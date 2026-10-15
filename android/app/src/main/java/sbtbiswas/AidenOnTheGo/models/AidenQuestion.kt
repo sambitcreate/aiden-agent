@@ -225,7 +225,8 @@ object AidenQuestionContractCodec {
         }
     }
 
-    private fun parseQuestions(array: JsonArray, label: String): List<AidenRemoteQuestion> {
+    /** The shared `ask_user_question` question list; the Bot session reads it too. */
+    internal fun parseQuestions(array: JsonArray, label: String): List<AidenRemoteQuestion> {
         if (array.isEmpty() || array.size > AidenRemoteProtocol.MAX_QUESTION_COUNT) {
             invalid("$label.questions")
         }

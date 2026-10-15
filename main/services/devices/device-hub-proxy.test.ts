@@ -10,6 +10,7 @@ import test from "node:test";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../aiden-remote-tls-identity.js";
 import { peerTlsOptions } from "../peer-transport.js";
 import {
+  decideDeviceHubRoute,
   hubResponseHeaders,
   startDeviceHubProxy,
   type DeviceHubProxy,
@@ -216,9 +217,20 @@ test("only allowlisted routes reach the hub, and never exec, tools, or traversal
       "/api/devices/",
       "/api/devices/boot",
       "/",
-      "/vendor/serve-emu/api/devices",
+      // serve-emu's input, install, and WebRTC routes are never forwarded.
+      "/vendor/serve-emu/api/tap?device=emulator-5554",
+      "/vendor/serve-emu/api/key?device=emulator-5554",
+      "/vendor/serve-emu/api/apps/install?device=emulator-5554",
+      "/vendor/serve-emu/webrtc/offer?device=emulator-5554",
+      "/vendor/serve-emu/",
+      // A device-scoped serve-emu route needs exactly one valid `device`.
+      "/vendor/serve-emu/api/fold",
+      "/vendor/serve-emu/api/screenshot?device=-s",
+      "/vendor/serve-emu/api/logcat",
+      "/vendor/serve-emu/api/accessibility?device=emulator-5554&device=emulator-5556",
     ]) {
-      const response = await send(proxy, `${path}?t=${token}`);
+      const [pathname, query] = path.split("?");
+      const response = await send(proxy, `${pathname}?${query ? `${query}&` : ""}t=${token}`);
       assert.equal(response.status, 404, path);
     }
     assert.equal(hub.records.length, 0);
@@ -232,9 +244,23 @@ test("only allowlisted routes reach the hub, and never exec, tools, or traversal
       `/vendor/serve-sim/helper/${UDID}/stream.avcc`,
       `/vendor/serve-sim/helper/${UDID}/config`,
       `/vendor/serve-sim/helper/${UDID}/panel/3/stream.avcc`,
+      `/vendor/serve-sim/helper/${UDID}/ax`,
       "/vendor/serve-sim/appstate",
+      "/vendor/serve-emu/api/devices",
+      "/vendor/serve-emu/health",
     ]) {
       assert.equal((await send(proxy, `${path}?t=${token}`)).status, 200, path);
+    }
+    // The accessibility tree and the event log are read-only.
+    for (const path of [`/vendor/serve-sim/helper/${UDID}/ax`, "/vendor/serve-sim/api/event-log/events"]) {
+      assert.equal((await send(proxy, `${path}?t=${token}`, { method: "POST" })).status, 405, path);
+    }
+    // Android's event log is serve-emu's logcat stream: read-only, and only for the named emulator.
+    const logcat = `/vendor/serve-emu/api/logcat?device=emulator-5554&t=${token}`;
+    assert.equal((await send(proxy, logcat, { method: "POST" })).status, 405);
+    for (const route of ["screenshot", "stream-mode", "stream-settings", "accessibility", "fold", "logcat"]) {
+      const path = `/vendor/serve-emu/api/${route}?device=emulator-5554`;
+      assert.equal((await send(proxy, `${path}&t=${token}`)).status, 200, path);
     }
   });
 });
@@ -541,4 +567,77 @@ test("a paired Mac's hub is reached over pinned TLS with main's credential, neve
     await new Promise((resolve) => relay.close(resolve));
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("each serve-emu route takes only its own mutating method, and fold writes need operate scope", () => {
+  const decide = (method: string, rawPath: string, query = "device=emulator-5554", upgrade = false) =>
+    decideDeviceHubRoute({ method, rawPath, search: new URLSearchParams(query), upgrade });
+  const scope = (route: ReturnType<typeof decide>) => (route.ok ? route.scope : route.status);
+  // Fold state is read with GET (watching) and changed with POST (driving).
+  assert.equal(scope(decide("GET", "/vendor/serve-emu/api/fold")), "read");
+  assert.equal(scope(decide("POST", "/vendor/serve-emu/api/fold")), "operate");
+  assert.equal(scope(decide("PUT", "/vendor/serve-emu/api/fold")), 405);
+  assert.equal(scope(decide("PUT", "/vendor/serve-emu/api/stream-mode")), "operate");
+  assert.equal(scope(decide("POST", "/vendor/serve-emu/api/stream-mode")), 405);
+  assert.equal(scope(decide("PATCH", "/vendor/serve-emu/api/stream-settings")), "operate");
+  assert.equal(scope(decide("GET", "/vendor/serve-emu/api/stream-settings")), "read");
+  // A screenshot capture is a read, as on iOS.
+  assert.equal(scope(decide("POST", "/vendor/serve-emu/api/screenshot")), "read");
+  assert.equal(scope(decide("POST", "/vendor/serve-sim/api/screenshot", "")), "read");
+  assert.equal(scope(decide("POST", "/vendor/serve-emu/api/accessibility")), 405);
+  // The Android socket carries input, so it is operate; the device list socket only watches.
+  assert.equal(scope(decide("GET", "/vendor/serve-emu/ws", "device=emulator-5554&frame-meta=1", true)), "operate");
+  assert.equal(scope(decide("GET", "/vendor/serve-emu/ws", "frame-meta=1", true)), 404);
+  assert.equal(scope(decide("GET", "/api/devices/ws", "", true)), "read");
+  const fold = decide("POST", "/vendor/serve-emu/api/fold");
+  assert.ok(fold.ok);
+  assert.deepEqual(fold.deviceIds, ["emulator-5554"]);
+  assert.equal(fold.upstreamPath, "/vendor/serve-emu/api/fold?device=emulator-5554");
+});
+
+test("serve-emu's video and gesture socket is proxied for a named emulator", async () => {
+  await withProxy(async ({ proxy, hub }) => {
+    const { token } = proxy.mintGrant();
+    assert.equal((await upgrade(proxy, `/vendor/serve-emu/ws?frame-meta=1&t=${token}`)).status, 404);
+    const accepted = await upgrade(proxy, `/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1&t=${token}`);
+    assert.equal(accepted.status, 101);
+    // The grant stays behind; the device and frame metadata reach serve-emu.
+    assert.equal(await accepted.firstFrame, "hub:/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1");
+    accepted.socket?.destroy();
+    assert.deepEqual(
+      hub.records.filter((record) => record.upgrade).map((record) => record.url),
+      ["/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1"],
+    );
+  });
+});
+
+test("fold posture POSTs and stream-mode PUTs reach the hub with their bodies", async () => {
+  await withProxy(async ({ proxy, hub }) => {
+    const { token } = proxy.mintGrant();
+    const fold = await send(proxy, `/vendor/serve-emu/api/fold?device=emulator-5554&t=${token}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ posture: "closed" }),
+    });
+    assert.equal(fold.status, 200);
+    const mode = await send(proxy, `/vendor/serve-emu/api/stream-mode?device=emulator-5554&t=${token}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "scrcpy" }),
+    });
+    assert.equal(mode.status, 200);
+    const posted = hub.records.filter((record) => record.method !== "GET");
+    assert.deepEqual(
+      posted.map((record) => [record.method, record.url, record.body]),
+      [
+        ["POST", "/vendor/serve-emu/api/fold?device=emulator-5554", JSON.stringify({ posture: "closed" })],
+        ["PUT", "/vendor/serve-emu/api/stream-mode?device=emulator-5554", JSON.stringify({ mode: "scrcpy" })],
+      ],
+    );
+    const preflight = await send(proxy, `/vendor/serve-emu/api/fold?device=emulator-5554&t=${token}`, {
+      method: "OPTIONS",
+      headers: { origin: "file://" },
+    });
+    assert.equal(preflight.headers["access-control-allow-methods"], "GET, HEAD, POST");
+  });
 });

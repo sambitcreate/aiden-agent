@@ -236,10 +236,15 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     .map(([name]) => name);
   assert.deepEqual(builders, ["build"]);
   const bundle = jobs.build.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  // Downloads follow the producer output, even when only a consumer is rerun
+  // and its github.run_attempt differs from the successful build's attempt.
+  assert.equal(jobs.build.outputs["artifact-name"], bundle.with.name);
+  assert.equal(bundle.with.name, "${{ steps.bundle.outputs.name }}");
+  assert.ok(jobs.build.steps.some((step) => step.id === "bundle"));
   for (const consumer of ["e2e", "verify"]) {
     assert.ok(jobs[consumer].needs.includes("build"), consumer);
     const download = jobs[consumer].steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
-    assert.equal(download?.with.name, bundle.with.name, consumer);
+    assert.equal(download?.with.name, "${{ needs.build.outputs.artifact-name }}", consumer);
   }
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));

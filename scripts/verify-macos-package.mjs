@@ -51,9 +51,10 @@ const reviewedHelperInfoPlistPath = path.join(
 const PACKAGED_MODELS_DEV_ENTRY = "resources/model-capabilities.json";
 const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY = "build/main/subagent-inference-worker.js";
 const PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY = "build/main/subagent-inference-worker-runtime.js";
-const PACKAGED_PARAKEET_WORKER_ENTRY = "build/main/parakeet-worker.js";
+const PACKAGED_LOCAL_SPEECH_WORKER_ENTRY = "build/main/local-speech-worker.js";
+const PACKAGED_SILERO_VAD_RESOURCE = path.join("speech", "silero_vad.onnx");
 const MAX_SUBAGENT_INFERENCE_WORKER_BYTES = 16 * 1024 * 1024;
-const MAX_PARAKEET_WORKER_BYTES = 4 * 1024 * 1024;
+const MAX_LOCAL_SPEECH_WORKER_BYTES = 4 * 1024 * 1024;
 const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
   "node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
   "node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
@@ -116,6 +117,15 @@ export async function assertRegularFile(file) {
     throw new Error(`Expected a regular non-symlinked package file: ${file}`);
   }
   return info;
+}
+
+/** The Silero VAD model ships as an extra resource beside app.asar. */
+export async function verifyPackagedSpeechResources(resourcesDirectory) {
+  const file = path.join(resourcesDirectory, PACKAGED_SILERO_VAD_RESOURCE);
+  const info = await assertRegularFile(file);
+  if (info.size === 0) {
+    throw new Error(`Packaged Silero VAD model is empty: ${file}`);
+  }
 }
 
 export async function verifyPackagedGenerativeUiLibraries(appPath) {
@@ -372,24 +382,24 @@ async function probeSubagentInferenceBootstrap(bootstrap) {
   }
 }
 
-export function assertPackagedParakeetWorkerEntries(entries) {
+export function assertPackagedLocalSpeechWorkerEntries(entries) {
   const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
-  if (!normalized.has(`/${PACKAGED_PARAKEET_WORKER_ENTRY}`)) {
+  if (!normalized.has(`/${PACKAGED_LOCAL_SPEECH_WORKER_ENTRY}`)) {
     throw new Error("Packaged app.asar is missing the on-device transcription worker.");
   }
 }
 
-export async function verifyPackagedParakeetWorker(appAsar) {
+export async function verifyPackagedLocalSpeechWorker(appAsar) {
   await assertRegularFile(appAsar);
-  assertPackagedParakeetWorkerEntries(listPackage(appAsar, { isPack: false }));
-  const entry = statFile(appAsar, PACKAGED_PARAKEET_WORKER_ENTRY, false);
+  assertPackagedLocalSpeechWorkerEntries(listPackage(appAsar, { isPack: false }));
+  const entry = statFile(appAsar, PACKAGED_LOCAL_SPEECH_WORKER_ENTRY, false);
   if (
     !entry ||
     entry.unpacked === true ||
     typeof entry.size !== "number" ||
     !Number.isSafeInteger(entry.size) ||
     entry.size <= 0 ||
-    entry.size > MAX_PARAKEET_WORKER_BYTES ||
+    entry.size > MAX_LOCAL_SPEECH_WORKER_BYTES ||
     typeof entry.offset !== "string" ||
     "files" in entry ||
     "link" in entry
@@ -862,10 +872,11 @@ export async function verifyMacPackage(appPath) {
   await verifyPackagedModelCatalogResources(appAsar);
   await verifyPackagedSlimness(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);
-  await verifyPackagedParakeetWorker(appAsar);
+  await verifyPackagedLocalSpeechWorker(appAsar);
   await verifyPackagedVccWorker(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
   await verifyPackagedGenerativeUiLibraries(paths.app);
+  await verifyPackagedSpeechResources(path.join(paths.app, "Contents", "Resources"));
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);

@@ -55,7 +55,7 @@ Do not mark existing physical-device acceptance gates complete based on simulato
 Desktop route learning, encrypted persistence, LAN preference, failover, preference
 preflight, route suppression/restore, and authenticated LAN CA delivery are implemented
 in the connection-reliability change. Healthy wake notifications probe before replacing
-feeds. Contract revision 25 adds desktop-only route trust, explicit Android phone
+feeds. Contract revision 31 adds desktop-only route trust, explicit Android phone
 identity, and epoch-fenced progress resumes. Behavioral/TLS fixtures cover both initial
 pairing directions, key renewal, rejected identity before request bytes, suppression,
 and retaining healthy streams. Physical packaged LAN/Tailscale acceptance and idle

@@ -4,6 +4,7 @@ import { cn } from "../lib/ui-utils";
 import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
+  subagentModelDisplay,
 } from "../lib/subagent-panel-state";
 import type { SubagentRunPresentation } from "../lib/subagent-view-state";
 import {
@@ -18,7 +19,7 @@ import {
   type SubagentContextUsageV1,
 } from "../shared/subagent-context-usage";
 import { Markdown } from "./markdown";
-import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
+import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
 import { CopyButton } from "./copy-button";
 
@@ -127,6 +128,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
+    const modelDisplay = subagentModelDisplay(run);
     const pendingQuestion = subagentPendingQuestion(run);
     const resultText = run.terminalMarkdown ?? run.latestText;
     const projectionNotices = subagentProjectionNotices(run);
@@ -232,7 +234,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
         >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
             <header className="flex min-w-0 items-start gap-2.5">
-              <SubagentOrb
+              <SubagentMark
                 role={run.role}
                 state={run.state}
                 activity={run.activity}
@@ -257,7 +259,13 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   color="tertiary"
                   className="mt-0.5 break-words [overflow-wrap:anywhere]"
                 >
-                  Model: {run.modelId}
+                  {[
+                    `Model: ${modelDisplay.model}`,
+                    modelDisplay.effort && `Effort ${modelDisplay.effort}`,
+                    modelDisplay.selection,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </Text>
                 {contextUsage ? (
                   <Text

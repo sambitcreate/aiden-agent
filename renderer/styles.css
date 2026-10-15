@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Onboarding feature-tour art (code-drawn tiles; see renderer/components/onboarding-art). */
+@import "./components/onboarding-art/onboarding-art.css";
 
 /* The Environment browser follows the app's quiet, compact workbench chrome. */
 .browser-panel { display: flex; height: 100%; min-width: 0; min-height: 0; flex-direction: column; color: var(--text-primary); background: var(--surface-popover); }
@@ -54,7 +56,7 @@
 .devices-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow-y: auto; padding: 8px 10px 14px; }
 .devices-list-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 6px; }
 .devices-list-note { padding: 4px 5px 8px; }
-.devices-agent-access { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; margin: 10px 10px 0; padding: 10px 12px; border: 1px solid var(--border-separator); border-radius: var(--radius-control); background: var(--surface-control); }
+.devices-agent-access { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; margin: 10px 10px 0; padding: 10px 12px; border: 0; border-radius: var(--radius-control); background: var(--surface-control); }
 .devices-agent-access > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-tertiary); }
 .devices-list-rows { margin: 0; padding: 0; list-style: none; }
 .devices-host-group + .devices-host-group { margin-top: 10px; }
@@ -75,10 +77,16 @@
 .device-phone-viewport { position: absolute; inset: 0; }
 .device-phone-viewport > canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .device-viewer-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; background: var(--surface-popover); text-align: center; }
+.device-viewer-notice { position: absolute; bottom: 10px; left: 50%; max-width: calc(100% - 20px); padding: 4px 8px; border-radius: var(--radius-menu); background: var(--surface-popover); color: var(--text-secondary); font-size: var(--text-small); pointer-events: none; transform: translateX(-50%); white-space: nowrap; }
+.devices-platform-group + .devices-platform-group { margin-top: 6px; }
+.devices-platform-title { display: block; padding: 6px 5px 2px; }
 .device-viewer-rail { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--border-separator); }
 .device-duo-controls { position: absolute; top: 50%; right: 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateY(-50%); }
-.device-duo-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; border: 1px solid var(--border-separator); border-radius: var(--radius-pill); background: var(--surface-popover); }
+.device-duo-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; border: 0; border-radius: var(--radius-pill); background: var(--surface-popover); box-shadow: var(--elevation-control); }
 .device-duo-group svg { width: 18px; height: 18px; }
+/* A horizontal phone turns the fold glyphs a quarter, as the device does. */
+.device-duo-glyph { transition: transform 180ms ease-out; }
+.device-duo-glyph[data-rotated] { transform: rotate(90deg); }
 .device-duo-error { display: inline-flex; color: var(--status-red); }
 .device-duo-error > svg { width: 16px; height: 16px; }
 .device-viewer-tools { flex: 0 1 auto; max-height: 55%; min-height: 0; overflow-y: auto; border-top: 1px solid var(--border-separator); }
@@ -99,6 +107,35 @@
 .device-tools-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .device-tools-mono { min-width: 0; max-width: 100%; font-family: var(--font-mono); font-size: var(--text-small); }
 @media (prefers-reduced-motion: reduce) { .device-tools *, .device-duo-controls * { transition: none !important; } }
+/* Device power features. Element frames are the overlay's content, so they carry a thin accent edge. */
+.device-ax-overlay, .device-touch-dots { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.device-ax-frame { position: absolute; box-sizing: border-box; border-radius: 3px; background: color-mix(in srgb, var(--status-accent) 9%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--status-accent) 65%, transparent); }
+.device-ax-frame[data-hovered] { background: color-mix(in srgb, var(--status-accent) 22%, transparent); box-shadow: inset 0 0 0 2px var(--status-accent); }
+.device-ax-label { position: absolute; z-index: 2; display: flex; align-items: baseline; gap: 6px; padding: 2px 7px; border-radius: var(--radius-menu); background: var(--surface-popover); box-shadow: var(--elevation-popover); color: var(--text-primary); font-size: calc(var(--ui-font-size) - 2px); white-space: nowrap; transform: translateY(calc(-100% - 2px)); }
+.device-ax-label[data-placement="below"] { transform: translateY(2px); }
+.device-ax-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.device-ax-label-role { flex: 0 0 auto; color: var(--text-secondary); }
+.device-touch-dot { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; background: color-mix(in srgb, var(--text-primary) 16%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-background) 55%, transparent); }
+.device-touch-dots[data-pressed] .device-touch-dot { background: color-mix(in srgb, var(--text-primary) 32%, transparent); }
+.device-event-log-toggle { justify-content: space-between; width: 100%; padding-inline: 0; color: var(--text-secondary); font-size: var(--text-small); font-weight: 550; }
+.device-event-log-chevron { transition: transform 150ms ease-out; }
+.device-event-log-chevron[data-open] { transform: rotate(180deg); }
+.device-event-log-list { max-height: 16rem; min-height: 3rem; margin: 0; padding: 6px 8px; overflow-y: auto; border-radius: var(--radius-menu); background: var(--surface-well); list-style: none; font-family: var(--font-mono); font-size: calc(var(--text-small) - 1px); line-height: 1.55; outline: none; }
+.device-event-log-list:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.device-event-log-entry { display: flex; min-width: 0; gap: 8px; }
+.device-event-log-time { flex: 0 0 auto; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.device-event-log-summary { min-width: 0; overflow-wrap: anywhere; }
+.device-event-log-empty { color: var(--text-secondary); }
+.device-record-indicator { gap: 6px; background: var(--status-red-surface); color: var(--status-red); font-variant-numeric: tabular-nums; }
+.device-record-indicator:hover { background: var(--status-red-surface); }
+.device-record-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--status-red); }
+.device-record-indicator[data-recording] .device-record-dot { animation: device-record-pulse 1.6s ease-in-out infinite; }
+.device-record-indicator .device-record-stop { width: 11px; height: 11px; fill: currentColor; }
+@keyframes device-record-pulse { 50% { opacity: 0.35; } }
+.device-screenshot-group { display: inline-flex; align-items: center; }
+.device-screenshot-group > .device-screenshot-menu { width: 18px; padding: 0; }
+.device-screenshot-group > .device-screenshot-menu svg { width: 12px; height: 12px; }
+@media (prefers-reduced-motion: reduce) { .device-record-indicator[data-recording] .device-record-dot { animation: none; } .device-event-log-chevron { transition: none; } }
 .browser-start-page { width: 100%; overflow-y: auto; padding: 24px; }
 .browser-start-page section + section { margin-top: 28px; }
 .browser-start-page h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 9px; color: var(--text-secondary); font-size: calc(var(--ui-font-size) - 1px); font-weight: 550; }
@@ -233,22 +270,33 @@
   --shadow-composer: var(--elevation-composer);
   --font-sans: var(--font-ui-family);
   --font-mono: var(--font-code-family);
+  /*
+   * Text steps follow the Untitled theme's ratios (GUI.md, gui/themes/untitled.md)
+   * anchored to the UI font-size preference so that setting still scales the
+   * whole ladder: at 14px, mini = xxs 10/14, small = xs 12/16, regular = s 14/20,
+   * large-strong = m 16/24, heading1 = l 24/32. heading2 keeps Aiden's 18/24 step
+   * so it stays distinct from large-strong.
+   */
   --text-heading1: calc(var(--ui-font-size) + 10px);
-  --text-heading1--line-height: calc(var(--ui-font-size) + 16px);
+  --text-heading1--line-height: calc(var(--ui-font-size) + 18px);
   --text-heading2: calc(var(--ui-font-size) + 4px);
   --text-heading2--line-height: calc(var(--ui-font-size) + 10px);
   --text-large-strong: calc(var(--ui-font-size) + 2px);
-  --text-large-strong--line-height: calc(var(--ui-font-size) + 8px);
+  --text-large-strong--line-height: calc(var(--ui-font-size) + 10px);
   --text-regular: var(--ui-font-size);
-  --text-regular--line-height: calc(var(--ui-font-size) + 5px);
+  --text-regular--line-height: calc(var(--ui-font-size) + 6px);
   --text-strong: var(--ui-font-size);
-  --text-strong--line-height: calc(var(--ui-font-size) + 5px);
-  --text-small: calc(var(--ui-font-size) - 1px);
-  --text-small--line-height: calc(var(--ui-font-size) + 3px);
-  --text-small-strong: calc(var(--ui-font-size) - 1px);
-  --text-small-strong--line-height: calc(var(--ui-font-size) + 3px);
-  --text-mini: calc(var(--ui-font-size) - 3px);
-  --text-mini--line-height: calc(var(--ui-font-size) - 1px);
+  --text-strong--line-height: calc(var(--ui-font-size) + 6px);
+  --text-small: calc(var(--ui-font-size) - 2px);
+  --text-small--line-height: calc(var(--ui-font-size) + 2px);
+  --text-small-strong: calc(var(--ui-font-size) - 2px);
+  --text-small-strong--line-height: calc(var(--ui-font-size) + 2px);
+  --text-mini: calc(var(--ui-font-size) - 4px);
+  --text-mini--line-height: var(--ui-font-size);
+  --ease-standard: var(--motion-easing);
+  --ease-emphasized: var(--motion-large-easing);
+  --default-transition-duration: var(--motion-duration);
+  --default-transition-timing-function: var(--motion-easing);
 }
 :root {
   color-scheme: light;
@@ -260,6 +308,13 @@
     ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   --ui-font-size: 14px;
   --code-font-size: 12px;
+  /* Untitled motion: small for controls/menus/popovers, large for panels. */
+  --motion-duration: 200ms;
+  --motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-large-duration: 360ms;
+  --motion-large-easing: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-popup-scale: 0.96;
+  --motion-press-distance: 1px;
   --text-primary: #3D3F41;
   --toolbar-icon: #77797a;
   --text-secondary: #545963;
@@ -306,10 +361,24 @@
   --bot-avatar-coral: #ff9f9b;
   --bot-avatar-peach: #ffc294;
   --bot-avatar-aqua: #78e8df;
+  --bot-avatar-rose: #ffa3c7;
+  --bot-avatar-lime: #c6ec7e;
+  --bot-avatar-plum: #dda8f2;
+  --bot-avatar-graphite: #c5c5ce;
   --bot-avatar-face: #292735;
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Categorical chart series for inline visuals: the bot-avatar hues, deepened
+     for >=3:1 non-text contrast on light surfaces. Never status colors. */
+  --chart-1: #1e88c7;
+  --chart-2: #1f9d63;
+  --chart-3: #b98200;
+  --chart-4: #e0544e;
+  --chart-5: #8a5cf0;
+  --chart-6: #138f88;
+  --chart-7: #d64d86;
+  --chart-8: #6f9a17;
   --window-gradient-start: rgb(246 247 249 / 0.98);
   --window-gradient-end: rgb(242 243 246 / 0.94);
   --glass-fill: rgb(238 240 243 / 0.68);
@@ -380,10 +449,23 @@
   --bot-avatar-coral: #ff9f9b;
   --bot-avatar-peach: #ffc294;
   --bot-avatar-aqua: #78e8df;
+  --bot-avatar-rose: #ffa3c7;
+  --bot-avatar-lime: #c6ec7e;
+  --bot-avatar-plum: #dda8f2;
+  --bot-avatar-graphite: #c5c5ce;
   --bot-avatar-face: #292735;
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Dark surfaces take the bot-avatar hues as-is. */
+  --chart-1: var(--bot-avatar-sky);
+  --chart-2: var(--bot-avatar-mint);
+  --chart-3: var(--bot-avatar-sun);
+  --chart-4: var(--bot-avatar-coral);
+  --chart-5: var(--bot-avatar-lilac);
+  --chart-6: var(--bot-avatar-aqua);
+  --chart-7: var(--bot-avatar-rose);
+  --chart-8: var(--bot-avatar-lime);
   --window-gradient-start: rgb(24 27 33 / 0.98);
   --window-gradient-end: rgb(28 32 39 / 0.94);
   --glass-fill: rgb(32 36 44 / 0.68);
@@ -443,6 +525,15 @@ body {
   font-size: var(--code-font-size);
 }
 
+/* Keys named in an InfoHint (ui-info-hint.tsx) read as keycaps in the hint's text. */
+.info-hint-content kbd {
+  padding-inline: 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
+}
+
 .code-font-sized,
 .code-font-sized :where(textarea, code, pre) {
   font-family: var(--font-code-family);
@@ -462,7 +553,10 @@ body {
   cursor: pointer !important;
 }
 
-:root[data-reduce-motion="true"] *,
+/* Activity marks are excluded: they freeze on their own still pose (see .aiden-mark),
+   and collapsing their tracks to 0.001ms would end them on a last frame instead.
+   A generated image's arrival keeps its short opacity fade (see .image-scan). */
+:root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *, .image-scan-result),
 :root[data-reduce-motion="true"] *::before,
 :root[data-reduce-motion="true"] *::after {
   animation-duration: 0.001ms !important;
@@ -536,7 +630,6 @@ body {
   width: 2rem;
   height: 2rem;
   place-items: center;
-  border-radius: 999px;
 }
 
 .ask-user-question-icon svg {
@@ -558,47 +651,35 @@ body {
   background: var(--surface-control);
 }
 
-.ask-user-question-option:focus-visible,
-.ask-user-question-custom:focus-visible,
-.ask-user-question-icon:focus-visible,
-.ask-user-question-pill:focus-visible {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 72%, transparent);
-}
-
-.ask-user-question-option-arrow {
-  opacity: 0;
-}
-
-.ask-user-question-option:hover .ask-user-question-option-arrow,
-.ask-user-question-option:focus-visible .ask-user-question-option-arrow,
-.ask-user-question-option.is-selected .ask-user-question-option-arrow {
-  opacity: 1;
-}
-
 .ask-user-question-pill {
   min-height: 2.25rem;
   flex-shrink: 0;
-  border: 1px solid var(--border-field);
-  border-radius: 999px;
   padding-inline: 0.9rem;
-  background: var(--surface-popover);
-  color: var(--text-primary);
-  box-shadow: var(--elevation-control);
-}
-
-.ask-user-question-pill:hover:not(:disabled) {
-  background: var(--surface-control-hover);
-  box-shadow: var(--elevation-control-hover);
-}
-
-.ask-user-question-pill:active:not(:disabled) {
-  background: var(--surface-control-active);
-  box-shadow: var(--elevation-control-pressed);
 }
 
 .ask-user-question-shell :disabled {
   cursor: default;
   opacity: 0.42;
+}
+
+.ask-user-question-recap-card {
+  border-radius: var(--radius-card);
+  background: var(--surface-well);
+  box-shadow: inset 0 0 0 1px var(--border-separator);
+}
+
+.ask-user-question-key {
+  display: inline-grid;
+  min-width: 1.15rem;
+  height: 1.05rem;
+  place-items: center;
+  padding-inline: 0.25rem;
+  border-radius: 0.3rem;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1;
 }
 
 @keyframes ask-user-question-in {
@@ -742,6 +823,94 @@ textarea {
   background: transparent;
 }
 
+/* Inline visual: no card chrome. Undo the UA [popover] border, padding,
+   Canvas fill, and scroll box while it sits in the transcript. */
+.aiden-inline-visual:not(:popover-open) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+}
+
+/* A wide visual leaves the reading column for the chat pane: it grows to
+   the pane's width (inside a slim gutter, up to a cap), stays centred on the
+   column, and follows the window. Never narrower than the column. The dock
+   gutter only guards the composer row, which content already scrolls under. */
+.aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  --inline-visual-wide-width: max(
+    100%,
+    min(calc(100cqi - 2 * var(--inline-visual-wide-gutter)), var(--inline-visual-wide-max))
+  );
+  width: var(--inline-visual-wide-width);
+  max-width: none;
+  margin-inline: calc((100% - var(--inline-visual-wide-width)) / 2);
+}
+
+/* While Quick View is open, docked or floating, the card owns that space; stay in the column. */
+[data-chat-card-inset] .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  width: 100%;
+  margin-inline: 0;
+}
+
+.aiden-inline-visual-frame {
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  transition: height var(--motion-duration) var(--motion-easing);
+}
+
+/* The iframe never matches :focus-visible itself; the host marks the box
+   while keyboard focus is inside the guest. Drawn inside the clipped box. */
+.aiden-inline-visual-frame[data-guest-focused],
+[data-html-artifact-expanded] [data-inline-visual-frame][data-guest-focused] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Title and actions sit below the visual like a figure caption, so no
+   control ever covers guest content. Quiet at rest, clearer on hover. */
+.aiden-inline-visual-caption {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  margin-top: 2px;
+  opacity: 0.7;
+  transition: opacity 150ms var(--motion-easing);
+}
+
+.aiden-inline-visual:hover > .aiden-inline-visual-caption,
+.aiden-inline-visual:focus-within > .aiden-inline-visual-caption {
+  opacity: 1;
+}
+
+/* A visual's suggested follow-up waits here, in Aiden's own UI, for the
+   user's click; a soft well fill, no border. */
+.aiden-inline-visual-followup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-card);
+  background: var(--surface-well);
+}
+
+/* A drafting visual names itself above the frame; it never overlays content. */
+.aiden-inline-visual-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiden-inline-visual-frame,
+  .aiden-inline-visual-caption {
+    transition: none;
+  }
+}
+
 .reasoning-surface {
   --scroll-fade-size: 20px;
 }
@@ -808,10 +977,9 @@ textarea {
 }
 
 /*
- * The model map borrows the tactile grammar of Apple's Photographic Styles
- * pad while keeping Aiden's restrained surfaces and accent palette. The
- * lattice is structural: its highlighted row and column expose both axes at
- * the current model instead of turning the map into an unlabeled mood field.
+ * Settings → Model Pad: the card is a size container so the tray can sit
+ * beside the square or stack under it; the header holds the count, the
+ * metric chip and the Add, Arrange and ⋯ actions.
  */
 .model-pad-fieldset {
   width: 100%;
@@ -819,71 +987,106 @@ textarea {
   container: model-pad-fieldset / inline-size;
 }
 
-.model-pad-field {
-  padding: 1.5rem;
+.model-pad-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.75rem 0.75rem 0 1rem;
 }
 
-.model-pad-field::after {
-  inset-inline: 1.5rem;
-}
-
-.settings-model-pad-grid {
-  grid-template-columns: minmax(0, 1fr);
+.model-pad-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16.25rem;
   align-items: start;
-  justify-content: center;
-  margin-top: 1.25rem;
-}
-
-.settings-model-pad-grid[data-panel-open="true"] {
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 18rem);
+  gap: 1rem;
+  padding: 0.75rem 1rem 1rem;
 }
 
 .model-pad-canvas {
-  width: min(100%, 40rem);
-  margin-inline: auto;
-  view-transition-name: model-pad-canvas;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.model-pad-browser {
-  position: sticky;
-  top: 1rem;
-  border: 1px solid var(--border-separator);
-  box-shadow: var(--elevation-control);
-  view-transition-name: model-pad-browser;
+/* Beside the square, the tray is never taller than it: the same size the
+   square resolves to (`.model-pad` width), with the list scrolling inside. */
+.model-pad-tray {
+  display: flex;
+  max-height: min(30rem, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  flex-direction: column;
 }
 
-.model-pad-browser-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.75rem;
+.model-pad-tray-list {
+  min-height: 0;
+  overflow-y: auto;
 }
 
-.model-pad-browser-count {
-  padding-top: 0.125rem;
-  color: var(--text-tertiary);
-  font-size: var(--text-mini);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--text-mini--line-height);
+/* The tray's source glyph speaks the Pad's marker language at row size. */
+.model-pad-tray-glyph {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex-shrink: 0;
+  border: 1.5px solid var(--accent);
+  border-radius: 9999px;
+}
+
+.model-pad-tray-glyph[data-placement-source="personal"] {
+  background: var(--accent);
+}
+
+/* Names the score behind benchmark heights, in the Pad header so it never
+   covers a marker in the square. */
+.model-pad-metric-chip {
+  display: inline-flex;
+  height: 1.25rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.5rem;
+  border: 0;
+  border-radius: var(--radius-pill);
   white-space: nowrap;
-}
-
-.model-pad-panel-below {
-  display: none;
-}
-
-.model-pad-axis-label {
-  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
-  margin-inline: auto;
+  background: var(--surface-control);
   color: var(--text-secondary);
-  font-size: var(--text-strong);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: var(--text-strong--line-height);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+  outline: none;
+  transition:
+    background-color var(--motion-duration) var(--ease-standard),
+    color var(--motion-duration) var(--ease-standard);
+}
+
+.model-pad-metric-chip:hover,
+.model-pad-metric-chip[data-state="open"] {
+  background: var(--surface-control-hover);
+  color: var(--text-primary);
+}
+
+.model-pad-metric-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Under the square while suggestions are previewed. */
+.model-pad-preview-bar {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  margin-top: 0.625rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.75rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  font-size: var(--text-small);
 }
 
 .model-pad {
-  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  width: min(100%, 30rem, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
   min-width: 0;
   aspect-ratio: 1 / 1;
   flex-shrink: 0;
@@ -940,24 +1143,50 @@ textarea {
 }
 
 .model-pad-marker-visual {
-  border: 0;
+  border: 2px solid transparent;
   box-shadow: var(--elevation-control);
   transition:
     transform 150ms cubic-bezier(0, 0, 0.2, 1),
     box-shadow 120ms ease-out;
 }
 
-.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual {
+/*
+ * One marker language on both Pad surfaces (composer picker, settings editor and tray):
+ * a personal placement is a solid accent dot; any data-assisted placement is a hollow
+ * accent ring; a previewed suggestion (settings only, not saved yet) is a faint dashed
+ * ring. The kinds differ by shape, not only by color.
+ */
+.model-pad-model[data-placement-source="personal"],
+.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual {
+  border-color: var(--accent);
   background: var(--accent);
 }
 
-.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual {
-  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
+.model-pad-model[data-placement-source="benchmark"],
+.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual {
+  border-color: var(--accent);
+  background: transparent;
+}
+
+.model-pad-marker[data-placement-source="suggestion"] .model-pad-marker-visual {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.6;
+}
+
+.model-pad-marker[data-placement-source="suggestion"]:hover .model-pad-marker-visual,
+.model-pad-marker[data-placement-source="suggestion"]:focus-visible .model-pad-marker-visual,
+.model-pad-marker[data-placement-source="suggestion"]:active .model-pad-marker-visual {
+  box-shadow: none;
+  opacity: 1;
 }
 
 .model-pad-marker:hover,
 .model-pad-marker:focus-visible,
-.model-pad-marker[data-selected="true"] {
+.model-pad-marker[data-selected="true"],
+.model-pad-marker[data-hot="true"] {
   z-index: 30;
 }
 
@@ -967,7 +1196,8 @@ textarea {
 
 .model-pad-marker:hover .model-pad-marker-visual,
 .model-pad-marker:focus-visible .model-pad-marker-visual,
-.model-pad-marker[data-selected="true"] .model-pad-marker-visual {
+.model-pad-marker[data-selected="true"] .model-pad-marker-visual,
+.model-pad-marker[data-hot="true"] .model-pad-marker-visual {
   box-shadow: var(--elevation-control-hover);
   transform: scale(1.08);
 }
@@ -975,6 +1205,18 @@ textarea {
 .model-pad-marker:active .model-pad-marker-visual {
   box-shadow: var(--elevation-control-pressed);
   transform: scale(1);
+}
+
+/*
+ * Another route to the hovered, focused or selected model (the same model through a
+ * different provider) shares its state with a soft accent halo: no border or outline,
+ * no scale (hover, focus and selection own that), and the button's focus-visible ring
+ * and a selected marker's own styling are untouched.
+ */
+.model-pad-marker[data-linked="true"]:not([data-selected="true"]) .model-pad-marker-visual {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent),
+    var(--elevation-control);
 }
 
 .model-pad-marker-label {
@@ -986,12 +1228,12 @@ textarea {
   max-width: 12rem;
   padding: 0.375rem 0.5rem;
   overflow: hidden;
-  border: 1px solid var(--border-separator);
+  border: 0;
   border-radius: var(--radius-popover);
   background: color-mix(in srgb, var(--surface-popover) 96%, transparent);
   box-shadow: var(--elevation-popover);
   opacity: 0;
-  transform: translate(-50%, 3px) scale(0.98);
+  transform: translate(-50%, 3px) scale(var(--motion-popup-scale));
   transition:
     opacity 120ms ease-out,
     transform 150ms cubic-bezier(0, 0, 0.2, 1);
@@ -1004,7 +1246,8 @@ textarea {
 
 .model-pad-marker:hover .model-pad-marker-label,
 .model-pad-marker:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-hot="true"] .model-pad-marker-label {
   opacity: 1;
   transform: translate(-50%, 0) scale(1);
 }
@@ -1012,43 +1255,46 @@ textarea {
 .model-pad-marker[data-label-side="bottom"] .model-pad-marker-label {
   top: calc(100% + 8px);
   bottom: auto;
-  transform: translate(-50%, -3px) scale(0.98);
+  transform: translate(-50%, -3px) scale(var(--motion-popup-scale));
 }
 
 .model-pad-marker[data-label-side="bottom"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-side="bottom"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-side="bottom"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-hot="true"] .model-pad-marker-label {
   transform: translate(-50%, 0) scale(1);
 }
 
 .model-pad-marker[data-label-align="start"] .model-pad-marker-label {
   left: -0.25rem;
-  transform: translate(0, 3px) scale(0.98);
+  transform: translate(0, 3px) scale(var(--motion-popup-scale));
   transform-origin: left bottom;
 }
 
 .model-pad-marker[data-label-align="start"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-align="start"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-align="start"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-align="start"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-align="start"][data-hot="true"] .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
 .model-pad-marker[data-label-align="end"] .model-pad-marker-label {
   right: -0.25rem;
   left: auto;
-  transform: translate(0, 3px) scale(0.98);
+  transform: translate(0, 3px) scale(var(--motion-popup-scale));
   transform-origin: right bottom;
 }
 
 .model-pad-marker[data-label-align="end"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-align="end"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-align="end"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-align="end"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-align="end"][data-hot="true"] .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
 .model-pad-marker[data-label-side="bottom"][data-label-align="start"] .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"] .model-pad-marker-label {
-  transform: translate(0, -3px) scale(0.98);
+  transform: translate(0, -3px) scale(var(--motion-popup-scale));
   transform-origin: top;
 }
 
@@ -1057,186 +1303,112 @@ textarea {
   .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="start"][data-selected="true"]
   .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="start"][data-hot="true"]
+  .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"]:focus-visible
   .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-selected="true"]
+  .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-hot="true"]
   .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
-.model-pad-legend {
-  min-height: 2.5rem;
-}
-
-.model-pad-legend-marker {
-  display: inline-block;
-  width: 0.75rem;
-  height: 0.75rem;
-  border: 0;
-  border-radius: 9999px;
-  box-shadow: var(--elevation-control);
-}
-
-.model-pad-legend-marker[data-source="benchmark"] {
-  background: var(--accent);
-}
-
-.model-pad-legend-marker[data-source="personal"] {
-  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
-}
-
-.model-pad-catalog {
-  max-height: max(8rem, var(--model-pad-available-size, calc(100dvh - 24rem)));
-}
-
-.model-pad-catalog-shell {
-  position: relative;
-}
-
-.model-pad-catalog-shell[data-more-below="true"]::after {
-  position: absolute;
-  z-index: 10;
-  inset-inline: 0;
-  bottom: 0;
-  height: 4rem;
-  border-radius: 0 0 var(--radius-control) var(--radius-control);
-  background: linear-gradient(to bottom, transparent, var(--surface-background) 78%);
-  content: "";
-  pointer-events: none;
-}
-
-.model-pad-catalog-more {
-  position: absolute;
-  z-index: 20;
-  bottom: 0.5rem;
-  left: 50%;
-  min-width: max-content;
-  border: 1px solid var(--border-separator);
-  background: color-mix(in srgb, var(--surface-popover) 94%, transparent);
-  box-shadow: var(--elevation-popover);
-  transform: translateX(-50%);
-  white-space: nowrap;
-  backdrop-filter: blur(12px) saturate(1.08);
-  -webkit-backdrop-filter: blur(12px) saturate(1.08);
-}
-
-.model-pad-catalog-more:hover {
-  background: var(--surface-popover);
-}
-
-.model-pad-disclosure {
-  margin-top: 1.5rem;
-  border: 0;
-  box-shadow: none;
-  view-transition-name: model-pad-insights;
-}
-
-/*
- * Supporting-panel switches use document snapshots so the Pad can move and
- * resize on the compositor instead of transitioning grid width. The root is
- * kept stable; only the named Pad and disclosed panel participate.
- */
-::view-transition-group(root) {
-  animation: none;
-}
-
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
-}
-
-::view-transition-group(model-pad-canvas) {
-  z-index: 2;
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1);
-}
-
-::view-transition-old(model-pad-canvas) {
-  animation: none;
-  opacity: 0;
-}
-
-::view-transition-new(model-pad-canvas) {
-  animation: none;
-  opacity: 1;
-}
-
-::view-transition-group(model-pad-browser),
-::view-transition-group(model-pad-insights) {
-  z-index: 3;
-}
-
-::view-transition-new(model-pad-browser) {
-  animation: model-pad-browser-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-old(model-pad-browser) {
-  animation: model-pad-browser-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-new(model-pad-insights) {
-  animation: model-pad-insights-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-old(model-pad-insights) {
-  animation: model-pad-insights-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-@keyframes model-pad-browser-in {
-  from {
-    opacity: 0;
-    transform: translateX(8px) scale(0.985);
-  }
-}
-
-@keyframes model-pad-browser-out {
-  to {
-    opacity: 0;
-    transform: translateX(4px) scale(0.99);
-  }
-}
-
-@keyframes model-pad-insights-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.99);
-  }
-}
-
-@keyframes model-pad-insights-out {
-  to {
-    opacity: 0;
-    transform: translateY(-2px) scale(0.995);
-  }
-}
-
-.model-pad-management {
-  margin-top: 1.5rem;
-}
-
-.model-pad-management > summary::-webkit-details-marker {
-  display: none;
-}
-
-.model-pad-management > summary::after {
-  float: right;
-  color: var(--text-tertiary);
-  content: "›";
-  transform: rotate(90deg);
-  transition: transform 150ms ease-out;
-}
-
-.model-pad-management[open] > summary::after {
-  transform: rotate(-90deg);
-}
-
 .model-pad-model {
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1.5px solid transparent;
+  /* Thin popover halo lifts the dot off the grid dots underneath it. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-popover) 55%, transparent);
   transition:
     background-color 120ms ease-out,
     box-shadow 120ms ease-out,
-    opacity 120ms ease-out;
+    scale 120ms ease-out;
+}
+
+/* The current model: the marker grows and gains a detached neutral target ring. */
+.model-pad-model[data-state="selected"] {
+  scale: 1.25;
+  box-shadow:
+    0 0 0 2px var(--surface-popover),
+    0 0 0 3.5px color-mix(in srgb, var(--text-primary) 45%, transparent);
+}
+
+/* The knob's current spot: the marker grows under the knob without the target ring. */
+.model-pad-model[data-state="preview"] {
+  scale: 1.25;
+  box-shadow: 0 0 0 2px var(--surface-popover);
+}
+
+/* Pad axis captions (composer and settings), in the 8% inset margin outside the
+   lattice. They are dropped on a Pad too small for the margin to clear the edge
+   markers. */
+.model-pad-axis-captions {
+  position: absolute;
+  inset: 0;
+  container-type: size;
+  pointer-events: none;
+}
+
+.model-pad-axis-captions > span {
+  position: absolute;
+  color: var(--text-tertiary);
+  font-size: var(--text-mini);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.model-pad-axis-captions > [data-axis="capability"] {
+  top: 2px;
+  left: 50%;
+  translate: -50% 0;
+}
+
+.model-pad-axis-captions > [data-axis="faster"] {
+  bottom: 2px;
+  left: 8%;
+}
+
+.model-pad-axis-captions > [data-axis="deliberate"] {
+  right: 8%;
+  bottom: 2px;
+}
+
+@container (max-width: 255px) {
+  .model-pad-axis-captions > span {
+    display: none;
+  }
+}
+
+/* Settings empty Pad: hint plus quick starts. The hint is dropped on a small
+   Pad so both quick starts stay fully visible down to the 160px minimum. */
+.model-pad-empty-state {
+  position: absolute;
+  inset: 0;
+  container-type: size;
+  pointer-events: none;
+}
+
+.model-pad-empty-state-content {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding-inline: 2.5rem;
+  text-align: center;
+}
+
+@container (max-width: 255px) {
+  .model-pad-empty-state-content {
+    padding-inline: 0.75rem;
+  }
+
+  .model-pad-empty-hint {
+    display: none;
+  }
 }
 
 .model-pad-knob {
@@ -1253,6 +1425,41 @@ textarea {
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--accent), transparent 58%),
     var(--elevation-control-hover);
+}
+
+/*
+ * The previewed model's name beside the composer knob. It jumps with the knob (no
+ * transform transition) and uses the marker-label surface. Its pixel position and
+ * offsets come from modelPadKnobTagLayout; these rules only anchor the tag on the edge
+ * that position names (left edge, center or right edge; bottom or top edge).
+ */
+.model-pad-knob-tag {
+  --model-pad-knob-tag-x: -50%;
+  --model-pad-knob-tag-y: -100%;
+  width: max-content;
+  padding: 0.25rem 0.5rem;
+  overflow: hidden;
+  border-radius: var(--radius-popover);
+  background: color-mix(in srgb, var(--surface-popover) 96%, transparent);
+  box-shadow: var(--elevation-popover);
+  pointer-events: none;
+  text-align: left;
+  white-space: nowrap;
+  transform: translate(var(--model-pad-knob-tag-x), var(--model-pad-knob-tag-y));
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
+}
+
+.model-pad-knob-tag[data-label-side="bottom"] {
+  --model-pad-knob-tag-y: 0;
+}
+
+.model-pad-knob-tag[data-label-align="start"] {
+  --model-pad-knob-tag-x: 0;
+}
+
+.model-pad-knob-tag[data-label-align="end"] {
+  --model-pad-knob-tag-x: -100%;
 }
 
 [data-toolbar] {
@@ -1306,7 +1513,7 @@ textarea {
 
 .settings-page .settings-card,
 .settings-page .settings-group-card {
-  border: 1px solid var(--border-separator);
+  border: 0;
   border-radius: var(--settings-card-radius);
   background: var(--settings-card-fill);
   box-shadow: var(--elevation-control);
@@ -1392,23 +1599,34 @@ textarea {
   }
 }
 
+/*
+ * The composer footer stays one row and collapses by priority instead of
+ * wrapping: the model label truncates first (it is the row's only shrinking
+ * item), then "Full access" drops to its icon, then the context meter drops
+ * its percentage. Only a phone-width composer wraps.
+ */
+@container composer (max-width: 560px) {
+  .composer-permission-control {
+    width: 2rem;
+  }
+
+  .composer-permission-trigger {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .composer-permission-label {
+    display: none;
+  }
+}
+
 @container composer (max-width: 520px) {
   .composer-workspace-trigger {
     max-width: 9rem;
   }
 
-  .composer-permission-control {
-    width: 1.75rem;
-    padding-inline: 0;
-  }
-
-  .composer-permission-label,
   .composer-slash-detail {
     display: none;
-  }
-
-  .composer-action-row {
-    width: 100%;
   }
 
   .composer-branch-trigger {
@@ -1417,8 +1635,15 @@ textarea {
 }
 
 @container composer (max-width: 460px) {
-  .composer-local-label {
+  .composer-local-label,
+  .context-meter-percent {
     display: none;
+  }
+}
+
+@container composer (max-width: 380px) {
+  .composer-footer-row {
+    flex-wrap: wrap;
   }
 }
 
@@ -1437,48 +1662,28 @@ textarea {
   }
 }
 
-/* Short windows share one wrapping row flow for Pad counts and actions. This
- * avoids an otherwise nearly empty counts row pushing the minimum-size Pad
- * and its legend below the Linux content viewport. Keep control sizes intact. */
-@media (max-height: 640px) {
-  .model-pad-toolbar-actions {
-    display: contents;
-  }
-
-  .settings-model-pad-grid {
-    margin-top: 0.75rem;
-  }
+/* Plugin directory cards pair up only when the Settings content column (not
+ * the window) has room for two readable cards. */
+.settings-plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
 }
 
-@container settings-content (max-width: 620px) {
-  .settings-model-pad-grid {
+@container settings-content (max-width: 720px) {
+  .settings-plugin-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@container model-pad-fieldset (max-width: 760px) {
-  .settings-model-pad-grid[data-panel-open="true"] {
+/* The tray moves under the Pad when the card itself is narrow. */
+@container model-pad-fieldset (max-width: 640px) {
+  .model-pad-body {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .model-pad-browser {
-    position: static;
-    scroll-margin-top: 1rem;
-  }
-
-  .model-pad-panel-below {
-    display: flex;
-    justify-content: center;
-    margin-block: -0.125rem -0.375rem;
-  }
-
-  .model-pad-catalog {
-    max-height: 18rem;
-  }
-
-  .model-pad-legend > :last-child {
-    width: 100%;
-    margin-left: 0;
+  .model-pad-tray {
+    max-height: none;
   }
 }
 
@@ -1512,6 +1717,13 @@ textarea {
 
 @container chat-toolbar (max-width: 460px) {
   .open-in-editor-picker {
+    display: none;
+  }
+}
+
+/* The title keeps priority over the workspace chip on narrow chat columns. */
+@container chat-toolbar (max-width: 560px) {
+  .workspace-chip {
     display: none;
   }
 }
@@ -1662,7 +1874,7 @@ textarea {
 @keyframes aiden-popover-in {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.98);
+    transform: translateY(-4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1712,26 +1924,6 @@ textarea {
   }
 }
 
-@keyframes aiden-streaming-unit-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes aiden-streaming-block-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes aiden-reasoning-surface-in {
   from {
     opacity: 0;
@@ -1772,7 +1964,7 @@ textarea {
 @keyframes aiden-slash-palette-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1817,7 +2009,7 @@ textarea {
 @keyframes aiden-environment-summary-in {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.98);
+    transform: translateY(-4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1839,7 +2031,7 @@ textarea {
 @keyframes aiden-app-update-banner-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1875,7 +2067,7 @@ textarea {
   animation: aiden-overlay-out 120ms ease-in;
 }
 :root[data-reduce-motion="false"] [data-slot="popover-content"][data-state="open"] {
-  animation: aiden-popover-in 150ms cubic-bezier(0, 0, 0.2, 1);
+  animation: aiden-popover-in var(--motion-duration) var(--motion-easing);
 }
 :root[data-reduce-motion="false"] [data-slot="popover-content"][data-state="closed"] {
   animation: aiden-popover-out 100ms ease-in;
@@ -1893,6 +2085,25 @@ textarea {
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="closed"] {
   animation: aiden-environment-summary-out 120ms ease-in both;
+}
+/* A Quick View card that appears mid-session (Context after the first message, Subagents after the first run). */
+@keyframes quick-view-card-enter {
+  from {
+    opacity: 0;
+    scale: 0.97;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+:root[data-reduce-motion="false"] .quick-view-card-slot[data-entering] {
+  animation: quick-view-card-enter var(--motion-large-duration) var(--motion-large-easing) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-view-card-slot[data-entering] {
+    animation: none;
+  }
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="open"] {
   animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1)
@@ -1925,12 +2136,22 @@ textarea {
   animation: aiden-thinking-shimmer 1.8s ease-in-out infinite;
 }
 
-:root[data-reduce-motion="false"] .streaming-reveal-unit {
-  animation: aiden-streaming-unit-in 160ms cubic-bezier(0.19, 1, 0.22, 1) both;
+/*
+ * Released text fades in by opacity alone, so nothing shifts while the reader
+ * follows along. The gate releases whole paragraphs, list items, and table
+ * rows; each new block, item, and row starts transparent as it mounts.
+ * Settled replies and reduced motion show text at once.
+ */
+:root[data-reduce-motion="false"] .streaming-reveal[data-streaming] > *,
+:root[data-reduce-motion="false"] .streaming-reveal[data-streaming] :is(li, tr) {
+  transition: opacity 450ms ease-out;
 }
 
-:root[data-reduce-motion="false"] .streaming-reveal-block {
-  animation: aiden-streaming-block-in 180ms cubic-bezier(0.19, 1, 0.22, 1) both;
+@starting-style {
+  :root[data-reduce-motion="false"] .streaming-reveal[data-streaming] > *,
+  :root[data-reduce-motion="false"] .streaming-reveal[data-streaming] :is(li, tr) {
+    opacity: 0;
+  }
 }
 
 :root[data-reduce-motion="false"] .reasoning-surface[data-streaming="true"] {
@@ -2144,7 +2365,7 @@ textarea {
 
 .appearance-theme-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px 10px;
 }
 
@@ -2396,14 +2617,17 @@ textarea {
 }
 
 /* ── Aiden dock inset ──────────────────────────────────────────────────── */
-/* Aiden's collapsed mark sits in the bottom-right of the window, right where
+/* Aiden's idle Live pill sits in the bottom-right of the window, right where
    the composer's send controls are. The chat column reserves that width on
    BOTH sides so the composer and the messages above it stay optically centered
-   rather than sliding left to dodge the mark. The gutter clears the 48px mark
-   plus its 16px offset plus a little breathing room. */
+   rather than sliding left to dodge the pill. The gutter clears the ~72px idle
+   "Live" pill plus its 16px offset plus a little breathing room; longer
+   in-session labels may reach the composer edge in narrow windows, like the HUD. */
 :root {
-  --aiden-dock-gutter: 4.5rem;
+  --aiden-dock-gutter: 6rem;
   --chat-content-max-width: 52rem;
+  --inline-visual-wide-max: 80rem;
+  --inline-visual-wide-gutter: 1.5rem;
 }
 
 .aiden-dock-inset {
@@ -2419,6 +2643,59 @@ textarea {
   margin-inline: auto;
 }
 
+/* The pane around the transcript column is the size container wide inline
+   visuals measure against (`cqi`), so they can grow past the column. */
+[data-scroll-content]:has(> .chat-content-column) {
+  container-type: inline-size;
+}
+
+/* Quick View docks beside the chat on narrower windows: the centered column
+   moves left only as far as the card needs, and narrows only once it reaches
+   the left edge. The workbench sets the inset and the column's maximum in px
+   (Full width has none); the inset is 0 when the card fits or when the chat
+   would get too narrow, so the card floats over it as before. */
+[data-chat-card-inset] .chat-content-column {
+  max-width: min(var(--chat-card-max-width), calc(100% - var(--chat-card-inset-end, 0px)));
+  margin-left: max(0px, calc((100% - var(--chat-card-inset-end, 0px) - var(--chat-card-max-width)) / 2));
+  margin-right: auto;
+}
+
+:root[data-reduce-motion="false"] [data-chat-card-inset] .chat-content-column {
+  transition: margin-left 300ms ease-out, max-width 300ms ease-out;
+}
+
+/* ── Floating device player ─────────────────────────────────────────────── */
+.device-mini-player-screen {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0 0 var(--radius-sheet) var(--radius-sheet);
+  box-shadow: none;
+}
+
+.device-mini-player-screen:focus-visible {
+  outline-offset: -2px;
+}
+
+:root[data-reduce-motion="false"] .device-mini-player {
+  animation: device-mini-player-enter 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+:root[data-reduce-motion="false"] .device-mini-player-settle {
+  transition: left 150ms ease-out, top 150ms ease-out, width 150ms ease-out, height 150ms ease-out;
+}
+
+@keyframes device-mini-player-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* ── Dictation pill window (renderer/pill) ─────────────────────────────── */
 /* The pill BrowserWindow is fully transparent; only the pill surface paints. */
 .aiden-pill-window,
@@ -2431,7 +2708,7 @@ textarea {
 @keyframes aiden-pill-enter {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -2465,6 +2742,7 @@ textarea {
   .model-pad-knob,
   .model-pad-marker-label,
   .model-pad-marker-visual,
+  .model-pad-metric-chip,
   .model-pad-model,
   .model-pad-node {
     transition: none;
@@ -2486,6 +2764,8 @@ textarea {
 :root[data-reduce-motion="true"] .model-pad-chip,
 :root[data-reduce-motion="true"] .model-pad-marker-label,
 :root[data-reduce-motion="true"] .model-pad-marker-visual,
+:root[data-reduce-motion="true"] .model-pad-metric-chip,
+:root[data-reduce-motion="true"] .model-pad-model,
 :root[data-reduce-motion="true"] .model-pad-node {
   transition: none;
 }
@@ -2500,6 +2780,8 @@ textarea {
 }
 
 /* Deliberate actions may opt into tactile feedback; routine controls stay still. */
+/* Untitled press distance: shared actions settle down by one pixel while held. */
+:root[data-reduce-motion="false"] [data-slot="button"]:active:not(:disabled):not([class*="translate-"]) { translate: 0 var(--motion-press-distance); }
 .button-press-feedback:active:not(:disabled) { scale: 0.96; }
 :root[data-reduce-motion="true"] .button-press-feedback { scale: none !important; }
 @media (prefers-reduced-motion: reduce) {
@@ -2533,125 +2815,243 @@ textarea {
   .busy-send-label, .busy-send-button [data-holding]::before { animation: none !important; }
 }
 
-/* Aiden Live replaces the previous Assistant panel with one persistent,
-   stateful control. Libraries.dev owns the motion; CSS owns layout and tint. */
+/* Aiden Live's window-level control: one compact pill. A leading Helix glyph
+   and a short label carry the session state; the pill height never changes. */
 :root {
-  --aiden-live-trigger-size: 3.5rem;
+  --aiden-live-trigger-size: 2rem;
   --aiden-live-edge-inset: 1rem;
 }
 .aiden-live-dock {
   bottom: var(--aiden-live-edge-inset);
 }
 /* Floating tools cannot move the launcher sideways at the minimum window
-   width. Leave its existing hit target and the panel's usual 3-spacing gap
-   below the panel instead. Inline tools already inset the dock horizontally. */
+   width. Leave the pill's height and the panel's usual 3-spacing gap below
+   the panel instead. Inline tools already inset the dock horizontally. */
 [data-app-focus-root]:has(> .aiden-live-dock) .environment-panel[data-surface-mode="tools-floating"] {
   bottom: calc(var(--aiden-live-edge-inset) + var(--aiden-live-trigger-size) + var(--spacing) * 3);
 }
 .aiden-live-trigger {
   position: relative;
-  display: grid;
-  width: var(--aiden-live-trigger-size);
+  display: inline-flex;
   height: var(--aiden-live-trigger-size);
-  place-items: center;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 8px;
   overflow: visible;
-  border: 1px solid color-mix(in srgb, var(--color-separator) 72%, transparent);
+  border: 0;
+  border-radius: var(--radius-button);
+  corner-shape: squircle;
   background: var(--color-background);
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
   box-shadow:
     0 10px 30px rgb(0 0 0 / 16%),
     0 1px 2px rgb(0 0 0 / 10%);
-  outline: none;
   transition:
     transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 160ms ease,
-    border-color 160ms ease;
+    background-color 160ms ease;
 }
-.aiden-live-trigger-logo-mask {
+.aiden-live-trigger:hover:not(:disabled) {
+  background: var(--color-control);
+  transform: translateY(-1px);
+}
+.aiden-live-trigger:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.aiden-live-trigger:disabled {
+  cursor: default;
+  color: var(--color-secondary);
+}
+.aiden-live-trigger-glyph {
   display: grid;
-  width: 100%;
-  height: 100%;
+  width: 20px;
+  height: 20px;
+  flex: none;
   place-items: center;
-  overflow: hidden;
+  color: var(--accent);
 }
-.aiden-live-trigger[data-kind="logo"] img {
-  width: 100%;
-  height: 100%;
-  scale: 1.32;
-  object-fit: cover;
+.aiden-live-trigger[data-state="unavailable"],
+.aiden-live-trigger[data-state="error"] {
+  color: var(--color-secondary);
 }
-.aiden-live-trigger[data-kind="orb"] {
-  appearance: none;
-  border-color: transparent;
-  border-radius: 9999px;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
+.aiden-live-trigger[data-state="unavailable"] .aiden-live-trigger-glyph,
+.aiden-live-trigger[data-state="error"] .aiden-live-trigger-glyph {
+  opacity: 0.55;
 }
-.aiden-live-trigger:hover {
-  transform: translateY(-1px) scale(1.025);
+/* Same soft semantic error fill and text as the Live HUD alert; no border. */
+.aiden-live-trigger[data-state="error"],
+.aiden-live-trigger[data-state="error"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-support-red) 10%, var(--color-background));
+  color: var(--color-support-red);
 }
-.aiden-live-trigger:active {
-  transform: scale(0.96);
-}
-.aiden-live-trigger:focus-visible {
-  box-shadow:
-    0 0 0 3px var(--color-focus-ring),
-    0 10px 30px rgb(0 0 0 / 16%);
-}
-.aiden-live-trigger[data-kind="orb"]:focus-visible {
-  box-shadow: 0 0 0 3px var(--color-focus-ring);
+.aiden-live-trigger[data-state="error"] .aiden-live-trigger-glyph {
+  color: var(--color-support-red);
 }
 .aiden-live-trigger-badge {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: -2px;
+  right: -2px;
   width: 10px;
   height: 10px;
   border: 2px solid var(--color-background);
   border-radius: 9999px;
   background: var(--color-support-warning);
 }
-.aiden-live-orb {
+.aiden-live-stop-symbol {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--color-primary);
+}
+:root[data-reduce-motion="true"] .aiden-live-trigger {
+  transition: none;
+}
+:root[data-reduce-motion="true"] .aiden-live-trigger:hover,
+:root[data-reduce-motion="true"] .aiden-live-trigger:active {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aiden-live-trigger { transition: none !important; }
+  .aiden-live-trigger:hover,
+  .aiden-live-trigger:active { transform: none !important; }
+}
+.aiden-live-mark {
   position: relative;
-  display: block;
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100%;
   min-width: 2.5rem;
   min-height: 2.5rem;
+  color: var(--accent);
   transform: scale(calc(0.94 + var(--aiden-live-level, 0) * 0.06));
   transition: opacity 300ms ease, transform 420ms cubic-bezier(.22, 1, .36, 1);
 }
-.aiden-live-orb-layer,
-.aiden-live-duplex-listening,
-.aiden-live-duplex-weaving { position: absolute; inset: 0; }
-.aiden-live-orb-layer { opacity: 0; transition: opacity 360ms ease; }
-.aiden-live-orb[data-visual="rest"] [data-layer="rest"],
-.aiden-live-orb[data-visual="connecting"] [data-layer="connecting"],
-.aiden-live-orb[data-visual="duplex"] [data-layer="duplex"] { opacity: 1; }
-.aiden-live-duplex-listening { opacity: .65; }
-.aiden-live-duplex-weaving { opacity: .35; }
-.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-listening { animation: aiden-live-duplex 10s ease-in-out infinite alternate; }
-.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-weaving { animation: aiden-live-duplex 10s ease-in-out infinite alternate-reverse; }
-@keyframes aiden-live-duplex { from { opacity: .75; } to { opacity: .25; } }
-.aiden-live-stop-symbol { position: absolute; width: 16px; height: 16px; border-radius: 4px; background: var(--color-text-primary, currentColor); opacity: 0; transform: scale(.85); transition: opacity 220ms ease, transform 300ms cubic-bezier(.22,1,.36,1); pointer-events: none; }
-.aiden-live-trigger[data-stop-revealed="true"] > .aiden-live-orb { opacity: 0; transform: scale(.94); }
-.aiden-live-trigger[data-stop-revealed="true"] .aiden-live-stop-symbol { opacity: 1; transform: scale(1); }
-:root[data-reduce-motion="true"] .aiden-live-orb-layer,
-:root[data-reduce-motion="true"] .aiden-live-stop-symbol { transition: none; }
-:root[data-reduce-motion="true"] .aiden-live-duplex-listening,
-:root[data-reduce-motion="true"] .aiden-live-duplex-weaving { animation: none !important; }
+.aiden-live-mark > .aiden-mark { width: 100% !important; height: 100% !important; animation: aiden-live-mark-in 280ms ease both; }
+@keyframes aiden-live-mark-in { from { opacity: 0; } to { opacity: 1; } }
+:root[data-reduce-motion="true"] .aiden-live-mark { transition: none; }
+:root[data-reduce-motion="true"] .aiden-live-mark > .aiden-mark { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  .aiden-live-orb, .aiden-live-orb-layer, .aiden-live-stop-symbol { transition: none !important; }
-  .aiden-live-duplex-listening, .aiden-live-duplex-weaving { animation: none !important; }
+  .aiden-live-mark { transition: none !important; }
+  .aiden-live-mark > .aiden-mark { animation: none; }
 }
-.aiden-live-orb-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100% !important;
-  height: 100% !important;
-  /* thinking-orbs 0.3.1 is monochrome; normalize its ink, then tint it blue. */
-  filter: brightness(0) saturate(100%) invert(48%) sepia(97%) saturate(3187%)
-    hue-rotate(209deg) brightness(102%) contrast(101%);
+
+/* ───────── Activity marks ─────────
+   Shared geometry and timing: docs/activity-marks.md (also drawn natively on iOS and Android).
+   Inline SVG, CSS keyframes on transform and opacity only: no canvas, no per-frame JS,
+   no filters. Paused, off-screen and Reduced Motion marks freeze on a still frame. */
+.aiden-mark { display: block; flex: none; overflow: visible; }
+.aiden-mark * { transform-box: view-box; }
+.aiden-mark[data-paused] *,
+.aiden-mark[data-offscreen] * { animation-play-state: paused !important; }
+:root[data-reduce-motion="true"] .aiden-mark * { animation-play-state: paused !important; }
+@media (prefers-reduced-motion: reduce) {
+  .aiden-mark * { animation-play-state: paused !important; }
+}
+
+/* Tri-step: a third of a turn with a small overshoot, then a rest. */
+.aiden-mark[data-aiden-mark="tri-step"] .aiden-mark-turn { transform-origin: 12px 12px; animation: aiden-mark-tri 2.7s infinite; }
+@keyframes aiden-mark-tri {
+  0% { transform: rotate(0); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+  22%, 33.33% { transform: rotate(120deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+  55.33%, 66.66% { transform: rotate(240deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+  88.66%, 100% { transform: rotate(360deg); }
+}
+
+/* Quad shuffle: fold to a diagonal, spread back, trade corners. */
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle { animation: 2.6s cubic-bezier(.65, 0, .35, 1) infinite; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(1) { animation-name: aiden-mark-shuffle-tl; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(2) { animation-name: aiden-mark-shuffle-tr; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(3) { animation-name: aiden-mark-shuffle-bl; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(4) { animation-name: aiden-mark-shuffle-br; }
+@keyframes aiden-mark-shuffle-tl { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(-2.2px, -2.2px); } 56%, 72% { transform: translate(10px, 0); } }
+@keyframes aiden-mark-shuffle-tr { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(-7.4px, 2.6px); } 56%, 72% { transform: translate(0, 10px); } }
+@keyframes aiden-mark-shuffle-bl { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(7.4px, -2.6px); } 56%, 72% { transform: translate(0, -10px); } }
+@keyframes aiden-mark-shuffle-br { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(2.2px, 2.2px); } 56%, 72% { transform: translate(-10px, 0); } }
+
+/* Compose: three text lines grow from the left in turn. */
+.aiden-mark[data-aiden-mark="compose"] rect {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: aiden-mark-compose 2.2s cubic-bezier(.4, 0, .2, 1) infinite both;
+}
+@keyframes aiden-mark-compose {
+  0% { transform: scaleX(.16); opacity: .35; }
+  35%, 70% { transform: scaleX(1); opacity: 1; }
+  100% { transform: scaleX(.16); opacity: .35; }
+}
+
+/* Scan grid: columns light up left to right. */
+.aiden-mark[data-aiden-mark="scan-grid"] circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: aiden-mark-scan 1.5s ease-in-out infinite;
+}
+@keyframes aiden-mark-scan { 0%, 70%, 100% { opacity: .2; transform: scale(1); } 30% { opacity: 1; transform: scale(1.18); } }
+
+/* Glance: look left, look right, blink. */
+.aiden-mark[data-aiden-mark="glance"] .aiden-mark-look { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
+.aiden-mark[data-aiden-mark="glance"] .aiden-mark-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
+@keyframes aiden-mark-look {
+  0%, 14% { transform: translateX(0); }
+  24%, 40% { transform: translateX(-2.6px); }
+  52%, 68% { transform: translateX(2.6px); }
+  80%, 100% { transform: translateX(0); }
+}
+@keyframes aiden-mark-blink { 0%, 86%, 94%, 100% { transform: scaleY(1); } 90% { transform: scaleY(.1); } }
+
+/* Bounce: the typing trio. */
+.aiden-mark[data-aiden-mark="bounce"] circle { animation: aiden-mark-bounce 1.2s cubic-bezier(.45, 0, .55, 1) infinite both; }
+@keyframes aiden-mark-bounce { 0%, 55%, 100% { transform: translateY(0); } 27% { transform: translateY(-5px); } }
+
+/* Bot faces glance and blink while their Bot works (spec §6), reusing the glance
+   keyframes. Motion runs only with Reduce Motion off and on screen; off screen the
+   face pauses where it is. */
+:root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eyes { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
+.bot-avatar[data-offscreen] * { animation-play-state: paused !important; }
+/* Under Reduce Motion a working face holds the glance's look-aside pose instead,
+   so it still reads as working without moving. */
+:root[data-reduce-motion="true"] .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
+@media (prefers-reduced-motion: reduce) {
+  .bot-avatar[data-working] * { animation: none !important; }
+  .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
+}
+
+/* Helix family (Live). Position and depth run on the same period with depth a
+   quarter behind (per-circle delays are inline), so the strands read as
+   passing in front of each other. */
+.aiden-mark[data-aiden-mark^="helix-"] circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation-name: aiden-mark-helix-y, aiden-mark-helix-z;
+  animation-duration: var(--dur);
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+@keyframes aiden-mark-helix-y { 0%, 100% { translate: 0 calc(var(--amp) * -1); } 50% { translate: 0 var(--amp); } }
+@keyframes aiden-mark-helix-z { 0%, 100% { scale: var(--zf); opacity: 1; } 50% { scale: var(--zb); opacity: var(--ob); } }
+.aiden-mark[data-aiden-mark="helix-calm"]   { --amp: 3.4px; --dur: 3.6s; --zf: 1.12; --zb: .78; --ob: .5; }
+.aiden-mark[data-aiden-mark="helix-twist"]  { --amp: 5px;   --dur: 1.5s; --zf: 1.3;  --zb: .55; --ob: .3; }
+.aiden-mark[data-aiden-mark="helix-swell"]  { --amp: 3px;   --dur: 1.6s; --zf: 1.3;  --zb: .6;  --ob: .35; --aiden-mark-amp2: 3px; }
+.aiden-mark[data-aiden-mark="helix-duplex"] { --amp: 5px;   --dur: 2s;   --zf: 1.3;  --zb: .6;  --ob: .35; }
+.aiden-mark[data-aiden-mark="helix-duplex"] .aiden-mark-strand-b { fill-opacity: .55; }
+.aiden-mark[data-aiden-mark="helix-flat"] circle { animation: none; }
+.aiden-mark[data-aiden-mark="helix-flat"] .aiden-mark-strands { opacity: .45; }
+/* Swell: a slower second wave on top of the braid, sized in five steps by the voice level. */
+.aiden-mark[data-aiden-mark="helix-swell"] .aiden-mark-wave { animation: aiden-mark-swell 2.3s ease-in-out infinite; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="0"] { --aiden-mark-amp2: 1px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="1"] { --aiden-mark-amp2: 2px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="2"] { --aiden-mark-amp2: 3px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="3"] { --aiden-mark-amp2: 4px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="4"] { --aiden-mark-amp2: 5px; }
+@keyframes aiden-mark-swell {
+  0%, 100% { translate: 0 calc(var(--aiden-mark-amp2) * -1); }
+  50% { translate: 0 var(--aiden-mark-amp2); }
 }
 .gemini-live-setup-hero {
   display: grid;
@@ -2660,22 +3060,20 @@ textarea {
   gap: 0.75rem;
   padding: 0.25rem 0 0.75rem;
 }
-.aiden-live-orb[data-state="ready"] {
+.aiden-live-mark[data-state="ready"] {
   opacity: 0.82;
 }
-.aiden-live-orb[data-visual="duplex"] {
+.aiden-live-mark[data-mark="helix-swell"],
+.aiden-live-mark[data-mark="helix-duplex"] {
   transform: scale(calc(0.98 + var(--aiden-live-level, 0) * 0.08));
 }
-.aiden-live-orb[data-state="approval"] {
-  filter: drop-shadow(0 0 7px rgb(79 125 255 / 32%));
-}
-.aiden-live-orb[data-state="error"],
-.aiden-live-orb[data-state="unavailable"] {
+.aiden-live-mark[data-state="error"],
+.aiden-live-mark[data-state="unavailable"] {
   opacity: 0.5;
 }
 .gemini-live-readiness-list {
   overflow: hidden;
-  border: 1px solid var(--color-separator);
+  border: 0;
   border-radius: 0.875rem;
   background: var(--color-well);
 }
@@ -2736,7 +3134,7 @@ textarea {
   width: min(22rem, calc(100vw - 2rem));
   overflow: hidden;
   pointer-events: auto;
-  border: 1px solid var(--color-separator);
+  border: 0;
   border-radius: 1rem;
   background: color-mix(in srgb, var(--color-background) 94%, transparent);
   box-shadow:
@@ -2751,7 +3149,7 @@ textarea {
   padding: 0.75rem;
   border-bottom: 1px solid var(--color-separator);
 }
-.gemini-live-hud-header > .aiden-live-orb {
+.gemini-live-hud-header > .aiden-live-mark {
   width: 2.5rem;
   height: 2.5rem;
 }
@@ -2773,14 +3171,169 @@ textarea {
   margin: 0 0.75rem 0.75rem;
   padding: 0.625rem 0.75rem;
 }
-:root[data-reduce-motion="true"] .aiden-live-trigger {
-  transition: none;
-}
-:root[data-reduce-motion="true"] .aiden-live-trigger:hover,
-:root[data-reduce-motion="true"] .aiden-live-trigger:active {
-  transform: none;
-}
-:root[data-reduce-motion="true"] .aiden-live-orb {
+:root[data-reduce-motion="true"] .aiden-live-mark {
   transform: none;
   transition: none;
 }
+
+/* ---- Generated-image "Lens" placeholder ------------------------------------
+   Shown where a chat's generated image will appear while generate_image runs.
+   Numbers mirror IMAGE_SCAN_SPEC in renderer/shared/image-generation/placeholder-spec.ts
+   (iOS and Android use the same spec). Only transform and opacity animate; the
+   dot fields are tiled gradients drawn once. Without motion (Reduce Motion, or
+   before the animation class applies) the lens rests in its still pose. */
+/* The slot is exactly the requested shape: as wide as the column allows, at
+   most 42rem wide and 32rem tall. A generated image renders at the same size. */
+.image-scan-slot {
+  width: min(100%, 42rem, calc(32rem * var(--image-scan-aspect, 1)));
+}
+.image-scan {
+  --image-scan-period: 2.8s;
+  --image-scan-dot: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --image-scan-dot-lit: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--image-scan-ratio, 1 / 1);
+  overflow: hidden;
+  contain: paint;
+  isolation: isolate;
+}
+.image-scan-result {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Never crop: a provider that ignores the requested ratio letterboxes. */
+  object-fit: contain;
+}
+.image-scan[data-scan-period="long"] { --image-scan-period: 5.2s; }
+.image-scan-cover {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-popover);
+}
+.image-scan-cover > * { position: absolute; inset: 0; }
+.image-scan-fill { background: var(--surface-control); }
+.image-scan-dots {
+  background-image: radial-gradient(var(--image-scan-dot) 1px, transparent 1.3px);
+  background-size: 12px 12px;
+  background-position: 6px 6px;
+}
+/* Edges sink toward the window background, which is darker than the popover in every theme. */
+.image-scan-vignette {
+  background: radial-gradient(120% 90% at 50% 40%, transparent 55%, color-mix(in srgb, var(--surface-background) 70%, transparent));
+}
+/* The lens: 34% of the height. Its still pose centres it at 40% of the height. */
+.image-scan .image-scan-lens,
+.image-scan .image-scan-edge {
+  inset: 0 0 auto 0;
+  height: 34%;
+  transform: translateY(67.65%);
+  will-change: transform;
+}
+.image-scan-lens {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 70%, #000 96%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 70%, #000 96%, transparent 100%);
+}
+.image-scan-lens-glow {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--accent) 7%, transparent) 100%);
+}
+/* Counter-moving bright dots, the placeholder's full height, so lit dots stay put. */
+.image-scan-lens-dots {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 294.12%;
+  transform: translateY(-23%);
+  will-change: transform;
+  background-image: radial-gradient(var(--image-scan-dot-lit) 1.1px, transparent 1.5px);
+  background-size: 12px 12px;
+  background-position: 6px 6px;
+}
+.image-scan-edge { pointer-events: none; }
+.image-scan-edge::after,
+.image-scan-cover::before {
+  content: "";
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  height: 1px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent) 22%, var(--accent) 78%, transparent);
+}
+.image-scan-edge::after {
+  bottom: 0;
+  opacity: 0.85;
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-lens,
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-edge {
+  animation: image-scan-window var(--image-scan-period) cubic-bezier(0.55, 0.06, 0.3, 1) infinite;
+}
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-lens-dots {
+  animation: image-scan-counter var(--image-scan-period) cubic-bezier(0.55, 0.06, 0.3, 1) infinite;
+}
+/* Travel during the first 78% of each pass, then rest. */
+@keyframes image-scan-window {
+  0% { transform: translateY(-100%); }
+  78%, 100% { transform: translateY(294.12%); }
+}
+@keyframes image-scan-counter {
+  0% { transform: translateY(34%); }
+  78%, 100% { transform: translateY(-100%); }
+}
+/* Offscreen or hidden pauses the whole slot, caption dot included. The reveal
+   pauses the scan but never the arriving image's own fade. */
+.image-scan-slot[data-offscreen] *,
+.image-scan-slot[data-document-hidden] *,
+.image-scan-slot[data-arrival="reveal"] .image-scan-live,
+.image-scan[data-arrival="reveal"] *:not(.image-scan-result) { animation-play-state: paused !important; }
+/* Arrival: the cover slides away under a bright edge, revealing the image. */
+.image-scan-cover::before {
+  top: -1px;
+  z-index: 1;
+  opacity: 0;
+  box-shadow: 0 0 12px 2px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.image-scan[data-arrival="reveal"] .image-scan-cover {
+  transform: translateY(100%);
+  transition: transform 720ms cubic-bezier(0.65, 0.05, 0.25, 1);
+}
+.image-scan[data-arrival="reveal"] .image-scan-cover::before {
+  opacity: 0.9;
+  transition: opacity 120ms;
+}
+.image-scan[data-arrival="reveal"] .image-scan-chip {
+  opacity: 0;
+  transition: opacity 200ms;
+}
+:root[data-reduce-motion="true"] .image-scan[data-arrival="reveal"] .image-scan-cover { transition: none; }
+:root[data-reduce-motion="true"] .image-scan-result { animation: image-scan-fade 260ms ease-out both; }
+@keyframes image-scan-fade { from { opacity: 0; } }
+.image-scan-chip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--surface-popover) 72%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+  font-variant-numeric: tabular-nums;
+}
+.image-scan-live {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.9;
+}
+:root[data-reduce-motion="false"] .image-scan-caption[data-motion="animate"] .image-scan-live {
+  animation: image-scan-live 1.4s ease-in-out infinite;
+}
+@keyframes image-scan-live { 50% { opacity: 0.25; } }

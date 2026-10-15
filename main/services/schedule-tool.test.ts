@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { runToolCall, type AgentToolResult } from "@earendil-works/pi-agent-core";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { digestPiRuntimeEffectArguments } from "./pi-runtime-effect-core.js";
 import type {
   McpServer,
   ScheduledMcpServerBinding,
@@ -27,7 +29,12 @@ import {
   summarizeScheduleToolCall,
   type ScheduleToolDependencies,
 } from "./schedule-tool.js";
-import { scheduledMcpServerBinding } from "./schedule-mcp-binding.js";
+import { createHash } from "node:crypto";
+import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import {
+  assertScheduledMcpServerBindings,
+  scheduledMcpServerBinding,
+} from "./schedule-mcp-binding.js";
 
 const ASSISTANT_MODEL_SELECTION = {
   providerId: "local-provider",
@@ -193,6 +200,36 @@ function jsonResult(value: AgentToolResult<null>): Record<string, unknown> {
   assert.equal(block?.type, "text");
   if (!block || block.type !== "text") throw new Error("Expected a text tool result.");
   return JSON.parse(block.text) as Record<string, unknown>;
+}
+
+for (const attended of [false, true]) {
+  test(`approved ${attended ? "Assistant" : "standard"} task reaches execution through the durable tool boundary`, async () => {
+    const fake = fakeDependencies();
+    const tool = createScheduleTaskTool(
+      attended ? ATTENDED_ACCESS : { kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION },
+      fake.dependencies,
+    );
+    const outcome = await runToolCall({
+      type: "toolCall", id: "create-approved", name: tool.name,
+      arguments: { action: "create", name: "Inbox brief", cron: "0 9 * * *", prompt: "Summarize unread email.", permission: "full", mcpServerIds: ["gmail"] },
+    }, {
+      assistantMessage: fauxAssistantMessage("I’ll prepare your daily brief."),
+      tools: [tool],
+      context: { messages: [], tools: [tool] },
+      beforeToolCall: async ({ args }) => {
+        if (attended) attachAssistantScheduleMcpApproval(args, [GMAIL_BINDING]);
+        else await prepareStandardScheduleApproval(args, ASSISTANT_MODEL_SELECTION, fake.dependencies);
+        // The managed runtime hashes arguments after approval and before dispatch.
+        digestPiRuntimeEffectArguments(args);
+        return undefined;
+      },
+    });
+    assert.equal(outcome.isError, false, JSON.stringify(outcome.result));
+    assert.equal(fake.tasks.length, 1);
+    assert.equal(fake.tasks[0]?.providerId, "local-provider");
+    assert.equal(fake.tasks[0]?.model, "local-model");
+    assert.deepEqual(fake.tasks[0]?.mcpServerBindings, [GMAIL_BINDING]);
+  });
 }
 
 test("schedule_task supports the full create/update/list/pause/resume/run/remove lifecycle", async () => {
@@ -1248,6 +1285,32 @@ test("Assistant approval resolution binds exact enabled MCP names", async () => 
   );
 });
 
+test("an approved schedule survives renaming its MCP server but not a connection change", () => {
+  const renamed = { ...GMAIL_SERVER, name: "Work mail", description: "Inbox for the team" };
+  assert.doesNotThrow(() => assertScheduledMcpServerBindings([renamed], [GMAIL_BINDING]));
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, url: "https://replacement.test/mcp" }], [GMAIL_BINDING]),
+    /changed after this automation was confirmed/iu,
+  );
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, headers: { authorization: "Bearer other" } }], [GMAIL_BINDING]),
+    /changed after this automation was confirmed/iu,
+  );
+  // Schedules approved before display fields left the binding keep running
+  // until the server changes; then they need approval again.
+  const legacy = {
+    id: GMAIL_SERVER.id,
+    fingerprint: createHash("sha256")
+      .update(JSON.stringify(mcpRuntimeConnectionSnapshot(GMAIL_SERVER)))
+      .digest("hex"),
+  };
+  assert.doesNotThrow(() => assertScheduledMcpServerBindings([GMAIL_SERVER], [legacy]));
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, url: "https://replacement.test/mcp" }], [legacy]),
+    /changed after this automation was confirmed/iu,
+  );
+});
+
 test("Assistant automation proposals cannot combine project and MCP capabilities", () => {
   assert.throws(
     () =>
@@ -1507,4 +1570,89 @@ test("standard schedule edits preserve a pinned task provider", async () => {
   });
   assert.equal(fake.tasks[0]?.providerId, "provider-1");
   assert.equal(fake.tasks[0]?.model, "model-1");
+});
+
+function botRoutineTask(id: string, botId: string): ScheduledTask {
+  return {
+    id,
+    name: `Routine ${id}`,
+    enabled: true,
+    mode: "llm",
+    cron: "41 8 * * 0",
+    timezone: "UTC",
+    prompt: "Plan this week's dinners.",
+    permission: "read-only",
+    botId,
+    routineSchedule: { kind: "weekly", days: [0], time: "08:41" },
+    notify: true,
+    createdAt: 1,
+    updatedAt: 7,
+  };
+}
+
+test("generic automation tools never list or change a Bot's routines", async () => {
+  const fake = fakeDependencies();
+  fake.tasks.push(
+    {
+      id: "task-1",
+      name: "Daily brief",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Summarize updates.",
+      permission: "read-only",
+      notify: true,
+      createdAt: 1,
+      updatedAt: 4,
+    },
+    botRoutineTask("routine-1", "bot-chef"),
+  );
+  const standard = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  const listed = jsonResult(await standard.execute("list", { action: "list" }));
+  assert.deepEqual((listed.tasks as Array<{ id: string }>).map((task) => task.id), ["task-1"]);
+  await assert.rejects(
+    standard.execute("pause", {
+      action: "pause",
+      id: "routine-1",
+      taskName: "Routine routine-1",
+      expectedUpdatedAt: 7,
+    }),
+    /not found/iu,
+  );
+  await assert.rejects(
+    standard.execute("remove", {
+      action: "remove",
+      id: "routine-1",
+      taskName: "Routine routine-1",
+      expectedUpdatedAt: 7,
+    }),
+    /not found/iu,
+  );
+  assert.equal(fake.tasks.find((task) => task.id === "routine-1")?.enabled, true);
+
+  const assistantList = createAssistantScheduleListTool(fake.dependencies);
+  const assistantListed = jsonResult(await assistantList.execute("list", {}));
+  assert.deepEqual(
+    (assistantListed.tasks as Array<{ id: string }>).map((task) => task.id),
+    ["task-1"],
+  );
+});
+
+test("schedule_task cannot choose a server switched off for the model", async () => {
+  const fake = fakeDependencies();
+  fake.dependencies.listMcpServers = async () => [{ ...GMAIL_SERVER, exposure: "hidden" }];
+  const proposal = prepareAssistantScheduleProposal(
+    { action: "create", name: "Brief", cron: "0 9 * * *", timezone: "UTC", prompt: "Summarize.", mcpServerIds: ["gmail"] },
+    new Date("2026-07-30T12:00:00.000Z"),
+  );
+  await assert.rejects(resolveAssistantScheduleMcpServers(proposal, fake.dependencies.listMcpServers), /off for the model/u);
+  await assert.rejects(
+    prepareStandardScheduleApproval(
+      { action: "create", name: "Brief", cron: "0 9 * * *", prompt: "Summarize.", permission: "full", mcpServerIds: ["gmail"] },
+      ASSISTANT_MODEL_SELECTION,
+      fake.dependencies,
+    ),
+    /off for the model/u,
+  );
 });

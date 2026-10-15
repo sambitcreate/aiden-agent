@@ -593,7 +593,8 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             .sorted { left, right in
                 left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
             }
-        let chatsByWorkspace = Dictionary(grouping: regularChats, by: \AidenChatSummary.workspaceId)
+        let triagedChats = aidenNeedsAttentionFirst(regularChats)
+        let chatsByWorkspace = Dictionary(grouping: triagedChats, by: \AidenChatSummary.workspaceId)
         let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
             let allChats = chatsByWorkspace[workspace.id] ?? []
             let workspaceMatches = !query.isEmpty && workspace.name.localizedCaseInsensitiveContains(query)
@@ -604,7 +605,7 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             return AidenWorkspaceSidebarSection(
                 workspace: workspace,
                 chats: visibleChats,
-                newestActivityAt: max(workspace.updatedAt, allChats.first?.updatedAt ?? .distantPast)
+                newestActivityAt: max(workspace.updatedAt, allChats.map(\.updatedAt).max() ?? .distantPast)
             )
         }
         .sorted { left, right in
@@ -616,7 +617,7 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             }
             return left.workspace.id < right.workspace.id
         }
-        let recents = regularChats.filter { chat in
+        let recents = triagedChats.filter { chat in
             guard !query.isEmpty else { return true }
             return chat.title.localizedCaseInsensitiveContains(query)
                 || workspaceByID[chat.workspaceId]?.name.localizedCaseInsensitiveContains(query) == true
@@ -3324,7 +3325,7 @@ private struct AidenAppSettingsView: View {
                 } footer: {
                     Text(
                         voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed by Parakeet on your paired desktop, and not retained. Text appears after you stop recording."
+                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired Mac, and not retained. Text appears after you stop recording."
                             : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
                     )
                 }

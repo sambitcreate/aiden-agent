@@ -6,8 +6,20 @@ import type {
   ScheduledTaskInput,
 } from "./types.js";
 
+/**
+ * What started a run. An automatic run carries the exact scheduled fire time it
+ * claimed, so downstream submissions can derive a stable idempotency key
+ * (`routine:<taskId>:<fireTime>`); a manual run carries its own unique key.
+ * A catch-up re-runs one fire a paused Bot skipped: it names that skipped
+ * run, so repeating the catch-up reuses the same idempotency key.
+ */
+export type ScheduledRunTrigger =
+  | { kind: "automatic"; fireTime: number }
+  | { kind: "manual"; key: string }
+  | { kind: "catch_up"; missedRunId: string; missedAt: number };
+
 interface ScheduleExecutionLike {
-  run(task: ScheduledTask, runId?: string): Promise<ScheduledRun>;
+  run(task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger): Promise<ScheduledRun>;
   cancel(taskId: string): boolean;
   cancelAll(): void;
 }
@@ -24,7 +36,7 @@ interface RunningTask {
 
 type DispatchOptions = { runId?: string; expectedUpdatedAt?: number } & (
   | { automatic: true; isCurrent: () => boolean }
-  | { automatic: false }
+  | { automatic: false; catchUp?: Extract<ScheduledRunTrigger, { kind: "catch_up" }> }
 );
 
 type DispatchResult =
@@ -151,6 +163,7 @@ export function createScheduleServiceCore(
   let started = false;
   let globallyEnabled = true;
   let startupRevision = 0;
+  let manualRunSequence = 0;
   const catchUp = createCatchUpQueue(dependencies.catchUp);
 
   const throwIfAborted = (signal: AbortSignal | undefined, action: string) => {
@@ -187,6 +200,11 @@ export function createScheduleServiceCore(
     task: ScheduledTask,
     isCurrent: () => boolean,
   ): Promise<ScheduledTask> {
+    // A one-off routine is spent by the claim itself, so cron (which has no
+    // year field) can never repeat it on the same date next year.
+    if (task.routineSchedule?.kind === "once") {
+      return store.updateRuntime(task.id, { enabled: false, nextRunAt: undefined }, isCurrent);
+    }
     return store.updateRuntime(task.id, {
       nextRunAt: task.enabled
         ? nextScheduledRun(task.cron, task.timezone, new Date(Date.now() + 1))
@@ -274,7 +292,7 @@ export function createScheduleServiceCore(
           );
         }
         if (
-          options.automatic &&
+          (options.automatic || options.catchUp !== undefined) &&
           (!started || !globallyEnabled || !task.enabled)
         ) {
           throw new Error("This scheduled task is paused.");
@@ -284,8 +302,15 @@ export function createScheduleServiceCore(
         const claimed = options.automatic ? await advanceBeforeRun(task, isCurrent) : task;
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
+        if (options.automatic && !claimed.enabled) {
+          stopJob(task.id);
+          dependencies.broadcast({ taskId: task.id });
+        }
         state.executionStarted = true;
-        return execution.run(claimed, options.runId);
+        const trigger: ScheduledRunTrigger = options.automatic
+          ? { kind: "automatic", fireTime: task.nextRunAt ?? Date.now() }
+          : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
+        return execution.run(claimed, options.runId, trigger);
       } finally {
         if (!workspaceResolved) {
           workspaceResolved = true;
@@ -659,6 +684,23 @@ export function createScheduleServiceCore(
       return operation.finally(() =>
         options.signal?.removeEventListener("abort", cancel),
       );
+    },
+
+    /**
+     * Run one missed fire again (a Bot routine skipped while its Bot was
+     * paused). Unlike `runNow` it honours the same gates as an automatic run
+     * (scheduler started, globally enabled, task enabled) and never advances
+     * the schedule. `undefined` when the task is already running.
+     */
+    catchUp(
+      id: string,
+      missed: { runId: string; at: number },
+    ): Promise<ScheduledRun> | undefined {
+      const result = dispatch(id, {
+        automatic: false,
+        catchUp: { kind: "catch_up", missedRunId: missed.runId, missedAt: missed.at },
+      });
+      return result.kind === "dispatched" ? result.completion : undefined;
     },
 
     async setGlobalEnabled(enabled: boolean): Promise<void> {

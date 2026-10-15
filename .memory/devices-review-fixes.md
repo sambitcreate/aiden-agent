@@ -1,0 +1,42 @@
+# Devices: review fixes on the parity branch (2026-10-08)
+
+Follow-up fixes to review findings on `feature/ios-simulator-upgrades-compare-42da8d`, after the A–F merge. Each fix has its own commit and a behavioral test.
+
+## Fixes
+
+1. **SSH stop is sticky** (`ssh-device-host.ts`).
+   - A `generation` counter replaces the `stopped` flag. Every connect (`ensureReady`, `ensureAgentReady`, and the reconnect loop) captures it when it is called. `stop()` bumps it.
+   - A stale connect refuses before reaching the host, or closes the tunnel it opened.
+   - `stop()` cannot be permanent, because `disconnectSsh` keeps the entries and reuses the host objects. Only remove and edit create new objects.
+   - Test: three queued connects plus a stop leave no live tunnel, and a later Connect works.
+2. **Phones cannot shut down Android emulators** (`device-service.ts`, `createShare`).
+   - Mobile `open` and `shutdown` refuse non-iOS devices with `capability_denied` (403).
+   - Mobile `action` is refused in the share host too. The relay already refused it, so this is defense in depth.
+3. **Phone input socket allowlist** (`aiden-remote-simulators.ts`).
+   - `MobileSimulatorInputFilter` is a streaming RFC 6455 client-frame parser, inserted through the new `pipeUpgrade({ inbound })` hook in `device-hub-proxy.ts`.
+   - Passes: masked binary messages whose first byte is in `MOBILE_SIMULATOR_INPUT_TAGS` (now exported from `aiden-remote-protocol.ts`), their continuations, and ping, pong, and close frames.
+   - Closes with 1008 on anything else: another tag, text, an empty or unmasked frame, RSV bits, or a reserved opcode. The offending frame never reaches the hub.
+   - The relay strips `Sec-WebSocket-Extensions` for phones, so no permessage-deflate is negotiated.
+   - Desktop relays stay an opaque pipe.
+   - Native iOS and Android encoders emit only 0x03, 0x04, 0x07, and 0x0D. They are pinned to the fixture, whose parser refuses other tags. No native change was needed.
+4. **Peer AVD id rewrite**.
+   - `peer-devices.ts` accepts a changed id only when it matches `isEmulatorSerial`.
+   - `device-service.ts` also requires that the requested device was a stopped Android AVD and that no other listed device has that serial. Otherwise the open is refused ("answered with a different device").
+5. **Save-path mkdir race** (`device-save-path.ts`).
+   - The walk starts from `realpath(root)` and does a non-recursive `mkdir` per component, then checks each one with `lstat` (links refused) and `realpath` (it must stay inside the root).
+   - Behavior change: a folder link below the root is now refused even when it points inside the root.
+   - The test patches `fs/promises.mkdir` with `syncBuiltinESMExports()` to plant a link mid-walk.
+6. **SSH forward exposure** (documented, not fixed).
+   - The loopback forward exposes the remote hub, including serve-sim exec, to every local process.
+   - A UNIX-socket forward would need every hub consumer (proxy, service hub calls, `/readyz`) to dial a socket path. The external agent-device CLI is TCP-only.
+   - Documented in `docs/devices.md` (user SSH section and Internals → SSH hosts), with a follow-up in `docs/plans/simulator-devices-t3-parity-plan.md`.
+7. **Save-path parent swap** (PR #391 review, P1). `O_NOFOLLOW` guarded only the leaf, so a checked parent swapped for an outside link before `open(O_TRUNC)` let the write escape.
+   - The native helper `aiden-worktree-file-io` gained a `save` operation: `open_root` by captured dev/ino, `parent_at` (mkdirat + `O_NOFOLLOW` openat per component), `O_EXCL` temp `.aiden-save-<hex>.tmp` in the held parent, `renameat` over the leaf on that descriptor. Existing non-regular leaf → `unsafe_destination`. Checkpoints `P` (parent opened) and `W` (temp written) for the test build. Cap 64 MB.
+   - Wrapper `saveConfinedWorkspaceFile` in `managed-worktree-file-io.ts`. `writeDeviceSaveFile` keeps its walk for messages, captures the root identity first, and refuses on non-darwin (devices are darwin-only).
+   - Residual: a folder *moved* (not replaced) after the helper opened it keeps the file. Hard-linked leaf: replaced as an entry, the outside inode is untouched (the old `O_TRUNC` wrote through it).
+   - `pretest:devices` builds the helper. Tests: `device-save-path.test.ts` (patches `fs/promises.open` and `child_process.execFile` to swap at the write; hard link) and two native tests in `scripts/worktree-file-io.test.mjs`.
+   - "Save screenshot…" uses the dialog path with `deps.writeFile`, not this writer.
+8. **Queued tool updates after revoke** (PR #391 review, P2, `device-service.ts`). `updateTool` checked consent before joining `granting`, then the queued callback installed unconditionally.
+   - New `agentEpoch` (bumped by streaming and agentAccess revokes) beside `streamingEpoch`. `installApproval()` snapshots both when the user acts; `requireInstallConsent(tool, approval)` runs immediately before every install side effect and throws "…was turned off…". Sharing revokes do not cancel tool updates.
+   - Guarded: `installLocalTool` (queued local Update, and the agent update inside `startLocal`), and SSH `updateTool` after its approval save (a streaming revoke that raced the save also drops that host's re-added approval) and before the agent `ensureAgentReady({allowInstall:true})`. `connectSsh` already rechecks streaming/`sshEpoch` right before the hub install; the agent grant and `start()` already check `consentEpoch`.
+   - Only an install already inside npm can finish after a revoke. Tests: three in `device-service-ssh.test.ts` (fake local `installTool` and SSH `ensureReady` gained hold points).

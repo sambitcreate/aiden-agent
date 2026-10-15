@@ -91,7 +91,6 @@ final class AidenBotCacheTests: XCTestCase {
             list: contract.botList,
             conversations: contract.botConversations,
             catalog: contract.botCapabilityCatalog,
-            notice: contract.botNotice,
             savedAt: Date(timeIntervalSince1970: 2)
         )
 
@@ -123,7 +122,6 @@ final class AidenBotCacheTests: XCTestCase {
             details: [contract.botDetail],
             conversations: contract.botConversations,
             catalog: contract.botCapabilityCatalog,
-            notice: contract.botNotice,
             savedAt: Date(timeIntervalSince1970: 10)
         )
         let stored = try await cache.store(initial, activation: activation)
@@ -141,7 +139,6 @@ final class AidenBotCacheTests: XCTestCase {
 
         XCTAssertEqual(merged?.details, [contract.botDetail])
         XCTAssertEqual(merged?.catalog, contract.botCapabilityCatalog)
-        XCTAssertEqual(merged?.notice, contract.botNotice)
         XCTAssertEqual(reloaded, merged)
         XCTAssertEqual(reloaded?.savedAt, Date(timeIntervalSince1970: 20))
     }
@@ -155,7 +152,7 @@ final class AidenBotCacheTests: XCTestCase {
         let emptyList = try AidenRemoteJSONDecoder.decode(
             AidenBotList.self,
             from: Data(
-                #"{"bots":[],"maxBots":256,"favorites":{"botIds":[],"revision":"favorites_empty"}}"#.utf8
+                #"{"bots":[],"maxBots":256}"#.utf8
             )
         )
         let activation = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
@@ -293,57 +290,35 @@ final class AidenBotCacheTests: XCTestCase {
         XCTAssertEqual(retainedOldPairing, snapshot)
     }
 
-    func testBotCacheAcceptsReadableConversationOwnedByArchivedBot() async throws {
+    func testDeletedBotIsForgottenFromListDetailsAndConversations() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appending(path: "aiden-bot-cache-archived-\(UUID().uuidString)", directoryHint: .isDirectory)
+            .appending(path: "aiden-bot-cache-delete-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
         let cache = AidenBotCache(root: root)
-        let list = try AidenRemoteJSONDecoder.decode(AidenBotList.self, from: Data(#"""
-        {
-          "bots": [
-            {
-              "id": "bot_active", "name": "Active", "purpose": "Current Bot",
-              "avatar": {"semantic": {"version": 1, "shape": "orb", "color": "sky", "eyes": "wide", "detail": "orbit"}},
-              "health": "ready", "createdAt": "2026-08-18T17:00:00.000Z",
-              "updatedAt": "2026-08-18T18:00:00.000Z", "revision": "active_revision"
-            },
-            {
-              "id": "bot_archived", "name": "Archived", "purpose": "Saved history",
-              "avatar": {"semantic": {"version": 1, "shape": "orb", "color": "sky", "eyes": "wide", "detail": "orbit"}},
-              "health": "archived", "createdAt": "2026-08-18T17:00:00.000Z",
-              "updatedAt": "2026-08-18T19:00:00.000Z", "revision": "archived_revision",
-              "archivedAt": "2026-08-18T19:00:00.000Z"
-            }
-          ],
-          "maxBots": 256,
-          "favorites": {"botIds": ["bot_active"], "revision": "favorites_revision"}
-        }
-        """#.utf8))
-        let conversations = try AidenRemoteJSONDecoder.decode(
-            AidenBotConversationPage.self,
-            from: Data(#"""
-            {
-              "conversations": [{
-                "chatId": "chat_archived", "botId": "bot_archived", "title": "Saved chat",
-                "preview": "Still readable", "activityState": "idle", "canRespondToApproval": false,
-                "createdAt": "2026-08-18T17:00:00.000Z", "updatedAt": "2026-08-18T19:00:00.000Z",
-                "revision": "chat_revision"
-              }]
-            }
-            """#.utf8)
+        let contract = try fixture()
+        let botID = contract.botDetail.id
+        _ = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        _ = try await cache.mergeAndStore(
+            AidenBotCacheSegments(
+                list: contract.botList,
+                details: [contract.botDetail],
+                conversations: contract.botConversations
+            ),
+            instanceId: "instance-a",
+            deviceId: "device-a"
         )
-        let snapshot = AidenBotCacheSnapshot(
-            list: list,
-            conversations: conversations,
-            savedAt: Date(timeIntervalSince1970: 1_777_777_777)
+
+        let afterDelete = try await cache.removeBotAndStore(
+            botId: botID,
+            instanceId: "instance-a",
+            deviceId: "device-a"
         )
-        let activation = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let reloaded = await cache.load(instanceId: "instance-a", deviceId: "device-a")
 
-        let stored = try await cache.store(snapshot, activation: activation)
-        let loaded = await cache.load(instanceId: "instance-a", deviceId: "device-a")
-
-        XCTAssertTrue(stored)
-        XCTAssertEqual(loaded, snapshot)
+        XCTAssertEqual(afterDelete, reloaded)
+        XCTAssertFalse(reloaded?.list?.bots.contains { $0.id == botID } ?? true)
+        XCTAssertFalse(reloaded?.details.contains { $0.id == botID } ?? true)
+        XCTAssertFalse(reloaded?.conversations?.conversations.contains { $0.botId == botID } ?? false)
     }
 
     func testDraftStoreSharesTextByInstallationAndChatWhileRejectingOldSessions() async throws {

@@ -1,3 +1,5 @@
+import { validateMcpExposureFields } from "./mcp-exposure.js";
+
 /** Explicit OAuth authority override; ordinary discovery remains the default. */
 export function parseMcpOAuthMetadataUrl(value: unknown): string {
   if (typeof value !== "string" || !value || value.length > 2048 || value.trim() !== value || [...value].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)) {
@@ -20,8 +22,9 @@ export function mcpOAuthMetadataUrlForServer(server: { transport?: unknown; oaut
 }
 
 
-export function validateMcpServerMetadata(server: { transport?: unknown; oauth?: unknown; authServerMetadataUrl?: unknown; oauthClientName?: unknown; description?: unknown; presetId?: unknown; authProvider?: unknown; url?: unknown; headers?: unknown }): void {
+export function validateMcpServerMetadata(server: { transport?: unknown; oauth?: unknown; authServerMetadataUrl?: unknown; oauthClientName?: unknown; description?: unknown; presetId?: unknown; authProvider?: unknown; url?: unknown; headers?: unknown; exposure?: unknown; hiddenTools?: unknown }): void {
   mcpOAuthMetadataUrlForServer(server);
+  validateMcpExposureFields(server);
   if (server.authProvider !== undefined) {
     if (typeof server.authProvider !== "string" || !/^[a-z0-9][a-z0-9_-]{0,127}$/u.test(server.authProvider)) throw new Error("Select a valid built-in provider for MCP authentication.");
     if (server.transport !== "http" || server.oauth || server.presetId || server.authServerMetadataUrl !== undefined || server.oauthClientName !== undefined || (server.headers && Object.keys(server.headers).length > 0)) throw new Error("Provider authentication requires a custom HTTP server without OAuth or configured headers.");

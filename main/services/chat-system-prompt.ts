@@ -3,6 +3,7 @@
 // need the static prompt do not import the generation pipeline.
 
 import { BROWSER_AGENT_GUIDANCE } from "./browser-tools.js";
+import { COMPUTER_USE_AGENT_GUIDANCE } from "./computer-use/tool.js";
 import { DEVICE_AGENT_GUIDANCE } from "./devices/device-tools.js";
 import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
@@ -12,6 +13,19 @@ import type { WorkspacePermission } from "./types.js";
 export type ChatSystemPromptPermission = WorkspacePermission | "read-only";
 
 export async function buildSystemPrompt(
+  ...args: Parameters<typeof buildSystemPromptWithSections>
+): Promise<string> {
+  return (await buildSystemPromptWithSections(...args)).systemPrompt;
+}
+
+/** The chat prompt plus the parts of it the context breakdown reports separately. */
+export interface ChatSystemPromptWithSections {
+  systemPrompt: string;
+  /** The skills listing exactly as appended, when present. */
+  sections: { skills?: string };
+}
+
+export async function buildSystemPromptWithSections(
   folderPath: string | undefined,
   branch: string | undefined,
   permission: ChatSystemPromptPermission,
@@ -19,7 +33,7 @@ export async function buildSystemPrompt(
   skillsAvailable = true,
   skillSnapshot?: SkillRegistrySnapshot,
   availableToolNames?: ReadonlySet<string>,
-): Promise<string> {
+): Promise<ChatSystemPromptWithSections> {
   const base = PI_CHAT_SYSTEM_PROMPT;
   const skillsText =
     skillsAvailable && skillSnapshot
@@ -30,8 +44,15 @@ export async function buildSystemPrompt(
     ? `\n\n${BROWSER_AGENT_GUIDANCE}`
     : "";
   const deviceSuffix = availableToolNames?.has("device_open") ? `\n\n${DEVICE_AGENT_GUIDANCE}` : "";
+  const computerUseSuffix = availableToolNames?.has("computer_use")
+    ? `\n\n${COMPUTER_USE_AGENT_GUIDANCE}`
+    : "";
+  const sections = skillsSuffix ? { skills: skillsSuffix } : {};
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}`;
+    return {
+      systemPrompt: `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}${computerUseSuffix}`,
+      sections,
+    };
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -45,7 +66,7 @@ export async function buildSystemPrompt(
   const delegation = subagentsAvailable
     ? ` Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`
     : "";
-  return (
+  const systemPrompt =
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
     capability +
@@ -58,6 +79,7 @@ export async function buildSystemPrompt(
     delegation +
     skillsSuffix +
     browserSuffix +
-    deviceSuffix
-  );
+    deviceSuffix +
+    computerUseSuffix;
+  return { systemPrompt, sections };
 }

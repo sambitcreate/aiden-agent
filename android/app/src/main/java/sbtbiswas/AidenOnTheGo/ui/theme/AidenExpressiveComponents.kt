@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
+import sbtbiswas.AidenOnTheGo.config.AidenPalette
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -50,6 +52,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /** Shared Material 3 Expressive geometry for connected groups and squircle actions. */
 object AidenShape {
@@ -237,7 +241,7 @@ fun <T> AidenSegmentedPillRow(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .heightIn(min = 44.dp)
+                    .heightIn(min = AidenUi.MinimumTouchTarget)
                     .tactilePress(interaction)
                     .selectable(
                         selected = isSelected,
@@ -295,7 +299,7 @@ fun AidenSplitButton(
     leadingIcon: ImageVector? = null,
     enabled: Boolean = true,
     containerColor: Color = AidenTheme.palette.accent,
-    contentColor: Color = Color.White,
+    contentColor: Color = AidenTheme.palette.onAccent,
     height: Dp = 40.dp,
     menuContent: @Composable ColumnScope.() -> Unit
 ) {
@@ -392,7 +396,7 @@ fun AidenPrimaryButton(
         interactionSource = interaction,
         colors = ButtonDefaults.buttonColors(
             containerColor = if (destructive) palette.danger else palette.accent,
-            contentColor = Color.White
+            contentColor = if (destructive) AidenPalette.readableOn(palette.danger) else palette.onAccent
         ),
         modifier = modifier
             .heightIn(min = 40.dp)
@@ -402,7 +406,7 @@ fun AidenPrimaryButton(
             Icon(leadingIcon, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
         }
-        Text(text, style = MaterialTheme.typography.labelLarge, color = Color.White)
+        Text(text, style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -458,7 +462,7 @@ fun AidenDialogConfirmButton(
 /** Dismiss action slot for an `AlertDialog`. */
 @Composable
 fun AidenDialogDismissButton(
-    text: String = "Cancel",
+    text: String = stringResource(R.string.action_cancel),
     onClick: () -> Unit
 ) = AidenTonalButton(text = text, onClick = onClick)
 
@@ -475,7 +479,11 @@ fun AidenSnackbar(data: SnackbarData) {
         dismissActionContentColor = palette.secondary,
         action = data.visuals.actionLabel?.let { label ->
             {
-                TextButton(onClick = { data.performAction() }, shape = AidenShape.Button) {
+                TextButton(
+                    onClick = { data.performAction() },
+                    shape = AidenShape.Button,
+                    contentPadding = AidenButtonDefaults.TextContentPadding
+                ) {
                     Text(label, color = palette.accent, style = MaterialTheme.typography.labelLarge)
                 }
             }

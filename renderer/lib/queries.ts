@@ -1,7 +1,10 @@
 // React Query hooks for providers, chats, and settings.
 
+import { useCallback, useEffect, useMemo } from "react";
 import {
+  keepPreviousData,
   queryOptions,
+  replaceEqualDeep,
   useMutation,
   useQueries,
   useQuery,
@@ -20,6 +23,7 @@ import {
   localVoiceApi,
   mcpApi,
   modelInsightsApi,
+  modelPaceApi,
   modelsApi,
   profileApi,
   providersApi,
@@ -31,10 +35,12 @@ import {
   telegramApi,
   titleProvidersApi,
   usageApi,
+  voiceApi,
   webSearchApi,
   workspacesApi,
 } from "./ipc";
 import { isWindowActive } from "./window-activity";
+import { keepPullRequestWhilePaused, pausedPollInterval } from "./github-pause";
 import type {
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
@@ -42,6 +48,8 @@ import type {
   ModelInsightsStatus,
   Provider,
   Chat,
+  GitHubPullRequestStatus,
+  McpLiveStatus,
   UsageDateRange,
 } from "./types";
 
@@ -51,6 +59,10 @@ export const queryKeys = {
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
+  botSessionState: (id: string | undefined) => ["bot-session-state", id ?? "none"] as const,
+  /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
+  botLiveSummaries: ["bot-live-summary"] as const,
+  botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -66,6 +78,7 @@ export const queryKeys = {
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
+  modelPaceSummaries: ["modelPaceSummaries"] as const,
   modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
@@ -74,6 +87,10 @@ export const queryKeys = {
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
   mcpPresets: ["mcpPresets"] as const,
+  mcpLiveStatus: ["mcpLiveStatus"] as const,
+  mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
+  mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
+  mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
@@ -81,6 +98,7 @@ export const queryKeys = {
   aidenRemotePairingRequests: ["aidenRemotePairingRequests"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
+  voiceResolution: ["voiceResolution"] as const,
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitPullRequestStatus: (workspaceId: string | undefined) =>
@@ -97,6 +115,8 @@ export const queryKeys = {
     ["chat-pull-requests", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatPullRequestsSidebar: (chatIds: readonly string[]) =>
+    ["chat-pull-requests-sidebar", ...chatIds] as const,
   chatPullRequestCandidates: (chatId: string | undefined) =>
     ["chat-pull-request-candidates", chatId ?? "none"] as const,
   chatPullRequestPending: (chatId: string | undefined) =>
@@ -294,14 +314,6 @@ export function useBot(botId: string | undefined) {
   });
 }
 
-export function useBotChats(botId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.botChats(botId),
-    queryFn: () => botsApi.listChats(botId!),
-    enabled: Boolean(botId),
-  });
-}
-
 /** Bot capability catalog for the desktop audience; refreshed after saves. */
 export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
   return useQuery({
@@ -362,9 +374,35 @@ export function useModelInfo(
   });
 }
 
+interface ModelInfoQueryResult {
+  data?: Record<string, ModelInfo>;
+  isLoading: boolean;
+  isError: boolean;
+}
+
+const PROVIDER_ID_SEPARATOR = "\u0000";
+
 /** Resolve offline display and capability metadata for every picker connection. */
 export function useProvidersModelInfo(providers: Provider[]) {
-  const results = useQueries({
+  // `combine` is keyed on the provider ids only, so it is not re-run on every
+  // render (the composer re-renders per streamed token) while they are unchanged.
+  const providerIdsKey = providers.map((provider) => provider.id).join(PROVIDER_ID_SEPARATOR);
+  const combine = useCallback(
+    (results: readonly ModelInfoQueryResult[]) => {
+      const providerIds = providerIdsKey ? providerIdsKey.split(PROVIDER_ID_SEPARATOR) : [];
+      const data: Record<string, Record<string, ModelInfo>> = {};
+      providerIds.forEach((providerId, index) => {
+        data[providerId] = results[index]?.data ?? {};
+      });
+      return {
+        data,
+        isLoading: results.some((result) => result.isLoading),
+        isError: results.some((result) => result.isError),
+      };
+    },
+    [providerIdsKey],
+  );
+  return useQueries({
     queries: providers.map((provider) => {
       const key = [...provider.models].sort().join(",");
       return {
@@ -374,15 +412,10 @@ export function useProvidersModelInfo(providers: Provider[]) {
         staleTime: 60 * 60 * 1000,
       };
     }),
+    // Combined results are structurally shared, so `data` keeps its identity
+    // until some provider's model info changes and callers can memoize on it.
+    combine,
   });
-  const data: Record<string, Record<string, ModelInfo>> = {};
-  providers.forEach((provider, index) => {
-    data[provider.id] = results[index]?.data ?? {};
-  });
-  return {
-    data,
-    isLoading: results.some((result) => result.isLoading),
-  };
 }
 
 // Git display reads are refreshed by `git:changed`, agent tool results,
@@ -417,10 +450,19 @@ export function gitPullRequestStatusQueryOptions(workspaceId: string | undefined
     queryKey: queryKeys.gitPullRequestStatus(workspaceId),
     queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    // `gh pr view` is a network call. Push, focus and repository-change
-    // events refresh it when stale; the interval only catches remote updates.
-    refetchInterval: gitSafetyPoll(enabled, PULL_REQUEST_POLL_MS),
+    // A GitHub API call. Push, focus and repository-change events refresh it
+    // when stale; the interval only catches remote updates, and waits out a
+    // rate-limit pause instead of polling into it.
+    refetchInterval: enabled
+      ? (query) =>
+          isWindowActive() ? pausedPollInterval(query.state.data, Date.now(), PULL_REQUEST_POLL_MS) : false
+      : false,
     staleTime: PULL_REQUEST_STALE_MS,
+    structuralSharing: (previous, next) =>
+      replaceEqualDeep(
+        previous,
+        keepPullRequestWhilePaused(previous as GitHubPullRequestStatus | undefined, next as GitHubPullRequestStatus),
+      ),
   });
 }
 
@@ -498,6 +540,21 @@ export function useChatCurrentPullRequest(chatId: string | undefined, enabled = 
     queryFn: () => pullRequestsApi.current(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * Sidebar rows' linked PRs and dismissed refs, read from local stores in one IPC call. It
+ * never reaches GitHub; `chats:pull-requests-changed` invalidates it.
+ */
+export function useSidebarChatPullRequests(chatIds: readonly string[]) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequestsSidebar(chatIds),
+    // Carry the asked-about ids so rows can tell "no dismissals" from "not read yet".
+    queryFn: async () => ({ chatIds: [...chatIds], rows: await pullRequestsApi.sidebar(chatIds) }),
+    enabled: chatIds.length > 0,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -583,14 +640,62 @@ export function useModelInsightsStatus() {
   });
 }
 
-export function useComputerUseStatus(enabled = true) {
+/**
+ * Device-local measured pace per `${providerId}::${modelId}`; re-read whenever a
+ * Pad surface mounts. A surface that stays mounted can pass `enabled` (only read
+ * while visible) and `staleTime: 0` to read again each time it is shown.
+ */
+export function useModelPaceSummaries(options: { enabled?: boolean; staleTime?: number } = {}) {
+  return useQuery({
+    queryKey: queryKeys.modelPaceSummaries,
+    queryFn: modelPaceApi.summaries,
+    enabled: options.enabled ?? true,
+    retry: false,
+    staleTime: options.staleTime ?? 30_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Forget every measured speed, then drop the cached summaries so every Pad re-reads. */
+export async function clearModelPaceSummaries(
+  queryClient: QueryClient,
+  clear: () => Promise<void> = modelPaceApi.clear,
+): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: queryKeys.modelPaceSummaries });
+  await clear();
+  await queryClient.invalidateQueries({ queryKey: queryKeys.modelPaceSummaries });
+}
+
+/** How often a surface waiting on macOS permissions forces a fresh Computer Use probe. */
+export const COMPUTER_USE_LIVE_CHECK_MS = 5_000;
+
+export function useComputerUseStatus(
+  enabled = true,
+  options: {
+    /**
+     * For a surface waiting on macOS permissions: every check bypasses the main
+     * process's status cache, repeats every few seconds and on window focus
+     * until Computer Use is ready, and stops after a failed check so the
+     * surface can offer a manual retry instead of probing in a loop.
+     */
+    liveUntilReady?: boolean;
+  } = {},
+) {
+  const live = options.liveUntilReady === true;
   return useQuery({
     queryKey: queryKeys.computerUseStatus,
-    queryFn: () => computerUseApi.status(),
+    queryFn: () => computerUseApi.status(live),
     enabled,
     retry: false,
     staleTime: 5_000,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: live
+      ? (query) => (query.state.status === "error" ? false : query.state.data?.ready ? true : "always")
+      : true,
+    refetchInterval: live
+      ? (query) =>
+          query.state.status === "error" || query.state.data?.ready ? false : COMPUTER_USE_LIVE_CHECK_MS
+      : false,
   });
 }
 
@@ -648,7 +753,77 @@ export function useMcpServers() {
 }
 
 export function useMcpPresets() {
-  return useQuery({ queryKey: queryKeys.mcpPresets, queryFn: mcpApi.presets });
+  return useQuery({
+    queryKey: queryKeys.mcpPresets,
+    queryFn: mcpApi.presets,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Live per-server MCP status keyed by server id. Reads the current snapshot
+ * once, then applies main's `mcp:statusChanged` pushes; it never polls. A
+ * change in sign-in health refreshes the preset list's readiness.
+ */
+export function useMcpLiveStatus() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const unsubscribe = mcpApi.onStatusChanged((status) => {
+      let signInChanged = false;
+      queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
+        const previous = current.find((entry) => entry.serverId === status.serverId);
+        signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
+        const others = current.filter((entry) => entry.serverId !== status.serverId);
+        return status.removed ? others : [...others, status];
+      });
+      if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
+    });
+    return () => {
+      unsubscribe();
+      // Pushes sent while nothing listens are lost, so the cached snapshot is
+      // only trusted while subscribed: the next mount reads main's current one.
+      // Main answers that read after any push it sent earlier, so the snapshot
+      // is never older than the pushes that arrive before it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.mcpLiveStatus, refetchType: "none" });
+    };
+  }, [queryClient]);
+  const query = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity });
+  return useMemo(
+    () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),
+    [query.data],
+  );
+}
+
+/**
+ * A server's tools from its last discovery (never connects). Keyed by the live
+ * inventory revision (a digest of names and titles), so any rediscovery that
+ * changes the list refetches, even when the tool count is unchanged.
+ */
+export function useMcpToolList(serverId: string, toolsRevision: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.mcpToolList(serverId, toolsRevision),
+    queryFn: () => mcpApi.toolList(serverId),
+    staleTime: Infinity,
+  });
+}
+
+/** Local servers waiting for approval to run, keyed by server id. */
+export function useMcpLaunchApprovals() {
+  const query = useQuery({ queryKey: queryKeys.mcpLaunchApprovals, queryFn: mcpApi.launchApprovals, staleTime: 0 });
+  return useMemo(
+    () => new Map((query.data ?? []).map((approval) => [approval.serverId, approval] as const)),
+    [query.data],
+  );
+}
+
+/** Schedules and Bots that depend on a server; fetched when a confirmation needs them. */
+export function useMcpDependents(serverId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.mcpDependents(serverId ?? ""),
+    queryFn: () => mcpApi.dependents(serverId!),
+    enabled: Boolean(serverId),
+    staleTime: 0,
+  });
 }
 
 export function useExaConfig() {
@@ -695,6 +870,17 @@ export function useEngineStatus(enabled = true) {
     queryFn: localVoiceApi.status,
     enabled,
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Local-first voice provider resolution. `inputs` should list what the answer
+ * depends on (settings, installed models, keys) so it refetches when they change.
+ */
+export function useVoiceResolution(inputs: readonly unknown[]) {
+  return useQuery({
+    queryKey: [...queryKeys.voiceResolution, ...inputs],
+    queryFn: voiceApi.resolveProvider,
   });
 }
 

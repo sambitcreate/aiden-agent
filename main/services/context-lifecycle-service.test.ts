@@ -52,7 +52,6 @@ function deps(overrides: Partial<ContextLifecycleServiceDeps> = {}) {
   const value: ContextLifecycleServiceDeps = {
     getChat: async () => baseChat,
     listChatsByBot: async () => [],
-    isBotArchived: async () => false,
     beginChatTurn: () => lease(events),
     openSession: async () => {
       throw new Error("stop after authority checks");
@@ -168,6 +167,30 @@ test("legacy Bot duplicates are read-only and never resolve provider state", asy
   assert.equal(resolved, false);
 });
 
+test("a Design project's hidden chat is never compacted from a chat surface", async () => {
+  let resolved = false;
+  const hidden: Chat = { ...baseChat, owner: { kind: "design-project", projectId: "project-1" } };
+  const { value } = deps({
+    getChat: async () => hidden,
+    resolveRuntime: async () => {
+      resolved = true;
+      throw new Error("must not resolve");
+    },
+  });
+  const audiences = [
+    { kind: "desktop", ownerId: "renderer:1" },
+    { kind: "telegram", profile: "phone", ownerId: "telegram:phone" },
+  ] as const;
+  for (const audience of audiences) {
+    assert.deepEqual(
+      await new ContextLifecycleService(value).compactChat(hidden.id, audience, "operator"),
+      { compacted: false, reason: "archived" },
+      audience.kind,
+    );
+  }
+  assert.equal(resolved, false, "no provider is resolved, so no request is spent");
+});
+
 test("manual compaction rejects a provider alias that changes the saved binding", async () => {
   const { value } = deps({
     resolveRuntime: async () =>
@@ -183,22 +206,6 @@ test("manual compaction rejects a provider alias that changes the saved binding"
       "operator",
     ),
     { compacted: false, reason: "context_metadata_invalid" },
-  );
-});
-
-test("archived Bots return a closed reason without leaking provider failures", async () => {
-  const archived = { ...baseChat, botId: "bot-1" };
-  const { value } = deps({
-    getChat: async () => archived,
-    isBotArchived: async () => true,
-  });
-  assert.deepEqual(
-    await new ContextLifecycleService(value).compactChat(
-      archived.id,
-      { kind: "desktop", ownerId: "renderer:1" },
-      "operator",
-    ),
-    { compacted: false, reason: "archived" },
   );
 });
 

@@ -14,6 +14,8 @@ Status: active, 2026-10-05. Implementation integrated on `feature/pi-1.0.3-upgra
 
 Keep host-managed Pi Agent children, Aiden journals and native plugin ports, OpenCode as a provider, Mac pairing authority, Ask/Full/None permissions and Remote approvals. No Pi fork, vendored source, pi-durable migration, Chord transport or virtual models. Keep manual-only models.dev/benchmark networking. The user explicitly authorized creating the replacement PR, watching exact-head CI, and auto-merging when green. Release publication and rollout advancement remain separate.
 
+> **Bots exception (2026-10-07):** Bots use `@earendil-works/pi-durable` 1.0.3 (with `@earendil-works/chord` 1.0.3), pinned exactly, per the [Bots rework spec](../superpowers/specs/2026-10-07-bots-rework-design.md). Each Bot has its own durable session. Workspace chats remain excluded from pi-durable and keep the journals described here.
+
 Live direct Pi dependencies move together to exact 1.0.3. The named `@aiden/pi-legacy-harness` alias remains on 0.87.1, with its compatible dependency subtree and SDK overrides. Preserve historical version records and migration fixtures; never globally replace 0.87.1 strings or force the legacy subtree onto new APIs.
 
 ## Execution

@@ -28,6 +28,7 @@ import { workspaceStore, accessFor } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
+import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
 
 /** One daemon owns this store. CLI imports always copy its journals into new sessions. */
 export function createDaemonChats(agentDir: string) {
@@ -133,6 +134,9 @@ export function createDaemonChats(agentDir: string) {
         if (!model) throw new Error("The saved provider/model is unavailable.");
         const botTools = botAdmission ? await bots!.tools(botAdmission) : [];
         const additionalNames: string[] = [];
+        const registeredTools: { readonly name: string; readonly label?: string }[] = [];
+        // Activity shows MCP tools by their server label, not the generated name.
+        timeline.setToolLabels((toolName) => mcpToolActivityLabel([...botTools, ...registeredTools], toolName));
         const extensions: InlineExtension[] = botAdmission || !workspace.folderPath ? [] : [
           // A corrupt settings file or wedged shared DB must degrade to
           // no-memory, never brick the generation (desktop parity: llm-client
@@ -155,7 +159,7 @@ export function createDaemonChats(agentDir: string) {
           name: extension.name,
           factory: (pi) => (typeof extension === "function" ? extension : extension.factory)(new Proxy(pi, { get(target, key, receiver) {
             if (key === "registerTool") return (tool: Parameters<typeof pi.registerTool>[0]) => {
-              additionalNames.push(tool.name); target.registerTool(tool);
+              additionalNames.push(tool.name); registeredTools.push(tool); target.registerTool(tool);
             };
             return Reflect.get(target, key, receiver);
           } })),

@@ -106,20 +106,42 @@ flowchart TD
 
 The shipped ChatGPT/Codex renderer establishes two related but distinct surfaces beside a stable conversation: a compact floating summary and larger work surfaces for Review or Files. Aiden names the compact status card **Quick View** and keeps **Environment** for the persistent, resizable Review, Subagents, and Files work surface. Quick View's `Changes` row opens Review, its execution row distinguishes local/cloud targets, its branch row opens branch/worktree controls, and its later rows lead into commit/push and comparison workflows. The tables below separate directly evidenced behavior from the additional production states Aiden needs under loading, empty, error, narrow-window, and concurrent-file-change conditions.
 
+### Workspace launcher and user-opened tabs (2026-10-07)
+
+Generic panel opening selects a New tab launcher. Tool actions and deep links
+select their destination directly. The shared strip contains only opened tools;
++ returns to the launcher, and closing the last tab returns there too. Changes,
+Files, Context, and Terminal are singleton tool views; browser page titles come
+from the existing browser service. The overflow menu and arrow/Home/End keyboard
+navigation expose tabs that do not fit. Closing Files hides its mounted editor
+without discarding a draft; existing lifecycle guards still protect edits.
+
+The launcher offers Changes, Files, Terminal, Context, Browser, Quick View, and
+capability-gated More tools. Missing workspace prerequisites have explanatory
+labels. The URL field only navigates after explicit submission. No suggested
+sites or new document/side-chat capabilities are fabricated from the reference.
+
+Terminal can move between bottom and side placements while its renderer surface
+and PTY sessions remain owned by the existing workspace provider. Moving to the
+bottom dismisses a floating panel that would cover the terminal controls. Hiding
+or closing the tool tab does not terminate sessions; session close still does.
+Context uses the same runtime projection as the composer meter and separately
+labels recorded usage. Appearance can hide the meter without hiding the tool.
+
 ### Shell and layout states
 
 | State | User sees | Interaction contract |
 |---|---|---|
-| Closed | Conversation uses the full workbench width; separate Environment and Quick View toolbar controls remain available. | Each surface has an independent open bit. `⌘⇧E` and `/environment` toggle the last full Environment destination; `/quick-view` toggles Quick View without changing Environment. |
-| Summary opening / closing | The compact card fades from 4px above and `.98` scale over `180ms`. | It does not resize, dim, or make the conversation inert. Motion is removed under Reduce Motion. |
-| Quick View open | A rounded top-right card shows working changes, local execution, the active branch, commit/push, compare, and current-chat subagents. | The dedicated two-row list control toggles this card. The adjacent panel control opens or closes Environment independently. `Changes` deep-links into Review without clearing Quick View. |
+| Closed | Conversation uses the full workbench width; separate Environment and Quick View toolbar controls remain available, beside one compact button per workspace tool (Terminal, Changes, Browser, Device, Files) that opens the panel on that tab. | Each surface has an independent open bit. `⌘⇧E` and `/environment` open the New tab tool launcher or hide the panel; `/quick-view` toggles Quick View without changing Environment. |
+| Summary opening / closing | The compact card fades from 4px above and `.98` scale over `180ms`. | It does not dim or make the conversation inert. On a narrower window the centered column moves left only as far as the card needs (narrowing only at the left edge, never below 560px) so the card docks beside it; with less room the card floats over the chat. Motion is removed under Reduce Motion. |
+| Quick View open | A top-right stack of separate rounded cards at sidebar-list density, each collapsed until opened. Environment is always shown when the workspace has a folder and access; the others (Changes, Context, Subagents) appear once they have something to say. | The dedicated two-row list control (first in the toolbar) toggles the stack. The panel control (last in the toolbar) opens or closes Environment independently. A card's open-in-sidebar button deep-links into its tool without clearing Quick View. |
 | Quick View + Environment | Both surfaces remain visibly open side by side when the measured workbench has room. | Invoking either surface brings it forward without closing the other. Opening the app sidebar recomputes placement from the remaining workbench width. On smaller layouts, the foreground surface is shown while the background surface is automatically hidden and inert; its open state and mounted tool state are preserved. |
 | Expanded work surface opening / closing | The right edge expands or retracts over the relaxed `300ms` panel timing. | Width, opacity, and geometry move together; the transition is flattened under Reduce Motion. |
 | Review open | Review is selected in the expanded surface and the conversation stays mounted. | Tab, width, and open state persist. Focus enters the selected tab; Quick View remains independent and can stay visible beside it. |
 | Files open | Files is selected; its tree and editor occupy the same shell used by Review. | Switching tabs does not discard an editor draft. Review can deep-link a changed file into Files. |
 | Resizing | A one-pixel boundary gains hover/focus emphasis while the user drags or uses arrow keys. | Easing is disabled during pointer drag. Arrow keys resize by 16px, Shift+Arrow by 40px, Home/End reach bounds. |
 | Inline wide-window | Conversation and the expanded Review/Files surface are sibling columns. | Used only when the content region can preserve a useful conversation measure beside the saved panel width; the summary card always floats. |
-| Floating narrow-window | Expanded Review/Subagents/Files becomes a rounded right-side surface inset 12px from the workbench edge. | It has no backdrop, blur, dialog role, focus trap, or app-wide inert state. Uncovered chat, composer, toolbar, navigation, command palette, and assistant dock remain interactive and do not dismiss it. Only Close, Escape, or `⌘⇧E` dismisses; focus already moved into chat is preserved. |
+| Floating narrow-window | Expanded Review/Subagents/Files becomes a rounded right-side surface inset 12px from the workbench edge and starting below the top bar, so the top-bar tool buttons stay reachable. | It has no backdrop, blur, dialog role, focus trap, or app-wide inert state. Uncovered chat, composer, toolbar, navigation, command palette, and assistant dock remain interactive and do not dismiss it. Only Close, Escape, or `⌘⇧E` dismisses; focus already moved into chat is preserved. |
 | No workspace | A quiet explanation fills whichever Environment surface is open. | The user is directed to choose a local workspace; no dead tree, diff, or editor controls appear. |
 | No Access | The active Environment surface explains that local file access is disabled. | It does not silently widen permission. The composer remains the place to change workspace access. |
 | Loading | Shape-matched skeleton rows appear in the active view. | Static labels do not shimmer, inactive tabs do not keep polling, and controls expose disabled/loading states. |
@@ -149,6 +171,11 @@ The shipped ChatGPT/Codex renderer establishes two related but distinct surfaces
 | Push outcome unknown | The alert directs the user to inspect the remote before retrying. | After timeout/abort Aiden uses `ls-remote` only to reconcile the exact destination ref; that is not a fetch and does not update local tracking refs. |
 | Push complete | The dialog closes and a toast names `remote/branch`; upstream-setting trouble is a separate warning. | If Git confirms the exact remote ref after a timeout, the result is success-with-warning rather than a false failure. |
 | Compare branch | A dedicated row opens Review in Compare mode. | Targets are exact local branches or last-fetched remote-tracking refs. No selection triggers a network fetch. |
+| Card layout | Each section is its own borderless raised card with a title, a chevron after the label, a trailing summary while collapsed, and a header button left of a right-edge grip. There is no `+` menu: cards start collapsed and appear only when relevant. | The grip shows on hover and keyboard focus. Drag it, or press ArrowUp or ArrowDown on it, to reorder; a polite status announces the new position. Order and the cards the user opened persist on this device. A card that appears mid-session fades and scales in; Reduce Motion removes the motion. |
+| Folder | The first Environment row shows the workspace folder and its parent, with a preferred-editor action when one is installed. Its card header offers an open-external button that reveals the folder in Finder (Files off macOS). | The row opens Files on this workspace. Open failures surface as a toast. The row is disabled without file access and absent when the workspace has no folder. |
+| Pull request | A Changes row names the chat's pull request number and state (open, draft, merged, closed). It appears only once a pull request exists for this chat, and there is no Create PR button. | Activating it opens the pull request on GitHub. A merged pull request without a title is named by its branch. |
+| Context | A card that appears after the first message. Collapsed, it shows a mini meter and the same percentage as the composer meter. Expanded, a stacked bar over the whole context window splits messages and each static category, with Free and Reserved for response, plus a legend with tokens and % of window. | Deferred MCP tools are listed in muted text with `—` for %, since they are not counted until used, and a fold lists them per server. A note covers compaction. Without a breakdown it falls back to Messages and System prompt & tools. The header button opens the Context tool in the sidebar. |
+| Subagents | A card that appears once the chat has started a subagent and stays for the session. Collapsed, it summarizes active and finished runs. Expanded, runs are grouped Running, Needs attention, Failed, Stopped and Completed. | Completed starts folded behind one disclosure row. Active foreground runs reveal Stop on hover or focus. A row opens that run, and the header button opens the Subagents tool in the sidebar. |
 
 ### Review panel states
 
@@ -212,7 +239,7 @@ Core easing curves:
 
 | Motion | Shipped treatment | Aiden adaptation |
 |---|---|---|
-| Panel open/close | `flex-grow` and `max-width` over `300ms`; transitions are disabled during drag. | Keep Aiden's `300ms` motion for expanded Review/Subagents/Files only; Quick View uses the compact-popover motion and never changes conversation width. |
+| Panel open/close | `flex-grow` and `max-width` over `300ms`; transitions are disabled during drag. | Keep Aiden's `300ms` motion for expanded Review/Subagents/Files only; Quick View uses the compact-popover motion and only shifts the conversation column when it docks beside it on narrower windows. |
 | Compact popover | Fade plus `translateY(-4px)` and `scale(.98)` to rest over `150ms`. | Use for menus and small contextual surfaces. It is quieter than a large zoom. |
 | Model dropdown | Fade and `scale(.98 → 1)` over `320ms` with a short delay. | Reserve this slightly slower entrance for the model picker only; normal menus should stay near `150–200ms`. |
 | Centered content swap | Enter over `260ms` from 8px lower and `.98` scale; exit over `180ms` with a smaller movement. | A good asymmetric pattern for major mode/content changes, but unnecessary for routine settings navigation. |

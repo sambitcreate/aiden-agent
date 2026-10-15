@@ -19,7 +19,8 @@ import {
   canReplaceGeneratedChatTitle,
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
-import type { Chat, ChatMessage, ChatMeta } from "./types.js";
+import { chatSurface, parseChatOwnerV1, type ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { Attachment, Chat, ChatMessage, ChatMeta } from "./types.js";
 import {
   FORK_SUMMARY_HOLD_MESSAGE,
   forkSummaryHoldsSend,
@@ -34,7 +35,10 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
-import { parseChatHtmlArtifacts } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
+import { isVisualSnapshotAttachmentId, parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { MAX_ATTACHMENT_INLINE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
@@ -47,7 +51,6 @@ import { ChatForkError } from "./chat-fork-error.js";
 import { jsonStringBytesBounded } from "./json-representation.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
-import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 import {
   chatSummaryRevision,
   isChatSummaryRevision,
@@ -375,6 +378,8 @@ export function createChatStore(
           meta.botId.length <= 160 &&
           meta.botId.normalize("NFKC") === meta.botId &&
           SAFE_CHAT_ID.test(meta.botId))) &&
+      (meta.owner === undefined ||
+        (parseChatOwnerV1(meta.owner) !== undefined && meta.botId === undefined)) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
       (meta.model === undefined || typeof meta.model === "string") &&
       (meta.preview === undefined ||
@@ -839,6 +844,13 @@ export function createChatStore(
         htmlArtifacts: assistant
           ? parseChatHtmlArtifacts(message.htmlArtifacts)
           : undefined,
+        htmlArtifactPlacements:
+          assistant && message.htmlArtifacts
+            ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
+            : undefined,
+        imagePlacements: assistant ? parseChatImagePlacements(message.imagePlacements) : undefined,
+        uiVisuals: assistant ? parseChatUiVisuals(message.uiVisuals) : undefined,
+        visualSnapshots: assistant ? parseVisualSnapshots(message.visualSnapshots) : undefined,
         reasoning:
           assistant &&
           typeof message.reasoning === "string" &&
@@ -869,6 +881,23 @@ export function createChatStore(
       else if (migratedProvider) await writeChat(chat).catch(() => undefined);
     }
     return chat;
+  }
+
+  /** Read-modify-write one chat's Computer Use access fields under its lock. */
+  async function updateComputerUseAccess(
+    id: string,
+    mutate: (chat: Chat) => void,
+  ): Promise<Chat> {
+    return shared([id], false, async () => {
+      const chat = await readChat(id, "owner");
+      if (!chat) throw new Error(`Chat ${id} not found`);
+      const before = [chat.computerUseAllowed, chat.computerUsePendingContinue];
+      mutate(chat);
+      if (before[0] !== chat.computerUseAllowed || before[1] !== chat.computerUsePendingContinue) {
+        await writeChat(chat);
+      }
+      return chat;
+    });
   }
 
   async function writeChat(
@@ -915,7 +944,8 @@ export function createChatStore(
         message.role === "assistant" &&
         (message.content.trim().length > 0 ||
           (message.attachments?.length ?? 0) > 0 ||
-          (message.htmlArtifacts?.length ?? 0) > 0) &&
+          (message.htmlArtifacts?.length ?? 0) > 0 ||
+          (message.uiVisuals?.length ?? 0) > 0) &&
         Number.isSafeInteger(message.createdAt) &&
         message.createdAt >= 0,
       );
@@ -931,6 +961,7 @@ export function createChatStore(
       title: chat.title,
       workspaceId: chat.workspaceId ?? DEFAULT_WORKSPACE_ID,
       ...(chat.botId ? { botId: chat.botId } : {}),
+      ...(chat.owner ? { owner: chat.owner } : {}),
       providerId: chat.providerId,
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
@@ -1073,8 +1104,12 @@ export function createChatStore(
       }));
     },
 
+    /** Chats that may appear in chat listings: ordinary and Assistant chats, never Bot or feature-owned. */
     async listRegular(workspaceId?: string): Promise<ChatMeta[]> {
-      return (await this.list(workspaceId)).filter((chat) => chat.botId === undefined);
+      return (await this.list(workspaceId)).filter((chat) => {
+        const surface = chatSurface(chat);
+        return surface === "regular" || surface === "assistant";
+      });
     },
 
     /** Transcript-free metadata read for bounded Remote summary pages. */
@@ -1111,7 +1146,6 @@ export function createChatStore(
       workspaceId: string;
       providerId?: string;
       model?: string;
-      computerUseEnabled: boolean;
       turnId: string;
       fingerprint: string;
       message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model">;
@@ -1161,7 +1195,6 @@ export function createChatStore(
           workspaceId: input.workspaceId,
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
-          computerUseEnabled: input.computerUseEnabled,
           title: input.title?.trim() || deriveChatTitleSeed(message),
           createdAt: now,
           updatedAt: now,
@@ -1177,40 +1210,30 @@ export function createChatStore(
       title?: string;
       workspaceId?: string;
       botId?: string;
+      owner?: ChatOwnerV1;
       providerId?: string;
       model?: string;
-      /** Main-owned Bot greeting copied once into the new durable conversation. */
-      initialAssistantMessage?: string;
       assertCurrent?: () => void;
     }): Promise<Chat> {
       const id = input.id ?? newId();
       return shared([id], true, async () => {
         input.assertCurrent?.();
-        if (
-          input.initialAssistantMessage !== undefined &&
-          !isBoundedBotText(input.initialAssistantMessage, 2_000)
-        ) {
-          throw new Error("Invalid initial Bot greeting.");
+        const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
+        if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
+          throw new Error("Invalid chat owner.");
         }
         const now = Date.now();
-        const openingGreeting = input.initialAssistantMessage?.trim();
         const chat: Chat = {
           id,
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
           ...(input.botId ? { botId: input.botId } : {}),
+          ...(owner ? { owner } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
           createdAt: now,
           updatedAt: now,
-          messages: openingGreeting
-            ? [{
-                id: randomUUID(),
-                role: "assistant",
-                content: openingGreeting,
-                createdAt: now,
-              }]
-            : [],
+          messages: [],
         };
         return installNewChat(chat, input.assertCurrent);
       });
@@ -1247,6 +1270,12 @@ export function createChatStore(
         input.assertCurrent?.();
         const source = await readChat(input.sourceChatId, "owner");
         if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
+        if (source.owner !== undefined) {
+          throw new ChatForkError(
+            "ineligible",
+            "This chat belongs to another Aiden feature and cannot be copied.",
+          );
+        }
         input.assertSource?.(source);
         if (
           input.expectedWorkspaceId !== undefined &&
@@ -1378,6 +1407,7 @@ export function createChatStore(
             charge(artifact.title);
             charge(artifact.mediaId);
           }
+          for (const visual of message.uiVisuals ?? []) charge(JSON.stringify(visual));
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
@@ -1395,6 +1425,27 @@ export function createChatStore(
                     const mediaId = remappedHtmlArtifactMediaId(newChatId, artifact.mediaId);
                     return { ...artifact, mediaId };
                   })
+                : undefined,
+            htmlArtifactPlacements:
+              message.role === "assistant" && message.htmlArtifactPlacements?.length
+                ? message.htmlArtifactPlacements.map((placement) => ({
+                    mediaId: remappedHtmlArtifactMediaId(newChatId, placement.mediaId),
+                    toolCallId: placement.toolCallId,
+                    ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
+                  }))
+                : undefined,
+            imagePlacements:
+              message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
+            uiVisuals:
+              message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
+            visualSnapshots:
+              message.role === "assistant" && message.visualSnapshots?.length
+                ? message.visualSnapshots.map((ref) => ({
+                    visualId: (message.htmlArtifacts ?? []).some((artifact) => artifact.mediaId === ref.visualId)
+                      ? remappedHtmlArtifactMediaId(newChatId, ref.visualId)
+                      : ref.visualId,
+                    attachmentId: ref.attachmentId,
+                  }))
                 : undefined,
             skill:
               message.role === "user"
@@ -1548,25 +1599,129 @@ export function createChatStore(
       });
     },
 
-    /** Persist the chat-local Computer Use opt-in without reordering conversation history. */
-    async setComputerUseEnabled(
+    /** Persist the user's per-chat Computer Use grant without reordering history. */
+    async setComputerUseAllowed(id: string, allowed: boolean): Promise<Chat> {
+      return updateComputerUseAccess(id, (chat) => {
+        if (allowed) chat.computerUseAllowed = true;
+        else delete chat.computerUseAllowed;
+      });
+    },
+
+    /**
+     * Revoke every chat's Computer Use grant. Each chat is a locked
+     * read-modify-write that rewrites only chats that held a grant; chats
+     * removed while this runs are skipped. Returns how many grants it cleared.
+     */
+    async clearAllComputerUseAllowed(): Promise<number> {
+      let cleared = 0;
+      for (const meta of await this.list()) {
+        try {
+          await updateComputerUseAccess(meta.id, (chat) => {
+            if (chat.computerUseAllowed === undefined) return;
+            delete chat.computerUseAllowed;
+            cleared += 1;
+          });
+        } catch (error) {
+          if (await this.get(meta.id).catch(() => null)) throw error;
+        }
+      }
+      return cleared;
+    },
+
+    /**
+     * Mark (or clear) a Computer Use access request that is waiting on macOS
+     * setup, so the chat can offer Continue after a restart.
+     */
+    async setComputerUsePendingContinue(id: string, pending: boolean): Promise<Chat> {
+      return updateComputerUseAccess(id, (chat) => {
+        if (pending) chat.computerUsePendingContinue = true;
+        else delete chat.computerUsePendingContinue;
+      });
+    },
+
+    /**
+     * Attach offscreen snapshots of a message's visuals as reserved image
+     * attachments. A newer snapshot of the same visual replaces the older one;
+     * snapshots that would exceed the per-message attachment limits are
+     * skipped. Returns whether anything was stored.
+     */
+    async addVisualSnapshots(
+      chatId: string,
+      messageId: string,
+      snapshots: readonly { visualId: string; attachment: Attachment }[],
+    ): Promise<boolean> {
+      return shared([chatId], true, async () => {
+        const chat = await readChat(chatId, "owner");
+        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "assistant");
+        if (!chat || !message) return false;
+        const visualIds = new Set([
+          ...(message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
+          ...(message.uiVisuals ?? []).map((visual) => visual.id),
+        ]);
+        let attachments = [...(message.attachments ?? [])];
+        let refs = [...(message.visualSnapshots ?? [])];
+        let stored = false;
+        for (const snapshot of snapshots) {
+          if (!visualIds.has(snapshot.visualId) || !isVisualSnapshotAttachmentId(snapshot.attachment.id)) continue;
+          const [attachment] = safeStoredAttachments([snapshot.attachment]) ?? [];
+          if (!attachment || attachment.kind !== "image") continue;
+          const previous = refs.find((ref) => ref.visualId === snapshot.visualId)?.attachmentId;
+          const remaining = attachments.filter((existing) => existing.id !== previous && existing.id !== attachment.id);
+          const bytes = remaining.reduce((total, existing) => total + existing.size, 0) + attachment.size;
+          if (remaining.length >= MAX_ATTACHMENTS_PER_MESSAGE || bytes > MAX_ATTACHMENT_INLINE_BYTES) continue;
+          attachments = [...remaining, attachment];
+          refs = [...refs.filter((ref) => ref.visualId !== snapshot.visualId), { visualId: snapshot.visualId, attachmentId: attachment.id }];
+          stored = true;
+        }
+        if (!stored) return false;
+        message.attachments = attachments;
+        message.visualSnapshots = refs;
+        await writeChatAndMeta(chat);
+        return true;
+      });
+    },
+
+    /**
+     * Remember a native visual's local state (tabs, filters, sliders) so it
+     * survives a reload. Returns false when the visual is not on that
+     * assistant message or the state does not validate.
+     */
+    async updateUiVisualState(
+      chatId: string,
+      messageId: string,
+      visualId: string,
+      state: Record<string, unknown>,
+    ): Promise<boolean> {
+      return shared([chatId], false, async () => {
+        const chat = await readChat(chatId, "owner");
+        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "assistant");
+        const current = message?.uiVisuals?.find((visual) => visual.id === visualId);
+        if (!chat || !message || !current) return false;
+        const next = parseChatUiVisualV1({ ...current, state });
+        if (!next) return false;
+        message.uiVisuals = message.uiVisuals!.map((visual) => (visual.id === visualId ? next : visual));
+        await writeChat(chat);
+        return true;
+      });
+    },
+
+    /**
+     * Empty a chat's transcript in place, keeping its identity, title, owner
+     * and model. Returns false when the chat is missing or already empty.
+     */
+    async clearMessages(
       id: string,
-      enabled: boolean,
-      isCurrent: () => boolean = () => true,
-    ): Promise<Chat> {
-      return shared([id], false, async () => {
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<boolean> {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        if (!isCurrent())
-          throw new Error("The renderer document is no longer active.");
-        chat.computerUseEnabled = enabled;
-        await writeChat(chat, () => {
-          // No await occurs between this ownership check and invoking the
-          // atomic rename, so a replaced document cannot commit the staged opt-in.
-          if (!isCurrent())
-            throw new Error("The renderer document is no longer active.");
-        });
-        return chat;
+        if (!chat) return false;
+        await assertCurrent(chat);
+        if (chat.messages.length === 0 && chat.forkedFrom === undefined) return false;
+        chat.messages = [];
+        delete chat.forkedFrom;
+        await writeChatAndMeta(chat);
+        return true;
       });
     },
 
@@ -1602,11 +1757,16 @@ export function createChatStore(
         autoTitle?: boolean;
         expectedWorkspaceId?: string;
         isCurrent?: () => boolean;
+        /** Renderer-authored appends refuse feature-owned (Design Studio) conversations. */
+        rejectFeatureOwned?: boolean;
       },
     ): Promise<Chat> {
       return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
+        if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
+          throw new Error("This conversation belongs to another Aiden feature and cannot be written from chat.");
+        }
         if (meta?.isCurrent && !meta.isCurrent()) {
           throw new Error("The renderer document is no longer active.");
         }
@@ -1646,6 +1806,16 @@ export function createChatStore(
             message.role === "assistant"
               ? parseChatHtmlArtifacts(message.htmlArtifacts)
               : undefined,
+          htmlArtifactPlacements:
+            message.role === "assistant" && message.htmlArtifacts
+              ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
+              : undefined,
+          imagePlacements:
+            message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
+          uiVisuals:
+            message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
+          visualSnapshots:
+            message.role === "assistant" ? parseVisualSnapshots(message.visualSnapshots) : undefined,
           skill:
             message.role === "user"
               ? parseSkillProvenanceV1(message.skill)

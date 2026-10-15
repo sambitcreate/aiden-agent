@@ -5,6 +5,7 @@
 //
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
+import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
 import { spawn } from "node:child_process";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
@@ -72,7 +73,7 @@ function textLines(text: string): string[] {
 }
 
 /** Count a shortest line edit script without exposing file contents in tool details. */
-function lineChangeCounts(before: string, after: string): Pick<
+export function lineChangeCounts(before: string, after: string): Pick<
   FileMutationDetailsV1,
   "additions" | "deletions"
 > {
@@ -842,7 +843,7 @@ function rejectProtectedCredential(
 }
 
 /** Preserve the parent agent's established narrow `.env*` read/search exclusion. */
-function isEnvironmentSecretPath(relativePath: string): boolean {
+export function isEnvironmentSecretPath(relativePath: string): boolean {
   return relativePath
     .split(/[\\/]/)
     .some((segment) => {
@@ -873,7 +874,7 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
     case "generate_image":
-      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
+      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")}${isImageAspectRatio(a.aspectRatio) ? ` at ${a.aspectRatio}` : ""} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
     case "classify":
       return `Send structured data and questions to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} for classification (may incur charges)`;
     case "share_image":

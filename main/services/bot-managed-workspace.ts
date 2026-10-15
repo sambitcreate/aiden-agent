@@ -21,6 +21,8 @@ export const BOT_MANAGED_WORKSPACE_MANIFEST = "bot-managed-workspaces.json";
 export const BOT_MANAGED_HOMES_DIRECTORY = "homes";
 export const BOT_MANAGED_HOME_RECEIPTS_DIRECTORY = "receipts";
 export const BOT_MANAGED_HOME_RECEIPT_SUFFIX = ".json";
+/** Deleted homes are moved here first, then erased. Never listed as homes. */
+export const BOT_MANAGED_REMOVED_HOMES_DIRECTORY = "removed";
 
 const MANIFEST_MAX_BYTES = 256 * 1024;
 const RECEIPT_MAX_BYTES = 8 * 1024;
@@ -234,6 +236,18 @@ export function createFileBotManagedWorkspaceStorage(
       }
     }
     return owned;
+  };
+
+  /** `<root>/removed`, created on first use and re-proven on every call. */
+  const removedHomesDirectory = async (): Promise<string> => {
+    const { root } = await roots();
+    const removed = path.join(root, BOT_MANAGED_REMOVED_HOMES_DIRECTORY);
+    assertDirectChild(root, removed);
+    await ensurePrivateDirectory(removed, false);
+    if ((await fs.realpath(removed)) !== removed) {
+      throw new Error("Bot managed removed-homes directory escaped its private root.");
+    }
+    return removed;
   };
 
   const homePath = async (directoryName: string): Promise<string> => {
@@ -591,6 +605,83 @@ export function createFileBotManagedWorkspaceStorage(
         reportDurabilityWarning(error, options.onDurabilityWarning);
       }
       return true;
+    },
+
+    async removeOwnedHome(
+      directoryName: string,
+      expectedReceipt: BotManagedHomeReceipt,
+    ): Promise<void> {
+      const expected = parseBotManagedHomeReceipt(expectedReceipt);
+      if (expected.directoryName !== directoryName) {
+        throw new Error("Bot managed home delete receipt targets another directory.");
+      }
+      const candidate = await homePath(directoryName);
+      const ownedReceiptPath = await receiptPath(directoryName);
+      const [homeInfo, receiptInfo] = await Promise.all([
+        fs.lstat(candidate).catch((error: unknown) => {
+          if (isMissing(error)) return null;
+          throw error;
+        }),
+        fs.lstat(ownedReceiptPath).catch((error: unknown) => {
+          if (isMissing(error)) return null;
+          throw error;
+        }),
+      ]);
+      if (receiptInfo) {
+        if (receiptInfo.isSymbolicLink() || !receiptInfo.isFile() || receiptInfo.nlink !== 1) {
+          throw new Error("Bot managed home delete receipt is unsafe.");
+        }
+        const actual = parseBotManagedHomeReceipt(
+          await parseJsonRegularFile(ownedReceiptPath, RECEIPT_MAX_BYTES),
+        );
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          throw new Error("Bot managed home delete refused a mismatched ownership receipt.");
+        }
+      }
+      if (homeInfo) {
+        if (!receiptInfo) {
+          throw new Error("Bot managed home delete refused a home without its receipt.");
+        }
+        if (homeInfo.isSymbolicLink() || !homeInfo.isDirectory()) {
+          throw new Error("Bot managed home delete target is unsafe.");
+        }
+        assertOwnedByCurrentUser(homeInfo, "Bot managed home delete target");
+        if ((await fs.realpath(candidate)) !== candidate) {
+          throw new Error("Bot managed home delete target escaped its private root.");
+        }
+        const incarnation = await captureHomeIncarnation(candidate);
+        await assertOwnedVolume(incarnation, receiptInfo);
+        if (!sameHomeByInode(expected.incarnation, incarnation)) {
+          throw new Error("Bot managed home delete refused a replaced directory.");
+        }
+        const removed = await removedHomesDirectory();
+        const target = path.join(removed, `${directoryName}-${randomUUID()}`);
+        assertDirectChild(removed, target);
+        // Same private volume (asserted above), so this rename is atomic.
+        await fs.rename(candidate, target);
+      }
+      if (receiptInfo) await fs.unlink(ownedReceiptPath);
+      if (homeInfo || receiptInfo) {
+        try {
+          const owned = await roots();
+          await Promise.all([
+            (options.syncDirectory ?? defaultSyncDirectory)(owned.homes),
+            (options.syncDirectory ?? defaultSyncDirectory)(owned.receipts),
+          ]);
+        } catch (error) {
+          reportDurabilityWarning(error, options.onDurabilityWarning);
+        }
+      }
+    },
+
+    async purgeRemovedHomes(): Promise<void> {
+      const removed = await removedHomesDirectory();
+      for (const entry of await fs.readdir(removed)) {
+        const target = path.join(removed, entry);
+        assertDirectChild(removed, target);
+        // Recursive removal deletes symbolic links themselves and never follows them.
+        await fs.rm(target, { recursive: true, force: true });
+      }
     },
   };
 }

@@ -1,4 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createDeviceService } from "../../../main/services/devices/device-service.js";
+import { createLocalDeviceHost, defaultLocalDeviceHostDeps } from "../../../main/services/devices/local-device-host.js";
+import { DEVICE_HUB, DeviceNodeUnavailableError, deviceToolPaths } from "../../../main/services/devices/device-toolchain.js";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -145,4 +151,74 @@ test("downloads and removal each ask before they run", () => {
   // Both confirmations stay open, busy, until the work finishes, then return focus to their control.
   assert.equal(source.match(/keepOpenOnConfirm\n\s*returnFocus=\{returnFocus\}/gu)?.length, 2);
   assert.doesNotMatch(source, /setInterval|setTimeout/u, "no background polling");
+});
+
+test("sharing with Aiden On The Go is its own switch, off by default and built on streaming", () => {
+  const before = view({});
+  const off = switchFor(before, "Share with Aiden On The Go");
+  assert.match(off, /aria-checked="false"/u);
+  assert.match(off, / disabled=""/u);
+
+  const streaming = view({
+    state: state({ hostStatus: "ready", consent: { streaming: true, agentAccess: false, peerSharing: true } }),
+  });
+  // Sharing with paired Macs never implies sharing with phones.
+  assert.match(switchFor(streaming, "Share with paired Macs"), /aria-checked="true"/u);
+  const available = switchFor(streaming, "Share with Aiden On The Go");
+  assert.match(available, /aria-checked="false"/u);
+  assert.doesNotMatch(available, / disabled=""/u);
+  assert.match(streaming, /can’t change simulator settings/u);
+
+  const shared = view({
+    state: state({
+      hostStatus: "ready",
+      consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: true },
+    }),
+  });
+  assert.match(switchFor(shared, "Share with Aiden On The Go"), /aria-checked="true"/u);
+  assert.match(switchFor(shared, "Share with paired Macs"), /aria-checked="false"/u);
+});
+
+
+test("Settings offers Retry for the real service's missing-Node setup error and keeps consent", async () => {
+  const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-settings-node-"));
+  let hasNode = false;
+  const deps = defaultLocalDeviceHostDeps({
+    baseDir, platform: "darwin", env: { HOME: baseDir },
+    resolveNodePath: async () => {
+      if (!hasNode) throw new DeviceNodeUnavailableError();
+      return process.execPath;
+    },
+    resolveNpmRunner: async () => { throw new Error("No download expected"); },
+  });
+  deps.runCommand = async (_command, args) => ({ code: 0, stderr: "", stdout: args.includes("list") ? '{"devices":{}}' : "usage: simctl" });
+  deps.pathExists = async () => false;
+  deps.realPath = async () => null;
+  const service = createDeviceService({
+    baseDir, host: createLocalDeviceHost(deps),
+    startProxy: async () => { throw new Error("No viewer was opened"); },
+    fetch: async () => { throw new Error("No Android SDK was found"); },
+  });
+  try {
+    const failed = await service.grantConsent("streaming");
+    assert.equal(failed.consent.streaming, true);
+    assert.equal(failed.hostStatus, "error");
+    const html = view({ state: failed, onRetry: () => {}, retrying: null });
+    assert.match(html, /Simulator helpers require Node.js 22 or newer/u);
+    const retry = /<button[^>]*aria-label="Retry This Mac"[^>]*>/u.exec(html);
+    assert.ok(retry, "the same Settings page must expose recovery");
+    assert.doesNotMatch(retry[0], /\sdisabled(?:=|[\s>])/u);
+    // Install a fixture locally, then exercise the action behind Settings Retry.
+    const tool = deviceToolPaths(baseDir, DEVICE_HUB);
+    await mkdir(path.dirname(tool.entryPath), { recursive: true });
+    await writeFile(tool.sentinel, `${DEVICE_HUB.version}\n`);
+    await writeFile(tool.entryPath, `import { createServer } from 'node:http'; createServer((req,res)=>res.end('{}')).listen(Number(process.argv[process.argv.indexOf('--port')+1]),'127.0.0.1');`);
+    hasNode = true;
+    const recovered = await service.startHost("local");
+    assert.equal(recovered.hostStatus, "ready");
+    assert.equal(recovered.consent.streaming, true);
+  } finally {
+    await service.stop();
+    await rm(baseDir, { recursive: true, force: true });
+  }
 });

@@ -104,9 +104,6 @@ function assertManagedHome(
 export async function prepareBotGeneration<Runtime extends ExactBotRuntime>(
   input: PrepareBotGenerationInput<Runtime>,
 ): Promise<PreparedBotGeneration<Runtime>> {
-  if (input.bot.archivedAt !== undefined) {
-    throw new Error("This bot is archived or no longer available.");
-  }
   if (input.signal?.aborted) throw input.signal.reason;
   const selection = requirePersistedSelection(input.chat);
   if (

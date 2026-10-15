@@ -12,7 +12,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -190,4 +193,75 @@ class AidenWorkspaceShellUiTest {
         compose.onNodeWithText("Cancel").performClick()
         assertEquals(1, dismissals)
     }
+
+    @Test
+    fun savedWorkspaceChatsRenderImmediatelyWhileTheyRefresh() {
+        val opened = mutableListOf<String>()
+        compose.setContent {
+            AidenTheme {
+                AidenWorkspaceChatList(
+                    chats = listOf(AidenWorkspaceChatListing("chat-1", "Plan the release", 4)),
+                    isRefreshing = true,
+                    loadFailed = false,
+                    canStartChat = true,
+                    onOpenChat = { opened += it },
+                    onStartChat = {},
+                    onRetry = {}
+                )
+            }
+        }
+
+        compose.onNodeWithText("Plan the release").assertIsDisplayed()
+        compose.onNodeWithText("4 messages").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Loading chats").assertDoesNotExist()
+        compose.onNodeWithText("Plan the release").performClick()
+        assertEquals(listOf("chat-1"), opened)
+    }
+
+    @Test
+    fun aFirstWorkspaceChatReadShowsOnePlaceholderAnnouncementAndNoEmptyClaim() {
+        compose.setContent {
+            AidenTheme {
+                AidenWorkspaceChatList(
+                    chats = null,
+                    isRefreshing = true,
+                    loadFailed = false,
+                    canStartChat = true,
+                    onOpenChat = {},
+                    onStartChat = {},
+                    onRetry = {}
+                )
+            }
+        }
+
+        compose.onAllNodesWithContentDescription("Loading chats").assertCountEquals(1)
+        compose.onNodeWithText("No chats in this workspace yet").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFailedFirstWorkspaceChatReadOffersRetryButAFailedRefreshKeepsSavedChats() {
+        var retries = 0
+        var saved by mutableStateOf<List<AidenWorkspaceChatListing>?>(null)
+        compose.setContent {
+            AidenTheme {
+                AidenWorkspaceChatList(
+                    chats = saved,
+                    isRefreshing = false,
+                    loadFailed = true,
+                    canStartChat = true,
+                    onOpenChat = {},
+                    onStartChat = {},
+                    onRetry = { retries += 1 }
+                )
+            }
+        }
+
+        compose.onNodeWithText("Try Again").performClick()
+        assertEquals(1, retries)
+
+        saved = listOf(AidenWorkspaceChatListing("chat-1", "Saved chat", 1))
+        compose.onNodeWithText("Saved chat").assertIsDisplayed()
+        compose.onNodeWithText("Try Again").assertDoesNotExist()
+    }
 }
+

@@ -35,7 +35,9 @@ test("flags a success claim after a failed mutating tool", () => {
     { kind: "unverified_success", stepIds: ["tool-1"] },
   );
   assert.deepEqual(
-    detectUnverifiedSuccessClaim("The task is completed.", timeline("github__merge_pr", "failed")),
+    detectUnverifiedSuccessClaim("The task is completed.", timeline("github__merge_pr", "failed"), {
+      isConnectorTool: (name) => name === "github__merge_pr",
+    }),
     { kind: "unverified_success", stepIds: ["tool-1"] },
   );
   assert.deepEqual(
@@ -53,6 +55,16 @@ test("keeps completed and read-only failures quiet", () => {
     undefined,
   );
   assert.equal(detectUnverifiedSuccessClaim("Done.", timeline("read_file", "failed")), undefined);
+});
+
+test("connector failures follow the host's MCP identity, not the tool name's shape", () => {
+  const mcpTools = new Set(["linear_create_issue"]);
+  const options = { isConnectorTool: (name: string) => mcpTools.has(name) };
+  assert.deepEqual(detectUnverifiedSuccessClaim("Done.", timeline("linear_create_issue", "failed"), options), {
+    kind: "unverified_success", stepIds: ["tool-1"],
+  });
+  // A double underscore alone does not make a tool an MCP connector.
+  assert.equal(detectUnverifiedSuccessClaim("Done.", timeline("local__helper", "failed"), options), undefined);
 });
 
 test("browser mutation failures cannot support an unqualified success claim", () => {

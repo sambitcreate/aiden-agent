@@ -12,7 +12,7 @@ import {
 } from "./ask-user-question-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
-test("Ask User Question is limited to attended desktop workspace chat", () => {
+test("Ask User Question runs in attended desktop and paired-device chats, including Bots", () => {
   const base = {
     usageSource: "chat",
     interactionSurface: "desktop",
@@ -36,7 +36,64 @@ test("Ask User Question is limited to attended desktop workspace chat", () => {
     false,
   );
   assert.equal(shouldEnableAskUserQuestionExtension({ ...base, assistantMode: true }), false);
-  assert.equal(shouldEnableAskUserQuestionExtension({ ...base, botBound: true }), false);
+  assert.equal(shouldEnableAskUserQuestionExtension({ ...base, botBound: true }), true);
+  assert.equal(
+    shouldEnableAskUserQuestionExtension({ ...base, botBound: true, interactionSurface: "telegram" }),
+    false,
+  );
+});
+
+test("a Bot turn can offer five quick replies, but not six", async () => {
+  const botScope = {
+    usageSource: "chat",
+    interactionSurface: "desktop",
+    assistantMode: false,
+    botBound: true,
+    rendererOwner: true,
+    excluded: false,
+  };
+  assert.equal(shouldEnableAskUserQuestionExtension(botScope), true);
+  const asked: number[] = [];
+  const extension = createAskUserQuestionExtension({
+    request: async (_toolCallId, questions) => {
+      asked.push(questions[0]!.options.length);
+      return {
+        version: 1,
+        promptId: "q-bot",
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "option", answer: questions[0]!.options[4]!.label }],
+      };
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const option = (label: string) => ({ label, description: `${label} plan` });
+  const labels = ["This works", "Vegetarian", "No seafood", "Cooking for two", "Shorter Sunday cook"];
+  const result = await tool.execute("call-bot", {
+    questions: [
+      {
+        question: "Want me to tweak this?",
+        header: "Meal plan",
+        options: labels.map(option),
+      },
+    ],
+  });
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+  assert.deepEqual(asked, [5]);
+  assert.match(text, /Answer: Shorter Sunday cook/u);
+  await assert.rejects(
+    tool.execute("call-bot-six", {
+      questions: [
+        {
+          question: "Too many?",
+          header: "Meal plan",
+          options: [...labels, "Batch cook"].map(option),
+        },
+      ],
+    }),
+    /questionnaire is invalid/u,
+  );
+  assert.deepEqual(asked, [5]);
 });
 
 test("tool returns selected and skipped answers without replaying an interruption", async () => {
@@ -75,6 +132,34 @@ test("tool returns selected and skipped answers without replaying an interruptio
   const text = result.content[0]?.type === "text" ? result.content[0].text : "";
   assert.match(text, /Answer: Direct/u);
   assert.match(text, /Answer: Skipped/u);
+  // The transcript recap carries the owner's choices, not the model-facing prose.
+  assert.deepEqual(result.details, {
+    version: 1,
+    outcome: "answered",
+    items: [
+      { question: "Which approach?", header: "Approach", kind: "option", answers: ["Direct"] },
+      { question: "How detailed?", header: "Detail", kind: "skipped", answers: [] },
+    ],
+  });
+});
+
+test("a stopped run leaves no recap, while a dismissed questionnaire records it", async () => {
+  const dismissed = { version: 1 as const, promptId: "q-one", cancelled: true, answers: [] };
+  const extension = createAskUserQuestionExtension({ request: async () => dismissed });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+
+  const closed = await tool.execute("call-closed", { questions: oneQuestion });
+  assert.deepEqual(closed.details, {
+    version: 1,
+    outcome: "dismissed",
+    items: [{ question: "Which approach?", header: "Approach", kind: "skipped", answers: [] }],
+  });
+
+  const controller = new AbortController();
+  controller.abort();
+  const stopped = await tool.execute("call-stopped", { questions: oneQuestion }, controller.signal);
+  assert.equal(stopped.details, null);
 });
 
 const oneQuestion = [

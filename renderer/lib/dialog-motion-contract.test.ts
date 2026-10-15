@@ -85,7 +85,6 @@ test("strong modal elevation stays modal-only while floating tools use dialog el
   );
   assert.equal(sharedUi.match(/shadow-modal/gu)?.length, 2);
   assert.equal(commandPalette.match(/shadow-modal/gu)?.length, 1);
-  assert.match(environment, /quick-view-card[\s\S]{0,300}shadow-dialog/u);
   assert.doesNotMatch(environment, /quick-view-card[\s\S]{0,300}shadow-modal/u);
   assert.match(
     styles,

@@ -1,4 +1,9 @@
 import { parseProducedFile } from "./produced-file.js";
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  parseAskUserQuestionRecap,
+  type AskUserQuestionRecapV1,
+} from "./ask-user-question.js";
 export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
@@ -40,6 +45,12 @@ export interface AgentToolStep {
    * of a command. Never raw file contents and never a raw shell command.
    */
   detail?: string;
+  /**
+   * What the owner chose in a settled `ask_user_question` card. Present only
+   * on a completed step of that tool, so the transcript can show the questions
+   * and answers in place of the generic activity line.
+   */
+  questionnaire?: AskUserQuestionRecapV1;
 }
 
 /** One uninterrupted stretch of model reasoning between tool calls. */
@@ -164,6 +175,8 @@ function parseToolStep(
   allowLineChanges = false,
 ): AgentToolStep | undefined {
   const producedFile = parseProducedFile(step.producedFile, String(step.toolName));
+  const questionnaire =
+    step.questionnaire === undefined ? undefined : parseAskUserQuestionRecap(step.questionnaire);
   const rawLineChanges = step.lineChanges;
   const lineChanges =
     rawLineChanges && typeof rawLineChanges === "object"
@@ -185,6 +198,11 @@ function parseToolStep(
     (step.producedFile !== undefined && (!producedFile || step.status !== "completed")) ||
     (step.target !== undefined && !safeStoredTarget(step.target)) ||
     (step.detail !== undefined && !safeStoredDetail(step.detail)) ||
+    (step.questionnaire !== undefined &&
+      (!allowLineChanges ||
+        !questionnaire ||
+        step.toolName !== ASK_USER_QUESTION_TOOL_NAME ||
+        step.status !== "completed")) ||
     (rawLineChanges !== undefined &&
       (!allowLineChanges ||
         !lineChanges ||
@@ -214,6 +232,7 @@ function parseToolStep(
     ...(step.target === undefined ? {} : { target: step.target as string }),
     ...(producedFile ? { producedFile } : {}),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
+    ...(questionnaire ? { questionnaire } : {}),
     ...(lineChanges === undefined
       ? {}
       : {

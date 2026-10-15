@@ -441,6 +441,20 @@
     </header>
 
     <main class="canvas">
+      <section class="card" aria-labelledby="workspace-launcher-specimen-title">
+        <h2 id="workspace-launcher-specimen-title">Workspace tool launcher</h2>
+        <p class="description">Open tools as needed beside the conversation. Generic open and + show this launcher; a direct action opens its tool.</p>
+        <div role="group" aria-label="Workspace tools specimen" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
+          <button class="button ghost" type="button" data-workspace-demo="Changes">Changes</button>
+          <button class="button ghost" type="button" data-workspace-demo="Files">Files</button>
+          <button class="button ghost" type="button" data-workspace-demo="Terminal">Terminal</button>
+          <button class="button ghost" type="button" data-workspace-demo="Context">Context</button>
+          <button class="button ghost" type="button" data-workspace-demo="Browser">Browser</button>
+          <button class="button ghost" type="button" data-workspace-demo="New tab">+ New tab</button>
+        </div>
+        <p id="workspace-demo-state" role="status">New tab — choose a tool.</p>
+        <button class="button small" type="button" id="workspace-demo-placement">Move terminal to side panel</button>
+      </section>
       <section class="intro">
         <div>
           <h1>Controls that feel quiet until you touch them.</h1>
@@ -1233,5 +1247,17 @@ export function EnvironmentSurfaces() {
 
       setEnvironmentState("overview", "summary");
     </script>
-  </body>
+      <script>
+      document.querySelectorAll("[data-workspace-demo]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.getElementById("workspace-demo-state").textContent = button.dataset.workspaceDemo === "New tab" ? "New tab — choose a tool." : button.dataset.workspaceDemo + " selected. Closing its tab keeps existing tool state safe.";
+        });
+      });
+      document.getElementById("workspace-demo-placement").addEventListener("click", (event) => {
+        const side = event.currentTarget.textContent.includes("side");
+        event.currentTarget.textContent = side ? "Move terminal to bottom" : "Move terminal to side panel";
+        document.getElementById("workspace-demo-state").textContent = "Terminal at " + (side ? "side" : "bottom") + "; same shell and screen.";
+      });
+    </script>
+</body>
 </html>

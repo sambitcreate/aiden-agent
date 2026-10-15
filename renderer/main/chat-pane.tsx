@@ -12,10 +12,16 @@ import { QueuedMessages } from "../components/queued-messages";
 import {
   saveComposerDraftText,
   seedComposerAttachments,
+  stageComposerText,
 } from "../lib/composer-draft-store";
+import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
+import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
+import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
+import { primeInlineVisualPreview, type GuestPromptHandler } from "../components/html-artifact-frame";
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
+  admitRunInputOnceStarted,
   chatMessageQueue,
   committedRunInputNotice,
   steerQueuedMessage,
@@ -33,6 +39,8 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
+import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
+import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQueryClient } from "@tanstack/react-query";
@@ -42,7 +50,7 @@ import {
   createAgentsInstructionNoticeLog,
 } from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
-import { BotAvatar } from "../components/bot-avatar";
+import { chatReadinessMessage as chatReadinessMessageFor } from "../lib/composer-placeholder";
 import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
@@ -58,6 +66,7 @@ import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
+import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
@@ -71,11 +80,13 @@ import { ariaKeyShortcut } from "../shared/keybindings";
 import type { ToolApprovalScope } from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
+import { APPEARANCE_CHANGE_EVENT, readCachedAppearance } from "../lib/appearance-runtime";
 import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ChatApprovalCard } from "../components/chat-approval-card";
+import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
   chatsApi,
   aidenRemoteApi,
@@ -94,8 +105,6 @@ import {
   refreshCodexProviderState,
   useAllRegularChats,
   useChat,
-  useBot,
-  useComputerUseStatus,
   useGitInfo,
   useModelInfo,
   useProviders,
@@ -123,7 +132,8 @@ import {
   type Workspace,
   type WorkspacePermission,
 } from "../lib/types";
-import { computerUseReadinessReady } from "../lib/computer-use-control";
+import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
+import { userFacingErrorMessage } from "../lib/ipc-error";
 import {
   resolveAgentActivity,
   resolveVisibleAgentActivity,
@@ -140,7 +150,7 @@ import {
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
+import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
 import {
   CODEX_THINKING_LEVELS,
   normalizeCodexThinkingLevel,
@@ -157,6 +167,7 @@ import {
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
 import { normalizeProviderThinkingLevel } from "../shared/provider-thinking";
+import { customModelThinkingLevels } from "../shared/custom-model-options";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -169,8 +180,10 @@ import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
   detachedTextStreamingRemaining,
   detachedLifecycleChatProjection,
+  detachedProjectionStreamComplete,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
+  visibleDetachedLifecycleProjection,
 } from "../lib/chat-terminal-sync";
 import {
   ASSISTANT_WORKSPACE_ID,
@@ -189,6 +202,12 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
+import {
+  acpHarnessChatReason,
+  acpHarnessReadinessMessage,
+  isAcpHarnessProvider,
+  type AcpHarnessBlockedSurface,
+} from "../shared/acp-harness";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -199,6 +218,11 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
  * that bursty providers do not flap the label mid-prose.
  */
 const TEXT_STREAMING_IDLE_MS = 2_000;
+/** Stable so idle frames don't rebuild the transcript artifact plan. */
+const NO_STREAMING_ARTIFACTS: ChatArtifactV1[] = [];
+const NO_UI_VISUALS: readonly ChatUiVisualV1[] = [];
+const NO_UI_DRAFTS: UiDrafts = new Map();
+const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 // AGENTS.md size notices are shown once per chat until the file changes.
 const agentsInstructionNotices = createAgentsInstructionNoticeLog();
 
@@ -220,11 +244,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : persistedChat;
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
-  const bot = useBot(chat.data?.botId);
+  // A Bot's conversation lives at its own route, rendered from the live projection.
+  const botChatId = chat.data?.botId;
+  React.useEffect(() => {
+    if (!botChatId) return;
+    void navigate({ to: "/bots/$botId/chat", params: { botId: botChatId }, replace: true });
+  }, [botChatId, navigate]);
   const settings = useSettings();
   const computerUseGloballyEnabled =
     capabilities.computerUse && settings.data?.computerUseEnabled === true;
-  const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
   const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<
     ReadonlySet<string>
@@ -232,13 +260,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  // Agent-backed models need someone answering approvals in an ordinary chat.
+  const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
+    chat.data?.botId ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
   const sideQuestionBlockedReason = draft
     ? "Send the first message before asking a side question."
-    : chat.data?.botId || bot.data
-      ? "Side questions are not available in Bot chats."
-      : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
         ? "Side questions are not available in Assistant chats."
-        : undefined;
+        : isAcpHarnessProvider(chat.data?.providerId ?? "")
+          ? "Side questions are not available with agent-backed models."
+          : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
@@ -249,11 +280,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
     () => null,
   );
-  // A durable terminal message can reach the cache before detached ownership is
-  // cleared. During that handoff there is no longer a response to stop or steer.
-  const cachedMessages = chat.data?.messages;
-  const visibleDetachedProjection =
-    cachedMessages?.[cachedMessages.length - 1]?.role === "assistant" ? null : detachedProjection;
+  const visibleDetachedProjection = visibleDetachedLifecycleProjection(detachedProjection, chat.data?.messages);
+  // Run input is admitted only for the document that owns the run, so a
+  // mirrored run (a phone's turn) offers Stop and queueing but not Steer.
+  const observedRunVisible = visibleDetachedProjection?.observed === true;
+  const steerableDetachedProjection = observedRunVisible ? null : visibleDetachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -279,7 +310,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
       settings.data?.hiddenModelsByProvider,
       hasMessages,
     ) &&
-    (selectedProvider.hasKey || !selectedProvider.needsKey),
+    (selectedProvider.hasKey || !selectedProvider.needsKey) &&
+    !acpHarnessChatReason(selectedProvider.id, selectedProvider.label, agentBlockedSurface),
+  );
+  // Assistant and Bot chats do not offer agent-backed models at all.
+  const pickerProviders = React.useMemo(
+    () =>
+      !settings.data
+        ? []
+        : agentBlockedSurface
+          ? (providers.data ?? []).filter((provider) => !isAcpHarnessProvider(provider.id))
+          : (providers.data ?? []),
+    [agentBlockedSurface, providers.data, settings.data],
   );
   const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
@@ -288,6 +330,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "Sign in with ChatGPT in Settings → Providers to use Codex."
         : "Choose a chat model, or add one in Settings → Providers.";
     }
+    const agentReason = acpHarnessReadinessMessage(selectedProvider, agentBlockedSurface);
+    if (agentReason) return agentReason;
     if (selectedProvider.needsKey && !selectedProvider.hasKey) {
       if (selectedProvider.id === OPENAI_CODEX_PROVIDER_ID) {
         return "Sign in with ChatGPT in Settings → Providers to use Codex.";
@@ -307,48 +351,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
       return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
     }
     return undefined;
-  }, [hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
-  const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
-  const computerUseReady = computerUseReadinessReady(
-    computerUseStatus.data?.ready === true,
-    computerUseStatus.isError,
-  );
-  const computerUseStatusDetail = computerUseStatus.isError
-    ? "Computer Use readiness check failed. Open Settings → Computer Use and try again."
-    : (computerUseStatus.data?.detail ?? "Checking Computer Use readiness…");
-  const computerUseReadinessMessage =
-    computerUseGloballyEnabled && chatComputerUseEnabled && !computerUseReady
-      ? computerUseStatus.isLoading
-        ? "Checking Computer Use readiness…"
-        : computerUseStatusDetail
-      : undefined;
-  const chatReadinessMessage = chat.isLoading
-    ? "Loading chat…"
-    : chat.isError
-      ? "This chat could not be loaded. Try again."
-      : !chat.data
-        ? "This chat is no longer available. Start a new agent."
-      : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
-        ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining && !visibleDetachedProjection
-          ? "Response continues in the background…"
-          : undefined;
-  const botReadinessMessage = chat.data?.botId
-    ? bot.isLoading
-      ? "Loading bot…"
-      : !bot.data
-        ? "This bot is no longer available."
-        : bot.data.archivedAt
-          ? "Restore this bot before continuing the conversation."
-          : undefined
-    : undefined;
-  const ready =
-    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
-  const readinessMessage =
-    chatReadinessMessage ??
-    botReadinessMessage ??
-    modelReadinessMessage ??
-    computerUseReadinessMessage;
+  }, [agentBlockedSurface, hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
+  const chatReadinessMessage = chatReadinessMessageFor({
+    loading: chat.isLoading,
+    failed: chat.isError,
+    missing: !chat.data,
+    appendReconciliationRequired:
+      documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId),
+    drainingWithoutProjection: detachedGenerationDraining && !visibleDetachedProjection,
+  });
+  const ready = modelReady && !chatReadinessMessage;
+  const readinessMessage = chatReadinessMessage ?? modelReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -360,6 +373,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Composer context meter: the runtime's next-request projection, refreshed
   // on the ambient triggers (open, model change, settle, draft typing) and
   // pushed live during a generation via chat:context-pressure.
+  const showComposerContextUsage = React.useSyncExternalStore(
+    React.useCallback((listener: () => void) => { window.addEventListener(APPEARANCE_CHANGE_EVENT, listener); return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, listener); }, []),
+    () => readCachedAppearance()?.showComposerContextUsage ?? true,
+    () => true,
+  );
   const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
   const [contextCompactPending, setContextCompactPending] = React.useState(false);
   const [contextCompactedFlash, setContextCompactedFlash] = React.useState(false);
@@ -461,11 +479,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     storedAnthropicThinkingLevel,
   );
   const providerThinkingLevels = React.useMemo<GenerationThinkingLevel[]>(() => {
+    if (selectedProvider?.kind === "openai") {
+      const custom = customModelThinkingLevels(thinkingMetadata?.overrides);
+      if (custom) return custom;
+    }
     const declared = thinkingMetadata?.thinkingLevels;
     return declared?.filter(isGenerationThinkingLevel) ?? [];
-  }, [thinkingMetadata?.thinkingLevels]);
+  }, [selectedProvider?.kind, thinkingMetadata?.overrides, thinkingMetadata?.thinkingLevels]);
   const providerThinkingSupported =
-    selectedProvider?.isBuiltin === true &&
+    (selectedProvider?.isBuiltin === true ||
+      (selectedProvider?.kind === "openai" &&
+        customModelThinkingLevels(thinkingMetadata?.overrides) !== undefined)) &&
     providerId !== GOOGLE_PROVIDER_ID &&
     providerId !== OPENAI_CODEX_PROVIDER_ID &&
     providerId !== ANTHROPIC_PROVIDER_ID &&
@@ -499,6 +523,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
+  const [streamingArtifactPlacements, setStreamingArtifactPlacements] = React.useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const [streamingWideVisuals, setStreamingWideVisuals] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [visualDrafts, setVisualDrafts] = React.useState<VisualDrafts>(NO_VISUAL_DRAFTS);
+  const [streamingUiVisuals, setStreamingUiVisuals] = React.useState<readonly ChatUiVisualV1[]>(NO_UI_VISUALS);
+  const [uiDrafts, setUiDrafts] = React.useState<UiDrafts>(NO_UI_DRAFTS);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
     null,
@@ -523,7 +556,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
-  const [questionnaire, setQuestionnaire] = React.useState<AskUserQuestionPromptV1 | null>(null);
+  const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
   // The prompt whose agent deadline passed while its card was still open.
   const [expiredQuestionnaireId, setExpiredQuestionnaireId] = React.useState<string | null>(null);
@@ -532,7 +565,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [lateAnswerSending, setLateAnswerSending] = React.useState(false);
   const [btwView, setBtwView] = React.useState<BtwLiveView | null>(null);
   const [todoSnapshot, setTodoSnapshot] = React.useState<TodoSnapshotViewV1 | null>(null);
-  const [computerUseSaving, setComputerUseSaving] = React.useState(false);
   const [thinkingSaving, setThinkingSaving] = React.useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const decidingApprovalRef = React.useRef<string | null>(null);
@@ -612,7 +644,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const refresh = async () => {
       const requestId = ++remoteApprovalRefreshRef.current;
       try {
-        const remote = await aidenRemoteApi.pendingApproval(chatId);
+        const [remote, remoteQuestion] = await Promise.all([
+          aidenRemoteApi.pendingApproval(chatId),
+          aidenRemoteApi.pendingQuestion(chatId),
+        ]);
         if (
           !active ||
           chatIdRef.current !== chatId ||
@@ -620,6 +655,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         )
           return;
         setApprovals((current) => mergeRemoteApproval(current, remote));
+        setQuestionnaire((current) => current && current.source !== "remote" ? current : remoteQuestion);
       } catch {
         // Remote chat infrastructure is lazy; absence before first pairing is expected.
       }
@@ -677,6 +713,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingReasoning(null);
     clearTextStreaming();
     setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setPersistedHandoffMessageId(null);
@@ -765,7 +804,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const displayedStreamingArtifacts =
     streamingArtifacts.length > 0
       ? streamingArtifacts
-      : (visibleDetachedProjection?.artifacts ?? []);
+      : (visibleDetachedProjection?.artifacts ?? NO_STREAMING_ARTIFACTS);
+  const displayedStreamingUiVisuals =
+    streamingUiVisuals.length > 0 ? streamingUiVisuals : (visibleDetachedProjection?.uiVisuals ?? NO_UI_VISUALS);
   const displayedGenerationTimeline =
     generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
   const displayedLiveSubagents = React.useMemo(
@@ -792,6 +833,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
+  // A run this pane did not start (a paired phone's turn) streams in live
+  // once main reports the chat busy, and stays until its saved reply lands.
+  // A draft or this pane's own turn stops it; an idle chat holds nothing.
+  const activeChatIds = useActiveChatIds();
+  useObservedLocalRun(
+    draft || isGenerating || isStartingGeneration ? null : chatId,
+    effectiveWorkspaceId,
+    activeChatIds.has(chatId),
+  );
   const thinkingDisabledReason =
     isStartingGeneration || isGenerating
       ? "Available after this response"
@@ -925,7 +975,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
-  const forkLineage = chat.data?.botId ? undefined : chat.data?.forkedFrom;
+  const forkLineage = chat.data?.forkedFrom;
   const allChats = useAllRegularChats(Boolean(forkLineage));
   const forkSource = forkLineage
     ? allChats.data?.find((candidate) => candidate.id === forkLineage.chatId)
@@ -957,7 +1007,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         await copyChat({ messageId, position }, undefined, summary);
         return;
       }
-      if (chat.data?.botId) throw new Error("Bot chats can only fork after a reply.");
       const index = messages.findIndex((message) => message.id === messageId);
       const message = messages[index];
       if (!message || message.role !== "user") {
@@ -982,7 +1031,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.info("Aiden could not open the new chat.");
       }
     },
-    [chat.data?.botId, chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
+    [chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
   );
 
   const forkFromTranscript = React.useCallback(
@@ -1086,6 +1135,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
   }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
 
+  React.useEffect(() => {
+    environmentPanel.setContextDetails(!draft && chat.data ? {
+      chat: chat.data,
+      providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
+      modelLabel: model ?? "Unavailable",
+      pressure: contextPressure,
+      compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
+    } : null);
+    return () => environmentPanel.setContextDetails(null);
+  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
+
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
     environmentPanel.setActiveChat(chatId, effectiveWorkspaceId ?? null);
@@ -1150,6 +1210,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setStreamingReasoning(null);
       clearTextStreaming();
       setStreamingArtifacts([]);
+      setVisualDrafts(NO_VISUAL_DRAFTS);
+      setStreamingUiVisuals(NO_UI_VISUALS);
+      setUiDrafts(NO_UI_DRAFTS);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
       setPersistedHandoffMessageId(null);
@@ -1194,6 +1257,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
+          inlineVisuals: readCachedAppearance()?.inlineVisuals ?? "automatic",
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -1229,6 +1293,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
           },
           onArtifactEvent: (event) => {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            setVisualDrafts((current) => reduceVisualDrafts(current, event));
+            setUiDrafts((current) => reduceUiDrafts(current, event));
+            setStreamingUiVisuals((current) => reduceUiVisuals(current, event));
+            if (event.operation === "draft" || event.operation === "draft_end") return;
+            if (event.operation === "ui" || event.operation === "ui_draft") {
+              if (event.operation === "ui") setIsModelLoading(false);
+              return;
+            }
             if (event.operation === "reset") {
               setStreamingArtifacts([]);
               streamingArtifactsRef.current = [];
@@ -1236,7 +1308,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            // Seed main's ready preview before the frame mounts so the final
+            // visual replaces its draft without a loading placeholder.
+            if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
+            if (event.toolCallId) {
+              const toolCallId = event.toolCallId;
+              // Visuals key by mediaId, generated images by attachment id. Both
+              // are unique per generation, so this map only grows; entries for
+              // artifacts no longer shown are never looked up.
+              const key = artifact.kind === "html" ? artifact.mediaId : artifact.attachment.id;
+              setStreamingArtifactPlacements((current) =>
+                current.get(key) === toolCallId ? current : new Map(current).set(key, toolCallId),
+              );
+            }
             if (artifact.kind === "html") {
+              // The latest presentation wins, so a revision can widen or narrow.
+              const wide = event.layout === "wide";
+              setStreamingWideVisuals((current) => {
+                if (current.has(artifact.mediaId) === wide) return current;
+                const next = new Set(current);
+                if (wide) next.add(artifact.mediaId);
+                else next.delete(artifact.mediaId);
+                return next;
+              });
               const index = streamingArtifactsRef.current.findIndex(
                 (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
               );
@@ -1367,6 +1461,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setStreamingText(null);
               setStreamingReasoning(null);
               setStreamingArtifacts([]);
+              setVisualDrafts(NO_VISUAL_DRAFTS);
+              setStreamingUiVisuals(NO_UI_VISUALS);
+              setUiDrafts(NO_UI_DRAFTS);
               streamingArtifactsRef.current = [];
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
@@ -1448,6 +1545,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 );
                 if (updatedChat) {
                   setStreamingArtifacts([]);
+                  setVisualDrafts(NO_VISUAL_DRAFTS);
+                  setStreamingUiVisuals(NO_UI_VISUALS);
+                  setUiDrafts(NO_UI_DRAFTS);
                   streamingArtifactsRef.current = [];
                 }
                 setIsStoppingGeneration(false);
@@ -1555,9 +1655,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
           "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
         );
       }
-      if (computerUseSaving) {
-        throw new Error("Wait for the Computer Use setting to finish saving before sending.");
-      }
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
@@ -1576,7 +1673,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaceId: firstDraft.chat.workspaceId!,
                 providerId,
                 model,
-                computerUseEnabled: firstDraft.chat.computerUseEnabled,
                 turnId: messageTurnId,
                 message: {
                   role: "user",
@@ -1623,11 +1719,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           return;
         }
-        const started = await runGeneration(messageTurnId);
-        // The user message crossed its durability barrier in appendMessage.
-        // Start rejection is surfaced by the stream callback but cannot turn
-        // that committed message back into an unsent composer payload.
-        if (!started.ok && mountedRef.current) setError(started.error.message);
+        // The user message crossed its durability barrier in appendMessage, so
+        // the send is finished here. Main may still be preparing the response:
+        // Stop and the Steer/Queue pill are live already, and holding this
+        // promise until start is acknowledged would make the composer drop
+        // whatever the user steers or queues in that window. A start rejection
+        // is surfaced as an error and cannot turn the committed message back
+        // into an unsent composer payload.
+        void runGeneration(messageTurnId).then((started) => {
+          if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
+            setError(started.error.message);
+          }
+        });
       } finally {
         if (firstDraft) finishChatDraftSend(chatId, false);
         if (
@@ -1641,7 +1744,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       chatId,
-      computerUseSaving,
       detachedGenerationDraining,
       imageArtifactRecoveryPending,
       imageArtifactRecoveryUnavailable,
@@ -1650,6 +1752,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       qc,
       runGeneration,
     ],
+  );
+
+  /** Anything that makes an immediate send unsafe; refreshed below once the queue is known. */
+  const visualPromptBusyRef = React.useRef(false);
+  /** The user clicked Send (or Add to draft) on a visual's follow-up chip. */
+  const handleVisualPrompt = React.useCallback<GuestPromptHandler>(
+    (text) => {
+      if (visualPromptBusyRef.current) {
+        stageComposerText(chatId, text);
+        return;
+      }
+      // Same path as typed input: queue/steer rules, permissions, and a
+      // visible user bubble all apply.
+      void handleSend(text, []).catch((error: unknown) => {
+        stageComposerText(chatId, text);
+        toast.error(error instanceof Error ? error.message : "Could not send the visual's follow-up.");
+      });
+    },
+    [chatId, handleSend],
   );
 
   const handleStop = React.useCallback(() => {
@@ -1695,7 +1816,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       !isStoppingGeneration &&
       !detachedGenerationDraining &&
       !thinkingSaving &&
-      !computerUseSaving &&
       !environmentPanel.gitOperationBusy &&
       !imageArtifactRecoveryPending &&
       !imageArtifactRecoveryUnavailable &&
@@ -1718,6 +1838,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
       );
     },
   });
+  // A visual's follow-up must never race a starting run, a detached run, or
+  // queued messages; in those states it is staged instead of sent.
+  const visualPromptBusy =
+    isGenerating ||
+    isStartingGeneration ||
+    visibleDetachedProjection !== null ||
+    queuedState.messages.length > 0;
+  React.useLayoutEffect(() => {
+    visualPromptBusyRef.current = visualPromptBusy;
+  }, [visualPromptBusy]);
 
   // Main refuses a fork's sends while its summary is pending or failed, so
   // follow-ups wait in the queue until the summary is ready or skipped.
@@ -1750,7 +1880,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   /** Admit run input and show what main committed without waiting for the run to end. */
   const admitSteer = React.useCallback(
     async (streamId: string, text: string) => {
-      const receipt = await chatControl.submitInput(streamId, "steer", text);
+      const receipt = await admitRunInputOnceStarted({
+        admit: () => chatControl.submitInput(streamId, "steer", text),
+        // This pane's own run can still be starting; a detached one is not retried.
+        live: () => generationRef.current?.streamId === streamId && !stopRequestedRef.current,
+      });
       if (receipt.committed && receipt.messageId) {
         const committed = { messageId: receipt.messageId, text, createdAt: Date.now() };
         qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
@@ -1770,7 +1904,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
       }
-      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
       if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
         throw new Error("The current response has ended. Send your message normally.");
       }
@@ -1793,17 +1927,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error(steerRejectionMessage(receipt.reason));
       }
     },
-    [admitSteer, isStoppingGeneration, visibleDetachedProjection],
+    [admitSteer, isStoppingGeneration, steerableDetachedProjection],
   );
 
   const canSteerQueued =
     !draft &&
-    (canStopGeneration || Boolean(visibleDetachedProjection)) &&
+    (canStopGeneration || Boolean(steerableDetachedProjection)) &&
     !isStoppingGeneration;
 
   const steerQueued = React.useCallback(
     async (id: string) => {
-      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
       if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
         toast.error("The current response has ended. The message stays queued.");
         return;
@@ -1825,7 +1959,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         );
       }
     },
-    [admitSteer, isStoppingGeneration, messageQueue, visibleDetachedProjection],
+    [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -1845,6 +1979,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingText(null);
     setStreamingReasoning(null);
     setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -1933,9 +2070,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         const status =
           expiredQuestionnaireId === prompt.promptId
             ? "expired"
-            : (await chatControl.answerQuestion({ promptId: prompt.promptId, response }))?.status;
+            : (await chatControl.answerQuestion({ promptId: prompt.promptId, response, source: prompt.source }))?.status;
         if (chatIdRef.current !== chatId) return;
-        setQuestionnaire(null);
+        setQuestionnaire((current) => current?.promptId === prompt.promptId ? null : current);
         if (status === "expired") {
           setLateQuestionnaireAnswer(
             response.cancelled
@@ -1981,6 +2118,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
     queueMessage,
   ]);
 
+  // A Computer Use request that stopped on missing macOS permissions leaves a
+  // marker on the chat; once ready, Continue resumes it as a normal turn.
+  const computerUsePendingContinue =
+    !draft && computerUseGloballyEnabled && chat.data?.computerUsePendingContinue === true;
+  const [computerUseContinueHiddenFor, setComputerUseContinueHiddenFor] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!computerUsePendingContinue) setComputerUseContinueHiddenFor(null);
+  }, [computerUsePendingContinue]);
+  const continueComputerUse = React.useCallback(async () => {
+    // Main clears the marker when the generation starts; hide the callout now.
+    setComputerUseContinueHiddenFor(chatId);
+    try {
+      await handleSend(COMPUTER_USE_CONTINUE_PROMPT, []);
+    } catch (sendError) {
+      if (chatIdRef.current !== chatId) return;
+      setComputerUseContinueHiddenFor(null);
+      toast.error(userFacingErrorMessage(sendError, "Couldn’t continue this chat."));
+    }
+  }, [chatId, handleSend]);
+  const dismissComputerUseContinue = React.useCallback(async () => {
+    try {
+      const updated = await chatsApi.dismissComputerUseContinue(chatId);
+      qc.setQueryData(queryKeys.chat(chatId), updated);
+    } catch (dismissError) {
+      toast.error(userFacingErrorMessage(dismissError, "Couldn’t dismiss this reminder."));
+    }
+  }, [chatId, qc]);
+
   const openFolder = React.useCallback(() => {
     if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
   }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
@@ -2019,30 +2184,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       environmentPanel.gitOperationBusy,
       qc,
     ],
-  );
-
-  const changeComputerUse = React.useCallback(
-    async (enabled: boolean) => {
-      if (computerUseSaving || isStartingGeneration || isGenerating) return;
-      setComputerUseSaving(true);
-      try {
-        if (getChatDraft(chatId)) {
-          updateChatDraft(chatId, { computerUseEnabled: enabled });
-          return;
-        }
-        const updated = await chatsApi.setComputerUse(chatId, enabled);
-        qc.setQueryData(queryKeys.chat(chatId), updated);
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't change Computer Use for this chat.",
-        );
-      } finally {
-        setComputerUseSaving(false);
-      }
-    },
-    [chatId, computerUseSaving, isGenerating, isStartingGeneration, qc],
   );
 
   const changeGoogleThinking = React.useCallback(
@@ -2332,6 +2473,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
 
   const pending = approvals[0];
+  const showComputerUseContinue =
+    computerUsePendingContinue &&
+    computerUseContinueHiddenFor !== chatId &&
+    !pending &&
+    !questionnaire &&
+    !isGenerating &&
+    !isStartingGeneration &&
+    !detachedGenerationDraining &&
+    !visibleDetachedProjection;
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2353,11 +2503,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     toolActivity,
   });
   const visualizingLive =
-    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||
+      hasActiveToolStep(displayedGenerationTimeline, RENDER_UI_TOOL_NAME)) &&
     !streamComplete && !visibleDetachedProjection;
   const timelineActivity = visualizingLive &&
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
-      ? { phase: "visualizing" as const, label: "Visualizing", orbState: "working" as const }
+      ? { phase: "visualizing" as const, label: "Visualizing", mark: "scan-grid" as const }
       : agentActivity;
   const chronologicalLiveRows = assistantPresentationRows(
     displayedStreamingText ?? "",
@@ -2370,7 +2521,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
     visualizingVisible:
       visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" && step.toolName === RENDER_ARTIFACT_TOOL_NAME)) === true,
+        row.steps.some((step) => step.kind === "tool" &&
+          (step.toolName === RENDER_ARTIFACT_TOOL_NAME || step.toolName === RENDER_UI_TOOL_NAME))) === true,
     toolVisible:
       chronologicalLiveRows?.some((row) => row.kind === "activity" &&
         row.steps.some((step) => step.kind === "tool" &&
@@ -2478,36 +2630,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : undefined;
   const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
 
+  // A Bot chat redirects to its Bot route above; render nothing while it leaves.
+  if (botChatId) return null;
+
+  const chatTitleMenu = (
+    <ChatTitleMenu
+      title={chat.data?.title ?? "New agent"}
+      persisted={!draft && Boolean(persistedChat.data)}
+      onRename={renameChat}
+      onDuplicate={() => copyChat()}
+      duplicateDisabledReason={forkDisabledReason}
+    />
+  );
+
   return (
     <>
       <ScrollArea
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
-          bot.data ? (
-            <span className="flex min-w-0 items-center gap-2">
-              <BotAvatar
-                botId={bot.data.id}
-                avatar={bot.data.avatar}
-                name={bot.data.name}
-                photoLoading="immediate"
-                size="small"
-              />
-              <span className="min-w-0">
-                <span className="flex items-center gap-2">
-                  <span className="truncate">{bot.data.name}</span>
-                  <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
-                    Bot
-                  </span>
-                </span>
-                <span className="block truncate text-small font-normal text-secondary">
-                  {chat.data?.title ?? "New conversation"}
-                </span>
-              </span>
-            </span>
-          ) : forkSourceLabel ? (
+          forkSourceLabel ? (
             <span className="block min-w-0" data-chat-fork-lineage>
-              <span className="block truncate">{chat.data?.title ?? "New agent"}</span>
+              {chatTitleMenu}
               <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
                 <GitFork aria-hidden="true" className="size-3 shrink-0" />
                 {forkSource ? (
@@ -2526,32 +2670,55 @@ export function ChatPane({ chatId }: { chatId: string }) {
               </span>
             </span>
           ) : (
-            (chat.data?.title ?? "New agent")
+            chatTitleMenu
           )
         }
-        actions={
-          <>
-            <OpenInEditorPicker
-              workspaceId={effectiveWorkspace?.id}
-              folderPath={effectiveWorkspace?.folderPath}
+        titleAccessory={
+          effectiveWorkspace ? (
+            <WorkspaceChip
+              workspace={effectiveWorkspace}
+              git={effectiveWorkspace.folderPath ? git.data : undefined}
+              canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
+              onOpenTerminal={() => {
+                if (!terminal.open) terminal.toggle();
+              }}
             />
-            <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
-            <QuickViewToggle disabled={!effectiveWorkspace} />
-            <Button
-              iconOnly
-              variant="toolbar"
-              size="large"
-              onClick={terminal.toggle}
-              disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-              aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-              aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-              aria-pressed={terminal.open}
-              title={`Toggle terminal (${terminalShortcut})`}
-              data-terminal-toggle
-            >
-              <TerminalSquare />
-            </Button>
-          </>
+          ) : null
+        }
+        actions={
+          <WorkspaceToolButtons
+            hasWorkspace={Boolean(effectiveWorkspace)}
+            hasFolder={Boolean(effectiveWorkspace?.folderPath)}
+            hasFolderAccess={Boolean(
+              effectiveWorkspace?.folderPath && effectiveWorkspace.permission !== "none",
+            )}
+            // A cached repository read must not outlive access being switched off.
+            isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
+            leading={<QuickViewToggle disabled={!effectiveWorkspace} />}
+            terminalButton={
+              <Button
+                iconOnly
+                variant="bar"
+                size="small"
+                onClick={terminal.toggle}
+                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                aria-pressed={terminal.open}
+                title={`Toggle terminal (${terminalShortcut})`}
+                data-terminal-toggle
+              >
+                <TerminalSquare />
+              </Button>
+            }
+            trailing={
+              <OpenInEditorPicker
+                workspaceId={effectiveWorkspace?.id}
+                folderPath={effectiveWorkspace?.folderPath}
+              />
+            }
+            end={<EnvironmentPanelToggle />}
+          />
         }
         autoScrollToBottom
         autoScrollResetKey={chatId}
@@ -2566,6 +2733,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingArtifacts.length,
         ]}
         showScrollToBottomButton
+        streaming={displayedStreamingText !== null}
         scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
         scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
         footer={
@@ -2582,6 +2750,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   cardRef={approvalCardRef}
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
+                />
+              ) : null}
+            </EventPresence>
+            <EventPresence
+              present={showComputerUseContinue}
+              className="aiden-dock-inset chat-content-column pb-2"
+            >
+              {showComputerUseContinue ? (
+                <ComputerUseContinueCallout
+                  onContinue={continueComputerUse}
+                  onDismiss={dismissComputerUseContinue}
+                  continueDisabledReason={
+                    ready ? undefined : (readinessMessage ?? "This chat can’t send right now.")
+                  }
                 />
               ) : null}
             </EventPresence>
@@ -2640,15 +2822,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 // without a chatId reset of its own.
                 key={chatId}
                 ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
-                readinessSettingsSection={
-                  !chatReadinessMessage && !botReadinessMessage
-                    ? modelReadinessMessage
-                      ? "providers"
-                      : computerUseReadinessMessage
-                        ? "computerUse"
-                        : undefined
-                    : undefined
-                }
+                readinessSettingsSection={!chatReadinessMessage && modelReadinessMessage ? "providers" : undefined}
                 readinessMessage={
                   imageArtifactRecoveryUnavailable
                     ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
@@ -2663,7 +2837,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
-                onSteer={draft ? undefined : steerMessage}
+                onSteer={draft || observedRunVisible ? undefined : steerMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={
@@ -2699,8 +2873,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onChangePermission={changePermission}
                 workspacePickerEnabled={isNewChat}
                 machinePicker={
-                  // A new chat may run on a paired Mac instead; a Bot's chat stays with its Bot.
-                  isNewChat && !chat.data?.botId && newChatMachines.length > 0 ? (
+                  // A new chat may run on a paired Mac instead.
+                  isNewChat && newChatMachines.length > 0 ? (
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
@@ -2729,18 +2903,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     : "Creates a separate workspace and opens a new chat. This conversation stays here."
                 }
                 visionSupported={visionSupported}
-                computerUse={
-                  computerUseGloballyEnabled
-                    ? {
-                        enabled: chatComputerUseEnabled,
-                        ready: computerUseReady,
-                        checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
-                        saving: computerUseSaving,
-                        detail: computerUseStatusDetail,
-                      }
-                    : undefined
-                }
-                onChangeComputerUse={changeComputerUse}
                 currentChatTitle={chat.data?.title}
                 latestAssistantResponse={latestAssistantResponse}
                 slashNavigationBlockedReason={settingsBlockedReason}
@@ -2768,10 +2930,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 authenticatedProviders={authenticatedProviders}
                 onCloneChat={() => copyChat()}
                 onForkChat={(messageId, position) => forkFromMessage(messageId, position)}
-                onForkWithSummary={
-                  chat.data?.botId
-                    ? undefined
-                    : (messageId, position) => setForkSummaryRequest({ messageId, position })
+                onForkWithSummary={(messageId, position) =>
+                  setForkSummaryRequest({ messageId, position })
                 }
                 onExportChat={exportChat}
                 onCompactChat={
@@ -2848,7 +3008,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       providerLabel={selectedProvider?.label ?? "Model"}
                       level={providerThinkingLevel}
                       levels={providerThinkingLevels}
-                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
+                        ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
@@ -2862,8 +3023,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : undefined
                 }
                 contextMeter={
-                  draft ? undefined : (
+                  draft || !showComposerContextUsage ? undefined : (
                     <ContextMeter
+                      onViewDetails={() => environmentPanel.showTools("context")}
                       pressure={contextPressure}
                       compacting={
                         contextCompactPending ||
@@ -2881,7 +3043,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onDraftChange={onDraftContextChange}
                 modelPicker={
                   <ModelPicker
-                    providers={settings.data ? (providers.data ?? []) : []}
+                    providers={pickerProviders}
                     providerId={providerId}
                     model={model}
                     onChange={(nextProviderId, nextModel) => {
@@ -2952,7 +3114,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingText={displayedStreamingText}
             streamingReasoning={displayedStreamingReasoning}
             streamingArtifacts={displayedStreamingArtifacts}
-            streamComplete={streamComplete || visibleDetachedProjection !== null}
+            streamingArtifactPlacements={streamingArtifactPlacements}
+            streamingWideVisuals={streamingWideVisuals}
+            onVisualPrompt={handleVisualPrompt}
+            visualFollowUpBusy={visualPromptBusy}
+            streamingVisualDrafts={visualDrafts}
+            streamingUiVisuals={displayedStreamingUiVisuals}
+            streamingUiDrafts={uiDrafts}
+            streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
             persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}
             timeline={displayedGenerationTimeline}
@@ -2962,12 +3131,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             agentActivity={visibleAgentActivity}
             readAloudMessageId={readAloudCandidateId}
             readAloud={readAloudProps}
-            onFork={chat.data?.botId ? undefined : forkFromTranscript}
+            onFork={forkFromTranscript}
             forkDisabledReason={forkDisabledReason}
-            onForkWithSummary={
-              chat.data?.botId
-                ? undefined
-                : (messageId, position) => setForkSummaryRequest({ messageId, position })
+            onForkWithSummary={(messageId, position) =>
+              setForkSummaryRequest({ messageId, position })
             }
             forkSummary={
               forkSummary

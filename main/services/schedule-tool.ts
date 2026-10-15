@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import {
   ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
   assertSafeScheduledPrompt,
@@ -44,6 +45,13 @@ import {
   type ScheduledTaskApprovalDetails,
 } from "../../renderer/shared/assistant.js";
 import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task-presentation.js";
+import { BOT_ROUTINE_MAX_MONTH_DAY } from "../../renderer/shared/bot-routine-schedule.js";
+import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.js";
+import {
+  BOT_ROUTINE_PROPOSAL_REASON_LIMIT,
+  BOT_ROUTINES_TOOL_NAME,
+} from "../../renderer/shared/bot-routine-proposals.js";
+import type { BotRoutine } from "./scheduled-bot-routines.js";
 
 export const SCHEDULE_TOOL_NAME = ASSISTANT_AUTOMATION_TOOL_NAME;
 export const EDIT_AUTOMATION_TOOL_NAME = ASSISTANT_AUTOMATION_EDIT_TOOL_NAME;
@@ -111,7 +119,10 @@ export interface AssistantScheduleProposal {
   >;
 }
 
-const APPROVED_MCP_BINDINGS = Symbol("assistant-approved-mcp-bindings");
+// Approval state belongs to this invocation, not the model's JSON arguments.
+// The runtime hashes those arguments after approval; hidden symbol properties
+// make them invalid JSON and prevent an approved task from ever dispatching.
+const approvedMcpByArguments = new WeakMap<object, ScheduledMcpServerBinding[]>();
 
 export function attachAssistantScheduleMcpApproval(
   args: unknown,
@@ -120,12 +131,7 @@ export function attachAssistantScheduleMcpApproval(
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     throw new Error("Automation approval arguments are invalid.");
   }
-  Object.defineProperty(args, APPROVED_MCP_BINDINGS, {
-    configurable: false,
-    enumerable: false,
-    writable: false,
-    value: structuredClone(bindings),
-  });
+  approvedMcpByArguments.set(args, structuredClone([...bindings]));
 }
 
 function approvedMcpBindings(
@@ -136,7 +142,7 @@ function approvedMcpBindings(
   const bindings =
     args && typeof args === "object" && !Array.isArray(args)
       ? validateScheduledMcpServerBindings(
-          (args as { [APPROVED_MCP_BINDINGS]?: unknown })[APPROVED_MCP_BINDINGS],
+          approvedMcpByArguments.get(args),
         )
       : undefined;
   if (
@@ -314,7 +320,22 @@ export interface ScheduleToolDependencies {
   selectionProvider(providerId: string): Promise<StoredProvider | undefined>;
 }
 
-const defaultDependencies: ScheduleToolDependencies = {
+/**
+ * Bot routines belong to their Bot; the generic automation tools must never
+ * list, edit, pause, run, or delete them.
+ */
+function withoutBotRoutines(dependencies: ScheduleToolDependencies): ScheduleToolDependencies {
+  return {
+    ...dependencies,
+    list: async () => (await dependencies.list()).filter((task) => task.botId === undefined),
+    get: async (id) => {
+      const task = await dependencies.get(id);
+      return task?.botId === undefined ? task : undefined;
+    },
+  };
+}
+
+const defaultDependencies: ScheduleToolDependencies = withoutBotRoutines({
   list: async () => (await import("./schedule-store.js")).scheduleStore.list(),
   get: async (id) => (await import("./schedule-store.js")).scheduleStore.get(id),
   save: async (input, expectedUpdatedAt, signal) =>
@@ -354,7 +375,7 @@ const defaultDependencies: ScheduleToolDependencies = {
   selectionProvider: async (providerId) =>
     (await import("./provider-registry.js")).providerRegistry.selectionProvider(providerId) ??
     (await import("./config-store.js")).configStore.getProvider(providerId),
-};
+});
 
 function result(value: unknown): AgentToolResult<null> {
   return {
@@ -575,7 +596,7 @@ export function canonicalizeAssistantScheduleToolArguments(
     cron: proposal.input.cron,
     timezone: proposal.input.timezone,
     prompt: proposal.input.prompt,
-    workspaceId: proposal.input.workspaceId,
+    ...(proposal.input.workspaceId ? { workspaceId: proposal.input.workspaceId } : {}),
     permission: proposal.input.permission,
     mcpServerIds: proposal.input.mcpServerIds,
     notify: proposal.input.notify,
@@ -870,6 +891,7 @@ export async function resolveAssistantScheduleMcpServers(
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
     const name = bounded(
       required(server.name, "MCP server name"),
       "MCP server name",
@@ -900,7 +922,7 @@ interface PreparedStandardScheduleApproval {
   details: ScheduledTaskApprovalDetails;
 }
 
-const PREPARED_STANDARD_SCHEDULE = Symbol("prepared-standard-schedule");
+const preparedStandardByArguments = new WeakMap<object, PreparedStandardScheduleApproval>();
 
 function sameIds(left: readonly string[] | undefined, right: readonly string[]): boolean {
   return (left?.length ?? 0) === right.length && right.every((id, index) => left?.[index] === id);
@@ -930,7 +952,7 @@ async function resolveStandardDefaultModel(
   dependencies: ScheduleToolDependencies,
 ): Promise<StandardDefaultModel> {
   const settings = await dependencies.getSettings();
-  const providerId = settings.lastProviderId?.trim();
+  const providerId = unattendedFallbackProviderId(settings.lastProviderId?.trim());
   if (!providerId) return {};
   const provider = await dependencies.selectionProvider(providerId);
   const model = settings.lastModel?.trim() || provider?.defaultModel?.trim();
@@ -1019,6 +1041,7 @@ async function standardScope(
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
     const name = bounded(
       required(server.name, "MCP server name"),
       "MCP server name",
@@ -1168,7 +1191,7 @@ async function resolveStandardScheduleApproval(
       ) {
         legacyGlobalMcp = true;
         mcpServerIds = (await dependencies.listMcpServers())
-          .filter((server) => server.enabled)
+          .filter((server) => server.enabled && mcpServerOffersTools(server))
           .map((server) => server.id);
       }
     }
@@ -1231,7 +1254,7 @@ async function resolveStandardScheduleApproval(
         );
       }
       input.mcpServerIds = (await dependencies.listMcpServers())
-        .filter((server) => server.enabled)
+        .filter((server) => server.enabled && mcpServerOffersTools(server))
         .map((server) => server.id);
     }
   }
@@ -1297,12 +1320,7 @@ export async function prepareStandardScheduleApproval(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Scheduled task arguments are invalid.");
   }
-  Object.defineProperty(value, PREPARED_STANDARD_SCHEDULE, {
-    configurable: false,
-    enumerable: false,
-    writable: false,
-    value: structuredClone(prepared),
-  });
+  preparedStandardByArguments.set(value, structuredClone(prepared));
   return { summary: prepared.summary, details: prepared.details };
 }
 
@@ -1314,17 +1332,16 @@ async function standardScheduleApprovalForExecution(
 ): Promise<PreparedStandardScheduleApproval> {
   const attached =
     value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { [PREPARED_STANDARD_SCHEDULE]?: PreparedStandardScheduleApproval })[
-          PREPARED_STANDARD_SCHEDULE
-        ]
+      ? preparedStandardByArguments.get(value)
       : undefined;
   if (attached) return structuredClone(attached);
   return resolveStandardScheduleApproval(value, selection, dependencies, defaultWorkspaceId);
 }
 
 export function createAssistantScheduleListTool(
-  dependencies: ScheduleToolDependencies = defaultDependencies,
+  allDependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
+  const dependencies = withoutBotRoutines(allDependencies);
   return declarePiRuntimeReplay(
     {
       name: LIST_SCHEDULED_TASKS_TOOL_NAME,
@@ -1353,8 +1370,9 @@ export function createAssistantScheduleListTool(
 
 export function createAssistantEditAutomationTool(
   modelSelection: AssistantScheduleModelSelection,
-  dependencies: ScheduleToolDependencies = defaultDependencies,
+  allDependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
+  const dependencies = withoutBotRoutines(allDependencies);
   const approvedModel = validateAssistantScheduleModelSelection(modelSelection);
   return {
     name: EDIT_AUTOMATION_TOOL_NAME,
@@ -1464,8 +1482,9 @@ export function createAssistantEditAutomationTool(
 
 export function createScheduleTaskTool(
   access: ScheduleToolAccess = { kind: "standard" },
-  dependencies: ScheduleToolDependencies = defaultDependencies,
+  allDependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
+  const dependencies = withoutBotRoutines(allDependencies);
   if (access.kind === "assistant-attended") {
     const approvedModel = validateAssistantScheduleModelSelection(access.modelSelection);
     return {
@@ -1724,12 +1743,149 @@ export function createScheduleTaskTool(
   };
 }
 
+/**
+ * What the Bot's `routines` tool may do. Creating, changing or deleting a
+ * routine is the person's job: `propose` only shows an approval card, and
+ * `pause` only reduces activity.
+ */
+export interface BotRoutinesToolDependencies {
+  list(botId: string): Promise<BotRoutine[]>;
+  /** Turn one of this Bot's routines off. Throws when it is not this Bot's. */
+  pause(botId: string, routineId: string): Promise<BotRoutine>;
+  /** Store the proposal and show its card. */
+  propose(
+    botId: string,
+    input: { name: string; schedule: unknown; prompt: string; reason?: string },
+  ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string }>;
+}
+
+const BOT_ROUTINE_TIME = Type.String({
+  pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+  description: 'Local 24-hour time, for example "08:41".',
+});
+
+const BOT_ROUTINE_SCHEDULE = Type.Union(
+  [
+    Type.Object(
+      { kind: Type.Literal("once"), date: Type.String({ description: "YYYY-MM-DD" }), time: BOT_ROUTINE_TIME },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { kind: Type.Literal("daily"), time: BOT_ROUTINE_TIME },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { kind: Type.Literal("weekdays"), time: BOT_ROUTINE_TIME },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        kind: Type.Literal("weekly"),
+        days: Type.Array(Type.Integer({ minimum: 0, maximum: 6 }), {
+          minItems: 1,
+          maxItems: 7,
+          description: "Days of the week, 0 = Sunday … 6 = Saturday.",
+        }),
+        time: BOT_ROUTINE_TIME,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        kind: Type.Literal("monthly"),
+        day: Type.Integer({ minimum: 1, maximum: BOT_ROUTINE_MAX_MONTH_DAY }),
+        time: BOT_ROUTINE_TIME,
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  { description: "When the routine runs, in the person's local timezone." },
+);
+
+function routinesRequest(fields: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const key of Object.keys(fields)) {
+    if (!allowed.includes(key)) throw new Error("Invalid routine request.");
+  }
+}
+
+/**
+ * The Bot's `routines` tool (spec 2026-10-09 §11.3): `list` reads this Bot's
+ * routines, `propose` shows the person an Add routine card, and `pause` turns
+ * one off. It is bound to the current Bot and has no way to create, change or
+ * delete a routine itself.
+ */
+export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDependencies): AgentTool {
+  return {
+    name: BOT_ROUTINES_TOOL_NAME,
+    label: "Routines",
+    description:
+      "This Bot's routines: messages you receive on a schedule, like a weekly plan or a morning check-in. " +
+      "Actions: list; propose (name, schedule, prompt, optional reason) shows the person an Add routine card they approve or decline, so only propose when a regular check-in would clearly help and they haven't declined it; pause (id from list) turns a routine off. " +
+      "You cannot create, change or delete routines yourself: the person does that in the Bot's profile.",
+    parameters: Type.Object(
+      {
+        action: Type.Union([Type.Literal("list"), Type.Literal("propose"), Type.Literal("pause")]),
+        id: Type.Optional(Type.String({ description: "Exact routine id from list (pause)." })),
+        name: Type.Optional(Type.String({ description: "Short routine name, for example \"Weekly meal prep\"." })),
+        schedule: Type.Optional(BOT_ROUTINE_SCHEDULE),
+        prompt: Type.Optional(Type.String({ description: "What you should do each time the routine runs." })),
+        reason: Type.Optional(
+          Type.String({ maxLength: BOT_ROUTINE_PROPOSAL_REASON_LIMIT, description: "One line on why this would help them." }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
+      throwIfScheduleToolAborted(signal);
+      if (!rawParams || typeof rawParams !== "object" || Array.isArray(rawParams)) {
+        throw new Error("Invalid routine request.");
+      }
+      const { action, ...fields } = rawParams as Record<string, unknown>;
+      if (action === "list") {
+        routinesRequest(fields, []);
+        return result({
+          routines: (await routines.list(botId)).map((routine) => ({
+            id: routine.id,
+            name: routine.name,
+            label: routine.label,
+            enabled: routine.enabled,
+          })),
+        });
+      }
+      if (action === "pause") {
+        routinesRequest(fields, ["id"]);
+        if (typeof fields.id !== "string" || !fields.id) throw new Error("Invalid routine request.");
+        const paused = await routines.pause(botId, fields.id);
+        return result({ routine: { id: paused.id, name: paused.name, label: paused.label, enabled: paused.enabled } });
+      }
+      if (action === "propose") {
+        routinesRequest(fields, ["name", "schedule", "prompt", "reason"]);
+        const outcome = await routines.propose(botId, {
+          name: typeof fields.name === "string" ? fields.name : "",
+          schedule: fields.schedule,
+          prompt: typeof fields.prompt === "string" ? fields.prompt : "",
+          ...(fields.reason !== undefined ? { reason: String(fields.reason) } : {}),
+        });
+        if (!outcome.ok) return result({ ok: false, code: outcome.code, error: outcome.error });
+        return result({
+          ok: true,
+          proposalId: outcome.proposalId,
+          message: "I've shown the person an Add routine card. Don't ask again unless they bring it up.",
+        });
+      }
+      throw new Error("Invalid routine request.");
+    },
+  };
+}
+
+
 export function scheduleTaskToolsForContext(context: {
   workspaceId?: string;
   allowScheduling?: boolean;
   mode?: "standard" | "assistant-attended";
   assistantModelSelection?: AssistantScheduleModelSelection;
 }): AgentTool[] {
+  // Bots use `createBotRoutinesTool`, built by the durable Bot runtime.
   if (context.allowScheduling === false) return [];
   if (context.mode === "assistant-attended") {
     if (!context.assistantModelSelection) {

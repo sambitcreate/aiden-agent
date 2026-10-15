@@ -1,0 +1,5 @@
+# Regenerate with: python3 marketing/rive/tools/render.py
+rive/.render/
+rive/exports/frames/
+rive/exports/transparent/*.mov
+__pycache__/

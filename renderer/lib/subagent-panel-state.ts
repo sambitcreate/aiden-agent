@@ -5,6 +5,7 @@ import {
   type SubagentRunView,
 } from "./subagent-view-state";
 import { subagentPendingQuestion, type SubagentRunSnapshot } from "../shared/subagent-runs";
+import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 
 export interface SubagentOverviewSummary {
   primary: string;
@@ -47,6 +48,91 @@ export function subagentOverviewSummary(runs: readonly SubagentRunView[]): Subag
     primary: parts[0] ?? "No subagents",
     secondary: parts.slice(1).join(" · ") || `${runs.length} total`,
     ariaLabel: parts.join(", ") || "No subagents",
+  };
+}
+
+export type SubagentRunStatusGroupId = "running" | "needs_attention" | "failed" | "stopped" | "completed";
+
+export interface SubagentRunStatusGroup {
+  id: SubagentRunStatusGroupId;
+  title: string;
+  runs: SubagentRunView[];
+}
+
+const STATUS_GROUP_BY_STATE: Record<SubagentRunView["state"], SubagentRunStatusGroupId> = {
+  queued: "running",
+  starting: "running",
+  running: "running",
+  needs_attention: "needs_attention",
+  failed: "failed",
+  timed_out: "failed",
+  unknown: "failed",
+  stopped: "stopped",
+  interrupted: "stopped",
+  completed: "completed",
+};
+
+const STATUS_GROUPS: ReadonlyArray<{ id: SubagentRunStatusGroupId; title: string }> = [
+  { id: "running", title: "Running" },
+  { id: "needs_attention", title: "Needs attention" },
+  { id: "failed", title: "Failed" },
+  { id: "stopped", title: "Stopped" },
+  { id: "completed", title: "Completed" },
+];
+
+/** Every run in the chat by outcome, in display order; empty groups are omitted and run order is kept. */
+export function groupSubagentRunsByStatus(runs: readonly SubagentRunView[]): SubagentRunStatusGroup[] {
+  const byGroup = new Map<SubagentRunStatusGroupId, SubagentRunView[]>();
+  for (const run of runs) {
+    const id = STATUS_GROUP_BY_STATE[run.state];
+    const list = byGroup.get(id);
+    if (list) list.push(run);
+    else byGroup.set(id, [run]);
+  }
+  return STATUS_GROUPS.flatMap(({ id, title }) => {
+    const groupRuns = byGroup.get(id);
+    return groupRuns ? [{ id, title, runs: groupRuns }] : [];
+  });
+}
+
+const EFFORT_LABELS: Record<GenerationThinkingLevel, string> = {
+  off: "Off",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
+
+const MODEL_SELECTION_LABELS: Record<NonNullable<SubagentRunSnapshot["modelSelection"]>, string> = {
+  inherited: "Same as parent",
+  requested: "Chosen by the agent",
+  configured: "From subagent settings",
+  role_locked: "Locked by role setting",
+};
+
+export interface SubagentModelDisplay {
+  model: string;
+  /** Absent for older runs that did not record their effort. */
+  effort?: string;
+  selection?: string;
+  /** True when the child's model came from a request or setting rather than the parent. */
+  childSpecific: boolean;
+  spoken: string;
+}
+
+export function subagentModelDisplay(
+  run: Pick<SubagentRunSnapshot, "modelId" | "providerId" | "thinkingLevel" | "modelSelection">,
+): SubagentModelDisplay {
+  const model = run.providerId ? `${run.providerId}/${run.modelId}` : run.modelId;
+  const effort = run.thinkingLevel ? EFFORT_LABELS[run.thinkingLevel] : undefined;
+  const selection = run.modelSelection ? MODEL_SELECTION_LABELS[run.modelSelection] : undefined;
+  return {
+    model,
+    ...(effort ? { effort } : {}),
+    ...(selection ? { selection } : {}),
+    childSpecific: run.modelSelection !== undefined && run.modelSelection !== "inherited",
+    spoken: `Model ${model}${effort ? `, effort ${effort.toLowerCase()}` : ""}`,
   };
 }
 

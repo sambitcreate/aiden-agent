@@ -14,6 +14,8 @@ import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-creden
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import { geminiTranscriptionTokens } from "./usage-accounting.js";
 import { recordTranscription } from "./transcription.js";
+import { resolveVoiceProviderNow } from "./voice-provider-resolution.js";
+import { cloudLanguageHint } from "../../renderer/shared/voice-language.js";
 import {
   bindOwnerInvalidation,
   decodePcm16Chunk,
@@ -68,7 +70,9 @@ class GeminiLiveTranscriptionManager {
     await listProvidersWithLegacyPiCredentialMigration();
     const settings = await configStore.getSettings();
     const selected = resolveCloudVoiceModel("gemini", settings.voiceModel);
-    if (settings.voiceProvider !== "gemini" || !isGeminiLiveTranscriptionModel(selected)) {
+    const resolution = await resolveVoiceProviderNow();
+    const resolvedGemini = resolution.kind === "ready" && resolution.provider === "gemini";
+    if (!resolvedGemini || !isGeminiLiveTranscriptionModel(selected)) {
       throw new Error("Select Gemini 3.5 Transcribe Live in Settings → Voice first.");
     }
     const auth = await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID);
@@ -76,6 +80,8 @@ class GeminiLiveTranscriptionManager {
     if (!key) throw new Error("Set up Google Gemini in Settings → Providers to use voice input.");
     const provider = await providerRegistry.selectionProvider(GOOGLE_PROVIDER_ID);
     if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
+
+    const language = cloudLanguageHint(settings.voiceLanguage);
 
     const keyForOwner = ownerKey(owner);
     const previous = this.activeByOwner.get(keyForOwner);
@@ -96,7 +102,7 @@ class GeminiLiveTranscriptionManager {
           config: {
             responseModalities: [Modality.TEXT],
             inputAudioTranscription: {
-              languageCodes: [],
+              languageCodes: language ? [language] : [],
               mode: AudioTranscriptionConfigMode.VERBATIM,
             },
           },

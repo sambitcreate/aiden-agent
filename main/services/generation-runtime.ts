@@ -81,9 +81,8 @@ export function resolveGenerationThinkingLevel(
   }
   const levels = piThinkingLevelsForModel(model) ?? [];
   if (levels.length === 0) return "off";
-  // Custom/local callers do not expose Aiden's generic thinking control and
-  // intentionally omit a request. Preserve their prior cost/latency behavior;
-  // built-in UI surfaces pass the normalized saved/default level explicitly.
+  // Callers without an effort control intentionally omit a request. Preserve
+  // their prior behavior; configured controls pass a normalized level explicitly.
   if (requested === undefined) return "off";
   return normalizeProviderThinkingLevel(levels, requested);
 }

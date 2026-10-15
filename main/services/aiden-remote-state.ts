@@ -14,6 +14,8 @@ import {
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
+  AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -248,6 +250,33 @@ export function mayHoldSimulatorCapabilities(type: AidenRemoteDeviceType): boole
   return type === "mac" || type === "linux";
 }
 
+function isMobileSimulatorCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/** Revision 27/30 opt-ins (`bot:cards`, `bot:activity`): no authority, any device type. */
+function isBotOptInCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The phone simulator viewer grant (contract revision 26) belongs to phones
+ * and tablets only (`android` since revision 31); desktops use `simulators:control`.
+ */
+export function mayHoldMobileSimulatorCapabilities(type: unknown): boolean {
+  return type === "iphone" || type === "ipad" || type === "android";
+}
+
 function parsePersistedCapabilities(
   value: unknown,
   acceptsBotCapabilities: boolean,
@@ -263,6 +292,7 @@ function parsePersistedCapabilities(
           (acceptsBotCapabilities || !isBotCapability(capability)) &&
           (acceptsProgressCapabilities || !isProgressCapability(capability)) &&
           (desktop || !isSimulatorCapability(capability)) &&
+          (!isMobileSimulatorCapability(capability) || mayHoldMobileSimulatorCapabilities(type)) &&
           (!isHostCapability(capability) || mayHoldHostCapability(type, capability)),
       )
     : value;
@@ -774,7 +804,9 @@ export class AidenRemoteStateRegistry {
       accepts.some((capability) =>
         !isProgressCapability(capability) &&
         !isSimulatorCapability(capability) &&
-        !isHostCapability(capability))
+        !isMobileSimulatorCapability(capability) &&
+        !isHostCapability(capability) &&
+        !isBotOptInCapability(capability))
     ) {
       return null;
     }
@@ -788,6 +820,8 @@ export class AidenRemoteStateRegistry {
       if (
         (accepts.some(isSimulatorCapability) &&
           !mayHoldSimulatorCapabilities(device.type)) ||
+        (accepts.some(isMobileSimulatorCapability) &&
+          !mayHoldMobileSimulatorCapabilities(device.type)) ||
         accepts.some(
           (capability) =>
             isHostCapability(capability) && !mayHoldHostCapability(device.type, capability),
@@ -800,7 +834,9 @@ export class AidenRemoteStateRegistry {
         (capability): capability is AidenRemoteCapability =>
           (isProgressCapability(capability) ||
             isSimulatorCapability(capability) ||
-            isHostCapability(capability)) &&
+            isMobileSimulatorCapability(capability) ||
+            isHostCapability(capability) ||
+            isBotOptInCapability(capability)) &&
           !granted.has(capability as AidenRemoteCapability),
       );
       const acceptsProgress = accepts.some(isProgressCapability);
@@ -845,6 +881,8 @@ export class AidenRemoteStateRegistry {
         capabilities.some(isProgressCapability)) ||
       (!mayHoldSimulatorCapabilities(input.type) &&
         (capabilities.some(isSimulatorCapability) || capabilities.some(isHostCapability))) ||
+      // The phone simulator grant is negotiated after pairing, never issued by it.
+      capabilities.some(isMobileSimulatorCapability) ||
       (!this.hostPolicy.botCapabilitiesSupported() &&
         (input.acceptsBotCapabilities === true || capabilities.some(isBotCapability)))
     ) {

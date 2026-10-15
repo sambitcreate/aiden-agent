@@ -1,20 +1,18 @@
 import * as path from "node:path";
 import { Notification, ipcMain, logger } from "../platform.js";
 import { requestAppPath } from "./app-navigation.js";
-import { APPROVAL_TOOL_NAMES } from "./coding-tools.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
 import { providerRegistry } from "./provider-registry.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
-import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
+import { scheduledGenerationToolPolicy } from "./scheduled-generation-policy.js";
 import { webSearchService } from "./web-search-main.js";
 import {
   assertAssistantScheduleExecutionBoundary,
   isSilentAssistantScheduleResponse,
   scheduledTaskGenerationMode,
-  scheduledTaskAllowsWebSearch,
 } from "./schedule-guard.js";
 import { showScheduledNotification } from "./schedule-notification.js";
 import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
@@ -29,6 +27,9 @@ import {
   scheduledGenerationSurface,
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
+import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { createBotRoutineExecutor, type BotRoutineExecutor } from "./scheduled-bot-routines.js";
+import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -116,9 +117,32 @@ function notify(task: ScheduledTask, body: string, chatId: string | undefined): 
   });
 }
 
+function notifyBotRoutine(task: ScheduledTask, body: string): void {
+  showScheduledNotification(task, body, task.botId, {
+    isSupported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    openChat: async (botId) => {
+      // The routine posted into the Bot's chat, not its Profile.
+      await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
+    },
+    onError: (stage) => {
+      logger.warn("schedule", `Routine notification ${stage} failed.`);
+    },
+  });
+}
+
 export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeStreams = new Map<string, string>();
   const activeControllers = new Map<string, AbortController>();
+  // Bot routines submit to their Bot's conversation, never a workspace chat.
+  let botRoutines: BotRoutineExecutor | undefined;
+  const botRoutineExecutor = () =>
+    (botRoutines ??= createBotRoutineExecutor({
+      store,
+      ports: async () => (await import("./scheduled-bot-routines-main.js")).botRoutinePorts(),
+      notify: notifyBotRoutine,
+      broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
+    }));
 
   async function ensureChat(task: ScheduledTask): Promise<string> {
     const create = (claimedChatId: string) =>
@@ -233,12 +257,19 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
     if (workspace) await assertManagedWorktreeAdmission(workspace);
     const settings = await configStore.getSettings();
+    if (!task.providerId && isAcpHarnessProvider(settings.lastProviderId ?? "")) {
+      throw new Error(
+        "This task follows your last-used model, which can't run scheduled tasks. Pin a model in the task's settings.",
+      );
+    }
     const providerId = task.providerId ?? settings.lastProviderId;
     if (!providerId) throw new Error("Choose a provider before running this scheduled task.");
     const provider =
       (await providerRegistry.selectionProvider(providerId)) ??
       (await configStore.getProvider(providerId));
     if (!provider) throw new Error("The task provider no longer exists.");
+    const harnessReason = acpHarnessUnavailableReason(providerId);
+    if (harnessReason) throw new Error(harnessReason);
     if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) {
       throw new Error(
         "Google chat models are off while Gemini is configured for transcription only.",
@@ -254,29 +285,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
     if (signal.aborted) throw new Error("Scheduled task was cancelled.");
-    const excluded = new Set<string>([SCHEDULE_TOOL_NAME]);
-    let webSearchReady = false;
-    if (scheduledTaskAllowsWebSearch(task)) {
-      try {
-        webSearchReady = (await webSearchService.availability()).ready === true;
-      } catch {
-        // Availability is categorical and fail-closed; a storage/provider
-        // read failure must never turn an explicit task grant into access.
-        webSearchReady = false;
-      }
-    }
-    if (!webSearchReady) excluded.add("web_search");
-    if (task.permission === "read-only") {
-      for (const name of APPROVAL_TOOL_NAMES) excluded.add(name);
-    }
+    const toolPolicy = await scheduledGenerationToolPolicy(task, () =>
+      webSearchService.availability(),
+    );
     const streamId = `scheduled-${task.id}-${Date.now().toString(36)}`;
-    const legacyAllMcp =
-      task.mcpServerIds === undefined &&
-      task.executionProfile === undefined &&
-      task.permission === "full";
-    const mcpServerIds = task.mcpServerIds ?? (legacyAllMcp ? undefined : []);
-    const allowMcpTools =
-      task.permission === "full" && (legacyAllMcp || (mcpServerIds?.length ?? 0) > 0);
     const background = createBackgroundOwner(streamId);
     const surface = scheduledGenerationSurface({
       chatId,
@@ -288,11 +300,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       mode: scheduledTaskGenerationMode(task),
       prompt,
       permission: task.permission,
-      excludeToolNames: excluded,
-      allowMcpTools,
-      mcpServerIds,
-      mcpServerBindings: task.mcpServerBindings,
-      providerFingerprint: task.providerFingerprint,
+      ...toolPolicy,
     });
     const turn = beginSurfaceGeneration(llmClient.beginChatTurn.bind(llmClient), surface);
     if (!turn) {
@@ -345,12 +353,27 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   return {
-    async run(task: ScheduledTask, runId?: string): Promise<ScheduledRun> {
+    async run(
+      task: ScheduledTask,
+      runId?: string,
+      trigger?: ScheduledRunTrigger,
+    ): Promise<ScheduledRun> {
       if (activeControllers.has(task.id)) {
         throw new Error("This scheduled task is already running.");
       }
       const controller = new AbortController();
       activeControllers.set(task.id, controller);
+      if (task.botId !== undefined) {
+        try {
+          return await botRoutineExecutor().run(task, {
+            runId,
+            trigger,
+            signal: controller.signal,
+          });
+        } finally {
+          activeControllers.delete(task.id);
+        }
+      }
       const startedAt = Date.now();
       let chatId: string | undefined;
       let result: ScheduledRun["result"] = "error";

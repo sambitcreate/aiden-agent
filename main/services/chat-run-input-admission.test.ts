@@ -346,3 +346,16 @@ test("run input admission reports committed cancellation when the run is cancell
   assert.equal(app.appended.length, 1);
   assert.equal(app.followedUp.length, 0);
 });
+
+test("a run that takes no mid-flight input refuses steer and queue before touching the transcript", async () => {
+  const f = fixture();
+  f.generation.inputClosed = true;
+  for (const mode of ["steer", "queue"] as const) {
+    assert.deepEqual(
+      await f.admission.admit({ streamId: "stream-1", mode, text: "make it blue", ownerDocumentId: "doc-1" }),
+      { admitted: false, reason: "run_not_active", committed: false },
+    );
+  }
+  assert.equal(f.appended.length, 0);
+  assert.equal(f.steered.length + f.followedUp.length, 0);
+});

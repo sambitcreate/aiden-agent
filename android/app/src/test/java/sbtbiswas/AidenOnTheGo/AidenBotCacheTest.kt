@@ -21,9 +21,7 @@ class AidenBotCacheTest {
 
         val recipe = AidenBotAvatarRecipe(
             shape = AidenBotAvatarShape.ORB,
-            color = AidenBotAvatarColor.LILAC,
-            eyes = AidenBotAvatarEyes.HAPPY,
-            detail = AidenBotAvatarDetail.SPARKLES
+            color = AidenBotAvatarColor.LILAC
         )
         val botSummary = AidenBotSummary(
             id = "bot_123",
@@ -31,13 +29,12 @@ class AidenBotCacheTest {
             purpose = "Automated test helper",
             avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(recipe)),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1"
         )
         val botList = AidenBotList(
-            bots = listOf(botSummary),
-            favorites = AidenBotFavorites(botIds = listOf("bot_123"), revision = "fav_1")
+            bots = listOf(botSummary)
         )
 
         cache.putBotList(botList)
@@ -61,10 +58,10 @@ class AidenBotCacheTest {
             name = "Helper",
             purpose = "Assists with coding",
             instructions = "Be concise.",
-            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
+            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1",
             access = AidenBotAccessView(
                 botId = "bot_1",
@@ -85,10 +82,10 @@ class AidenBotCacheTest {
             avatar = detail.avatar,
             health = AidenBotHealth.READY,
             createdAt = detail.createdAt,
-            updatedAt = Instant.now(),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_2"
         )
-        cache.putBotList(AidenBotList(bots = listOf(summary), favorites = AidenBotFavorites(botIds = emptyList(), revision = "fav_1")))
+        cache.putBotList(AidenBotList(bots = listOf(summary)))
 
         // Detail should still be preserved
         assertNotNull(cache.getBotDetail("bot_1"))
@@ -101,10 +98,10 @@ class AidenBotCacheTest {
             name = "Helper",
             purpose = "Assists with coding",
             instructions = "Be concise.",
-            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
+            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1",
             access = AidenBotAccessView(
                 botId = "assistant-1",
@@ -127,20 +124,30 @@ class AidenBotCacheTest {
     @Test
     fun testBotPurgeRemovesOnlyRequestedInstallationAndClearsActiveState() {
         val cache = AidenBotCache(tempFolder.root)
-        val list = AidenBotList(
-            bots = emptyList(),
-            favorites = AidenBotFavorites(botIds = emptyList(), revision = "favorites-1")
+        fun list(name: String) = AidenBotList(
+            bots = listOf(
+                AidenBotSummary(
+                    id = "bot_1",
+                    name = name,
+                    purpose = "",
+                    avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
+                    health = AidenBotHealth.READY,
+                    createdAt = Instant.EPOCH,
+                    updatedAt = Instant.EPOCH,
+                    revision = "rev_1"
+                )
+            )
         )
         cache.activate("mac-a", "device-a")
-        cache.putBotList(list)
+        cache.putBotList(list("Mac A"))
         cache.activate("mac-b", "device-b")
-        cache.putBotList(list.copy(favorites = list.favorites.copy(revision = "favorites-2")))
+        cache.putBotList(list("Mac B"))
 
         cache.purge("mac-b", "device-b")
         assertNull(cache.botList.value)
 
         cache.activate("mac-a", "device-a")
-        assertEquals("favorites-1", cache.botList.value?.favorites?.revision)
+        assertEquals("Mac A", cache.botList.value?.bots?.single()?.name)
         cache.activate("mac-b", "device-b")
         assertNull(cache.botList.value)
     }
@@ -171,58 +178,23 @@ class AidenBotCacheTest {
     }
 
     @Test
-    fun testBotCacheAcceptsReadableConversationOwnedByArchivedBot() {
-        val archivedBot = AidenBotSummary(
-            id = "bot_archived",
-            name = "Archived Bot",
-            purpose = "Old history",
-            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
-            health = AidenBotHealth.ARCHIVED,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
-            revision = "archived_rev",
-            archivedAt = Instant.now()
-        )
-        val conversation = AidenBotConversationItem(
-            chatId = "chat_archived",
-            botId = "bot_archived",
-            title = "Saved Chat",
-            preview = "Still readable",
-            activityState = AidenBotConversationActivityState.IDLE,
-            canRespondToApproval = false,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
-            revision = "chat_rev"
-        )
-
-        val cache = AidenBotCache(tempFolder.root)
-        cache.activate("mac_1", "device_1")
-        cache.putBotList(AidenBotList(bots = listOf(archivedBot), favorites = AidenBotFavorites(botIds = emptyList(), revision = "fav_1")))
-        cache.putBotConversations(AidenBotConversationPage(conversations = listOf(conversation)))
-
-        assertEquals(1, cache.botConversations.value?.conversations?.size)
-        assertEquals("chat_archived", cache.botConversations.value?.conversations?.first()?.chatId)
-    }
-
-    @Test
     fun testBotCacheIsIsolatedByInstallationAndDevice() {
         val cache = AidenBotCache(tempFolder.root)
         val summary = AidenBotSummary(
             id = "bot_1",
             name = "Mac A Bot",
             purpose = "Scoped helper",
-            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
+            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1"
         )
 
         cache.activate("mac_a", "device_a")
         cache.putBotList(
             AidenBotList(
-                bots = listOf(summary),
-                favorites = AidenBotFavorites(botIds = emptyList(), revision = "fav_a")
+                bots = listOf(summary)
             )
         )
 

@@ -88,7 +88,10 @@ test("floating preview uses the live browser portal independently of sidebar vis
   const controls = readFileSync(new URL("./browser-floating-frame.tsx", import.meta.url), "utf8");
   for (const label of ["Move floating browser", "Return browser to Environment", "Close floating browser preview"]) assert.ok(controls.includes(label));
   assert.ok(controls.includes("setPointerCapture"));
-  assert.ok(controls.includes("ResizeObserver"));
+  // The frame's container tracking is shared with the floating device player.
+  assert.ok(controls.includes("useFloatingContainerBounds()"));
+  const bounds = readFileSync(new URL("../lib/use-floating-container-bounds.ts", import.meta.url), "utf8");
+  assert.ok(bounds.includes("ResizeObserver"));
   const composer = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
   assert.ok(composer.includes('data-browser-composer-inset="true"'));
   assert.ok(!composer.includes('data-browser-composer-inset={hasMessages'));

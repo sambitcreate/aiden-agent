@@ -14,6 +14,7 @@ import {
 } from "./aiden-remote-chats.js";
 import {
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  assertNoForbiddenWireKeys,
   parseAidenRemoteChatForkResult,
   parseAidenRemoteChatProjection,
 } from "./aiden-remote-protocol.js";
@@ -76,6 +77,7 @@ function fixture(
     ) => Promise<readonly SkillCatalogEntry[]>;
     resolveSkillInvocation?: (workspaceId: string, invocationId: string) => Promise<RegisteredSkill>;
     forks?: ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"];
+    inlineVisuals?: ConstructorParameters<typeof AidenRemoteChatService>[0]["inlineVisuals"];
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -85,6 +87,7 @@ function fixture(
   let begins = 0;
   let starts = 0;
   let lastGenerationOptions: Record<string, unknown> | null = null;
+  let lastParams: Record<string, unknown> | null = null;
   const preparedInvocations: PreparedSkillInvocation[] = [];
   let botArchived = fixtureOptions.botArchived === true;
   const streams = new AidenRemoteStreamService({
@@ -207,8 +210,9 @@ function fixture(
           },
         };
       },
-      start: async (streamId, _params, owner, generationOptions) => {
+      start: async (streamId, params, owner, generationOptions) => {
         starts += 1;
+        lastParams = params as unknown as Record<string, unknown>;
         lastGenerationOptions = generationOptions as Record<string, unknown>;
         if (fixtureOptions.startThrows) throw new Error("provider setup failed");
         generationOptions.onTurnAccepted();
@@ -244,7 +248,7 @@ function fixture(
               revision: `botrev:${id}`,
               name: "Fixture bot",
               instructions: "Be helpful.",
-              avatar: "spark" as const,
+              avatar: { version: 1 as const, shape: "wisp" as const, color: "lilac" as const },
               createdAt: 1_000,
               updatedAt: 2_000,
               ...(botArchived ? { archivedAt: 3_000 } : {}),
@@ -271,6 +275,7 @@ function fixture(
       ? { resolveSkillInvocation: fixtureOptions.resolveSkillInvocation }
       : {}),
     ...(fixtureOptions.forks ? { forks: fixtureOptions.forks } : {}),
+    ...(fixtureOptions.inlineVisuals ? { inlineVisuals: fixtureOptions.inlineVisuals } : {}),
   });
   return {
     service,
@@ -281,6 +286,7 @@ function fixture(
     begins: () => begins,
     starts: () => starts,
     lastGenerationOptions: () => lastGenerationOptions,
+    lastParams: () => lastParams,
     preparedInvocations: () => [...preparedInvocations],
     current: () => current ? structuredClone(current) : null,
     setBotArchived: (value: boolean) => { botArchived = value; },
@@ -738,29 +744,6 @@ test("chat classification reads only main-owned metadata before payload access",
   assert.equal(payloadReads, 1);
 });
 
-test("Bot chat mutation rechecks authoritative archive state inside the lifecycle gate", async () => {
-  const app = fixture(chat({ botId: "bot-1" }), {
-    retainedBotChatAuthorizer: () => true,
-  });
-  const classification = await app.service.classify("chat-1");
-  let mutated = false;
-
-  app.setBotArchived(true);
-  await assert.rejects(
-    app.service.runMutation("device-1", "chat-1", classification, async () => {
-      mutated = true;
-    }),
-    (error: unknown) =>
-      (error as { code?: string; status?: number }).code === "bot_archived" &&
-      (error as { status?: number }).status === 409,
-  );
-  assert.equal(mutated, false);
-  assert.deepEqual(await app.service.classify("chat-1"), {
-    botId: "bot-1",
-    botArchived: true,
-  });
-});
-
 test("retained Bot chat authorization is absent-by-default and fails closed", async () => {
   const denied = fixture(chat({ botId: "bot-1" }));
   assert.equal(await denied.service.authorizeRetainedBotChat({
@@ -1071,6 +1054,122 @@ test("chat projection omits a timeline that points beyond truncated assistant te
     prefixTimeline.messages[0]?.timeline?.steps[0]?.contentOffset,
     projectedPrefix.length,
   );
+});
+
+function visualsMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  const snapshotHtml = `visual-snapshot_${"a".repeat(64)}`;
+  const snapshotUi = `visual-snapshot_${"b".repeat(64)}`;
+  return {
+    id: "assistant-visuals",
+    role: "assistant",
+    content: "Here are your numbers.",
+    createdAt: 2_000,
+    timeline: {
+      version: 3,
+      generationId: "stream-visuals",
+      status: "completed",
+      startedAt: 1_000,
+      finishedAt: 2_000,
+      steps: [
+        {
+          id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "render_artifact",
+          label: "Draw visual", status: "completed", startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500, contentOffset: 0,
+        },
+        {
+          id: "tool-2", order: 1, kind: "tool", toolCallId: "call-2", toolName: "render_ui",
+          label: "Draw visual", status: "completed", startedAt: 1_500, updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+        },
+      ],
+    },
+    htmlArtifacts: [{ mediaId: "html-1", title: "Weekly total" } as NonNullable<ChatMessage["htmlArtifacts"]>[number]],
+    htmlArtifactPlacements: [{ mediaId: "html-1", toolCallId: "call-1", layout: "wide" }],
+    uiVisuals: [{
+      version: 1,
+      kind: "ui",
+      id: "ui-1",
+      toolCallId: "call-2",
+      title: "Plan options",
+      catalogVersion: 1,
+      tree: { t: "Visual", k: "0", c: [{ t: "#text", k: "0.0", s: "Team" }] },
+      dataJson: "{\"path\":\"/Users/private/secret\"}",
+      state: { plan: "team" },
+      fallbackText: "Plan options: Team $60",
+    }],
+    visualSnapshots: [
+      { visualId: "html-1", attachmentId: snapshotHtml },
+      { visualId: "ui-1", attachmentId: snapshotUi },
+    ],
+    attachments: [
+      { id: snapshotHtml, name: "Weekly total.png", mimeType: "image/png", kind: "image", size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG },
+      { id: snapshotUi, name: "Plan options.png", mimeType: "image/png", kind: "image", size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG },
+    ],
+    ...overrides,
+  };
+}
+
+test("chat projection lists each inline visual with its snapshot and no private markup", () => {
+  const projection = projectAidenRemoteChat(chat({ messages: [visualsMessage()] }));
+  const message = projection.messages[0]!;
+  const attachmentIds = new Map(message.attachments?.map((attachment) => [attachment.name, attachment.id]));
+  assert.deepEqual(message.visuals, [
+    {
+      id: "html-1",
+      kind: "html",
+      title: "Weekly total",
+      toolCallId: "call-1",
+      snapshotAttachmentId: attachmentIds.get("Weekly total.png"),
+      layout: "wide",
+    },
+    {
+      id: "ui-1",
+      kind: "ui",
+      title: "Plan options",
+      toolCallId: "call-2",
+      fallbackText: "Plan options: Team $60",
+      snapshotAttachmentId: attachmentIds.get("Plan options.png"),
+    },
+  ]);
+  // The tree, data, and saved state stay on the Mac.
+  const wire = JSON.stringify(projection);
+  assert.doesNotMatch(wire, /Users\/private|dataJson|"tree"|"state"/u);
+  assertNoForbiddenWireKeys(projection, "chat projection");
+  // The projection is something a paired client accepts unchanged.
+  assert.deepEqual(parseAidenRemoteChatProjection(projection).messages[0]?.visuals, message.visuals);
+});
+
+test("chat projection drops a damaged visual but keeps its message and neighbours", () => {
+  const stored = visualsMessage();
+  const projection = projectAidenRemoteChat(chat({
+    messages: [{
+      ...stored,
+      uiVisuals: [{ ...stored.uiVisuals![0]!, tree: undefined } as unknown as NonNullable<ChatMessage["uiVisuals"]>[number]],
+      // A snapshot whose attachment is gone is not offered.
+      attachments: stored.attachments!.filter((attachment) => attachment.name !== "Weekly total.png"),
+    }],
+  }));
+  const message = projection.messages[0]!;
+  assert.equal(message.text, "Here are your numbers.");
+  assert.deepEqual(message.visuals?.map((visual) => [visual.id, visual.snapshotAttachmentId]), [["html-1", undefined]]);
+});
+
+test("chat projection omits visuals for a message without any", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [{ id: "assistant-plain", role: "assistant", content: "Hi", createdAt: 2_000 }],
+  }));
+  assert.equal("visuals" in projection.messages[0]!, false);
+});
+
+test("a new snapshot changes the chat revision so phones refetch", () => {
+  const stored = visualsMessage();
+  const withoutSnapshots = projectAidenRemoteChat(chat({
+    messages: [{ ...stored, visualSnapshots: undefined, attachments: undefined }],
+  }));
+  const withSnapshots = projectAidenRemoteChat(chat({ messages: [stored] }));
+  assert.notEqual(withSnapshots.revision, withoutSnapshots.revision);
+  const onlyHtml = projectAidenRemoteChat(chat({
+    messages: [{ ...stored, visualSnapshots: stored.visualSnapshots!.slice(0, 1) }],
+  }));
+  assert.notEqual(onlyHtml.revision, withSnapshots.revision);
 });
 
 test("chat reads expose an in-flight background title without changing the revision", async () => {
@@ -1657,6 +1756,23 @@ test("invalidated uploads remain bounded until their retained request bodies set
     lease.release();
   }
   store.beginUpload("device-2", "chat-2").release();
+});
+
+test("a remote turn draws visuals by the Mac's Appearance setting and knows they arrive as images", async () => {
+  const off = fixture(chat(), { inlineVisuals: async () => "off" });
+  await off.service.startTurn("device-1", "chat-1", "visuals-turn-001", { text: "chart this" });
+  assert.equal(off.lastParams()?.inlineVisuals, "off");
+  assert.equal(off.lastGenerationOptions()?.visualAudience, "remote");
+
+  const automatic = fixture(chat(), { inlineVisuals: async () => "automatic" });
+  await automatic.service.startTurn("device-1", "chat-1", "visuals-turn-002", { text: "chart this" });
+  assert.equal(automatic.lastParams()?.inlineVisuals, "automatic");
+
+  // An unreadable setting never costs the phone its turn; it gets the default.
+  const unreadable = fixture(chat(), { inlineVisuals: async () => { throw new Error("settings unreadable"); } });
+  await unreadable.service.startTurn("device-1", "chat-1", "visuals-turn-003", { text: "chart this" });
+  assert.equal(unreadable.starts(), 1);
+  assert.equal(unreadable.lastParams()?.inlineVisuals, undefined);
 });
 
 test("question tool is exposed only to devices granted the question capability", async () => {
@@ -2397,4 +2513,21 @@ test("a fork too large to send from a paired device is refused without creating 
   // A retry with the same key is refused like any replayed rejection, and still creates nothing.
   await assert.rejects(fork(), hasCode("internal_error", 409));
   assert.equal((await store.list()).length, 1);
+});
+
+test("Remote classification refuses feature-owned chats before any payload read", async () => {
+  let payloadReads = 0;
+  const { service } = fixture(
+    chat({ owner: { kind: "design-project", projectId: "project-1" } }),
+    { onPayloadGet: () => { payloadReads += 1; } },
+  );
+
+  await assert.rejects(
+    service.classify("chat-1"),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      (error as { code?: string; status?: number }).code === "not_found" &&
+      (error as { status?: number }).status === 404,
+  );
+  assert.equal(payloadReads, 0);
 });

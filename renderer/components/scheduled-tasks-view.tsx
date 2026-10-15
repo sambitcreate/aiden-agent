@@ -38,6 +38,7 @@ import {
   toast,
   type BadgeColor,
 } from "./ui";
+import { Segmented } from "./ui-primitives";
 import { ScheduledTaskEditor } from "./scheduled-task-editor";
 import { requestAssistantAutomationComposer } from "../lib/assistant-dock";
 import { scheduleApi } from "../lib/ipc";
@@ -133,7 +134,6 @@ function newTask(
   mcpServers: McpServer[],
   providers: Provider[] | undefined,
   hiddenModelsByProvider: HiddenModelsByProvider | undefined,
-  template?: (typeof TEMPLATES)[number],
 ): ScheduledTaskInput {
   const mode = settings?.defaultMode ?? "llm";
   const permission = mode === "script" ? "full" : (settings?.defaultPermission ?? "read-only");
@@ -142,15 +142,15 @@ function newTask(
       ? scheduledTaskProviderPin(providers, readModelSelection(), hiddenModelsByProvider)
       : undefined;
   return {
-    name: template?.name ?? "",
+    name: "",
     enabled: true,
     mode,
-    cron: template?.cron ?? "0 9 * * 1-5",
+    cron: "0 9 * * 1-5",
     timezone:
       settings?.defaultTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
     workspaceId,
     ...(pinned ?? {}),
-    prompt: template?.prompt ?? "",
+    prompt: "",
     script: "",
     permission,
     mcpServerIds:
@@ -572,44 +572,15 @@ export function ScheduledTasksView() {
                     </Button>
                   ) : null}
                 </div>
-                <div
-                  role="tablist"
+                <Segmented
                   aria-label="Scheduled task status"
-                  className="flex rounded-control bg-control p-0.5"
-                >
-                  {TASK_TABS.map((value, index) => (
-                    <Button
-                      role="tab"
-                      aria-selected={tab === value}
-                      tabIndex={tab === value ? 0 : -1}
-                      key={value}
-                      size="small"
-                      variant={tab === value ? "filled" : "transparent"}
-                      onClick={() => setTab(value)}
-                      onKeyDown={(event) => {
-                        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-                          return;
-                        }
-                        event.preventDefault();
-                        const nextIndex =
-                          event.key === "Home"
-                            ? 0
-                            : event.key === "End"
-                              ? TASK_TABS.length - 1
-                              : (index + (event.key === "ArrowRight" ? 1 : -1) + TASK_TABS.length) %
-                                TASK_TABS.length;
-                        setTab(TASK_TABS[nextIndex] ?? "all");
-                        const tabs =
-                          event.currentTarget.parentElement?.querySelectorAll<HTMLElement>(
-                            '[role="tab"]',
-                          );
-                        tabs?.[nextIndex]?.focus();
-                      }}
-                    >
-                      {value === "all" ? "All" : value === "active" ? "Active" : "Paused"}
-                    </Button>
-                  ))}
-                </div>
+                  value={tab}
+                  onValueChange={setTab}
+                  options={TASK_TABS.map((value) => ({
+                    value,
+                    label: value === "all" ? "All" : value === "active" ? "Active" : "Paused",
+                  }))}
+                />
               </div>
 
               {tasks.isLoading ? (
@@ -757,18 +728,9 @@ export function ScheduledTasksView() {
                           {index > 0 ? <Separator /> : null}
                           <button
                             type="button"
-                            disabled={manualCreationUnavailable}
                             onClick={() => {
-                              setEditingUpdatedAt(undefined);
-                              setEditing(
-                                newTask(
-                                  settings.data,
-                                  activeId,
-                                  mcpServers.data ?? [],
-                                  providers.data,
-                                  appSettings.data?.hiddenModelsByProvider,
-                                  template,
-                                ),
+                              requestAssistantAutomationComposer(
+                                `Create an automation named "${template.name}". ${template.prompt} Schedule: ${formatSchedule(template.cron, settings.data?.defaultTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC")}.`,
                               );
                             }}
                             className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 [--keyboard-focus-offset:-2px] focus-visible:outline-focus-ring disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none"

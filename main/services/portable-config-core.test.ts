@@ -1373,6 +1373,63 @@ test("settings persistence preserves future assistant fields and values", async 
   assert.equal(saved.settings.profileName, "After");
 });
 
+test("Model Pad placements, pins, recent models and metric survive a settings.json load and reload into a fresh store with invalid entries dropped", async (t) => {
+  const r = await roots(t);
+  const placement = { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark", yMetric: "intelligence" };
+  const measured = { x: 0, y: 0.5, xSource: "measured", ySource: "user" };
+  await fs.writeFile(
+    r.settingsFile,
+    JSON.stringify({
+      settings: {
+        modelPadPlacements: {
+          "openai::gpt": placement,
+          "openai::fast": measured,
+          "openai::measured-height": { ...placement, ySource: "measured" },
+          "openai::out-of-range": { ...placement, x: 1.5 },
+          "openai::legacy": { x: 0.5, y: 0.5, source: "user" },
+          "not-a-model-key": placement,
+        },
+        pinnedModels: ["openai::gpt", "openai::gpt", 42, "bare-model", "google::gemini"],
+        recentModels: ["google::gemini", "bare-model", "google::gemini", "p::1", "p::2", "p::3", "p::4"],
+        modelPadMetric: "agentic",
+      },
+    }),
+    "utf-8",
+  );
+
+  const loaded = await stores(r).settings.load();
+  assert.deepEqual(loaded.settings.modelPadPlacements, {
+    "openai::gpt": placement,
+    "openai::fast": measured,
+  });
+  assert.deepEqual(loaded.settings.pinnedModels, ["openai::gpt", "google::gemini"]);
+  assert.deepEqual(loaded.settings.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
+  assert.equal(loaded.settings.modelPadMetric, "agentic");
+
+  // Write the loaded document into a fresh store's settings.json and read it back.
+  const target = await roots(t);
+  await fs.writeFile(target.settingsFile, JSON.stringify(loaded), "utf-8");
+  const reloaded = runtimeSettingsFrom((await stores(target).settings.load()).settings);
+  assert.deepEqual(reloaded.modelPadPlacements, {
+    "openai::gpt": placement,
+    "openai::fast": measured,
+  });
+  assert.deepEqual(reloaded.pinnedModels, ["openai::gpt", "google::gemini"]);
+  assert.deepEqual(reloaded.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
+  assert.equal(reloaded.modelPadMetric, "agentic");
+
+  const wrongShapes = runtimeSettingsFrom({
+    modelPadPlacements: ["openai::gpt"],
+    pinnedModels: { "openai::gpt": true },
+    recentModels: "openai::gpt",
+    modelPadMetric: "speed",
+  } as never);
+  assert.equal(wrongShapes.modelPadPlacements, undefined);
+  assert.equal(wrongShapes.pinnedModels, undefined);
+  assert.equal(wrongShapes.recentModels, undefined);
+  assert.equal(wrongShapes.modelPadMetric, undefined);
+});
+
 test("a post-startup unsafe local edit cannot be erased by a workspace write", async (t) => {
   const r = await roots(t);
   await fs.writeFile(

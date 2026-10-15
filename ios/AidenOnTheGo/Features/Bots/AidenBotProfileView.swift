@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 private struct AidenBotProfileSkeletonView: View {
@@ -6,15 +7,9 @@ private struct AidenBotProfileSkeletonView: View {
     var body: some View {
         VStack(spacing: 18) {
             AidenBotSkeletonBlock(width: 112, height: 112, radius: 56, reduceMotion: reduceMotion)
-            AidenBotSkeletonBlock(width: 170, height: 28, radius: 12, reduceMotion: reduceMotion)
-            AidenBotSkeletonBlock(width: 230, height: 15, radius: 7, reduceMotion: reduceMotion)
-            HStack(spacing: 8) {
-                ForEach(0..<4, id: \.self) { _ in
-                    AidenBotSkeletonBlock(width: 56, height: 62, radius: 14, reduceMotion: reduceMotion)
-                }
-            }
-            AidenBotSkeletonBlock(width: nil, height: 118, radius: 18, reduceMotion: reduceMotion)
-            AidenBotSkeletonBlock(width: nil, height: 170, radius: 18, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 110, radius: 20, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 210, radius: 20, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 56, radius: 20, reduceMotion: reduceMotion)
         }
         .padding(.horizontal, 20)
         .padding(.top, 28)
@@ -24,202 +19,138 @@ private struct AidenBotProfileSkeletonView: View {
     }
 }
 
-struct AidenBotProfileRoute: Identifiable, Equatable {
-    let summary: AidenBotSummary
-    var id: String { summary.id }
-}
-
-enum AidenBotFavoriteOrderMove: Equatable {
-    case add
-    case remove
-    case earlier
-    case later
-}
-
-func aidenBotFavoriteOrder(
-    _ botIDs: [String],
-    moving botID: String,
-    _ move: AidenBotFavoriteOrderMove
-) -> [String] {
-    var result = botIDs.filter { $0 != botID }
-    switch move {
-    case .add:
-        result.append(botID)
-    case .remove:
-        break
-    case .earlier, .later:
-        guard let oldIndex = botIDs.firstIndex(of: botID) else { return botIDs }
-        let destination = move == .earlier ? max(0, oldIndex - 1) : min(botIDs.count - 1, oldIndex + 1)
-        result.insert(botID, at: destination)
-    }
-    return result
-}
-
-func aidenBotConversationCanDelete(
-    _ conversation: AidenBotConversationItem,
-    botHealth: AidenBotHealth,
-    canWrite: Bool
-) -> Bool {
-    canWrite && botHealth != .archived && conversation.activityState == .idle
-}
-
-struct AidenBotConversationSelectionAccessibility: Equatable {
-    let value: String
-    let isSelected: Bool
-    let hint: String
-}
-
-func aidenBotConversationSelectionAccessibility(
-    isSelecting: Bool,
-    isSelected: Bool,
-    canDelete: Bool,
-    botHealth: AidenBotHealth,
-    canWrite: Bool,
-    activityState: AidenBotConversationActivityState
-) -> AidenBotConversationSelectionAccessibility {
-    guard isSelecting else {
-        return .init(value: "", isSelected: false, hint: "Opens this chat.")
-    }
-    let hint: String
-    if botHealth == .archived {
-        hint = "Archived Bot chats are read-only."
-    } else if !canWrite {
-        hint = "Reconnect or refresh before selecting chats."
-    } else if activityState != .idle {
-        hint = "Active chats cannot be deleted."
-    } else if canDelete {
-        hint = "Selects this chat for deletion."
-    } else {
-        hint = "This chat cannot be deleted."
-    }
-    return .init(
-        value: isSelected ? "Selected" : "Not selected",
-        isSelected: isSelected,
-        hint: hint
-    )
-}
-
-enum AidenBotProfileLifecycleAction: Equatable {
-    case archive
-    case restore(idempotencyKey: UUID)
-}
-
-struct AidenBotProfileLifecycleResult: Equatable {
-    let detail: AidenBotDetail
-    let favorites: AidenBotFavorites
-}
-
+/// Saves Profile's identity edits (R15). Each edit already shows on the page; it
+/// goes to the Mac after the ones before it, on the newest revision, waiting
+/// briefly for a connection. A lost answer is settled by re-reading the Bot, so
+/// a retry never repeats a change the Mac saved; anything else hands back the
+/// Mac's Bot (when it could be read) for the page to roll back to, with an error.
 @MainActor
-func aidenBotProfileLifecycleUpdate(
-    client: AidenRemoteClient,
-    botID: String,
-    revision: String,
-    action: AidenBotProfileLifecycleAction,
-    isCurrent: () -> Bool
-) async throws -> AidenBotProfileLifecycleResult {
-    guard isCurrent() else { throw AidenRemoteClientError.installationChanged }
-    let detail: AidenBotDetail
-    switch action {
-    case .archive:
-        detail = try await client.archiveBot(id: botID, revision: revision)
-    case let .restore(idempotencyKey):
-        detail = try await client.restoreBot(
-            id: botID,
-            revision: revision,
-            idempotencyKey: idempotencyKey
-        )
+final class AidenBotIdentitySaver {
+    enum Outcome: Equatable {
+        case saved(AidenBotDetail)
+        case failed(authoritative: AidenBotDetail?)
     }
-    guard isCurrent(), detail.id == botID else {
-        throw AidenRemoteClientError.installationChanged
+
+    static let failedMessage = "That change wasn’t saved. Please try again."
+
+    private(set) var inFlight = 0
+    private var revision: String?
+    private var lane: Task<Void, Never>?
+    private let send: AidenBotMainActorCall<@MainActor (AidenBotIdentityPatch, String) async throws -> AidenBotDetail>
+    private let refresh: AidenBotMainActorCall<@MainActor () async throws -> AidenBotDetail>
+    private let waitForConnection: (@MainActor (Duration) async -> Bool)?
+    private let connectionHold: Duration
+    private let requestLimit: Duration
+
+    init(
+        send: @escaping @MainActor (AidenBotIdentityPatch, String) async throws -> AidenBotDetail,
+        refresh: @escaping @MainActor () async throws -> AidenBotDetail,
+        waitForConnection: (@MainActor (Duration) async -> Bool)? = nil,
+        connectionHold: Duration = .seconds(8),
+        requestLimit: Duration = .seconds(12)
+    ) {
+        self.send = AidenBotMainActorCall(send)
+        self.refresh = AidenBotMainActorCall(refresh)
+        self.waitForConnection = waitForConnection
+        self.connectionHold = connectionHold
+        self.requestLimit = requestLimit
     }
-    let favorites = try await client.botFavorites()
-    guard isCurrent() else { throw AidenRemoteClientError.installationChanged }
-    return .init(detail: detail, favorites: favorites)
-}
 
-@MainActor
-@discardableResult
-func aidenBotProfileDeleteConversation(
-    client: AidenRemoteClient,
-    projection: AidenBotConversationItem,
-    expectedBotID: String,
-    isCurrent: () -> Bool
-) async throws -> AidenChat {
-    guard isCurrent() else { throw AidenRemoteClientError.installationChanged }
-    let chat = try await client.chat(id: projection.id)
-    guard isCurrent() else { throw AidenRemoteClientError.installationChanged }
-    guard chat.id == projection.id, chat.botId == expectedBotID else {
-        throw AidenRemoteClientError.invalidResponse
+    /// The Bot as last read. A read never moves the revision under a save in flight.
+    func adopt(_ detail: AidenBotDetail) {
+        if inFlight == 0 { revision = detail.revision }
     }
-    try await client.removeChat(id: chat.id, revision: chat.revision)
-    guard isCurrent() else { throw AidenRemoteClientError.installationChanged }
-    return chat
-}
 
-private enum AidenBotProfileSheet: Identifiable {
-    case edit(String)
-    case access(String)
-
-    var id: String {
-        switch self {
-        case let .edit(botID): "edit-\(botID)"
-        case let .access(botID): "access-\(botID)"
+    func save(_ patch: AidenBotIdentityPatch) async -> Outcome {
+        inFlight += 1
+        defer { inFlight -= 1 }
+        let previous = lane
+        let job = Task { @MainActor [weak self] () -> Outcome in
+            await previous?.value
+            guard let self else { return .failed(authoritative: nil) }
+            return await self.run(patch)
         }
+        lane = Task { _ = await job.value }
+        return await job.value
     }
-}
 
-private struct AidenBotProfileMutation: Equatable {
-    enum Kind: Equatable {
-        case favorites(revision: String, botIDs: [String])
-        case archive(revision: String)
-        case restore(revision: String, idempotencyKey: UUID)
-
-        static func == (lhs: Self, rhs: Self) -> Bool {
-            switch (lhs, rhs) {
-            case let (.favorites(lRevision, lIDs), .favorites(rRevision, rIDs)):
-                lRevision == rRevision && lIDs == rIDs
-            case let (.archive(lhs), .archive(rhs)):
-                lhs == rhs
-            case let (.restore(lRevision, lKey), .restore(rRevision, rKey)):
-                lRevision == rRevision && lKey == rKey
-            default:
-                false
+    private func run(_ patch: AidenBotIdentityPatch) async -> Outcome {
+        do {
+            if let waitForConnection, await waitForConnection(connectionHold) == false {
+                throw URLError(.notConnectedToInternet)
             }
+            guard let revision else { throw URLError(.resourceUnavailable) }
+            let send = send
+            let detail = try await aidenBotWithin(requestLimit) { try await send.call(patch, revision) }
+            self.revision = detail.revision
+            return .saved(detail)
+        } catch {
+            let refresh = refresh
+            guard let fresh = try? await aidenBotWithin(requestLimit, { try await refresh.call() }) else {
+                return .failed(authoritative: nil)
+            }
+            revision = fresh.revision
+            return patch.isSatisfied(by: fresh) ? .saved(fresh) : .failed(authoritative: fresh)
         }
     }
-
-    let context: AidenRemoteRequestContext
-    let botID: String
-    let kind: Kind
-    let token: UUID
 }
 
+extension AidenBotIdentityPatch {
+    /// The Bot already holds every field this patch sets.
+    func isSatisfied(by detail: AidenBotDetail) -> Bool {
+        (name == nil || name == detail.name)
+            && (purpose == nil || purpose == detail.purpose)
+            && (instructions == nil || instructions == detail.instructions)
+            && (avatar == nil || avatar == detail.avatar.semantic)
+            && (chatActivity == nil || chatActivity == detail.chatActivity)
+    }
+}
+
+private enum AidenBotProfileField: Hashable {
+    case name
+    case subtitle
+}
+
+/// A Bot's one settings page: photo, name, subtitle, character, and
+/// instructions. Everything else sits behind ••• → Advanced.
 struct AidenBotProfileView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let initialSummary: AidenBotSummary
-    let onOpenConversation: (AidenBotConversationItem) async -> Void
-    let onCreateConversation: (AidenBotSummary) async -> Void
     var onChanged: () -> Void = { }
+    /// Called after the Bot is deleted, so the caller can leave its chat.
+    var onDeleted: () -> Void = { }
     var showsDismissButton = true
-    var showsConversationAction = true
-    var showsFavoriteControls = true
+    /// Opens Profile → Memory once it is ready (the chat's "Memory updated").
+    var opensMemory = false
+    /// Opens Profile → Advanced once the Bot has loaded (a Bots row's menu).
+    var opensAdvanced = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var detail: AidenBotDetail?
-    @State private var favorites: AidenBotFavorites?
-    @State private var conversations: [AidenBotConversationItem] = []
     @State private var capturedContext: AidenRemoteRequestContext?
-    @State private var presentedSheet: AidenBotProfileSheet?
     @State private var isLoading = true
     @State private var loadError: String?
     @State private var mutationError: String?
-    @State private var activeMutation: AidenBotProfileMutation?
-    @State private var retainedRestore: (revision: String, key: UUID)?
-    @State private var requiresRefreshAfterMutation = false
-    @State private var isConfirmingArchive = false
+    @State private var saver: AidenBotIdentitySaver?
+    @State private var isDeleting = false
     @State private var loadGeneration: UInt = 0
+    @State private var nameText = ""
+    @State private var subtitleText = ""
+    @State private var character: AidenBotCharacterDraft?
+    @State private var avatarModel: AidenBotGeneratedAvatarModel?
+    @State private var photoItem: PhotosPickerItem?
+    @State private var isShowingImagePlayground = false
+    @State private var isConfirmingImagePlaygroundPrivacy = false
+    @State private var isConfirmingPhotoRemoval = false
+    @State private var isConfirmingDelete = false
+    @State private var isShowingAdvanced = false
+    @State private var memoryModel: AidenBotMemoryModel?
+    @State private var isShowingMemory = false
+    @State private var hasOpenedMemory = false
+    @State private var hasOpenedAdvanced = false
+    @FocusState private var focusedField: AidenBotProfileField?
 
     private var botID: String { initialSummary.id }
 
@@ -227,79 +158,113 @@ struct AidenBotProfileView: View {
         AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
     }
 
-    private var isMutating: Bool { activeMutation != nil }
-
+    /// Edits apply at once, cached or fresh, connected or not (R15); each waits
+    /// briefly for the Mac and rolls back with an error if it doesn't reach it.
     private var canWrite: Bool {
         capturedContext.map(coordinator.isCurrent) == true
-            && coordinator.connectionState == .connected
+            && saver != nil
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
-            && !requiresRefreshAfterMutation
-            && !isMutating
+            && !isDeleting
     }
 
-    private var isArchived: Bool { detail?.health == .archived }
-
-    private var isFavorite: Bool { favorites?.botIds.contains(botID) == true }
-
-    private var favoriteIndex: Int? { favorites?.botIds.firstIndex(of: botID) }
+    private var canDelete: Bool {
+        AidenBotDeletion.isAvailable(coordinator: coordinator) && detail != nil && !isDeleting
+    }
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Bot")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     if showsDismissButton {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Done") { dismiss() }
-                                .disabled(isMutating)
+                                .disabled(isDeleting)
                         }
                     }
-                    if let detail {
+                    if detail != nil {
                         ToolbarItem(placement: .primaryAction) {
-                            lifecycleMenu(detail)
+                            moreMenu
                         }
                     }
                 }
-        }
-        .interactiveDismissDisabled(isMutating)
-        .sheet(item: $presentedSheet, onDismiss: {
-            let expectedSession = sessionIdentity
-            Task { await load(for: expectedSession) }
-        }) { sheet in
-            switch sheet {
-            case let .edit(botID):
-                AidenBotEditorView(coordinator: coordinator, mode: .edit(botID: botID)) { _ in
-                    let expectedSession = sessionIdentity
-                    Task { await load(for: expectedSession) }
-                    onChanged()
+                .navigationDestination(isPresented: $isShowingAdvanced) {
+                    AidenBotAdvancedView(
+                        coordinator: coordinator,
+                        botID: botID,
+                        onSaved: { updated in
+                            apply(updated)
+                            onChanged()
+                        },
+                        onSaveFailed: { mutationError = $0 }
+                    )
                 }
-            case let .access(botID):
-                AidenBotCustomAccessFlowView(coordinator: coordinator, preferredBotID: botID)
-            }
+                .navigationDestination(isPresented: $isShowingMemory) {
+                    if let memoryModel {
+                        AidenBotMemoryView(model: memoryModel, canWrite: canWrite)
+                    }
+                }
         }
-        .task(id: sessionIdentity) {
+        .interactiveDismissDisabled(isDeleting || avatarModel?.isBusy == true)
+        // A new pairing starts over; a connection coming up only re-reads, keeping edits.
+        .task(id: sessionIdentity.pairing) {
             let expectedSession = sessionIdentity
             reset(for: expectedSession)
             await load(for: expectedSession)
         }
-        .onChange(of: sessionIdentity) { oldValue, newValue in
+        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+            guard connected, detail != nil else { return }
+            let expectedSession = sessionIdentity
+            Task { await load(for: expectedSession) }
+        }
+        .task(id: avatarModel?.sessionIdentity) {
+            await avatarModel?.sessionDidChangeAndRefresh()
+        }
+        .onChange(of: sessionIdentity.pairing) { oldValue, newValue in
             if showsDismissButton, capturedContext != nil, oldValue != newValue { dismiss() }
         }
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            photoItem = nil
+            Task { await ingestPhoto(item) }
+        }
+        .onChange(of: focusedField) { oldValue, _ in
+            if let oldValue { Task { await commit(oldValue) } }
+        }
         .confirmationDialog(
-            "Archive this Bot?",
-            isPresented: $isConfirmingArchive,
+            "Create with Apple Intelligence",
+            isPresented: $isConfirmingImagePlaygroundPrivacy,
             titleVisibility: .visible
         ) {
-            Button("Archive Bot", role: .destructive) {
-                Task { await archive() }
+            Button("Open Image Playground") { isShowingImagePlayground = true }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(AidenBotImagePlaygroundCopy.privacyNote)
+        }
+        .aidenBotImagePlaygroundSheet(
+            isPresented: $isShowingImagePlayground,
+            identity: .init(name: detail?.name ?? initialSummary.name, purpose: detail?.purpose ?? "")
+        ) { copiedURL in
+            Task { await avatarModel?.ingestCopiedCandidate(at: copiedURL) }
+        } onCopyFailed: {
+            mutationError = AidenBotImagePlaygroundFallbackReason.candidateCopyFailed.message
+        }
+        .aidenBotDeleteConfirmation(
+            isPresented: $isConfirmingDelete,
+            botName: detail?.name ?? initialSummary.name
+        ) {
+            Task { await deleteBot() }
+        }
+        .confirmationDialog("Remove photo?", isPresented: $isConfirmingPhotoRemoval, titleVisibility: .visible) {
+            Button("Remove Photo", role: .destructive) {
+                Task { await avatarModel?.revertToSemanticAvatar() }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Its chats stay available to read. Restore the Bot later to edit it or start new work.")
+            Text("The Bot goes back to its character.")
         }
         .alert(
-            "Couldn’t Complete the Change",
+            "Something Went Wrong",
             isPresented: Binding(
                 get: { mutationError != nil },
                 set: { if !$0 { mutationError = nil } }
@@ -307,7 +272,7 @@ struct AidenBotProfileView: View {
         ) {
             Button("OK", role: .cancel) { mutationError = nil }
         } message: {
-            Text(mutationError ?? "The change could not be completed.")
+            Text(mutationError ?? "Please try again.")
         }
     }
 
@@ -317,11 +282,11 @@ struct AidenBotProfileView: View {
             profile(detail)
         } else if isLoading {
             AidenBotProfileSkeletonView(reduceMotion: reduceMotion)
-        } else if let loadError {
+        } else {
             ContentUnavailableView {
                 Label("Couldn’t Load Bot", systemImage: "exclamationmark.bubble")
             } description: {
-                Text(loadError)
+                Text(loadError ?? "Connect to your Mac, then try again.")
             } actions: {
                 Button("Try Again") {
                     let expectedSession = sessionIdentity
@@ -331,53 +296,73 @@ struct AidenBotProfileView: View {
         }
     }
 
+    private var moreMenu: some View {
+        Menu {
+            Button("Advanced", systemImage: "slider.horizontal.3") {
+                isShowingAdvanced = true
+            }
+            if canDelete {
+                Button("Delete Bot", systemImage: "trash", role: .destructive) {
+                    isConfirmingDelete = true
+                }
+            }
+        } label: {
+            Image(systemName: AidenChromeSymbols.overflowMenu)
+        }
+        .disabled(isDeleting)
+        .accessibilityLabel("More")
+    }
+
     private func profile(_ detail: AidenBotDetail) -> some View {
         ScrollView {
-            LazyVStack(spacing: 22) {
+            VStack(alignment: .leading, spacing: 10) {
                 if let loadError {
-                    Label(loadError, systemImage: "exclamationmark.triangle")
+                    Label(loadError, systemImage: "wifi.slash")
                         .font(.footnote)
                         .foregroundStyle(palette.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 16))
+                        .padding(.horizontal, 4)
                 }
-                identityHeader(detail)
-                if detail.health == .archived {
-                    Label(
-                        "Archived — chats remain readable. Restore this Bot to make changes or start new chats.",
-                        systemImage: "archivebox.fill"
-                    )
-                    .font(.subheadline)
-                    .foregroundStyle(palette.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 16))
-                }
-                if requiresRefreshAfterMutation {
-                    Button {
-                        let expectedSession = sessionIdentity
-                        Task { await load(for: expectedSession) }
-                    } label: {
-                        Label("Refresh before making another change", systemImage: "arrow.clockwise")
-                            .frame(maxWidth: .infinity)
+                avatarHeader(detail)
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 12)
+                identityCard
+                    .padding(.bottom, 16)
+
+                sectionLabel("Character")
+                if let character {
+                    AidenBotCharacterCard(draft: character, isEnabled: canWrite) { next in
+                        Task { await saveCharacter(next) }
                     }
-                    .buttonStyle(.bordered)
                 }
-                actionBar(detail)
-                if showsFavoriteControls {
-                    favoriteOrderCard(detail)
+                Text("How this Bot looks everywhere")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+
+                instructionsRow(detail)
+
+                if let memoryModel {
+                    Button {
+                        isShowingMemory = true
+                    } label: {
+                        AidenBotMemoryRow(summary: memoryModel.countSummary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
                 }
-                if showsConversationAction {
-                    conversationCard
+
+                if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.routines, coordinator: coordinator) {
+                    AidenBotRoutinesSection(coordinator: coordinator, botID: detail.id, canWrite: canWrite)
+                        .padding(.top, 16)
                 }
-                identityDetails(detail)
             }
-            .frame(maxWidth: 680)
+            .frame(maxWidth: 640)
             .padding(.horizontal, 20)
-            .padding(.vertical, 24)
+            .padding(.vertical, 16)
             .frame(maxWidth: .infinity)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(palette.canvas.ignoresSafeArea())
         .refreshable {
             let expectedSession = sessionIdentity
@@ -385,455 +370,267 @@ struct AidenBotProfileView: View {
         }
     }
 
-    private func identityHeader(_ detail: AidenBotDetail) -> some View {
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline)
+            .foregroundStyle(palette.secondary)
+            .padding(.horizontal, 16)
+    }
+
+    private func avatarHeader(_ detail: AidenBotDetail) -> some View {
         VStack(spacing: 12) {
-            AidenBotCanonicalAvatarView(
-                coordinator: coordinator,
-                botID: detail.id,
-                avatar: detail.avatar,
-                name: detail.name,
-                size: 112
-            )
-            Text(detail.name)
-                .font(.largeTitle.bold())
-                .multilineTextAlignment(.center)
-                .foregroundStyle(palette.foreground)
-            if !detail.purpose.isEmpty {
-                Text(detail.purpose)
-                    .font(.body)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(palette.secondary)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func actionBar(_ detail: AidenBotDetail) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            if showsConversationAction {
-                profileAction(
-                    conversations.isEmpty ? "Start Chat" : "Open Chat",
-                    systemImage: "message"
-                ) {
-                    guard detail.health == .ready else { return }
-                    if showsDismissButton { dismiss() }
-                    if let conversation = conversations.first {
-                        Task { await onOpenConversation(conversation) }
-                    } else {
-                        Task { await onCreateConversation(initialSummary) }
-                    }
-                }
-                .disabled(!aidenBotCanStartNewChat(health: detail.health, canWrite: canWrite))
-                .accessibilityHint(
-                    detail.health == .ready
-                        ? "Opens this Bot’s persistent conversation."
-                        : "Repair this Bot’s access on the paired desktop before starting its conversation."
-                )
-            }
-
-            profileAction("Edit Bot", systemImage: "pencil") {
-                presentedSheet = .edit(detail.id)
-            }
-            .disabled(!canWrite || detail.health == .archived)
-
-            profileAction("Access", systemImage: "switch.2") {
-                presentedSheet = .access(detail.id)
-            }
-            .disabled(!canWrite || detail.health == .archived)
-
-            if showsFavoriteControls {
-                profileAction(
-                    isFavorite ? "Unpin" : "Pin",
-                    systemImage: isFavorite ? "pin.slash" : "pin"
-                ) {
-                    Task { await updateFavorite(isFavorite ? .remove : .add) }
-                }
-                .disabled(!canWrite || detail.health == .archived || favorites == nil)
-            }
-        }
-    }
-
-    private func profileAction(
-        _ title: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                Image(systemName: systemImage)
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 48, height: 42)
-                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 13))
-                Text(title)
-                    .font(.caption)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-    }
-
-    @ViewBuilder
-    private func favoriteOrderCard(_ detail: AidenBotDetail) -> some View {
-        if isFavorite, let favoriteIndex, let favorites {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label("Favorite order", systemImage: "star.fill")
-                        .font(.headline)
-                    Spacer()
-                    Text("\(favoriteIndex + 1) of \(favorites.botIds.count)")
-                        .font(.subheadline)
-                        .foregroundStyle(palette.secondary)
-                }
-                HStack {
-                    Button("Move Earlier", systemImage: "arrow.left") {
-                        Task { await updateFavorite(.earlier) }
-                    }
-                    .disabled(!canWrite || detail.health == .archived || favoriteIndex == 0)
-                    Spacer()
-                    Button("Move Later", systemImage: "arrow.right") {
-                        Task { await updateFavorite(.later) }
-                    }
-                    .disabled(
-                        !canWrite || detail.health == .archived
-                            || favoriteIndex == favorites.botIds.count - 1
+            ZStack(alignment: .bottomTrailing) {
+                if let image = avatarModel?.candidateImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 112, height: 112)
+                        .clipShape(Circle())
+                        .accessibilityLabel("New photo preview")
+                } else {
+                    AidenBotCanonicalAvatarView(
+                        coordinator: coordinator,
+                        botID: detail.id,
+                        avatar: detail.avatar,
+                        name: detail.name,
+                        size: 112,
+                        isDecorative: false
                     )
                 }
-                .buttonStyle(.bordered)
+                photoMenu(detail)
             }
-            .padding(16)
-            .background(palette.raised, in: RoundedRectangle(cornerRadius: 18))
-        }
-    }
-
-    private var conversationCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Chat")
-                    .font(.headline)
-                Spacer()
+            if avatarModel?.isBusy == true {
+                // The photo is on its way: a shimmer, never a spinner (R15).
+                AidenBotSkeletonBlock(width: 112, height: 6, radius: 3, reduceMotion: reduceMotion)
+                    .accessibilityElement()
+                    .accessibilityLabel("Saving photo")
             }
-            .padding(16)
-
-            Divider()
-            if conversations.isEmpty {
-                Text("No chats yet")
-                    .foregroundStyle(palette.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-            } else {
-                ForEach(conversations) { conversation in
-                    conversationRow(conversation)
-                    if conversation.id != conversations.last?.id { Divider().padding(.leading, 56) }
+            if avatarModel?.hasCandidate == true {
+                HStack(spacing: 12) {
+                    Button("Cancel") { avatarModel?.cancelCandidate() }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                    Button("Use This Photo") {
+                        Task { await avatarModel?.useCandidate() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(palette.accent)
+                    .foregroundStyle(palette.onAccent)
+                    .disabled(avatarModel?.canUseCandidate != true)
                 }
             }
+            if let message = avatarModel?.errorMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(palette.danger)
+                    .multilineTextAlignment(.center)
+            }
         }
-        .background(palette.raised, in: RoundedRectangle(cornerRadius: 18))
     }
 
-    private func conversationRow(_ conversation: AidenBotConversationItem) -> some View {
-        return Button {
-            if showsDismissButton { dismiss() }
-            Task { await onOpenConversation(conversation) }
+    private func photoMenu(_ detail: AidenBotDetail) -> some View {
+        AidenBotImagePlaygroundSupportReader { canGenerate in
+            Menu {
+                PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+                    Label("Choose Photo", systemImage: "photo.on.rectangle")
+                }
+                if canGenerate {
+                    Button("Create with Apple Intelligence", systemImage: "apple.intelligence") {
+                        isConfirmingImagePlaygroundPrivacy = true
+                    }
+                }
+                if detail.avatar.asset != nil {
+                    Button("Remove Photo", systemImage: "trash", role: .destructive) {
+                        isConfirmingPhotoRemoval = true
+                    }
+                }
+            } label: {
+                Image(systemName: AidenChromeSymbols.overflowMenu)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(palette.foreground)
+                    .frame(width: 36, height: 36)
+                    .background(palette.raised, in: Circle())
+                    .contentShape(Circle())
+            }
+            .disabled(!canWrite || avatarModel == nil || avatarModel?.isBusy == true)
+            .accessibilityLabel("Photo options")
+        }
+    }
+
+    private var identityCard: some View {
+        VStack(spacing: 0) {
+            TextField("Name", text: $nameText)
+                .font(.title2.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .focused($focusedField, equals: .name)
+                .submitLabel(.done)
+                .onSubmit { focusedField = nil }
+                .padding(.vertical, 16)
+                .padding(.horizontal, 16)
+                .accessibilityLabel("Name")
+            Divider().padding(.leading, 16)
+            TextField("What it helps with", text: $subtitleText)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(palette.secondary)
+                .focused($focusedField, equals: .subtitle)
+                .submitLabel(.done)
+                .onSubmit { focusedField = nil }
+                .padding(.vertical, 14)
+                .padding(.horizontal, 16)
+                .accessibilityLabel("Subtitle")
+        }
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .disabled(!canWrite)
+    }
+
+    private func instructionsRow(_ detail: AidenBotDetail) -> some View {
+        NavigationLink {
+            AidenBotInstructionsEditorView(initialText: detail.instructions, canSave: canWrite) { text in
+                startInstructionsSave(text)
+            }
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: "message")
-                    .foregroundStyle(palette.accent)
-                    .frame(width: 28)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(conversation.title.isEmpty ? "New Chat" : conversation.title)
-                        .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
-                    Text(conversation.preview ?? conversationStatus(conversation))
-                        .font(.subheadline)
-                        .foregroundStyle(palette.secondary)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Text(conversation.updatedAt, style: .relative)
-                    .font(.caption)
+                Image(systemName: "doc.text")
                     .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+                Text("Instructions")
+                    .foregroundStyle(palette.foreground)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(16)
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Opens this Bot’s persistent chat.")
     }
 
-    private func identityDetails(_ detail: AidenBotDetail) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(detail.access.summary, systemImage: "switch.2")
-            if let openingGreeting = detail.openingGreeting, !openingGreeting.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Greeting").font(.caption).foregroundStyle(palette.secondary)
-                    Text(openingGreeting)
-                }
-            }
-        }
-        .font(.subheadline)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(palette.raised, in: RoundedRectangle(cornerRadius: 18))
-    }
-
-    private func lifecycleMenu(_ detail: AidenBotDetail) -> some View {
-        Menu {
-            if detail.health == .archived {
-                Button("Restore Bot", systemImage: "arrow.uturn.backward") {
-                    Task { await restore() }
-                }
-                .disabled(!canWrite)
-            } else {
-                Button("Archive Bot", systemImage: "archivebox", role: .destructive) {
-                    isConfirmingArchive = true
-                }
-                .disabled(!canWrite)
-            }
-        } label: {
-            Image(systemName: AidenChromeSymbols.overflowMenu)
-        }
-        .disabled(isMutating)
-        .accessibilityLabel("Bot actions")
-    }
-
-    private func conversationStatus(_ conversation: AidenBotConversationItem) -> String {
-        switch conversation.activityState {
-        case .idle: "No preview"
-        case .queued: "Queued"
-        case .running: "Working"
-        case .waitingForApproval: "Waiting for approval"
-        case .reconciling: "Updating"
-        }
-    }
+    // MARK: Loading
 
     @MainActor
     private func reset(for expectedSession: AidenBotCustomAccessSessionIdentity) {
         guard sessionIdentity == expectedSession else { return }
         loadGeneration &+= 1
         detail = nil
-        favorites = nil
-        conversations = []
         capturedContext = nil
-        presentedSheet = nil
         isLoading = true
         loadError = nil
         mutationError = nil
-        activeMutation = nil
-        retainedRestore = nil
-        requiresRefreshAfterMutation = false
+        saver = nil
+        character = nil
+        memoryModel = nil
+        isShowingMemory = false
+        avatarModel?.clearForDismissal()
+        avatarModel = nil
+    }
+
+    @MainActor
+    private func apply(_ loaded: AidenBotDetail) {
+        saver?.adopt(loaded)
+        detail = loaded
+        if focusedField != .name { nameText = loaded.name }
+        if focusedField != .subtitle { subtitleText = loaded.purpose }
+        character = AidenBotCharacterDraft(avatar: loaded.avatar.semantic)
+        memoryModel?.rename(loaded.name)
+    }
+
+    /// Profile → Memory, only on a Mac that serves `bot-memory-v1`.
+    @MainActor
+    private func prepareMemory(context: AidenRemoteRequestContext, botName: String) async {
+        guard memoryModel == nil,
+              AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator),
+              let client = try? coordinator.remoteClient(for: context) else { return }
+        let model = AidenBotMemoryModel(botID: botID, botName: botName, transport: client)
+        memoryModel = model
+        if opensMemory, !hasOpenedMemory {
+            hasOpenedMemory = true
+            isShowingMemory = true
+        }
+        await model.load()
+    }
+
+    /// The saver for this pairing, made once the page has a Bot to edit.
+    @MainActor
+    private func prepareSaver(context: AidenRemoteRequestContext) {
+        guard saver == nil else { return }
+        let botID = botID
+        saver = AidenBotIdentitySaver(
+            send: { patch, revision in
+                try await coordinator.remoteClient(for: context).updateBotIdentity(id: botID, revision: revision, patch: patch)
+            },
+            refresh: { try await coordinator.remoteClient(for: context).bot(id: botID) },
+            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) }
+        )
+        if let detail { saver?.adopt(detail) }
     }
 
     @MainActor
     private func load(for expectedSession: AidenBotCustomAccessSessionIdentity) async {
-        guard sessionIdentity == expectedSession, !isMutating else { return }
+        // An edit on its way keeps what the page shows until the Mac answers it.
+        guard sessionIdentity.pairing == expectedSession.pairing, saver?.inFlight ?? 0 == 0 else { return }
         loadGeneration &+= 1
         let generation = loadGeneration
         isLoading = true
-        loadError = nil
         var requestContext: AidenRemoteRequestContext?
         do {
             let context = try coordinator.requestContext()
             requestContext = context
             guard isCurrentLoad(generation, session: expectedSession, context: context) else { return }
-            if let cached = await AidenBotCache.shared.load(
-                instanceId: context.instanceId,
-                deviceId: context.deviceId
-            ) {
-                guard isCurrentLoad(generation, session: expectedSession, context: context) else { return }
-                if let cachedDetail = cached.details.first(where: { $0.id == botID }) {
-                    detail = cachedDetail
-                    favorites = cached.list?.favorites
-                    conversations = aidenCanonicalBotConversations(
-                        cached.conversations?.conversations ?? []
-                    ).filter { $0.botId == botID }
-                    isLoading = false
+            if detail == nil,
+               let cached = await AidenBotCache.shared.load(instanceId: context.instanceId, deviceId: context.deviceId),
+               let cachedDetail = cached.details.first(where: { $0.id == botID }),
+               isCurrentLoad(generation, session: expectedSession, context: context) {
+                apply(cachedDetail)
+                // The saved details are editable at once; edits wait for the Mac (R15).
+                capturedContext = context
+                prepareSaver(context: context)
+                isLoading = false
+            }
+            let loaded = try await coordinator.remoteClient(for: context).bot(id: botID)
+            guard isCurrentLoad(generation, session: expectedSession, context: context),
+                  loaded.id == botID, !Task.isCancelled, saver?.inFlight ?? 0 == 0 else { return }
+            apply(loaded)
+            capturedContext = context
+            prepareSaver(context: context)
+            loadError = nil
+            if opensAdvanced, !hasOpenedAdvanced {
+                hasOpenedAdvanced = true
+                isShowingAdvanced = true
+            }
+            if memoryModel == nil {
+                Task { await prepareMemory(context: context, botName: loaded.name) }
+            } else {
+                Task { await memoryModel?.load() }
+            }
+            if avatarModel == nil {
+                avatarModel = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: botID) { updated in
+                    apply(updated)
+                    onChanged()
                 }
             }
-            let client = try coordinator.remoteClient(for: context)
-            async let detailRequest = client.bot(id: botID)
-            async let favoritesRequest = client.botFavorites()
-            async let conversationsRequest = client.botConversations(
-                query: try AidenBotConversationQuery(botId: botID, limit: 50)
-            )
-            let (loadedDetail, loadedFavorites, page) = try await (
-                detailRequest,
-                favoritesRequest,
-                conversationsRequest
-            )
-            guard isCurrentLoad(generation, session: expectedSession, context: context),
-                  loadedDetail.id == botID, page.conversations.allSatisfy({ $0.botId == botID }),
-                  !Task.isCancelled else { return }
-            detail = loadedDetail
-            favorites = loadedFavorites
-            conversations = aidenCanonicalBotConversations(page.conversations)
-                .filter { $0.botId == botID }
-            capturedContext = context
-            if retainedRestore?.revision != loadedDetail.revision {
-                retainedRestore = nil
-            }
-            requiresRefreshAfterMutation = false
             _ = await coordinator.withRetainedInstallationData(for: context) {
                 _ = try? await AidenBotCache.shared.upsertDetailAndStore(
-                    loadedDetail,
+                    loaded,
                     instanceId: context.instanceId,
                     deviceId: context.deviceId
                 )
             }
-            guard isCurrentLoad(generation, session: expectedSession, context: context),
-                  !Task.isCancelled else { return }
             isLoading = false
         } catch is CancellationError {
             return
         } catch {
             if let context = requestContext,
                await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard loadGeneration == generation, sessionIdentity == expectedSession else { return }
-            capturedContext = nil
-            loadError = error.localizedDescription
+            guard loadGeneration == generation, sessionIdentity.pairing == expectedSession.pairing else { return }
+            // Saved details stay editable offline; with none, there is nothing to edit.
+            if detail == nil { capturedContext = nil }
+            loadError = detail == nil ? error.localizedDescription : "Offline — showing saved details"
             isLoading = false
         }
-    }
-
-    @MainActor
-    private func updateFavorite(_ move: AidenBotFavoriteOrderMove) async {
-        guard canWrite, let context = capturedContext, coordinator.isCurrent(context),
-              let detail, detail.health != .archived, let favorites else { return }
-        let botIDs = aidenBotFavoriteOrder(favorites.botIds, moving: botID, move)
-        guard botIDs != favorites.botIds else { return }
-        let mutation = AidenBotProfileMutation(
-            context: context,
-            botID: botID,
-            kind: .favorites(revision: favorites.revision, botIDs: botIDs),
-            token: UUID()
-        )
-        activeMutation = mutation
-        loadGeneration &+= 1
-        mutationError = nil
-        let previousFavorites = favorites
-        self.favorites = try? AidenBotFavorites(
-            botIds: botIDs,
-            revision: favorites.revision
-        )
-        defer { if activeMutation == mutation { activeMutation = nil } }
-        do {
-            let update = try AidenBotFavoritesUpdateRequest(botIds: botIDs)
-            guard isCurrent(mutation) else { return }
-            let response = try await coordinator.remoteClient(for: context).updateBotFavorites(
-                update,
-                revision: favorites.revision
-            )
-            guard isCurrent(mutation) else { return }
-            self.favorites = response
-            onChanged()
-        } catch is CancellationError {
-            return
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard isCurrent(mutation) else { return }
-            do {
-                let authoritative = try await coordinator.remoteClient(for: context).botFavorites()
-                guard isCurrent(mutation) else { return }
-                self.favorites = authoritative
-                if authoritative.botIds != botIDs {
-                    mutationError = "Aiden refreshed the latest Favorites order. Review it before trying again."
-                }
-                onChanged()
-            } catch {
-                if await coordinator.handleCredentialRevocation(error, context: context) { return }
-                guard isCurrent(mutation) else { return }
-                self.favorites = previousFavorites
-                requiresRefreshAfterMutation = true
-                mutationError = "Aiden could not confirm the latest Favorites order. Refresh before trying again."
-            }
-        }
-    }
-
-    @MainActor
-    private func archive() async {
-        guard canWrite, let context = capturedContext, coordinator.isCurrent(context),
-              let detail, detail.health != .archived else { return }
-        let mutation = AidenBotProfileMutation(
-            context: context,
-            botID: botID,
-            kind: .archive(revision: detail.revision),
-            token: UUID()
-        )
-        await performLifecycleMutation(mutation, action: .archive)
-    }
-
-    @MainActor
-    private func restore() async {
-        guard canWrite, let context = capturedContext, coordinator.isCurrent(context),
-              let detail, detail.health == .archived else { return }
-        let restore: (revision: String, key: UUID)
-        if let retainedRestore, retainedRestore.revision == detail.revision {
-            restore = retainedRestore
-        } else {
-            restore = (detail.revision, UUID())
-            retainedRestore = restore
-        }
-        let mutation = AidenBotProfileMutation(
-            context: context,
-            botID: botID,
-            kind: .restore(revision: restore.revision, idempotencyKey: restore.key),
-            token: UUID()
-        )
-        await performLifecycleMutation(
-            mutation,
-            action: .restore(idempotencyKey: restore.key)
-        )
-    }
-
-    @MainActor
-    private func performLifecycleMutation(
-        _ mutation: AidenBotProfileMutation,
-        action: AidenBotProfileLifecycleAction
-    ) async {
-        activeMutation = mutation
-        loadGeneration &+= 1
-        mutationError = nil
-        defer { if activeMutation == mutation { activeMutation = nil } }
-        do {
-            let revision: String
-            switch mutation.kind {
-            case let .archive(value), let .restore(value, _):
-                revision = value
-            default:
-                return
-            }
-            let result = try await aidenBotProfileLifecycleUpdate(
-                client: coordinator.remoteClient(for: mutation.context),
-                botID: botID,
-                revision: revision,
-                action: action,
-                isCurrent: { isCurrent(mutation) }
-            )
-            guard isCurrent(mutation) else { return }
-            detail = result.detail
-            favorites = result.favorites
-            retainedRestore = nil
-            onChanged()
-        } catch is CancellationError {
-            return
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: mutation.context) { return }
-            guard isCurrent(mutation) else { return }
-            requiresRefreshAfterMutation = true
-            mutationError = "Aiden could not confirm the Bot’s latest state. Refresh before trying again."
-        }
-    }
-
-    @MainActor
-    private func isCurrent(_ mutation: AidenBotProfileMutation) -> Bool {
-        coordinator.isCurrent(mutation.context)
-            && capturedContext == mutation.context
-            && activeMutation == mutation
-            && detail?.id == mutation.botID
     }
 
     @MainActor
@@ -842,9 +639,168 @@ struct AidenBotProfileView: View {
         session: AidenBotCustomAccessSessionIdentity,
         context: AidenRemoteRequestContext
     ) -> Bool {
-        loadGeneration == generation
-            && activeMutation == nil
-            && sessionIdentity == session
-            && coordinator.isCurrent(context)
+        loadGeneration == generation && sessionIdentity.pairing == session.pairing && coordinator.isCurrent(context)
+    }
+
+    // MARK: Saving
+
+    @MainActor
+    private func commit(_ field: AidenBotProfileField) async {
+        guard let detail else { return }
+        let patch: AidenBotIdentityPatch?
+        switch field {
+        case .name:
+            let next = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !next.isEmpty else {
+                nameText = detail.name
+                return
+            }
+            patch = next == detail.name ? nil : try? AidenBotIdentityPatch(name: next)
+        case .subtitle:
+            let next = subtitleText.trimmingCharacters(in: .whitespacesAndNewlines)
+            patch = next == detail.purpose ? nil : try? AidenBotIdentityPatch(purpose: next)
+        }
+        guard let patch else { return }
+        _ = await saveIdentity(patch)
+    }
+
+    @MainActor
+    private func saveCharacter(_ next: AidenBotCharacterDraft) async {
+        guard let detail, let patch = try? next.identityPatch(comparedTo: detail) else { return }
+        // Shown at once; a failed save puts back the Mac's character.
+        character = next
+        _ = await saveIdentity(patch)
+    }
+
+    /// The editor closes at once and the change goes out (R15). Returns why it
+    /// can't be saved, for the editor to show, or nil once it is on its way.
+    @MainActor
+    private func startInstructionsSave(_ text: String) -> String? {
+        guard let detail else { return AidenBotIdentitySaver.failedMessage }
+        let next = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard next != detail.instructions else { return nil }
+        guard !next.isEmpty else { return "Instructions can’t be empty." }
+        guard let patch = try? AidenBotIdentityPatch(instructions: next) else { return "Those instructions are too long." }
+        Task { _ = await saveIdentity(patch) }
+        return nil
+    }
+
+    /// Sends one identity change the page already shows. On failure the page
+    /// rolls back to the Mac's Bot, or to what it showed before, with an error.
+    @MainActor
+    private func saveIdentity(_ patch: AidenBotIdentityPatch) async -> Bool {
+        guard canWrite, let context = capturedContext, coordinator.isCurrent(context),
+              let saver, let before = detail else { return false }
+        switch await saver.save(patch) {
+        case let .saved(updated):
+            guard coordinator.isCurrent(context), updated.id == botID else { return false }
+            apply(updated)
+            _ = await coordinator.withRetainedInstallationData(for: context) {
+                _ = try? await AidenBotCache.shared.upsertDetailAndStore(
+                    updated,
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId
+                )
+            }
+            onChanged()
+            return true
+        case let .failed(authoritative):
+            guard coordinator.isCurrent(context) else { return false }
+            let restored = authoritative ?? before
+            detail = restored
+            if focusedField != .name { nameText = restored.name }
+            if focusedField != .subtitle { subtitleText = restored.purpose }
+            character = AidenBotCharacterDraft(avatar: restored.avatar.semantic)
+            mutationError = AidenBotIdentitySaver.failedMessage
+            return false
+        }
+    }
+
+    @MainActor
+    private func ingestPhoto(_ item: PhotosPickerItem) async {
+        guard let avatarModel else { return }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else { return }
+            await avatarModel.ingestCopiedCandidate(data: data)
+        } catch {
+            mutationError = "That photo couldn’t be opened. Try another one."
+        }
+    }
+
+    @MainActor
+    private func deleteBot() async {
+        guard canDelete, let detail else { return }
+        isDeleting = true
+        defer { isDeleting = false }
+        do {
+            try await AidenBotDeletion.delete(botID: detail.id, revision: detail.revision, coordinator: coordinator)
+            onChanged()
+            onDeleted()
+            if showsDismissButton { dismiss() }
+        } catch is CancellationError {
+            return
+        } catch {
+            mutationError = "\(detail.name) wasn’t deleted. Please try again."
+        }
+    }
+}
+
+/// Full-screen instructions editor. Back without saving discards.
+struct AidenBotInstructionsEditorView: View {
+    let initialText: String
+    let canSave: Bool
+    /// Starts the save and returns nil, or says why it can't be saved.
+    let onSave: (String) -> String?
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
+    @State private var text: String
+    @State private var problem: String?
+
+    init(initialText: String, canSave: Bool, onSave: @escaping (String) -> String?) {
+        self.initialText = initialText
+        self.canSave = canSave
+        self.onSave = onSave
+        _text = State(initialValue: initialText)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextEditor(text: $text)
+                .scrollContentBackground(.hidden)
+                .padding(12)
+                .frame(minHeight: 220, alignment: .top)
+                .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .accessibilityLabel("Instructions")
+            if let problem {
+                Label(problem, systemImage: "exclamationmark.circle")
+                    .font(.footnote)
+                    .foregroundStyle(palette.danger)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("Instructions")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: text) { _, _ in problem = nil }
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                // Saves as it closes; a failure comes back on the Profile (R15).
+                Button("Save") {
+                    if let reason = onSave(text) {
+                        problem = reason
+                    } else {
+                        dismiss()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(palette.accent)
+                .foregroundStyle(palette.onAccent)
+                .disabled(!canSave || text == initialText)
+            }
+        }
     }
 }

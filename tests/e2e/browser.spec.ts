@@ -28,7 +28,7 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await finishLmStudioOnboarding(page);
     await page.getByRole("button", { name: "Show Environment" }).click();
     const surface = page.getByRole("complementary", { name: "Environment work surface" });
-    await surface.getByRole("tab", { name: "Browser", exact: true }).click();
+    await surface.getByRole("button", { name: "Browser", exact: true }).click();
     const opened = await command(page, { action: "create", url });
     const tabId = opened.state.activeTabId!;
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Browser fixture");
@@ -180,9 +180,10 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await command(page, { action: "zoom", tabId, zoom: 1 });
     await command(page, { action: "viewport", tabId, viewport: { mode: "fill", width: 1280, height: 720 } });
 
-    await surface.getByRole("tab", { name: "Review", exact: true }).click();
+    await surface.getByRole("button", { name: "New workspace tab" }).click();
+    await surface.getByRole("button", { name: "Changes", exact: true }).click();
     expect((await state(page)).tabs.some(tab => tab.id === tabId)).toBe(true);
-    await surface.getByRole("tab", { name: "Browser", exact: true }).click();
+    await surface.getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name: "Browser fixture", exact: true }).click();
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
     await surface.getByRole("button", { name: "Browser menu" }).click();
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
@@ -268,11 +269,13 @@ test("workspace documents and app links open in the shared browser", async ({ ai
   expect((await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('h1')).color" })).value).toBe("rgb(12, 34, 56)");
   const localSnapshot = await command(page, { action: "snapshot", tabId, includeImage: false });
   expect(JSON.stringify(localSnapshot)).not.toContain("__aiden_preview");
-  await command(page, { action: "defaults", defaults: { linkTarget: "browser" } });
+  await command(page, { action: "defaults", defaults: { linkOpening: "browser" } });
   const targetUrl = (await state(page)).tabs.find(tab => tab.id === tabId)!.url;
   await page.evaluate(url => { const a=document.createElement("a");a.href=url;a.textContent="Browser routing fixture";document.body.append(a); }, targetUrl);
   await page.getByRole("link", { name: "Browser routing fixture" }).click();
-  await expect.poll(async () => (await state(page)).tabs.length).toBe(2);
+  // The link points at the already-open tab's own URL: open_link reuses that tab
+  // rather than opening a duplicate (per the link-opening spec's tab-reuse rule).
+  await expect.poll(async () => (await state(page)).tabs.length).toBe(1);
   await expect(command(page, { action: "open_file", path: "../../etc/passwd" })).rejects.toThrow();
   const pdfBytes = await aiden.app.evaluate(async ({ webContents }) => {
     const guest = webContents.getAllWebContents().find(contents => contents.getURL().includes("/docs/preview.html"));
@@ -291,6 +294,58 @@ test("workspace documents and app links open in the shared browser", async ({ ai
   expect(restored.agentAccessAllowed).toBe(false);
   expect(restored.history).toEqual([]);
   expect(restored.tabs).toEqual([]);
+});
+
+test("first link click asks, remembers Aiden, then reuses the tab", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await command(page, { action: "defaults", defaults: { linkOpening: "ask" } });
+  const before = (await state(page)).tabs.length;
+  await page.evaluate(() => {
+    const a = document.createElement("a");
+    a.href = "https://example.com/";
+    a.textContent = "Ask-flow fixture link";
+    document.body.append(a);
+  });
+  await page.getByRole("link", { name: "Ask-flow fixture link" }).click();
+  const dialog = page.getByRole("dialog", { name: "Open this link?" });
+  await expect(dialog.getByRole("checkbox", { name: "Remember my choice" })).toBeChecked();
+  await dialog.getByRole("button", { name: "Open in Aiden browser", exact: true }).click();
+  await expect.poll(async () => (await state(page)).tabs.length).toBe(before + 1);
+  // Preference is now remembered as "browser"; the same URL reuses the tab with no second prompt.
+  await page.getByRole("link", { name: "Ask-flow fixture link" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(async () => (await state(page)).tabs.length).toBe(before + 1);
+  expect((await state(page)).defaults.linkOpening).toBe("browser");
+  const relaunched = await aiden.relaunch();
+  expect((await state(relaunched)).defaults.linkOpening).toBe("browser");
+});
+
+test("loopback links open in Aiden with no prompt even when the preference is external", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<!doctype html><title>Loopback fixture</title><h1>Loopback</h1>");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  try {
+    await command(page, { action: "defaults", defaults: { linkOpening: "external" } });
+    const before = (await state(page)).tabs.length;
+    await page.evaluate((href) => {
+      const a = document.createElement("a");
+      a.href = href;
+      a.textContent = "Loopback fixture link";
+      document.body.append(a);
+    }, url);
+    await page.getByRole("link", { name: "Loopback fixture link" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect.poll(async () => (await state(page)).tabs.length).toBe(before + 1);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test("direct user document links discover static sidecars without widening agent file grants", async ({ aiden }) => {
@@ -420,7 +475,7 @@ test("deleting a browser profile asks first, and a failure shows inside Browser 
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Show Environment" }).click();
   const surface = page.getByRole("complementary", { name: "Environment work surface" });
-  await surface.getByRole("tab", { name: "Browser", exact: true }).click();
+  await surface.getByRole("button", { name: "Browser", exact: true }).click();
   await command(page, { action: "profile_create", name: "Work" });
   const hasWork = async () => (await state(page)).profiles.some(profile => profile.name === "Work");
   await expect.poll(hasWork).toBe(true);

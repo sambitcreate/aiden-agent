@@ -144,6 +144,7 @@ export type HostChatApprovalResult =
   | { resolution: "elsewhere"; decision?: "allow" | "deny" };
 
 export interface HostChatQuestionInput {
+  source?: "remote";
   /** Main must bind this locally saved request to its original pairing before sending. Never sent on the wire. */
   savedIntent?: boolean;
   runId?: string;

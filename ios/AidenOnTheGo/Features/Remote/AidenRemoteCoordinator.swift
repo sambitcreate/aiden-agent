@@ -295,8 +295,8 @@ final class AidenRemoteCoordinator {
     }
 
     func activatePairing(
-        payload: AidenRemoteContractFixture.PairingPayload,
-        exchange: AidenRemoteContractFixture.PairingExchange
+        payload: AidenRemotePairing.PairingPayload,
+        exchange: AidenRemotePairing.PairingExchange
     ) async throws {
         let temporaryName = exchange.displayName
             ?? payload.bootstrap.endpoint.host
@@ -828,6 +828,9 @@ final class AidenRemoteCoordinator {
         if server.supportsQuestionPrompts { requested.append(.questionsRespond) }
         if server.supportsChatSkills { requested.append(.skillsInvoke) }
         if server.supportsPhoneRunControl { requested += [.runsObserve, .runsControl] }
+        if server.supportsMobileSimulators { requested.append(.simulatorsMobile) }
+        if server.supportsBotCards { requested.append(.botCards) }
+        if server.offersBotActivity { requested.append(.botActivity) }
         guard !requested.isEmpty,
               let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
             return
@@ -1028,6 +1031,8 @@ final class AidenRemoteCoordinator {
         AidenChatForkPrefillHandoff.purge(instanceId: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
+        AidenBotSessionCache.shared.purge(instanceId: installationId)
+        await AidenBotOutboxStore.shared.purge(instanceId: installationId)
         AidenModelPreferenceStore.shared.purge(instanceID: installationId)
         await chatCache.purge(instanceId: installationId)
         await scheduledTaskCache.purge(instanceId: installationId)

@@ -261,19 +261,19 @@ test("application adapter projects semantic fallback and exposes only canonical 
       mintAssetId: () => ASSET_A, mintAssetRevision: () => REVISION_A,
     });
     const adapter = createBotAvatarApplicationAdapter({ store, ownerId: OWNER_A });
-    assert.deepEqual(await adapter.view(BOT_A, "spark"), { semantic: "spark" });
+    assert.deepEqual(await adapter.view(BOT_A, { version: 1, shape: "wisp", color: "lilac" }), { semantic: { version: 1, shape: "wisp", color: "lilac" } });
     const asset = await adapter.put({
       botId: BOT_A, expectedAssetRevision: null, operationId: "remote-operation-1",
     }, {
       mimeType: "image/jpeg",
       data: jpeg(100, 80).toString("base64"),
     });
-    assert.deepEqual(await adapter.view(BOT_A, "spark"), { semantic: "spark", asset });
+    assert.deepEqual(await adapter.view(BOT_A, { version: 1, shape: "wisp", color: "lilac" }), { semantic: { version: 1, shape: "wisp", color: "lilac" }, asset });
     assert.deepEqual((await adapter.content(BOT_A, REVISION_A)).bytes, png(512, 512, 8));
     await adapter.delete({
       botId: BOT_A, expectedAssetRevision: REVISION_A, operationId: "remote-operation-2",
     });
-    assert.deepEqual(await adapter.view(BOT_A, "spark"), { semantic: "spark" });
+    assert.deepEqual(await adapter.view(BOT_A, { version: 1, shape: "wisp", color: "lilac" }), { semantic: { version: 1, shape: "wisp", color: "lilac" } });
   } finally { await rm(paths.parent, { recursive: true, force: true }); }
 });
 
@@ -293,7 +293,7 @@ test("renderer projection returns exact canonical bytes without exposing private
       revision: "bot-revision-a",
       name: "Planner",
       instructions: "Plan carefully.",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
       createdAt: 1,
       updatedAt: 1,
     };
@@ -315,14 +315,14 @@ test("renderer projection preserves the semantic fallback for missing or stale r
     revision: "bot-revision-a",
     name: "Planner",
     instructions: "Plan carefully.",
-    avatar: "spark",
+    avatar: { version: 1, shape: "wisp", color: "lilac" },
     createdAt: 1,
     updatedAt: 1,
   };
   assert.equal(await projectBotAvatarForRenderer(BOT_A, {
     bots: { get: async () => null },
     avatar: {
-      view: async () => ({ semantic: "spark" }),
+      view: async () => ({ semantic: { version: 1, shape: "wisp", color: "lilac" } }),
       content: async () => { throw new Error("must not read"); },
     },
   }), null);
@@ -330,7 +330,7 @@ test("renderer projection preserves the semantic fallback for missing or stale r
     bots: { get: async () => bot },
     avatar: {
       view: async () => ({
-        semantic: "spark",
+        semantic: { version: 1, shape: "wisp", color: "lilac" },
         asset: { assetRevision: REVISION_A, mimeType: "image/png", width: 512, height: 512, byteSize: 1 },
       }),
       content: async () => { throw new Error("concurrently replaced"); },
@@ -348,7 +348,7 @@ test("renderer projection reconciles one concurrent canonical-photo replacement"
       revision: "bot-revision-a",
       name: "Planner",
       instructions: "Plan carefully.",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
       createdAt: 1,
       updatedAt: 1,
     }) },
@@ -356,7 +356,7 @@ test("renderer projection reconciles one concurrent canonical-photo replacement"
       view: async () => {
         views += 1;
         return {
-          semantic: "spark",
+          semantic: { version: 1, shape: "wisp", color: "lilac" },
           asset: {
             assetRevision: views === 1 ? REVISION_A : replacementRevision,
             mimeType: "image/png",
@@ -386,4 +386,39 @@ test("renderer projection reconciles one concurrent canonical-photo replacement"
     assetRevision: replacementRevision,
     dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
   });
+});
+
+test("Bot delete erases every owner's photo for that Bot and survives restart", async () => {
+  const paths = await temporaryRoot("aiden-bot-avatar-delete-");
+  try {
+    const assets = [ASSET_A, ASSET_B, "30000000-0000-4000-8000-000000000003"];
+    const revisions = [REVISION_A, REVISION_B, "avatar_revision_30000000000040008000000000000003"];
+    const service = createFileBotAvatarStore({
+      root: () => paths.root, normalizer,
+      mintAssetId: () => assets.shift()!, mintAssetRevision: () => revisions.shift()!,
+    });
+    const source = { mimeType: "image/png" as const, bytes: png(640, 480) };
+    await service.put({ ownerId: OWNER_A, botId: BOT_A, expectedAssetRevision: null, operationId: "op-a", source });
+    await service.put({ ownerId: OWNER_B, botId: BOT_A, expectedAssetRevision: null, operationId: "op-b", source });
+    const kept = await service.put({ ownerId: OWNER_A, botId: BOT_B, expectedAssetRevision: null, operationId: "op-c", source });
+
+    await service.deleteBot(BOT_A);
+    assert.equal(await service.metadata(OWNER_A, BOT_A), null);
+    assert.equal(await service.metadata(OWNER_B, BOT_A), null);
+    await assert.rejects(service.read(OWNER_A, BOT_A, REVISION_A), BotAvatarUnavailableError);
+    // Only the other Bot's photo file remains on disk.
+    assert.equal((await readdir(join(paths.root, "assets"))).length, 1);
+    await service.deleteBot(BOT_A);
+
+    const restarted = createFileBotAvatarStore({ root: () => paths.root, normalizer });
+    assert.equal(await restarted.metadata(OWNER_A, BOT_A), null);
+    assert.deepEqual(await restarted.metadata(OWNER_A, BOT_B), kept);
+    // The deleted Bot's operation receipts are gone too: reusing an id starts fresh.
+    const again = await restarted.put({
+      ownerId: OWNER_A, botId: BOT_A, expectedAssetRevision: null, operationId: "op-a", source,
+    });
+    assert.equal(again.mimeType, "image/png");
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
 });

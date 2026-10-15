@@ -17,6 +17,6 @@ test("Remote runtime keeps Linux lifecycle and Bot route gates explicit", () => 
     source,
     /new AidenRemoteService\([\s\S]*?botCapabilitiesSupported: \(\) => hostPlatformCapabilities\(\)\.bots/u,
   );
-  assert.match(source, /\.\.\.\(botsSupported[\s\S]*?botFiles,[\s\S]*?bots,[\s\S]*?botNotice:/u);
+  assert.match(source, /\.\.\.\(botsSupported[\s\S]*?botFiles,[\s\S]*?bots,[\s\S]*?botSessions,[\s\S]*?: \{\}\)/u);
   assert.match(source, /aidenRemoteServiceKeepsApplicationAlive/u);
 });

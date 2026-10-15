@@ -26,7 +26,7 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
 - A resumed SSE stream must flush its headers at open (`response.flushHeaders()` in `openCursorSse`). Otherwise a resume with nothing to replay never fires the client's `onOpen`, and the host stays "syncing" and stale until the next change or the 15 s heartbeat. The acceptance test reproduces this because its feed heartbeat is one hour.
 - The renderer applies feed messages once per animation frame. More than 512 queued for one host collapse into one resync.
 - A connection-request pairing keeps withdrawal ownership until the host is saved locally: `requestPeerPairing` takes an `install` callback (the registry's `/server` confirmation plus `storage.save`) and sends `DELETE /pairing/requests/{id}` if it throws or is cancelled. The host revokes the issued device on that cancel even after the envelope was delivered, so a pairing this device never saved leaves no working credential on the other Mac. The host acknowledges that cancel only after the revocation is durable (otherwise `500 internal_error`, retryable); a withdrawn device still live is revoked at record retirement or `close()`. Setup-code pairing (`/pairing/exchange`) has no such rollback.
-- A host's wire cost does not depend on how many other hosts are paired. Before revision 25, a wake cost 2 requests per host (`GET /server` plus a feed resume) and no new snapshot. Revision 25 retains healthy streams and costs one bounded identity/health check per healthy host.
+- A host's wire cost does not depend on how many other hosts are paired. Before revision 31, a wake cost 2 requests per host (`GET /server` plus a feed resume) and no new snapshot. Revision 31 retains healthy streams and costs one bounded identity/health check per healthy host.
 
 ## Tests
 
@@ -59,7 +59,7 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
 
 ## Connection reliability implementation â€” 2026-10-06
 
-- Revision 25 adds authenticated desktop-only `peer-routes-v1` advertisements.
+- Revision 31 adds authenticated desktop-only `peer-routes-v1` advertisements.
   Verified paired channels deliver route-specific LAN CA/SPKI and bounded private
   address hints; Tailscale remains WebPKI plus SPKI. All route trust stays in main.
 - `peer-routes.ts` validates canonical LAN/Tailscale route hints. Registry stores

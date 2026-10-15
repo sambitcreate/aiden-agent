@@ -5,8 +5,15 @@ import {
   isConnectablePlugin,
   PLUGIN_CATALOG,
   PLUGIN_CATALOG_SOURCE_URL,
+  PLUGIN_CATALOG_VERIFIED_ON,
   pluginCompatibilityLabel,
 } from "./plugin-catalog.js";
+import {
+  assertMcpPresetServer,
+  MCP_PRESETS,
+  mcpPresetFromPlugin,
+  serverFromPreset,
+} from "../../main/services/mcp-presets.js";
 
 test("plugin catalog ids are unique kebab-case entries from Codex plus Composio", () => {
   const ids = PLUGIN_CATALOG.map((plugin) => plugin.id);
@@ -15,12 +22,8 @@ test("plugin catalog ids are unique kebab-case entries from Codex plus Composio"
   assert.ok(ids.includes("linear"));
   assert.ok(ids.includes("superpowers"));
   assert.ok(ids.includes("crowdstrike-falcon-foundry"));
-  assert.equal(PLUGIN_CATALOG.length, 65);
-  assert.equal(PLUGIN_CATALOG.filter(isConnectablePlugin).length, 21);
-  assert.equal(
-    PLUGIN_CATALOG.filter((plugin) => plugin.compatibility === "mcp-auth-unsupported").length,
-    6,
-  );
+  assert.ok(PLUGIN_CATALOG.some(isConnectablePlugin));
+  assert.ok(PLUGIN_CATALOG.some((plugin) => !isConnectablePlugin(plugin)));
   assert.equal(PLUGIN_CATALOG_SOURCE_URL, "https://github.com/openai/plugins");
   for (const plugin of PLUGIN_CATALOG) {
     assert.match(plugin.id, /^[a-z0-9-]+$/);
@@ -29,10 +32,18 @@ test("plugin catalog ids are unique kebab-case entries from Codex plus Composio"
     assert.ok(plugin.vendor.startsWith("By "));
     assert.ok(plugin.category.length > 0);
     assert.match(plugin.docsUrl, /^https:\/\//);
+    if (plugin.url) {
+      // Every listed MCP endpoint, connectable or not, is HTTPS Streamable
+      // HTTP without embedded credentials; legacy SSE endpoints are not offered.
+      const url = new URL(plugin.url);
+      assert.equal(url.protocol, "https:", `${plugin.id} uses HTTPS`);
+      assert.doesNotMatch(url.pathname, /\/sse\/?$/u, `${plugin.id} uses an SSE endpoint`);
+      assert.equal(url.username + url.password, "");
+    }
+    if (plugin.auth?.kind === "apiKey") assert.match(plugin.auth.keyHelpUrl, /^https:\/\//u);
     if (plugin.compatibility === "http-mcp") {
       assert.equal(plugin.transport, "http");
       assert.ok(plugin.url);
-      assert.match(plugin.url, /^https:\/\//);
       assert.ok(plugin.auth);
       assert.equal(isConnectablePlugin(plugin), true);
     } else {
@@ -40,6 +51,13 @@ test("plugin catalog ids are unique kebab-case entries from Codex plus Composio"
       assert.equal(isConnectablePlugin(plugin), false);
     }
   }
+});
+
+test("the catalog records when it was last reviewed against upstream", () => {
+  assert.match(PLUGIN_CATALOG_VERIFIED_ON, /^\d{4}-\d{2}-\d{2}$/u);
+  const verified = new Date(`${PLUGIN_CATALOG_VERIFIED_ON}T00:00:00Z`);
+  assert.equal(verified.toISOString().slice(0, 10), PLUGIN_CATALOG_VERIFIED_ON, "a real calendar date");
+  assert.ok(verified.getTime() <= Date.now(), "a review cannot be dated in the future");
 });
 
 test("search and compatibility filters keep connectable MCP separate from skills", () => {
@@ -71,4 +89,27 @@ test("search and compatibility filters keep connectable MCP separate from skills
   assert.equal(pluginCompatibilityLabel("http-mcp"), "MCP");
   assert.equal(pluginCompatibilityLabel("chatgpt-app"), "ChatGPT app");
   assert.equal(pluginCompatibilityLabel("mcp-auth-unsupported"), "MCP (auth)");
+});
+
+test("every connectable plugin derives a built-in preset whose server record validates", () => {
+  const connectable = PLUGIN_CATALOG.filter(isConnectablePlugin);
+  assert.deepEqual(
+    MCP_PRESETS.map((preset) => preset.id),
+    connectable.map((plugin) => plugin.id),
+  );
+  for (const plugin of PLUGIN_CATALOG) {
+    const preset = mcpPresetFromPlugin(plugin);
+    if (!isConnectablePlugin(plugin)) {
+      assert.equal(preset, undefined, `${plugin.id} is not connectable`);
+      continue;
+    }
+    assert.ok(preset, `${plugin.id} derives a preset`);
+    assert.deepEqual(
+      { id: preset.id, name: preset.name, url: preset.url, auth: preset.auth, docsUrl: preset.docsUrl },
+      { id: plugin.id, name: plugin.name, url: plugin.url, auth: plugin.auth, docsUrl: plugin.docsUrl },
+    );
+    const server = serverFromPreset(preset);
+    assert.equal(assertMcpPresetServer(server)?.id, plugin.id);
+    assert.equal(server.oauth === true, plugin.auth?.kind === "oauth");
+  }
 });

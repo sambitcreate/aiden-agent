@@ -117,10 +117,6 @@ export function ProviderEditor({
       defaultModel,
     ),
   );
-  const usesArtificialAnalysis = models.some(
-    (modelId) =>
-      modelInfo.data?.[modelId]?.metadataSource === "artificial-analysis",
-  );
 
   // Reset drafts whenever a different provider is opened.
   React.useEffect(() => {
@@ -479,16 +475,6 @@ export function ProviderEditor({
                     : "Text only for this connection"}
                 {" · Change capabilities in Model options"}
               </Text>
-              {usesArtificialAnalysis ? (
-                <a
-                  href="https://artificialanalysis.ai"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-fit text-small text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
-                >
-                  Model data · Artificial Analysis
-                </a>
-              ) : null}
             </div>
           </Field>
         ) : (
@@ -632,6 +618,7 @@ export function ProviderEditor({
             info={modelInfo.data}
             disabled={saving || testing}
             modelsStale={modelsStale}
+            supportsEffortControl={kind === "openai"}
             onAdd={(id) => {
               if (modelsStale) {
                 const retained = [...new Set([...manualModels, id])];

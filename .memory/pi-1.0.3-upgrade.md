@@ -1,5 +1,7 @@
 # Pi 1.0.3 upgrade (2026-10-05)
 
+> Superseded pins (2026-10-13): live desktop/CLI Pi packages are now exactly 1.2.0 (MCP remediation slice 12; see `mcp-plugins-remediation.md`). The frozen 0.87.1 legacy harness is unchanged. The record below is historical.
+
 User approved committing a plan and starting implementation. Execution source: `docs/plans/pi-1.0.3-upgrade-plan.md`; historical stable parity work: `docs/plans/pi-1-parity-plan.md` on the stack.
 
 Verified main `43d8adb02` (0.53.0, Pi 0.87.1); target `v1.0.3` / `d78dc83d633229d12f8b79631384c4c2717c399f`. Continue #299 → #302 → #301 → #304 → #303 → #306 → #305 → #307 via normal merges, not rebase. #300 is merged/closed. Start by reconciling #299 (`aa337d714`) with main in the existing 39a6 checkout. No PR merge/release/rollout advancement is requested.

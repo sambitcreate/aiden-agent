@@ -51,7 +51,14 @@ superseded. Runner capacity can still cause queueing.
   the `pretest:serial`/`test:serial` graph belongs to exactly one lane. New files
   require explicit assignment; unknown shell commands, environment changes, test
   flags and root `pretest`/`posttest` hooks fail the inventory check rather than
-  silently dropping or duplicating coverage.
+  silently dropping or duplicating coverage. Validation also discovers every
+  `*.test.*` file under `main/`, `renderer/` and `scripts/` on disk: each must be
+  reachable from the serial graph, from a registry `workflowScripts` entry (npm
+  scripts a workflow runs directly, such as `test:diagnostics` or
+  `test:linux-native`, which must still appear as `npm run <script>` in a
+  workflow), or from the `manual` allowlist (perf, smoke and Linux D-Bus
+  integration files, each with a reason). Prerequisite and preserved ids must be
+  unique, so the runner schedules each build once.
 - `npm test` runs `scripts/run-ci-tests.mjs --parallel`: prerequisites first, the
   three lanes concurrently with prefixed output (sharing one machine-sized pool
   of Node test workers), then the preserved commands.

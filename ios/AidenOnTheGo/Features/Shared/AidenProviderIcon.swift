@@ -6,6 +6,7 @@ enum AidenProviderIconResolver {
         "amazon-bedrock",
         "ant-ling",
         "anthropic",
+        "antigravity",
         "apple-foundation-models",
         "azure-openai-responses",
         "cerebras",

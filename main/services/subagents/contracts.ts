@@ -1,4 +1,10 @@
+import {
+  GENERATION_THINKING_LEVELS,
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../../renderer/shared/generation-thinking.js";
 import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
+import { isSubagentModelKey } from "./subagent-model-selection.js";
 import type { SubagentContextMode } from "./forked-context.js";
 import { normalizeSubagentModelText } from "./model-text.js";
 import { types as utilTypes } from "node:util";
@@ -42,6 +48,10 @@ export interface SubagentTaskRequest {
   maxTurns?: number;
   /** Optional strict subset of the root request; omission inherits the root request. */
   capabilities?: SubagentRequestedCapabilities;
+  /** Optional `providerId/modelId`; the host validates it against the offered models. */
+  model?: string;
+  /** Optional reasoning effort; the host validates it against the chosen model. */
+  effort?: GenerationThinkingLevel;
 }
 
 export interface SubagentToolRequest {
@@ -357,10 +367,16 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       ? undefined
       : parseRequestedCapabilities(request.capabilities);
   const parsedTasks = request.tasks.map((entry) => {
-    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns"]);
+    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns", "model", "effort"]);
     if (!task) throw new Error("Invalid subagent task fields.");
     if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
       throw new Error("Unknown subagent role.");
+    }
+    if (task.model !== undefined && !isSubagentModelKey(task.model)) {
+      throw new Error("Invalid subagent model. Use a providerId/modelId value from the tool description.");
+    }
+    if (task.effort !== undefined && !isGenerationThinkingLevel(task.effort)) {
+      throw new Error(`Invalid subagent effort. Use one of: ${GENERATION_THINKING_LEVELS.join(", ")}.`);
     }
     if (task.maxTurns !== undefined &&
       (!Number.isInteger(task.maxTurns) || (task.maxTurns as number) < 1 ||
@@ -374,6 +390,8 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       maxTurns: task.maxTurns as number | undefined,
       capabilities:
         task.capabilities === undefined ? undefined : parseRequestedCapabilities(task.capabilities),
+      model: task.model as string | undefined,
+      effort: task.effort as GenerationThinkingLevel | undefined,
     };
   });
   const inferredCapabilities = suppliedCapabilities
@@ -408,6 +426,8 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
         task: task.task,
         ...(task.maxTurns === undefined ? {} : { maxTurns: task.maxTurns }),
         ...(taskCapabilities ? { capabilities: taskCapabilities } : {}),
+        ...(task.model === undefined ? {} : { model: task.model }),
+        ...(task.effort === undefined ? {} : { effort: task.effort }),
       };
     }),
   };

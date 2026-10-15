@@ -429,7 +429,7 @@ export function remoteRunTranscript(view: RemoteRunView, messages: readonly Chat
       : null;
   let agentActivity: AgentActivity | null = null;
   if (active && pendingQuestion) {
-    agentActivity = { phase: "waiting", label: "Waiting for an answer", orbState: "listening" };
+    agentActivity = { phase: "waiting", label: "Waiting for an answer", mark: "glance" };
   } else if (active) {
     agentActivity = resolveAgentActivity({
       isStarting: view.text.length === 0 && view.reasoning.length === 0 && !toolActivity && !view.incomplete,

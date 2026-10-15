@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parseParams } from "./chat-params.js";
+import { parseAssistantChatCreate, parseChatCreate } from "./chat-create-params.js";
 import { parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { ChatTurnAdmission } from "../services/chat-turn-admission.js";
 import { subagentsAllowedForGeneration } from "../services/subagents/eligibility.js";
@@ -163,6 +164,30 @@ test("chat:start rejects renderer history and every unknown authority field", ()
   }
 });
 
+test("chat creation and generation envelopes refuse renderer-supplied Bot identity", () => {
+  // Bot identity, instructions and delivery surface are resolved in main from
+  // the persisted chat; the ordinary chat envelopes can never carry them.
+  const create = { workspaceId: "workspace-1", providerId: "p", model: "m" };
+  for (const field of ["botId", "instructions", "systemPrompt", "interactionSurface"]) {
+    assert.throws(
+      () => parseParams({ ...base, [field]: "forged" }),
+      /Invalid generation field/u,
+      field,
+    );
+    assert.throws(
+      () => parseChatCreate({ ...create, [field]: "forged" }),
+      /Invalid chat creation fields/u,
+      field,
+    );
+    assert.throws(
+      () => parseAssistantChatCreate({ providerId: "p", model: "m", [field]: "forged" }),
+      /Invalid Assistant chat creation fields/u,
+      field,
+    );
+  }
+  assert.equal("botId" in parseChatCreate(create), false);
+});
+
 test("parseParams rejects invalid envelopes and requires provider/model identity", () => {
   for (const value of [null, "hi", undefined, 42]) {
     assert.throws(() => parseParams(value), /Invalid generation params/);
@@ -275,4 +300,10 @@ test("parseParams keeps bounded generation selectors and creates empty authorita
   );
   assert.deepEqual(parseParams({ ...base, visualize: true }).visualize, true);
   assert.throws(() => parseParams({ ...base, visualize: false }), /Invalid generation fields/);
+  for (const inlineVisuals of ["automatic", "on_request", "off"] as const) {
+    assert.equal(parseParams({ ...base, inlineVisuals }).inlineVisuals, inlineVisuals);
+  }
+  assert.equal(parseParams(base).inlineVisuals, undefined);
+  assert.throws(() => parseParams({ ...base, inlineVisuals: "sometimes" }), /Invalid generation fields/);
+  assert.throws(() => parseParams({ ...base, inlineVisuals: 1 }), /Invalid generation fields/);
 });

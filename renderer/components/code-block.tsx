@@ -43,7 +43,7 @@ export const CodeBlock = React.memo(function CodeBlock({ code, lang, plain = fal
   );
 
   return (
-    <div className="group/code my-2 overflow-hidden rounded-lg border border-separator bg-well">
+    <div className="group/code my-2 overflow-hidden rounded-lg bg-well">
       <div className="flex items-center justify-between border-b border-separator/60 px-3 py-1">
         <span className="font-mono text-mini uppercase tracking-wide text-tertiary">
           {language || "text"}

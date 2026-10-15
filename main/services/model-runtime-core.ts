@@ -24,6 +24,7 @@ import {
 import { withOpenCodeSessionAttribution } from "./opencode-session-attribution.js";
 import type { RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
+import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const openaiStreams = openAICompletionsApi();
@@ -52,6 +53,19 @@ export function buildModel(
   modelId: string,
   limits: RuntimeModelLimits,
 ): Model<Api> {
+  const options = provider.modelMetadata?.[modelId]?.overrides;
+  const effortLevels = provider.kind === "openai" && limits.reasoning
+    ? customModelThinkingLevels(options)
+    : undefined;
+  const customThinkingMap = effortLevels ? {
+    off: effortLevels.includes("off") ? "none" : null,
+    minimal: null,
+    low: effortLevels.includes("low") ? "low" : null,
+    medium: effortLevels.includes("medium") ? "medium" : null,
+    high: effortLevels.includes("high") ? "high" : null,
+    xhigh: effortLevels.includes("xhigh") ? "xhigh" : null,
+    max: effortLevels.includes("max") ? "max" : null,
+  } : undefined;
   return {
     id: modelId,
     name: modelId,
@@ -63,12 +77,23 @@ export function buildModel(
     cost: ZERO_COST,
     contextWindow: limits.contextWindow,
     maxTokens: limits.maxTokens,
-    thinkingLevelMap: limits.thinkingLevelMap,
+    thinkingLevelMap: customThinkingMap ?? limits.thinkingLevelMap,
     samplingParamsByThinkingLevel: limits.samplingParamsByThinkingLevel,
     compat:
       provider.kind === "anthropic" && limits.forceAdaptiveThinking
         ? { forceAdaptiveThinking: true }
-        : undefined,
+        : effortLevels
+          ? options?.effortControl === "glm"
+            ? {
+                thinkingFormat: "chat-template",
+                supportsReasoningEffort: false,
+                chatTemplateKwargs: {
+                  enable_thinking: { $var: "thinking.enabled" },
+                  reasoning_effort: { $var: "thinking.effort", omitWhenOff: true },
+                },
+              }
+            : { thinkingFormat: "openai", supportsReasoningEffort: true }
+          : undefined,
   };
 }
 

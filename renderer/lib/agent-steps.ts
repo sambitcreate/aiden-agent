@@ -1,3 +1,4 @@
+import { imageGenerationModelName } from "./image-generation-slots";
 import {
   isToolStep,
   type AgentStep,
@@ -31,6 +32,7 @@ const VERBS: Record<string, VerbPair> = {
   edit_file: { active: "Editing", complete: "Edited" },
   run_command: { active: "Running", complete: "Ran" },
   web_search: { active: "Searching the web", complete: "Searched the web" },
+  generate_image: { active: "Generating image", complete: "Generated image" },
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using computer", complete: "Used computer" },
@@ -49,8 +51,19 @@ const VERBS: Record<string, VerbPair> = {
   browser_wait_for: { active: "Waiting for page", complete: "Waited for page" },
   browser_recording_start: { active: "Starting browser recording", complete: "Started browser recording" },
   browser_recording_stop: { active: "Stopping browser recording", complete: "Stopped browser recording" },
+  device_list: { active: "Listing simulators", complete: "Listed simulators" },
+  device_open: { active: "Opening simulator", complete: "Opened simulator" },
+  device_screenshot: { active: "Taking simulator screenshot", complete: "Took simulator screenshot" },
+  device_close: { active: "Closing simulator", complete: "Closed simulator" },
   vcc_recall: { active: "Recalling chat history", complete: "Recalled chat history" },
   compact_context: { active: "Compacting context", complete: "Compacted context" },
+  // Activity an ACP agent (for example, Google Antigravity) ran itself.
+  delete_file: { active: "Deleting", complete: "Deleted" },
+  move_file: { active: "Moving", complete: "Moved" },
+  web_fetch: { active: "Fetching web page", complete: "Fetched web page" },
+  agent_subagents: { active: "Running subagents", complete: "Ran subagents" },
+  agent_tool: { active: "Using an agent tool", complete: "Used an agent tool" },
+  agent_context_rebuilt: { active: "Starting a fresh agent session", complete: "Started a fresh agent session" },
 };
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
@@ -88,6 +101,14 @@ export function reasoningActivityLabel(
 
 /** The object a tool acted on: a pattern, a query, or a workspace-relative path. */
 function stepObject(step: AgentToolStep): string | undefined {
+  // While an image generates its placeholder already shows the requested
+  // ratio; the trail names it once the call settles.
+  if (step.toolName === "generate_image") {
+    if (step.status === "running") return undefined;
+    // `target` is `<provider>/<model id>`; the row names only the model.
+    const parts = [step.detail, imageGenerationModelName(step.target)].filter(Boolean);
+    return parts.length ? parts.join(" · ") : undefined;
+  }
   if (step.toolName === "grep" && step.detail && step.target) {
     return `${step.detail} in ${step.target}`;
   }

@@ -66,6 +66,19 @@ data class AidenServer(
     val supportsChatSummaries: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE)
 
+    /** Revision 25: each Bot has one durable session addressed by Bot id. */
+    val supportsBotDurableSession: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_DURABLE_SESSION_FEATURE)
+
+    val supportsBotRoutines: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_ROUTINES_FEATURE)
+
+    val supportsBotConnectionRequests: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_CONNECTION_REQUESTS_FEATURE)
+
+    val supportsBotPresets: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_PRESETS_FEATURE)
+
     val supportsChatTasks: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_TASKS_FEATURE)
 
@@ -110,6 +123,40 @@ data class AidenServer(
     /** The Mac offers the phone-scoped `runs:observe` / `runs:control` subset. */
     val supportsPhoneRunControl: Boolean
         get() = features.contains(AidenRemoteProtocol.PHONE_RUN_CONTROL_FEATURE)
+
+    /** The Mac offers the phone-scoped `simulators:mobile` grant (revision 26). */
+    val supportsMobileSimulators: Boolean
+        get() = features.contains(AidenRemoteProtocol.MOBILE_SIMULATORS_FEATURE)
+
+    /** A Bot's memory can be read and edited from this phone (revision 27). */
+    val supportsBotMemory: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_MEMORY_FEATURE)
+
+    /** Routine proposals, the daily check-in suggestion and the routine notification feed (revision 27). */
+    val supportsBotProactive: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_PROACTIVE_FEATURE)
+
+    /** Only a Mac that can send memory or proposal cards is asked for `bot:cards`. */
+    val offersBotCards: Boolean
+        get() = supportsBotMemory || supportsBotProactive
+
+    /**
+     * The Mac offers `bot:activity` (revision 30) in its capability list, so this phone asks for
+     * it (FR-m3: the same rule as iOS). A Mac offers it only while it announces `bot-activity-v1`.
+     */
+    val offersBotActivity: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ACTIVITY) == true
+
+    /** Announced and held: show the status line, Steer and Queue, Queued bubbles and Chat activity. */
+    val supportsBotActivity: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE) && capabilities.contains(AidenRemoteCapability.BOT_ACTIVITY)
+
+    /**
+     * Chat messages may carry inline `visuals` (revision 28). Informational:
+     * the transcript renders whatever visuals a message carries.
+     */
+    val supportsChatVisuals: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_VISUALS_FEATURE)
 
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
@@ -215,9 +262,20 @@ data class AidenInstallation(
     var deviceCapabilities: List<AidenRemoteCapability>,
     var serverCapabilities: List<AidenRemoteCapability>? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
-    @Serializable(with = InstantIso8601Serializer::class) var lastConnectedAt: Instant? = null
+    @Serializable(with = InstantIso8601Serializer::class) var lastConnectedAt: Instant? = null,
+    /**
+     * The feature tokens the Mac's `/server` last announced to this pairing, or null before it
+     * first answered. With the persisted grants they stand in for `/server` while it is still on
+     * its way (R21), so a cold offline start keeps what this pairing could do.
+     */
+    val serverFeatures: List<String>? = null
 ) {
     val id: String get() = instanceId
+
+    /** The Mac last announced `bot-activity-v1` and this pairing holds `bot:activity` (R21). */
+    val cachedBotActivitySupported: Boolean
+        get() = serverFeatures?.contains(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE) == true &&
+            hasNegotiatedAccess(AidenRemoteCapability.BOT_ACTIVITY)
 
     val isBotsEligible: Boolean
         get() = hasNegotiatedAccess(AidenRemoteCapability.BOT_READ)

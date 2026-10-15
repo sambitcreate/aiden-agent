@@ -6,14 +6,17 @@
  */
 import {
   AidenRemoteSimulatorRelay,
+  type AidenRemoteSimulatorAudience,
   type AidenRemoteSimulatorHost,
 } from "../aiden-remote-simulators.js";
 
-let provider: (() => AidenRemoteSimulatorHost | null) | null = null;
+type ShareHostProvider = (audience: AidenRemoteSimulatorAudience) => AidenRemoteSimulatorHost | null;
 
-export function registerSimulatorShareHost(next: (() => AidenRemoteSimulatorHost | null) | null): void {
+let provider: ShareHostProvider | null = null;
+
+export function registerSimulatorShareHost(next: ShareHostProvider | null): void {
   provider = next;
   if (!next) simulatorShareRelay.closeAll();
 }
 
-export const simulatorShareRelay = new AidenRemoteSimulatorRelay(() => provider?.() ?? null);
+export const simulatorShareRelay = new AidenRemoteSimulatorRelay((audience) => provider?.(audience) ?? null);

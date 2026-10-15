@@ -8,6 +8,7 @@ import {
   Button,
   Command,
   CommandEmpty,
+  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -15,32 +16,47 @@ import {
   PopoverContent,
   PopoverTrigger,
   Text,
+  toast,
 } from "./ui";
 import { ModelPickerPad } from "./model-picker-pad";
 import { cn } from "../lib/ui-utils";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import {
+  alsoViaLabel,
   createModelEntries,
   encodeSelection,
   modelInfoByValue,
-  modelGridSize,
+  modelSiblings,
   orderModelEntries,
-  PINNED_MODELS_KEY,
   positionSavedModels,
-  positionModels,
+  recentModelsForList,
   visibleModelEntries,
   type ModelEntry,
-  type PositionedModel,
 } from "../lib/model-picker-data";
-import { useProvidersModelInfo } from "../lib/queries";
+import { useModelPaceSummaries, useProvidersModelInfo } from "../lib/queries";
 import {
-  MODEL_PAD_INSET_PERCENT,
-  MODEL_PAD_RANGE_PERCENT,
-  useModelPadLayout,
+  BENCHMARK_STALE_DAYS,
+  formatListPrice,
+  isOlderThanDays,
+  showsListPrice,
+} from "../lib/model-details";
+import { formatModelPace } from "../lib/model-pad-pace";
+import type { ModelPaceSummary } from "../shared/model-pace";
+import {
+  BASE_MODEL_PAD_GRID_SIZE,
+  addModelPadPlacement,
+  modelPadGridSizeForPlacements,
+  modelPadHeightMetric,
+  type ModelPadPlacement,
 } from "../lib/model-pad-layout";
+import { useModelPadPreferences } from "../lib/model-pad-preferences";
+import { recordRecentModel } from "../shared/model-pad-preferences";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, Pin, SlidersHorizontal } from "lucide-react";
+import { Check, Grid2x2Check, Grid2x2Plus, Pin, SlidersHorizontal } from "lucide-react";
+import { ModelPadLattice } from "./model-pad-lattice";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
+import { providerDeploymentLabel } from "../shared/provider-deployment";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -101,10 +117,14 @@ function formatCapabilities(info: ModelInfo | undefined): string {
   return hasKnownCapability ? "Standard generation" : "Unknown";
 }
 
+function deploymentSuffix(entry: Pick<ModelEntry, "providerId" | "isLocal">): string {
+  return ` · ${providerDeploymentLabel(entry.providerId, entry.isLocal).tag}`;
+}
+
 function describeModel(entry: ModelEntry): string {
   const details = [
     `Provider ${entry.providerLabel}`,
-    entry.isLocal ? "Deployment local" : "Deployment hosted",
+    providerDeploymentLabel(entry.providerId, entry.isLocal).description,
     `Inputs ${formatInputs(entry.info)}`,
     `Capabilities ${formatCapabilities(entry.info)}`,
   ];
@@ -112,26 +132,9 @@ function describeModel(entry: ModelEntry): string {
   const output = formatTokens(entry.info?.outputLimit);
   if (context) details.push(`Context ${context} tokens`);
   if (output) details.push(`Maximum output ${output} tokens`);
-  if (entry.ranking) details.push(`Benchmark ${entry.ranking.source}`);
   if (entry.info?.benchmark) details.push(`Benchmark ${entry.info.benchmark.sourceLabel}`);
-  else if (entry.info?.metadataSource === "artificial-analysis") {
-    details.push("Model data Artificial Analysis");
-  }
   details.push(`Model ID ${entry.model}`);
   return details.join(". ");
-}
-
-function readPinnedModels(): string[] {
-  try {
-    const raw = localStorage.getItem(PINNED_MODELS_KEY);
-    if (!raw) return [];
-    const value = JSON.parse(raw) as unknown;
-    return Array.isArray(value)
-      ? value.filter((entry): entry is string => typeof entry === "string")
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 function useExternalModelDetails(): boolean {
@@ -165,20 +168,7 @@ function EmptyModelPad({
   return (
     <div className="model-pad relative aspect-square w-full overflow-hidden rounded-card">
       <div aria-hidden="true" className="absolute inset-0 opacity-55">
-        {Array.from({ length: gridSize * gridSize }, (_, index) => {
-          const column = index % gridSize;
-          const row = Math.floor(index / gridSize);
-          return (
-            <span
-              key={index}
-              className="absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20"
-              style={{
-                left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-                top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-              }}
-            />
-          );
-        })}
+        <ModelPadLattice gridSize={gridSize} dotClassName="bg-primary/20" />
       </div>
       <div className="absolute inset-0 bg-popover/45 backdrop-blur-[2px]" />
       <div className="relative flex h-full flex-col items-center justify-center px-8 text-center">
@@ -218,11 +208,132 @@ function EmptyModelPad({
   );
 }
 
-function ModelHoverDetails({
+/**
+ * A secondary action inside a cmdk list row (Pin, Pad toggle). It never chooses
+ * the row: pointer presses don't reach cmdk's selection, and Enter is kept from
+ * the command root so the button's native activation runs instead.
+ */
+function ModelRowAction({
+  label,
+  active,
+  onToggle,
+  children,
+}: {
+  label: string;
+  /** Pinned or on the Pad: the action stays visible instead of appearing on hover. */
+  active: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+      className={cn(
+        "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+        active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** One model row in the List, with its Pin and Pad toggles. */
+function ModelListRow({
+  entry,
+  isActive,
+  isPinned,
+  isOnPad,
+  onChoose,
+  onPreview,
+  onTogglePin,
+  onTogglePad,
+}: {
+  entry: ModelEntry;
+  isActive: boolean;
+  isPinned: boolean;
+  isOnPad: boolean;
+  onChoose: (entry: ModelEntry) => void;
+  onPreview: (value: string) => void;
+  onTogglePin: (value: string) => void;
+  onTogglePad: (value: string) => void;
+}) {
+  const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
+  return (
+    <CommandItem
+      value={entry.value}
+      keywords={[entry.label, entry.providerLabel, entry.model, entry.format ?? ""]}
+      aria-describedby={descriptionId}
+      onSelect={() => onChoose(entry)}
+      onMouseEnter={() => onPreview(entry.value)}
+      className="group gap-2"
+    >
+      <ProviderIcon
+        providerId={entry.providerId}
+        providerLabel={entry.providerLabel}
+        modelId={entry.model}
+        artwork={entry.providerArtwork}
+        className="size-4 text-tertiary"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-small-strong">{entry.label}</span>
+        <span className="block truncate text-small text-tertiary">
+          {entry.providerLabel}
+          {deploymentSuffix(entry)}
+        </span>
+      </span>
+      {entry.format ? (
+        <span className="shrink-0 text-small text-tertiary">{entry.format}</span>
+      ) : null}
+      <span id={descriptionId} className="sr-only">
+        {describeModel(entry)}
+      </span>
+      {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
+      <ModelRowAction
+        label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
+        active={isPinned}
+        onToggle={() => onTogglePin(entry.value)}
+      >
+        <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
+      </ModelRowAction>
+      <ModelRowAction
+        label={isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`}
+        active={isOnPad}
+        onToggle={() => onTogglePad(entry.value)}
+      >
+        {isOnPad ? (
+          <Grid2x2Check className="size-3.5 text-accent" />
+        ) : (
+          <Grid2x2Plus className="size-3.5" />
+        )}
+      </ModelRowAction>
+    </CommandItem>
+  );
+}
+
+export function ModelHoverDetails({
   model,
+  alsoVia,
+  pace,
   metadataLoading,
 }: {
-  model: PositionedModel | undefined;
+  model: ModelEntry | undefined;
+  /** Other providers serving the same model, such as "Also via OpenRouter". */
+  alsoVia?: string;
+  /** Device-local speed measured from this model's chat responses. */
+  pace?: ModelPaceSummary;
   metadataLoading: boolean;
 }) {
   if (!model) return null;
@@ -231,11 +342,17 @@ function ModelHoverDetails({
   const context = formatTokens(info?.contextLength);
   const output = formatTokens(info?.outputLimit);
   const inputs = formatInputs(info);
-  const benchmarkAsOf = formatBenchmarkDate(info?.benchmark?.asOf);
-  const attributionUrl =
-    info?.benchmark?.sourceUrl ??
-    model.ranking?.sourceUrl ??
-    (info?.metadataSource === "artificial-analysis" ? "https://artificialanalysis.ai" : undefined);
+  const listPrice = showsListPrice(model) ? formatListPrice(info?.cost) : undefined;
+  const speed =
+    pace && pace.sampleCount >= 1
+      ? `${formatModelPace(pace)} (${pace.sampleCount} run${pace.sampleCount === 1 ? "" : "s"})`
+      : undefined;
+  const benchmarkDate = formatBenchmarkDate(info?.benchmark?.asOf);
+  const benchmarkAsOf =
+    benchmarkDate && isOlderThanDays(info?.benchmark?.asOf, BENCHMARK_STALE_DAYS)
+      ? `${benchmarkDate} (over ${BENCHMARK_STALE_DAYS} days old)`
+      : benchmarkDate;
+  const benchmark = info?.benchmark;
   const capabilities = [
     info?.vision ? "Vision" : null,
     info?.toolCall ? "Tools" : null,
@@ -247,6 +364,8 @@ function ModelHoverDetails({
     info?.parameterCount ? ["Parameters", info.parameterCount] : null,
     context ? ["Context", context] : null,
     output ? ["Max output", output] : null,
+    listPrice ? ["List price", listPrice] : null,
+    speed ? ["Your speed", speed] : null,
     info?.releaseDate ? ["Released", info.releaseDate] : null,
     info?.knowledge ? ["Knowledge", info.knowledge] : null,
     info?.benchmark?.intelligence !== undefined
@@ -276,13 +395,18 @@ function ModelHoverDetails({
           </Text>
           <Text variant="small" color="tertiary" as="p" truncate>
             {model.providerLabel}
-            {model.isLocal ? " · Local" : " · Hosted"}
+            {deploymentSuffix(model)}
             {model.format ? ` · ${model.format}` : ""}
           </Text>
+          {alsoVia ? (
+            <Text variant="small" color="tertiary" as="p" truncate>
+              {alsoVia}
+            </Text>
+          ) : null}
         </div>
       </div>
 
-      {info?.matched || info?.benchmark ? (
+      {capabilities.length > 0 || detailRows.length > 0 ? (
         <>
           {capabilities.length > 0 ? (
             <p className="mt-2 text-small text-secondary">{capabilities.join(" · ")}</p>
@@ -291,8 +415,10 @@ function ModelHoverDetails({
             <dl className="mt-2 grid gap-1 border-t border-separator pt-2 text-small">
               {detailRows.map(([label, value]) => (
                 <div key={label} className="flex items-baseline justify-between gap-3">
-                  <dt className="text-tertiary">{label}</dt>
-                  <dd className="min-w-0 truncate text-right text-secondary tabular-nums">
+                  <dt className="shrink-0 text-tertiary">{label}</dt>
+                  {/* Values wrap rather than truncate: the tail of a long value
+                      (run count, staleness) is the part that matters. */}
+                  <dd className="min-w-0 break-words text-right text-secondary tabular-nums">
                     {value}
                   </dd>
                 </div>
@@ -318,16 +444,14 @@ function ModelHoverDetails({
         >
           {model.model}
         </div>
-        {attributionUrl ? (
+        {benchmark ? (
           <a
-            href={attributionUrl}
+            href={benchmark.sourceUrl}
             target="_blank"
             rel="noreferrer"
             className="mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
           >
-            {info?.benchmark
-              ? `${info.benchmark.sourceLabel} · ${info.benchmark.license}`
-              : `${model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`}
+            {`${benchmark.sourceLabel} · ${benchmark.license}`}
           </a>
         ) : null}
       </div>
@@ -336,19 +460,10 @@ function ModelHoverDetails({
   );
 }
 
-/** Keeps the previous catalog object while every provider's cached answer is unchanged. */
-function useStableModelInfo(
-  data: Record<string, Record<string, ModelInfo>>,
-): Record<string, Record<string, ModelInfo>> {
-  const ref = React.useRef(data);
-  const previous = ref.current;
-  const keys = Object.keys(data);
-  const same =
-    keys.length === Object.keys(previous).length &&
-    keys.every((key) => previous[key] === data[key]);
-  if (!same) ref.current = data;
-  return same ? previous : data;
-}
+/** Matches the knob's 250ms confirm transition closely enough to read as one beat. */
+const PAD_COMMIT_CLOSE_DELAY_MS = 200;
+/** One toast for list-row removals, so only the latest removal offers Undo. */
+const REMOVE_FROM_PAD_TOAST_ID = "model-picker-remove-from-pad";
 
 export function ModelPicker({
   providers,
@@ -362,12 +477,18 @@ export function ModelPicker({
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"pad" | "list">("list");
+  const [search, setSearch] = React.useState("");
   const [previewValue, setPreviewValue] = React.useState<string>();
-  const [pinned, setPinned] = React.useState<string[]>(readPinnedModels);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
   const showExternalDetails = useExternalModelDetails();
-  const modelPadLayout = useModelPadLayout();
+  const {
+    placements: modelPadPlacements,
+    pinnedModels: pinned,
+    recentModels,
+    metric: modelPadMetric,
+    save: saveModelPadPreferences,
+  } = useModelPadPreferences();
   const pickerId = React.useId();
   const listTabId = `${pickerId}-list-tab`;
   const padTabId = `${pickerId}-pad-tab`;
@@ -375,93 +496,260 @@ export function ModelPicker({
   const padPanelId = `${pickerId}-pad-panel`;
 
   const catalog = useProvidersModelInfo(providers);
+  // Device-local measured speed for the detail card; display-only. Read afresh
+  // each time the picker opens so new chats show up without a remount.
+  const paceSummaries = useModelPaceSummaries({ enabled: open, staleTime: 0 }).data;
   // The composer re-renders on every streamed token. Keep the catalog derivation
   // keyed on its real inputs, and derive list order and detail positions only
   // while the popover is open.
-  const catalogData = useStableModelInfo(catalog.data);
+  // `catalog.data` keeps its identity until some provider's model info changes.
   const allEntries = React.useMemo(
-    () => createModelEntries(providers, modelInfoByValue(providers, catalogData)),
-    [providers, catalogData],
+    () => createModelEntries(providers, modelInfoByValue(providers, catalog.data)),
+    [providers, catalog.data],
   );
   const entries = React.useMemo(
     () => visibleModelEntries(allEntries, hiddenModelsByProvider),
     [allEntries, hiddenModelsByProvider],
   );
   const positioned = React.useMemo(
-    () => positionSavedModels(entries, modelPadLayout.placements),
-    [entries, modelPadLayout.placements],
+    () => positionSavedModels(entries, modelPadPlacements),
+    [entries, modelPadPlacements],
+  );
+  // Other visible routes to the same model, linked visually on the Pad and side card.
+  const siblingsByValue = React.useMemo(
+    () => (open ? modelSiblings(entries) : new Map<string, ModelEntry[]>()),
+    [open, entries],
   );
   const orderedEntries = React.useMemo(
     () => (open ? orderModelEntries(entries, pinned) : []),
     [open, entries, pinned],
   );
-  const detailPositions = React.useMemo(
-    () => (open ? positionModels(entries) : []),
-    [open, entries],
-  );
-  const padGridSize = modelGridSize(entries.length);
-  const hasPadModels = positioned.length > 0;
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
+  // With an empty filter the List groups pinned models, then recent ones, then the
+  // rest; a filter shows one flat, ranked list. Each model is listed once.
+  const listSections = React.useMemo(() => {
+    const recent =
+      open && search === ""
+        ? recentModelsForList(entries, recentModels, { selectedValue, pinned })
+        : [];
+    if (!recent.length) return { leading: orderedEntries, recent, rest: [] };
+    const pinnedSet = new Set(pinned);
+    const recentSet = new Set(recent.map((entry) => entry.value));
+    return {
+      leading: orderedEntries.filter((entry) => pinnedSet.has(entry.value)),
+      recent,
+      rest: orderedEntries.filter(
+        (entry) => !pinnedSet.has(entry.value) && !recentSet.has(entry.value),
+      ),
+    };
+  }, [open, search, entries, recentModels, selectedValue, pinned, orderedEntries]);
+  const hasPadModels = positioned.length > 0;
+  // Named only while some model on the Pad takes its height from a benchmark:
+  // the score those heights came from, or "mixed" when they differ.
+  const heightMetric = React.useMemo(
+    () =>
+      modelPadHeightMetric(
+        modelPadPlacements,
+        positioned.map((entry) => entry.value),
+        modelPadMetric,
+      ),
+    [modelPadPlacements, positioned, modelPadMetric],
+  );
+  // Same sizing as positionSavedModels and the settings editor: placed, visible
+  // models only. The empty Pad shows the base grid.
+  const padGridSize = React.useMemo(
+    () =>
+      hasPadModels
+        ? modelPadGridSizeForPlacements(
+            modelPadPlacements,
+            entries.map((entry) => entry.value),
+          )
+        : BASE_MODEL_PAD_GRID_SIZE,
+    [hasPadModels, modelPadPlacements, entries],
+  );
   const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
-  const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
-  const activePosition = !open
+  // The current model is available but not placed (the Pad may be empty): the Pad
+  // shows no active model and offers to add it. A model hidden from the picker
+  // could not appear, so it is not offered.
+  const selectedOffPad = selectedPosition
+    ? undefined
+    : entries.find((entry) => entry.value === selectedValue);
+  const activePosition: ModelEntry | undefined = !open
     ? undefined
     : view === "pad"
-      ? (positioned.find((entry) => entry.value === previewValue) ??
-        selectedPosition ??
-        positioned[0])
-      : (detailPosition ??
-        detailPositions.find((entry) => entry.value === selectedValue) ??
-        detailPositions[0]);
+      ? // The empty Pad has no detail card. Otherwise an unplaced current model is
+        // described as itself, and an unavailable one leaves the card empty rather
+        // than describing a different model.
+        hasPadModels
+        ? (positioned.find((entry) => entry.value === previewValue) ??
+          selectedPosition ??
+          selected ??
+          (selectedValue ? undefined : positioned[0]))
+        : undefined
+      : (entries.find((entry) => entry.value === previewValue) ??
+        entries.find((entry) => entry.value === selectedValue) ??
+        entries[0]);
   const activeAttribution = activePosition?.info?.benchmark
     ? {
         url: activePosition.info.benchmark.sourceUrl,
         label: `${activePosition.info.benchmark.sourceLabel} · ${activePosition.info.benchmark.license}`,
       }
-    : activePosition?.ranking?.sourceUrl ||
-        activePosition?.info?.metadataSource === "artificial-analysis"
-      ? {
-          url: activePosition?.ranking?.sourceUrl ?? "https://artificialanalysis.ai",
-          label: `${activePosition?.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`,
-        }
-      : null;
+    : null;
   const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
   const metadataLoading = catalog.isLoading;
   const unavailableMessage =
     "No chat models are available. Open Settings → Providers to discover models for a connection.";
 
-  const setPinnedModels = React.useCallback((next: string[]) => {
-    setPinned(next);
-    try {
-      localStorage.setItem(PINNED_MODELS_KEY, JSON.stringify(next));
-    } catch {
-      // A pin is a convenience preference; selection remains usable if storage is unavailable.
-    }
-  }, []);
-
   const togglePin = React.useCallback(
     (value: string) => {
-      setPinnedModels(
-        pinned.includes(value) ? pinned.filter((entry) => entry !== value) : [...pinned, value],
+      // Selection stays usable if saving fails; the pin reverts and says why.
+      void saveModelPadPreferences(({ pinnedModels }) => ({
+        pinnedModels: pinnedModels.includes(value)
+          ? pinnedModels.filter((entry) => entry !== value)
+          : [...pinnedModels, value],
+      })).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "Couldn’t update pinned models.");
+      });
+    },
+    [saveModelPadPreferences],
+  );
+
+  const restoreOnPad = React.useCallback(
+    (value: string, placement: ModelPadPlacement) => {
+      void saveModelPadPreferences(({ placements }) =>
+        // Placed again meanwhile (another window): keep that placement.
+        placements[value] ? {} : { modelPadPlacements: { ...placements, [value]: placement } },
+      ).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "Couldn’t update your Pad.");
+      });
+    },
+    [saveModelPadPreferences],
+  );
+
+  const toggleOnPad = React.useCallback(
+    (value: string) => {
+      const visibleValues = entries.map((entry) => entry.value);
+      const label = entries.find((entry) => entry.value === value)?.label ?? value;
+      let removed: ModelPadPlacement | undefined;
+      void saveModelPadPreferences(({ placements }) => {
+        removed = undefined;
+        if (!placements[value]) {
+          return { modelPadPlacements: addModelPadPlacement(placements, visibleValues, value) };
+        }
+        const { [value]: placement, ...rest } = placements;
+        removed = placement;
+        return { modelPadPlacements: rest };
+      }).then(
+        () => {
+          // Adding stays quiet; a removal can be undone from its toast.
+          const placement = removed;
+          if (!placement) return;
+          toast(`Removed ${label} from your Pad`, {
+            id: REMOVE_FROM_PAD_TOAST_ID,
+            action: { label: "Undo", onClick: () => restoreOnPad(value, placement) },
+          });
+        },
+        (error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn’t update your Pad.");
+        },
       );
     },
-    [pinned, setPinnedModels],
+    [entries, saveModelPadPreferences, restoreOnPad],
   );
+
+  const focusPad = React.useCallback(() => {
+    contentRef.current
+      ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
+      ?.focus();
+  }, []);
+
+  const focusPadAfterAddRef = React.useRef(false);
+  const addSelectedToPad = () => {
+    if (!selectedOffPad) return;
+    const value = selectedOffPad.value;
+    const visibleValues = entries.map((entry) => entry.value);
+    focusPadAfterAddRef.current = true;
+    setPreviewValue(value);
+    void saveModelPadPreferences(({ placements }) => ({
+      modelPadPlacements: addModelPadPlacement(placements, visibleValues, value),
+    })).catch((error: unknown) => {
+      focusPadAfterAddRef.current = false;
+      toast.error(error instanceof Error ? error.message : "Couldn’t add the model to your Pad.");
+    });
+  };
+
+  // The Add button disappears once the model is placed; keep focus on the Pad,
+  // where the knob now rests on the added model.
+  React.useEffect(() => {
+    if (!selectedPosition || !focusPadAfterAddRef.current) return;
+    focusPadAfterAddRef.current = false;
+    focusPad();
+  }, [selectedPosition, focusPad]);
 
   const commit = React.useCallback(
     (entry: ModelEntry, close = false) => {
       if (entry.value !== selectedValue) onChange(entry.providerId, entry.model);
       setPreviewValue(entry.value);
       if (close) setOpen(false);
+      // Recents are history: the choice already happened, so a failed write is
+      // not worth interrupting anyone for.
+      void saveModelPadPreferences(({ recentModels: recent }) => {
+        const next = recordRecentModel(recent, entry.value);
+        // Already the newest recent: nothing to write.
+        const unchanged =
+          next.length === recent.length && next.every((value, index) => value === recent[index]);
+        return unchanged ? {} : { recentModels: next };
+      }).catch((error: unknown) => {
+        console.warn("Couldn’t record the recent model.", error);
+      });
     },
-    [onChange, selectedValue],
+    [onChange, selectedValue, saveModelPadPreferences],
+  );
+
+  // Choosing on the Pad closes the picker once the knob's confirm pulse has shown,
+  // like choosing in the list. The timer never outlives the popover it was set for.
+  const padCloseTimerRef = React.useRef<number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (padCloseTimerRef.current !== null) window.clearTimeout(padCloseTimerRef.current);
+      padCloseTimerRef.current = null;
+    },
+    [open],
+  );
+  const commitFromPad = (entry: ModelEntry) => {
+    commit(entry);
+    if (padCloseTimerRef.current !== null) window.clearTimeout(padCloseTimerRef.current);
+    padCloseTimerRef.current = window.setTimeout(
+      () => {
+        padCloseTimerRef.current = null;
+        setOpen(false);
+      },
+      prefersReducedMotion() ? 0 : PAD_COMMIT_CLOSE_DELAY_MS,
+    );
+  };
+
+  const renderListRow = (entry: ModelEntry) => (
+    <ModelListRow
+      key={entry.value}
+      entry={entry}
+      isActive={entry.value === selectedValue}
+      isPinned={pinned.includes(entry.value)}
+      isOnPad={Boolean(modelPadPlacements[entry.value])}
+      onChoose={(choice) => commit(choice, true)}
+      onPreview={setPreviewValue}
+      onTogglePin={togglePin}
+      onTogglePad={toggleOnPad}
+    />
   );
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
+      // Cleared on open rather than close, so the list keeps its filter while the
+      // popover animates out.
+      setSearch("");
       setView(hasPadModels ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
     } else {
@@ -469,7 +757,9 @@ export function ModelPicker({
     }
   };
 
-  const switchView = (next: "pad" | "list", focusPanel = true) => {
+  const switchView = (next: "pad" | "list", focusPanel = true, seed = "") => {
+    // Re-selecting the current view keeps what was typed in the filter.
+    if (next !== view || seed) setSearch(seed);
     setView(next);
     setPreviewValue(selectedValue || positioned[0]?.value);
     if (!focusPanel) return;
@@ -482,12 +772,11 @@ export function ModelPicker({
         contentRef.current?.querySelector<HTMLElement>("[data-model-pad-settings]")?.focus();
         return;
       }
-      contentRef.current
-        ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
-        ?.focus();
+      focusPad();
     });
   };
 
+  const customizeBlockedReasonId = `${pickerId}-customize-blocked`;
   const openModelDataSettings = () => {
     if (settingsBlockedReason) return;
     setOpen(false);
@@ -567,17 +856,14 @@ export function ModelPicker({
               searchRef.current?.focus();
               return;
             }
-            const pad = contentRef.current?.querySelector<HTMLElement>(
-              '[aria-roledescription="two-dimensional model picker"]',
-            );
-            pad?.focus();
+            focusPad();
           });
         }}
       >
         <div className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-hidden rounded-popover bg-popover shadow-popover">
-        <div className="p-1.5 pb-0">
+        <div className="flex items-center gap-1 p-1.5 pb-0">
           <div
-            className="grid grid-cols-2 rounded-control bg-control/60 p-0.5"
+            className="grid min-w-0 flex-1 grid-cols-2 rounded-control bg-control/60 p-0.5"
             role="tablist"
             aria-label="Model picker view"
           >
@@ -617,6 +903,29 @@ export function ModelPicker({
               Pad
             </Button>
           </div>
+          {hasPadModels ? (
+            // The empty Pad has its own Customize call to action.
+            <>
+              <Button
+                variant="transparent"
+                size="small"
+                iconOnly
+                className={cn("shrink-0", settingsBlockedReason && "opacity-45")}
+                aria-label="Customize Model Pad"
+                aria-disabled={Boolean(settingsBlockedReason)}
+                aria-describedby={settingsBlockedReason ? customizeBlockedReasonId : undefined}
+                title={settingsBlockedReason ?? "Customize Model Pad"}
+                onClick={openModelDataSettings}
+              >
+                <SlidersHorizontal />
+              </Button>
+              {settingsBlockedReason ? (
+                <span id={customizeBlockedReasonId} className="sr-only">
+                  {settingsBlockedReason}.
+                </span>
+              ) : null}
+            </>
+          ) : null}
         </div>
 
         {view === "pad" ? (
@@ -626,6 +935,19 @@ export function ModelPicker({
             aria-labelledby={padTabId}
             className="min-w-0 p-2"
           >
+            {selectedOffPad ? (
+              <div className="mb-2 flex min-w-0 items-center gap-2 rounded-control bg-control/60 py-1 pr-1 pl-2.5">
+                <Text variant="small" color="secondary" as="p" className="flex min-w-0 flex-1">
+                  <span className="min-w-0 truncate" title={selectedOffPad.label}>
+                    {selectedOffPad.label}
+                  </span>
+                  <span className="shrink-0">{"\u00a0"}isn’t on your Pad</span>
+                </Text>
+                <Button size="small" className="shrink-0" onClick={addSelectedToPad}>
+                  Add to Pad
+                </Button>
+              </div>
+            ) : null}
             {hasPadModels ? (
               <ModelPickerPad
                 models={positioned}
@@ -633,7 +955,14 @@ export function ModelPicker({
                 selectedValue={selectedValue}
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
-                onCommit={(entry) => commit(entry)}
+                onCommit={commitFromPad}
+                heightMetric={heightMetric}
+                siblingsByValue={siblingsByValue}
+                onTypeToSearch={(character) => {
+                  // A model was just chosen and the picker is about to close.
+                  if (padCloseTimerRef.current !== null) return;
+                  switchView("list", true, character);
+                }}
               />
             ) : (
               <EmptyModelPad
@@ -660,70 +989,20 @@ export function ModelPicker({
             >
               <CommandInput
                 ref={searchRef}
+                value={search}
+                onValueChange={setSearch}
                 aria-label="Filter chat models"
                 placeholder="Filter models…"
               />
               <CommandList>
                 <CommandEmpty>No models found.</CommandEmpty>
-                {orderedEntries.map((entry) => {
-                  const isActive = entry.value === selectedValue;
-                  const isPinned = pinned.includes(entry.value);
-                  const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
-                  return (
-                    <CommandItem
-                      key={entry.value}
-                      value={entry.value}
-                      keywords={[entry.label, entry.providerLabel, entry.model, entry.format ?? ""]}
-                      aria-describedby={descriptionId}
-                      onSelect={() => commit(entry, true)}
-                      onMouseEnter={() => setPreviewValue(entry.value)}
-                      className="group gap-2"
-                    >
-                      <ProviderIcon
-                        providerId={entry.providerId}
-                        providerLabel={entry.providerLabel}
-                        modelId={entry.model}
-                        artwork={entry.providerArtwork}
-                        className="size-4 text-tertiary"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-small-strong">{entry.label}</span>
-                        <span className="block truncate text-small text-tertiary">
-                          {entry.providerLabel}
-                          {entry.isLocal ? " · Local" : " · Hosted"}
-                        </span>
-                      </span>
-                      {entry.format ? (
-                        <span className="shrink-0 text-small text-tertiary">{entry.format}</span>
-                      ) : null}
-                      <span id={descriptionId} className="sr-only">
-                        {describeModel(entry)}
-                      </span>
-                      {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
-                      <button
-                        type="button"
-                        aria-label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
-                        aria-pressed={isPinned}
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          togglePin(entry.value);
-                        }}
-                        className={cn(
-                          "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
-                          isPinned
-                            ? "opacity-100"
-                            : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                        )}
-                      >
-                        <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
-                      </button>
-                    </CommandItem>
-                  );
-                })}
+                {listSections.leading.map(renderListRow)}
+                {listSections.recent.length ? (
+                  <CommandGroup heading="Recent">
+                    {listSections.recent.map(renderListRow)}
+                  </CommandGroup>
+                ) : null}
+                {listSections.rest.map(renderListRow)}
               </CommandList>
             </Command>
           </section>
@@ -743,7 +1022,14 @@ export function ModelPicker({
         ) : null}
         </div>
         {showExternalDetails && (view === "list" || hasPadModels) ? (
-          <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
+          <ModelHoverDetails
+            model={activePosition}
+            alsoVia={
+              activePosition ? alsoViaLabel(siblingsByValue.get(activePosition.value)) : undefined
+            }
+            pace={activePosition ? paceSummaries?.[activePosition.value] : undefined}
+            metadataLoading={metadataLoading}
+          />
         ) : null}
       </PopoverContent>
     </Popover>

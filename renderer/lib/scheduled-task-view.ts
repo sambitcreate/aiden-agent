@@ -6,6 +6,8 @@ import {
 } from "../shared/model-visibility";
 import type { Provider, ScheduledTask, ScheduledTaskMode } from "./types";
 import { formatScheduledTaskCadence } from "../shared/scheduled-task-presentation";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
+import { formatRelativeTime } from "./relative-time";
 
 export type ScheduledTaskTab = "all" | "active" | "paused";
 
@@ -158,13 +160,7 @@ export function filterScheduledTasks(
 
 export function formatNextRun(timestamp: number | undefined, now = Date.now()): string {
   if (timestamp === undefined) return "No next run";
-  const delta = timestamp - now;
-  const absolute = Math.abs(delta);
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  if (absolute < 90_000) return formatter.format(Math.round(delta / 1_000), "second");
-  if (absolute < 90 * 60_000) return formatter.format(Math.round(delta / 60_000), "minute");
-  if (absolute < 36 * 3_600_000) return formatter.format(Math.round(delta / 3_600_000), "hour");
-  return formatter.format(Math.round(delta / 86_400_000), "day");
+  return formatRelativeTime(timestamp, now);
 }
 
 export function scheduledTaskStatus(task: ScheduledTask): "active" | "paused" | "error" {
@@ -191,6 +187,7 @@ export function scheduledTaskProviderPin(
   if (
     !provider ||
     !isUsable(provider) ||
+    isAcpHarnessProvider(provider.id) ||
     !provider.models.includes(selection.model) ||
     isModelHidden(hidden, provider.id, selection.model)
   ) {
@@ -239,16 +236,24 @@ export function scheduledTaskProviderModelOptions(
   return { models: visibleModels, model };
 }
 
-/** Warn when an LLM task pins no provider and no usable app default provider exists. */
+/**
+ * The warning for an LLM task that pins no provider when no usable app default
+ * provider exists, or undefined when the task can run.
+ */
 export function scheduledTaskProviderGuardrail(
   mode: ScheduledTaskMode,
   providerId: string | undefined,
   appDefaultProviderId: string | undefined,
   providers: Provider[] | undefined,
-): boolean {
-  if (mode !== "llm" || providerId) return false;
-  if (!appDefaultProviderId) return true;
-  return !providers?.some(
-    (provider) => provider.id === appDefaultProviderId && isUsable(provider),
-  );
+): string | undefined {
+  if (mode !== "llm" || providerId) return undefined;
+  if (appDefaultProviderId && isAcpHarnessProvider(appDefaultProviderId)) {
+    // The default exists and works in chats, so "no app default" would be wrong; say why it can't run here.
+    const label = providers?.find((provider) => provider.id === appDefaultProviderId)?.label ?? "an agent-backed model";
+    return `No provider pinned, and the app default (${label}) runs only in chats you have open on this computer. Pin a provider so this task can run.`;
+  }
+  const usableDefault =
+    appDefaultProviderId !== undefined &&
+    providers?.some((provider) => provider.id === appDefaultProviderId && isUsable(provider));
+  return usableDefault ? undefined : "No provider pinned. If no app default is available, this task cannot run.";
 }

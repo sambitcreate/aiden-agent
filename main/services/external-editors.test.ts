@@ -193,6 +193,16 @@ test("rejects an editor that disappeared after discovery", async () => {
   );
 });
 
+/**
+ * A fake editor launcher that records `payload` (a JS expression) as JSON in
+ * `marker`. It writes a temp file and renames it into place, so the test's
+ * "marker exists" poll never sees a created-but-still-empty file.
+ */
+function fakeLauncher(marker: string, payload: string): string {
+  const partial = `${marker}.partial`;
+  return `#!${process.execPath}\nconst fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(partial)}, JSON.stringify(${payload}));\nfs.renameSync(${JSON.stringify(partial)}, ${JSON.stringify(marker)});`;
+}
+
 async function withLinuxPath(run: (root: string) => Promise<void>): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden editors "));
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -244,7 +254,7 @@ test("Linux launches a discovered editor with a single absolute workspace argume
     const marker = path.join(root, "argv.json");
     const launcher = path.join(root, "code");
     await fs.writeFile(launcher,
-      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));`,
+      fakeLauncher(marker, "process.argv.slice(2)"),
       { mode: 0o755 });
     const workspace = path.join(root, "--workspace ; $() ' spaces");
     await fs.mkdir(workspace);
@@ -336,7 +346,7 @@ test("Linux Zed aliases preserve PATH precedence, executable guards and literal 
     const writeLauncher = async (directory: string, name: string) => {
       const executable = path.join(directory, name);
       await fs.writeFile(executable,
-        `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ executable: ${JSON.stringify(executable)}, args: process.argv.slice(2) }));`,
+        fakeLauncher(marker, `{ executable: ${JSON.stringify(executable)}, args: process.argv.slice(2) }`),
         { mode: 0o755 });
       return executable;
     };

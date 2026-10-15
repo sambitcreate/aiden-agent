@@ -10,6 +10,8 @@ Aiden origin/main: `d2197dfef` (0.51.0). Pi checkout `/Users/sambitbiswas/projec
 
 The audit covers the delta from Aiden's 0.87.1 pins and the complete stable coding-agent surface. Pi's durable, client/server/protocol and virtual-model APIs are explicitly experimental. Aiden's existing remote protocol, native clients, security policy, journals, and subagent supervision stay authoritative. Matching a feature means delivering its user capability with Aiden's permissions, not replacing a stronger existing implementation.
 
+> **Bots exception (2026-10-07):** Bots use `@earendil-works/pi-durable` 1.0.3 (with `@earendil-works/chord` 1.0.3), pinned exactly, per the [Bots rework spec](../superpowers/specs/2026-10-07-bots-rework-design.md). Each Bot has its own durable session. Workspace chats remain excluded from pi-durable and keep the journals described here.
+
 ## Feature and integration inventory
 
 | Surface | Existing Aiden | Pi 1.0 requirement / implementation |
@@ -117,7 +119,7 @@ All eight PRs use the same three task worktrees. They are stacked in this order,
 
 Retarget each successor to main as predecessors merge; do not merge these PRs without release-owner authorization. The active plan remains here until review/merge is reconciled.
 
-Additional deliberate differences: the live pi.dev overlay remains chat-only; non-chat operation inventory uses the pinned 1.0 runtime. Idle cache warming, full llama.cpp router management and Radius convenience configuration remain CLI capabilities. No experimental durable/protocol/virtual-model migration or post-1.0 HEAD feature is claimed.
+Additional deliberate differences: the live pi.dev overlay remains chat-only; non-chat operation inventory uses the pinned 1.0 runtime. Idle cache warming, full llama.cpp router management and Radius convenience configuration remain CLI capabilities. No experimental durable/protocol/virtual-model migration or post-1.0 HEAD feature is claimed. The one durable exception is Bot sessions on pi-durable 1.0.3 (see the note above).
 
 A synthetic unsigned ASAR smoke also started the packaged Pi sandbox worker and QuickJS WASM under Electron and returned an offline result. This verifies worker/unpack wiring, not a signed distributable.
 

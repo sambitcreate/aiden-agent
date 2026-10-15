@@ -1,7 +1,10 @@
 import type { SamplingParamsByThinkingLevel } from "@earendil-works/pi-ai";
+import { GENERATION_THINKING_LEVELS, isGenerationThinkingLevel, type GenerationThinkingLevel } from "./generation-thinking";
 
 /** Explicit user overrides, separate from rediscovered provider metadata. */
 export interface CustomModelOptions {
+  effortControl?: "openai" | "glm";
+  effortLevels?: GenerationThinkingLevel[];
   samplingParamsByThinkingLevel?: SamplingParamsByThinkingLevel;
   vision?: boolean;
   reasoning?: boolean;
@@ -22,6 +25,21 @@ export function parseCustomModelOptions(
   }
   const raw = value as Record<string, unknown>;
   const result: CustomModelOptions = {};
+  if (raw.effortControl !== undefined) {
+    if (raw.effortControl !== "openai" && raw.effortControl !== "glm") {
+      throw new Error("Invalid effort control format.");
+    }
+    result.effortControl = raw.effortControl;
+  }
+  if (raw.effortLevels !== undefined) {
+    if (!Array.isArray(raw.effortLevels) || raw.effortLevels.length > 6 ||
+        !raw.effortLevels.every(isGenerationThinkingLevel) ||
+        new Set(raw.effortLevels).size !== raw.effortLevels.length) {
+      throw new Error("Invalid supported effort levels.");
+    }
+    const levels = raw.effortLevels;
+    result.effortLevels = GENERATION_THINKING_LEVELS.filter((level) => levels.includes(level));
+  }
   if (raw.samplingParamsByThinkingLevel !== undefined) {
     result.samplingParamsByThinkingLevel = parseSamplingParamsByThinkingLevel(raw.samplingParamsByThinkingLevel);
   }
@@ -59,6 +77,20 @@ export function parseCustomModelOptions(
     throw new Error("Maximum output tokens cannot exceed the context length.");
   }
   return result;
+}
+
+/** Explicit server presets, independent of similarly named catalog models. */
+export function customModelThinkingLevels(
+  options: CustomModelOptions | undefined,
+): GenerationThinkingLevel[] | undefined {
+  if (options?.reasoning !== true || !options.effortControl) return undefined;
+  if (options.effortLevels !== undefined) {
+    const selected = GENERATION_THINKING_LEVELS.filter((level) => options.effortLevels?.includes(level));
+    return selected.length ? selected : undefined;
+  }
+  if (options?.effortControl === "glm") return ["off", "low", "high", "max"];
+  if (options?.effortControl === "openai") return ["off", "low", "medium", "high"];
+  return undefined;
 }
 
 export function mergeDiscoveredModelMetadata<

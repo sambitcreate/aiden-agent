@@ -3,6 +3,8 @@
 Status: Partial — Phases 0–4 plus the beta-labeled Aiden Live orb/setup shell and dedicated metadata-only session threads are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
 Date: 2026-09-15
 Voice-default release follow-up (2026-09-17): 0.41.5 exposes ordinary voice-only Aiden Live in normal Finder-launched production builds. The existing `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0`/`false` values remain an incident kill switch. Screen capture is unchanged and stays unavailable unless `AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN=1` is deliberately supplied; the native-picker acceptance receipt remains pending.
+
+Screen-default follow-up (2026-10-07): screen capture now ships enabled with the Live gate. `AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN=0` (any value other than `1` or `true`) is its own kill switch, and `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` still turns off both. The native-picker acceptance receipt is still pending.
 Continuous orb follow-up (2026-09-17): active listening/thinking/speaking/acting now share stable Listening + Weaving canvas layers with a slow complementary blend and connection/rest crossfades. Removed visible dock status text (retained screen-reader status). First active click reveals Stop; the second stops, Escape restores the orb, and closing disables duplicate clicks. Sharing/error surfaces remain visible. Added mapping/click-policy regressions; all 230 Live tests, type-check, lint, and standalone browser interaction/motion checks pass. Downloads duplex-review.html uses the actual orb component; the installed notarized app has not been rebuilt for this change.
 
 Release hardening follow-up (2026-09-17): Pullfrog's post-merge review blocked 0.41.4 publication until screen authority is generation-fenced. Exact binding tokens now prevent stale releases from revoking replacements, late picker streams stop after teardown, rejected frame sends revoke capture, and temporary Electron permission handlers admit only audio-only media for the exact document before restoring defaults when the final binding closes. Source Change/Remove is locked across pending provider startup and start failure releases the exact current binding. Adversarial coverage was added for each path.
@@ -388,7 +390,9 @@ tool catalog is unchanged.
 - Review remediation adds the missing user-owned authority control to Live
   setup: Computer Use is visibly off by default, reads global helper readiness,
   and changes only the exact active hidden Assistant chat through
-  `chats:setComputerUse`. Ordinary Assistant streaming and pending automation
+  `chats:setComputerUse` (since removed with the per-chat composer toggle; see
+  [Computer Use on request](computer-use-on-request-plan.md), where chats ask
+  once on first use). Ordinary Assistant streaming and pending automation
   approvals disable both setup entry and confirmation with an explicit recovery
   message, while exact-session Live approvals remain visible. Revoking either
   Computer Use gate now terminates the whole Live session consistently:

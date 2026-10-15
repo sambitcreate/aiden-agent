@@ -1,8 +1,8 @@
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai/compat";
-import { ASSISTANT_WORKSPACE_ID } from "../../../renderer/shared/assistant.js";
 import { BTW_LIMITS, type BtwEventV1, type BtwStartReceiptV1 } from "../../../renderer/shared/btw.js";
+import { chatSurface } from "../../../renderer/shared/chat-visibility.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { Chat } from "../types.js";
 import { assistantUsageRecord, isLocalModelProvider, unreportedUsageRecord } from "../usage-accounting.js";
@@ -16,6 +16,7 @@ import {
   type BtwHistoryTurn,
 } from "./context.js";
 import { BtwOperationRegistry } from "./operation-registry.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 
 export interface BtwOwner {
   documentId: string;
@@ -105,7 +106,7 @@ export class BtwService {
     const question = boundedQuestion(questionValue);
     const chat = await this.deps.getChat(chatIdValue);
     if (!chat) throw new Error("This chat is no longer available.");
-    if (chat.botId || chat.workspaceId === ASSISTANT_WORKSPACE_ID) {
+    if (chatSurface(chat) !== "regular") {
       throw new Error("Side questions are currently available only in ordinary desktop chats.");
     }
     const binding = fingerprint(chat);
@@ -174,6 +175,9 @@ export class BtwService {
     timeout.unref?.();
     let runtime: ResolvedModelRuntime | undefined;
     try {
+      if (isAcpHarnessProvider(input.chat.providerId ?? "")) {
+        throw new Error("Side questions are not available with agent-backed models. Switch models to ask one.");
+      }
       runtime = await this.deps.resolveRuntime(
         input.chat.providerId!,
         input.chat.model!,

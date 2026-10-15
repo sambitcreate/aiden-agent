@@ -29,9 +29,11 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -44,14 +46,23 @@ import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkEligibility
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatScroll
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkSource
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.chat.AidenForeignRunAttachPolicy
+import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
+import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualsWithRows
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 
 class AidenChatTest {
     @Test
@@ -185,6 +196,27 @@ class AidenChatTest {
         assertEquals(2, timeline.steps.map { it.id }.toSet().size)
     }
 
+    @Test
+    fun canonicalFixtureQuestionnaireRecapDecodesFromTheTimelineEvent() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        val timelineEvent = root.getValue("events").jsonArray.map { it.jsonObject }
+            .single { it.getValue("type").jsonPrimitive.content == "timeline" }
+        val timeline = json.decodeFromJsonElement(
+            AidenGenerationTimeline.serializer(),
+            timelineEvent.getValue("payload").jsonObject.getValue("timeline"),
+        )
+        assertTrue(timeline.isRendererSafe())
+        val recap = timeline.steps.firstNotNullOf { it.questionnaireRecap }
+        assertEquals(AidenQuestionnaireRecap.Outcome.ANSWERED, recap.outcome)
+        assertEquals(
+            listOf(
+                AidenQuestionnaireRecap.Answer.Choice("Plain text"),
+                AidenQuestionnaireRecap.Answer.Unanswered(AidenQuestionnaireRecap.Outcome.ANSWERED),
+            ),
+            recap.items.map { recap.answer(it) },
+        )
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun backgroundChatRefreshReportsReadOnlyAfterReturningToChat() {
@@ -258,6 +290,194 @@ class AidenChatTest {
         }
     }
 
+    @Test
+    fun snapshotStoredAfterTheReplySettlesAppearsWithoutUserAction() = assertLateSnapshotRefresh(snapshotArrives = true)
+
+    @Test
+    fun snapshotThatNeverArrivesStopsRefetchingAfterThreeTries() = assertLateSnapshotRefresh(snapshotArrives = false)
+
+    @Test
+    fun snapshotStoredAfterAStreamedTurnSettlesAppearsWithoutUserAction() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-stream-snapshot-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val wireJson = Json(json) { explicitNulls = false }
+        val initial = AidenChat(
+            id = "chat-stream", workspaceId = "workspace-stream", title = "Plans",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r0"
+        )
+        val question = AidenChatMessage("question-1", AidenChatRole.USER, "Compare plans", createdAt = Instant.now())
+        val snapshot = AidenMessageAttachment(
+            "visual-snapshot_${"5".repeat(64)}", "Plan options.png", "image/png", AidenAttachmentKind.IMAGE, 2_048
+        )
+        val reply = AidenChatMessage(
+            "reply-1", AidenChatRole.ASSISTANT, "Here are the plans.",
+            visuals = listOf(AidenChatVisual(
+                id = "ui_plans", kind = "ui", title = "Plan options",
+                fallbackText = "Solo or team", snapshotAttachmentId = snapshot.id
+            )),
+            createdAt = Instant.now()
+        )
+        // The terminal read lands before capture; the snapshot is stored only once the phone has settled.
+        val settled = initial.copy(revision = "r1", messages = listOf(question, reply))
+        val captured = initial.copy(revision = "r2", messages = listOf(question, reply.copy(attachments = listOf(snapshot))))
+        val remote = java.util.concurrent.atomic.AtomicReference(initial)
+        val turnStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.requestUrl!!.encodedPath
+                return when {
+                    path == "/api/aiden/v1/chats/chat-stream/turns" -> {
+                        turnStarted.set(true)
+                        remote.set(settled)
+                        MockResponse().setResponseCode(202).setBody(
+                            """{"turnId":"turn-1","streamId":"stream-1","status":"queued","message":${wireJson.encodeToString(question)}}"""
+                        )
+                    }
+                    path == "/api/aiden/v1/chats/chat-stream" -> MockResponse().setBody(wireJson.encodeToString(remote.get()))
+                    path == "/api/aiden/v1/streams/stream-1/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                        "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-1\",\"sequence\":1," +
+                            "\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"reply-1\"}}\n\n"
+                    )
+                    path == "/api/aiden/v1/streams/stream-1" -> MockResponse().setBody(
+                        """{"streamId":"stream-1","chatId":"chat-stream","turnId":"turn-1","state":"done","lastSequence":1,"updatedAt":"2026-09-22T12:00:00Z"}"""
+                    )
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val grants = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-stream", deviceId = "device-stream", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                // The production client binding without unrelated /server refresh work.
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(
+                    initial.id, coordinator, cache, drafts, initial,
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(300L, 300L, 300L))
+                )
+                viewModels.put("stream", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Compare plans")
+                assertTrue(model.canSend)
+                model.send()
+                // The streamed turn reaches its terminal event and settles on the snapshot-less transcript.
+                withTimeout(5_000) { while (!turnStarted.get()) kotlinx.coroutines.delay(10) }
+                withTimeout(5_000) {
+                    while (model.chat.value?.revision != "r1" || model.hasActiveStream.value || model.isStarting.value) {
+                        kotlinx.coroutines.delay(10)
+                    }
+                }
+                assertNull(aidenVisualDisplay(reply.visuals!!.single(), model.chat.value!!.messages.last().attachments.orEmpty()).snapshot)
+                // Capture finishes on the Mac; nothing on the phone asks for it.
+                remote.set(captured)
+                val shown = withTimeout(5_000) { model.chat.first { it?.revision == "r2" } }!!
+                val message = shown.messages.last()
+                assertEquals(snapshot, aidenVisualDisplay(message.visuals!!.single(), message.attachments.orEmpty()).snapshot)
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun assertLateSnapshotRefresh(snapshotArrives: Boolean) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-late-snapshot-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val snapshot = AidenMessageAttachment(
+            "visual-snapshot_${"4".repeat(64)}", "Plan options.png", "image/png", AidenAttachmentKind.IMAGE, 2_048
+        )
+        val reply = AidenChatMessage(
+            "reply-visual", AidenChatRole.ASSISTANT, "Here are the plans.",
+            visuals = listOf(AidenChatVisual(
+                id = "ui_plans", kind = "ui", title = "Plan options",
+                fallbackText = "Solo or team", snapshotAttachmentId = snapshot.id
+            )),
+            createdAt = Instant.now()
+        )
+        // The Mac settles the reply before its snapshot capture finishes.
+        val settled = AidenChat(
+            id = "chat-visual", workspaceId = "workspace-visual", title = "Plans", messages = listOf(reply),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
+        )
+        val captured = settled.copy(revision = "r2", messages = listOf(reply.copy(attachments = listOf(snapshot))))
+        val fetches = java.util.concurrent.atomic.AtomicInteger(0)
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val wireJson = Json(json) { explicitNulls = false }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-visual","name":"Visual Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-visuals-v1"],"connectionMode":"lan","serverTime":"2026-09-27T12:00:00Z"}""")
+                "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                "/api/aiden/v1/chats/chat-visual" -> {
+                    // The first read lands before the snapshot is stored; later reads see it when it exists.
+                    val served = if (fetches.incrementAndGet() > 1 && snapshotArrives) captured else settled
+                    MockResponse().setBody(wireJson.encodeToString(served))
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-visual", deviceId = "device-visual", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                val model = AidenChatViewModel(
+                    settled.id, coordinator, cache, drafts, settled,
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(50L, 50L, 50L))
+                )
+                viewModels.put("visual", model)
+                if (snapshotArrives) {
+                    val shown = withTimeout(5_000) { model.chat.first { it?.revision == "r2" } }!!
+                    val message = shown.messages.single()
+                    assertEquals(snapshot, aidenVisualDisplay(message.visuals!!.single(), message.attachments.orEmpty()).snapshot)
+                    val afterSnapshot = fetches.get()
+                    kotlinx.coroutines.delay(400)
+                    assertEquals("refetching stops once every visual has its snapshot", afterSnapshot, fetches.get())
+                } else {
+                    withTimeout(5_000) { while (fetches.get() < 4) kotlinx.coroutines.delay(20) }
+                    kotlinx.coroutines.delay(400)
+                    assertEquals("the initial read plus three bounded retries", 4, fetches.get())
+                    assertEquals("r1", model.chat.value?.revision)
+                }
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     // clear() requests cancellation; children can still resume on Main to finish cleanup.
     // A cancelled test caller must finish this barrier before disposing shared resources.
     private suspend fun ViewModelStore.clearAndJoin() = withContext(NonCancellable) {
@@ -279,6 +499,9 @@ class AidenChatTest {
     private fun withForeignRunChat(
         initial: AidenChat?,
         route: (String, RecordedRequest) -> MockResponse,
+        agentsRead: Boolean = false,
+        attach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy(),
+        features: List<String> = listOf("phone-run-control-v1"),
         body: suspend CoroutineScope.(AidenChatViewModel) -> Unit
     ) {
         val directory = kotlin.io.path.createTempDirectory("aiden-foreign-run-").toFile()
@@ -289,10 +512,11 @@ class AidenChatTest {
         val grants = listOf(
             AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE,
             AidenRemoteCapability.APPROVAL_RESPOND, AidenRemoteCapability.RUNS_OBSERVE, AidenRemoteCapability.RUNS_CONTROL
-        )
+        ) + if (agentsRead) listOf(AidenRemoteCapability.AGENTS_READ) else emptyList()
+        val serverFeatures = features + if (agentsRead) listOf("chat-agents-v1") else emptyList()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (val path = request.requestUrl!!.encodedPath) {
-                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-run","name":"Run Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-run","name":"Run Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":${json.encodeToString(serverFeatures)},"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
                 else -> route(path.removePrefix("/api/aiden/v1"), request)
             }
         }
@@ -310,7 +534,7 @@ class AidenChatTest {
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
-                val model = AidenChatViewModel("chat-mac", coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel("chat-mac", coordinator, cache, drafts, initial, foreignRunAttach = attach)
                 viewModels.put("foreign", model)
                 try {
                     body(model)
@@ -432,6 +656,258 @@ class AidenChatTest {
             // Recovery re-reads the chat on its own; the answer moves into the transcript.
             withTimeout(10_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "reply-mac" } == true } }
             withTimeout(5_000) { model.liveText.first { it.isEmpty() } }
+        }
+    }
+
+    private fun rosterFrame(turnId: String, revision: Int): String {
+        val roster = """{"version":1,"chatId":"chat-mac","turnId":"$turnId","previousTurns":[],"availability":"ready",""" +
+            """"epoch":"epoch-run","revision":$revision,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+        return "id: $revision\nevent: agents_update\ndata: {\"protocolVersion\":1,\"streamId\":\"chat-mac\",\"sequence\":$revision," +
+            "\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"agents_update\",\"terminal\":false,\"payload\":$roster}\n\n"
+    }
+
+    /** A run the Mac started: its opening replay, then a connection that stays open. */
+    private fun macRunRoute(path: String): MockResponse? = when (path) {
+        "/chats/chat-mac" -> MockResponse().setBody(Json(json) { explicitNulls = false }.encodeToString(foreignRunChat()))
+        "/runs/run-mac/events" -> runFeed("").setHeadersDelay(5, TimeUnit.SECONDS)
+        else -> null
+    }
+
+    private val macRunFeed: MockResponse
+        get() = runFeed(
+            runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                runFrame(2, "text_delta", """{"text":"Live from the Mac"}""")
+        )
+
+    @Test
+    fun rosterAnnouncingANewTurnAttachesToItsRunAndRetriesOnceUntilTheRunIsRegistered() =
+        assertRosterTurnAttach(runRegisters = true)
+
+    @Test
+    fun rosterTurnWhoseRunNeverAppearsIsLookedUpOnceMoreAndThenLeftAlone() =
+        assertRosterTurnAttach(runRegisters = false)
+
+    private fun assertRosterTurnAttach(runRegisters: Boolean) {
+        // Lookups and the policy's waits, in the order they happened.
+        val log = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val rosterRequests = java.util.concurrent.atomic.AtomicInteger(0)
+        val macTurnStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val runRegistered = java.util.concurrent.atomic.AtomicBoolean(false)
+        val attach = AidenForeignRunAttachPolicy(pause = { log.add("wait $it") })
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, attach = attach, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                "/chats/chat-mac/agents" -> MockResponse().setBody(
+                    """{"version":1,"chatId":"chat-mac","turnId":"turn-1","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                )
+                "/chats/chat-mac/progress/events" -> {
+                    rosterRequests.incrementAndGet()
+                    runFeed(if (macTurnStarted.get()) rosterFrame("turn-2", 2) else rosterFrame("turn-1", 1))
+                }
+                "/chats/chat-mac/runs/current/events" -> {
+                    log.add("lookup")
+                    if (runRegistered.get()) {
+                        macRunFeed
+                    } else {
+                        // The roster can announce a turn just before its run is registered.
+                        if (runRegisters && macTurnStarted.get()) runRegistered.set(true)
+                        MockResponse().setResponseCode(404)
+                    }
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-1" } }
+            // The lookup made on opening found nothing; the first roster's turn is
+            // checked once more, and not again when the feed repeats it.
+            withTimeout(5_000) { while (log.size < 2) kotlinx.coroutines.delay(10) }
+            awaitRosterReconnects(rosterRequests, 2)
+            assertEquals(listOf("lookup", "lookup"), log.toList())
+
+            macTurnStarted.set(true)
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-2" } }
+            if (runRegisters) {
+                withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
+                assertTrue("A live foreign run offers Stop", model.canStopCurrentRun)
+            } else {
+                withTimeout(5_000) { while (log.count { it == "lookup" } < 4) kotlinx.coroutines.delay(10) }
+                awaitRosterReconnects(rosterRequests, 2)
+                assertEquals("", model.liveText.value)
+            }
+            assertEquals(
+                "Opening, the first roster, the announced turn, then one retry after waiting for the run to register",
+                listOf("lookup", "lookup", "lookup", "wait 400", "lookup"),
+                log.toList()
+            )
+        }
+    }
+
+    /** Waits until the roster feed has been reopened [count] more times, so each earlier frame was handled. */
+    private suspend fun awaitRosterReconnects(requests: java.util.concurrent.atomic.AtomicInteger, count: Int) {
+        val target = requests.get() + count
+        withTimeout(5_000) { while (requests.get() < target) kotlinx.coroutines.delay(10) }
+    }
+
+    @Test
+    fun rosterAnnouncingThisPhonesOwnFinishedTurnDoesNotLookForARun() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val lookups = java.util.concurrent.atomic.AtomicInteger(0)
+        val rosterRequests = java.util.concurrent.atomic.AtomicInteger(0)
+        val announceOwnTurn = java.util.concurrent.atomic.AtomicBoolean(false)
+        val question = AidenChatMessage(
+            id = "question-1", role = AidenChatRole.USER, text = "Compare plans", createdAt = Instant.EPOCH
+        )
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/turns" -> MockResponse().setResponseCode(202).setBody(
+                    """{"turnId":"turn-phone","streamId":"stream-phone","status":"queued","message":${wireJson.encodeToString(question)}}"""
+                )
+                "/streams/stream-phone/events" -> runFeed(
+                    "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-phone\",\"sequence\":1," +
+                        "\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"reply-1\"}}\n\n"
+                )
+                "/streams/stream-phone" -> MockResponse().setBody(
+                    """{"streamId":"stream-phone","chatId":"chat-mac","turnId":"turn-phone","state":"done","lastSequence":1,"updatedAt":"2026-10-05T10:00:00Z"}"""
+                )
+                "/chats/chat-mac/agents" -> MockResponse().setBody(
+                    """{"version":1,"chatId":"chat-mac","turnId":"turn-1","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                )
+                "/chats/chat-mac/progress/events" -> {
+                    rosterRequests.incrementAndGet()
+                    runFeed(if (announceOwnTurn.get()) rosterFrame("turn-phone", 2) else rosterFrame("turn-1", 1))
+                }
+                "/chats/chat-mac/runs/current/events" -> {
+                    lookups.incrementAndGet()
+                    MockResponse().setResponseCode(404)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-1" } }
+            withTimeout(5_000) { while (lookups.get() < 2) kotlinx.coroutines.delay(10) }
+
+            model.updateDraft("Compare plans")
+            model.send()
+            withTimeout(5_000) { model.isStarting.first { it } }
+            withTimeout(5_000) {
+                while (model.isStarting.value || model.hasActiveStream.value) kotlinx.coroutines.delay(10)
+            }
+            // The roster reports the phone's own turn only after its stream has ended.
+            announceOwnTurn.set(true)
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-phone" } }
+            awaitRosterReconnects(rosterRequests, 2)
+            assertEquals("Only the lookups made on opening and for the first roster", 2, lookups.get())
+        }
+    }
+
+    @Test
+    fun withoutRosterAccessAnOpenChatProbesForARunWithBackoffAndStopsInTheBackground() {
+        // Lookups and the policy's waits, in the order they happened. Each wait
+        // holds until the test releases it, standing in for the clock.
+        val log = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val release = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val registerAfterLookup = java.util.concurrent.atomic.AtomicInteger(Int.MAX_VALUE)
+        val attach = AidenForeignRunAttachPolicy(
+            probeDelaysMillis = listOf(5_000L, 10_000L, 20_000L),
+            pause = { log.add("wait $it"); release.receive() }
+        )
+        fun lookups() = log.count { it == "lookup" }
+        suspend fun awaitLog(size: Int) = withTimeout(5_000) { while (log.size < size) kotlinx.coroutines.delay(10) }
+        withForeignRunChat(initial = foreignRunChat(), attach = attach, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                "/chats/chat-mac/runs/current/events" -> {
+                    log.add("lookup")
+                    if (lookups() > registerAfterLookup.get()) macRunFeed else MockResponse().setResponseCode(404)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            // The first wait starts only once the lookup made on opening has answered.
+            awaitLog(2)
+            assertEquals(listOf("lookup", "wait 5000"), log.toList())
+            // Each probe answers before the next, longer wait; the last wait repeats.
+            repeat(3) { release.send(Unit) }
+            awaitLog(8)
+            assertEquals(
+                listOf("lookup", "wait 5000", "lookup", "wait 10000", "lookup", "wait 20000", "lookup", "wait 20000"),
+                log.toList()
+            )
+
+            // In the background the pending probe is dropped.
+            model.stopProgressObservation()
+            val backgrounded = log.size
+            kotlinx.coroutines.delay(200)
+            assertEquals(backgrounded, log.size)
+
+            // Back on screen the probe starts over and finds a run the Mac
+            // started after the lookup made on reopening.
+            registerAfterLookup.set(lookups() + 1)
+            model.startProgressObservation()
+            awaitLog(backgrounded + 2)
+            assertEquals(listOf("lookup", "wait 5000"), log.drop(backgrounded))
+            release.send(Unit)
+            withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
+            assertEquals(listOf("lookup", "wait 5000", "lookup"), log.drop(backgrounded))
+        }
+    }
+
+    @Test
+    fun aTitleRefreshHoldingAForeignRunsReplyRetiresItsCardWhileRecoveryRetries() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val runEnded = java.util.concurrent.atomic.AtomicBoolean(false)
+        val failedRead = CountDownLatch(1)
+        val answer = AidenChatMessage("reply-mac", AidenChatRole.ASSISTANT, "Visible answer", createdAt = Instant.EPOCH)
+        // The title is settled with the run, so the title refresh keeps reading until the run has ended.
+        fun chat() = if (runEnded.get()) foreignRunChat(listOf(answer)) else foreignRunChat().apply { titlePending = true }
+        withForeignRunChat(initial = chat(), features = listOf(
+            "phone-run-control-v1", AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE,
+            AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_METADATA_FEATURE
+        ), route = { path, _ ->
+            when (path) {
+                // Transcript reads, including the recovery after the run ends, page the
+                // latest messages; every one of them fails once the run is over.
+                "/chats/chat-mac/messages" -> if (runEnded.get()) {
+                    failedRead.countDown()
+                    MockResponse().setResponseCode(500).setBody("""{"code":"internal_error","message":"Try again."}""")
+                } else chat().let {
+                    MockResponse().setBody(wireJson.encodeToString(AidenChatMessagesWindow(
+                        it.id, it.revision, it.messages, hasOlder = false, workspaceId = it.workspaceId, title = it.title,
+                        titlePending = it.titlePending, createdAt = it.createdAt, updatedAt = it.updatedAt
+                    )))
+                }
+                // Only the title refresh reads the whole chat.
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(chat()))
+                "/chats/chat-mac/runs/current/events" -> runFeed(
+                    runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                        runFrame(2, "text_delta", """{"text":"Visible answer"}""")
+                )
+                "/runs/run-mac/events" -> {
+                    runEnded.set(true)
+                    runFeed(
+                        runFrame(3, "done", """{"messageId":"reply-mac"}""", terminal = true) +
+                            runFrame(3, "run.ended", """{"runId":"run-mac","chatId":"chat-mac","state":"done"}""", terminal = true)
+                    )
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.liveText.first { it == "Visible answer" } }
+            assertTrue(withContext(Dispatchers.IO) { failedRead.await(10, TimeUnit.SECONDS) })
+            withTimeout(10_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "reply-mac" } == true } }
+            // The reply is in the transcript now, so its finished live card goes, though
+            // the recovery that was keeping it on screen never gets a page.
+            withTimeout(2_000) { model.liveText.first { it.isEmpty() } }
+            assertFalse(AidenChatScroll.showsLiveCard(model.streamState.value, model.liveText.value.isNotEmpty()))
+            // The failed read's banner goes with it, since the reply it was recovering is shown.
+            assertNull(model.presentedError.value)
         }
     }
 
@@ -598,6 +1074,385 @@ class AidenChatTest {
         )
     }
 
+    private val answeredQuestionnaireJson = """{"version":1,"outcome":"answered","items":[""" +
+        """{"question":"Which database?","header":"Database","kind":"option","answers":["Postgres"]},""" +
+        """{"question":"Which extras?","header":"Extras","kind":"multi","answers":["Auth","Billing"]},""" +
+        """{"question":"Anything else?","header":"Notes","kind":"custom","answers":["Keep it small"]},""" +
+        """{"question":"Deploy target?","header":"Deploy","kind":"skipped","answers":[]}]}"""
+
+    private fun questionnaireTimelineJson(
+        questionnaire: String = answeredQuestionnaireJson,
+        toolName: String = "ask_user_question",
+        status: String = "completed"
+    ) = """{"version":3,"generationId":"generation-questions","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+        """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},""" +
+        """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"$toolName","label":"Ask","status":"$status","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":7,"questionnaire":$questionnaire},""" +
+        """{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"run_command","label":"Run command","status":"completed","startedAt":1500,"updatedAt":1600,"finishedAt":1600,"contentOffset":7}]}"""
+
+    @Test
+    fun answeredQuestionnaireBecomesItsOwnRowAtItsPositionAndLeavesTheActivityTally() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
+        val message = AidenChatMessage("message-q", AidenChatRole.ASSISTANT, "Before.After.",
+            timeline = timeline, createdAt = Instant.EPOCH)
+        assertTrue(message.isWireSafe)
+
+        val recap = timeline.steps[1].questionnaireRecap
+        assertNotNull(recap)
+        assertEquals(AidenQuestionnaireRecap.Outcome.ANSWERED, recap!!.outcome)
+        assertEquals(listOf("Which database?", "Which extras?", "Anything else?", "Deploy target?"),
+            recap.items.map { it.question })
+
+        // The recap splits the activity at its offset: the read before it and the
+        // command after it stay activity lines on either side of the answers.
+        val rows = AidenChronologicalProjection.rows(message.text, "", timeline)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:tool-1", "QUESTIONNAIRE:tool-2", "TOOL:tool-3", "TEXT:After."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+        assertEquals(recap, rows[2].questionnaire)
+
+        // Two tool calls are activity; the questionnaire is not counted.
+        assertEquals("Explored 1 file, ran 1 command", AidenAgentActivityPresentation.summary(timeline))
+        assertEquals(listOf("tool-1", "tool-3"),
+            AidenAgentActivityPresentation.activityTimeline(timeline).steps.map { it.id })
+
+        // The chat cache re-encodes the step; the recap survives the round trip.
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        assertEquals(recap, cached.steps[1].questionnaireRecap)
+        // An absent recap stays absent on the wire rather than turning into null.
+        assertFalse(wireJson.encodeToString(timeline.steps[0]).contains("questionnaire"))
+    }
+
+    @Test
+    fun liveFallbackListsTheTimelineCallsAndRecapsInsteadOfTheStreamToolRows() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
+        // The stream's text has not reached the steps' offset yet, so the reply has no
+        // chronological rows and falls back to listing activity.
+        assertNull(AidenChronologicalProjection.rows("Bef", "", timeline))
+        // Live rows carry stream ids that match no step's toolCallId.
+        val liveTools = listOf(
+            AidenLiveTool("tool_1", "read_file", "completed"),
+            AidenLiveTool("tool_2", "ask_user_question", "completed"),
+            AidenLiveTool("tool_3", "run_command")
+        )
+
+        assertEquals(listOf("tool-1", "tool-3"),
+            AidenAgentActivityPresentation.liveToolSteps(timeline).map { it.id })
+        assertEquals(listOf("Which database?", "Which extras?", "Anything else?", "Deploy target?"),
+            AidenAgentActivityPresentation.questionnaireSteps(timeline).single().questionnaireRecap!!.items.map { it.question })
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline))
+
+        // A recap alone still covers its call: the plain question row stays hidden.
+        val recapOnly = timeline.copy(steps = listOf(timeline.steps[1]))
+        assertTrue(AidenAgentActivityPresentation.liveToolSteps(recapOnly).isEmpty())
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, recapOnly))
+
+        // Before the timeline knows any call, the stream's rows are all there is.
+        assertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, null))
+        assertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline.copy(steps = emptyList())))
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(emptyList(), null))
+        assertTrue(AidenAgentActivityPresentation.questionnaireSteps(null).isEmpty())
+    }
+
+    @Test
+    fun questionnaireAnswersReadAsChoicesQuotesOrTheReasonTheyWereUnanswered() {
+        val recap = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(answeredQuestionnaireJson))!!
+        assertEquals(
+            listOf(
+                AidenQuestionnaireRecap.Answer.Choice("Postgres"),
+                AidenQuestionnaireRecap.Answer.Choice("Auth, Billing"),
+                AidenQuestionnaireRecap.Answer.Custom("Keep it small"),
+                AidenQuestionnaireRecap.Answer.Unanswered(AidenQuestionnaireRecap.Outcome.ANSWERED)
+            ),
+            recap.items.map(recap::answer)
+        )
+        for (outcome in listOf("dismissed", "expired")) {
+            val closed = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(
+                """{"version":1,"outcome":"$outcome","items":[{"question":"Which database?","header":"Database","kind":"skipped","answers":[]}]}"""
+            ))!!
+            assertEquals(outcome, closed.outcome.wire)
+            assertTrue(closed.answer(closed.items.single()) is AidenQuestionnaireRecap.Answer.Unanswered)
+        }
+    }
+
+    @Test
+    fun malformedQuestionnaireIsDroppedWhileTheStepAndChatStillRender() {
+        fun item(kind: String, answers: String, question: String = "Which database?", header: String = "Database") =
+            """{"question":"$question","header":"$header","kind":"$kind","answers":$answers}"""
+        fun recap(outcome: String = "answered", version: String = "1", vararg items: String) =
+            """{"version":$version,"outcome":"$outcome","items":[${items.joinToString(",")}]}"""
+        val oneItem = item("option", """["Postgres"]""")
+        val malformed = mapOf(
+            "option with two answers" to recap(items = arrayOf(item("option", """["Postgres","MySQL"]"""))),
+            "option with no answer" to recap(items = arrayOf(item("option", "[]"))),
+            "multi with a repeated label" to recap(items = arrayOf(item("multi", """["Auth","Auth"]"""))),
+            "multi with six labels" to recap(items = arrayOf(item("multi", """["a","b","c","d","e","f"]"""))),
+            "custom with two answers" to recap(items = arrayOf(item("custom", """["a","b"]"""))),
+            "skipped with an answer" to recap(items = arrayOf(item("skipped", """["Postgres"]"""))),
+            "answer on a dismissed card" to recap(outcome = "dismissed", items = arrayOf(oneItem)),
+            "answer on an expired card" to recap(outcome = "expired", items = arrayOf(oneItem)),
+            "no items" to recap(),
+            "five items" to recap(items = Array(5) { oneItem }),
+            "unknown kind" to recap(items = arrayOf(item("ranking", """["Postgres"]"""))),
+            "unknown outcome" to recap(outcome = "ignored", items = arrayOf(oneItem)),
+            "future version" to recap(version = "2", items = arrayOf(oneItem)),
+            "string version" to recap(version = "\"1\"", items = arrayOf(oneItem)),
+            "non-string answer" to recap(items = arrayOf(item("option", "[7]"))),
+            "answers not a list" to recap(items = arrayOf(item("option", "\"Postgres\""))),
+            "blank question" to recap(items = arrayOf(item("option", """["Postgres"]""", question = "  "))),
+            "header over 16 characters" to recap(items = arrayOf(item("option", """["Postgres"]""", header = "A".repeat(17)))),
+            "control character" to recap(items = arrayOf(item("option", """["Post\u0007gres"]"""))),
+            "label over 60 characters" to recap(items = arrayOf(item("option", """["${"x".repeat(61)}"]"""))),
+            "not an object" to "\"answered\"",
+            "null" to "null"
+        )
+        for ((case, questionnaire) in malformed) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson(questionnaire))
+            val step = timeline.steps[1]
+            assertNull(case, step.questionnaire)
+            assertEquals(case, "ask_user_question", step.toolName)
+            assertTrue(case, timeline.isRendererSafe(contentLength = 13))
+            // Without a recap the questionnaire is an ordinary activity line again.
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertEquals(case, listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+        }
+
+        // A literal tab or newline is allowed inside a custom answer.
+        val multiline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson(
+            recap(items = arrayOf(item("custom", """["Line one\nLine two"]"""))))
+        )
+        assertEquals("Line one\nLine two", multiline.steps[1].questionnaireRecap?.items?.single()?.answers?.single())
+    }
+
+    @Test
+    fun recapOutsideACompletedAskUserQuestionStepKeepsTheActivityLine() {
+        for ((toolName, status) in listOf("ask_user_question" to "cancelled", "read_file" to "completed")) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+                questionnaireTimelineJson(toolName = toolName, status = status)
+            )
+            assertNull(timeline.steps[1].questionnaireRecap)
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertTrue(rows.none { it.kind == AidenChronologicalRow.Kind.QUESTIONNAIRE })
+            assertEquals(listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+            assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        }
+    }
+
+    private fun fixtureVisualMessage(): AidenChatMessage {
+        val data = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
+        val chat = wireJson.decodeFromJsonElement(AidenChat.serializer(), Json.parseToJsonElement(data).jsonObject.getValue("chat"))
+        return chat.messages.single { it.id == "message_fixture_assistant_01" }
+    }
+
+    private fun visualWireMessage(visuals: String): AidenChatMessage = wireJson.decodeFromString(
+        """
+            {"id":"message-visuals","role":"assistant","text":"Here it is.","createdAt":"2026-08-25T18:00:00.000Z",
+             "attachments":[{"id":"visual-snapshot_aa","name":"Chart.png","mimeType":"image/png","kind":"image","size":10}],
+             "visuals":$visuals}
+        """.trimIndent()
+    )
+
+    @Test
+    fun fixtureChatDecodesItsInlineVisualsInReplyOrder() {
+        val message = fixtureVisualMessage()
+        val visuals = message.visuals.orEmpty()
+        assertEquals(listOf("artifact_fixture_01", "ui_fixture_01"), visuals.map { it.id })
+        assertEquals(listOf("html", "ui"), visuals.map { it.kind })
+        assertEquals(listOf("call-1", "call-2"), visuals.map { it.toolCallId })
+        assertEquals("wide", visuals[0].layout)
+        assertNull(visuals[1].layout)
+        assertEquals("Plan options\nSolo: \$12.00\nTeam: \$60.00", visuals[1].fallbackText)
+        assertTrue(message.isWireSafe)
+    }
+
+    @Test
+    fun eachVisualFollowsTheToolStepThatDrewItAndUnmatchedVisualsTrail() {
+        val message = fixtureVisualMessage()
+        val rows = AidenChronologicalProjection.rows(
+            message.text, message.reasoning.orEmpty(), message.timeline, message.visuals.orEmpty()
+        )!!
+        // Both tool steps share content offset 0, yet each visual sits right after its own step.
+        assertEquals(
+            listOf("TOOL:call-1", "VISUAL:artifact_fixture_01", "TOOL:call-2", "VISUAL:ui_fixture_01", "TEXT:"),
+            rows.map { row ->
+                when (row.kind) {
+                    AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                    AidenChronologicalRow.Kind.VISUAL -> "VISUAL:" + row.visual?.id
+                    else -> "${row.kind}:"
+                }
+            }
+        )
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+
+        val orphan = AidenChatVisual(id = "ui_orphan", kind = "ui", title = "Orphan", toolCallId = "call-9")
+        val trailing = AidenChronologicalProjection.rows(
+            message.text, "", message.timeline, message.visuals.orEmpty() + orphan
+        )!!
+        assertEquals(AidenChronologicalRow.Kind.VISUAL, trailing.last().kind)
+        assertEquals("ui_orphan", trailing.last().visual?.id)
+        // Without visuals, the steps group as before.
+        assertEquals(
+            listOf(AidenChronologicalRow.Kind.TOOL, AidenChronologicalRow.Kind.TEXT),
+            AidenChronologicalProjection.rows(message.text, "", message.timeline)?.map { it.kind }
+        )
+    }
+
+    @Test
+    fun malformedVisualIsDroppedWithoutLosingItsMessage() {
+        val message = visualWireMessage(
+            """
+            [
+              {"id":"ui_untitled","kind":"ui"},
+              {"id":"ui_kind","kind":"chart","title":"Bad kind"},
+              {"id":"ui_call","kind":"ui","title":"Bad call","toolCallId":"tool-1"},
+              {"id":"ui_layout","kind":"ui","title":"Bad layout","layout":"narrow"},
+              {"id":"ui_long","kind":"ui","title":"Long","fallbackText":"${"x".repeat(4_001)}"},
+              "not an object",
+              {"id":"html_ok","kind":"html","title":"Chart","snapshotAttachmentId":"visual-snapshot_aa","futureKey":1},
+              {"id":"html_ok","kind":"html","title":"Duplicate"}
+            ]
+            """.trimIndent()
+        )
+        assertEquals("Here it is.", message.text)
+        assertEquals(listOf("html_ok"), message.visuals?.map { it.id })
+        assertEquals("Chart", message.visuals?.single()?.title)
+        assertTrue(message.isWireSafe)
+
+        val chat = AidenChat(
+            id = "chat-visuals", workspaceId = "workspace-1", title = "Visuals", messages = listOf(message),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "rev_1"
+        )
+        assertEquals(1, chat.messages.size)
+    }
+
+    @Test
+    fun moreThanFortyVisualsFailTheMessage() {
+        val forty = (1..40).map { AidenChatVisual(id = "ui_$it", kind = "ui", title = "Visual $it") }
+        val base = AidenChatMessage("message-1", AidenChatRole.ASSISTANT, "Text", createdAt = Instant.EPOCH)
+        assertTrue(base.copy(visuals = forty).isWireSafe)
+        assertFalse(base.copy(visuals = forty + AidenChatVisual(id = "ui_41", kind = "ui", title = "Visual 41")).isWireSafe)
+    }
+
+    @Test
+    fun snapshotAttachmentsNeverReachTheOrdinaryAttachmentList() {
+        val message = fixtureVisualMessage()
+        val photo = AidenMessageAttachment("photo-1", "Photo.png", "image/png", AidenAttachmentKind.IMAGE, 1_024)
+        val namedSnapshot = AidenMessageAttachment("named-snapshot", "Named.png", "image/png", AidenAttachmentKind.IMAGE, 1_024)
+        val strayPrefixed = AidenMessageAttachment(
+            "visual-snapshot_${"3".repeat(64)}", "Stray.png", "image/png", AidenAttachmentKind.IMAGE, 1_024
+        )
+        val notes = AidenMessageAttachment("notes", "notes.txt", "text/plain", AidenAttachmentKind.TEXT, 12)
+        val visuals = message.visuals.orEmpty() +
+            AidenChatVisual(id = "ui_named", kind = "ui", title = "Named", snapshotAttachmentId = "named-snapshot")
+        val attachments = message.attachments.orEmpty() + photo + namedSnapshot + strayPrefixed + notes
+
+        assertEquals(listOf(photo), aidenEligibleImageAttachments(attachments, visuals))
+        assertEquals(listOf(photo, notes), aidenVisibleMessageAttachments(attachments, visuals))
+        // A message without visuals keeps every ordinary image.
+        assertEquals(listOf(photo, namedSnapshot), aidenEligibleImageAttachments(listOf(photo, namedSnapshot)))
+    }
+
+    @Test
+    fun visualRowShowsSnapshotThenFallbackTextThenTitle() {
+        val message = fixtureVisualMessage()
+        val attachments = message.attachments.orEmpty()
+        val (html, ui) = message.visuals.orEmpty()
+
+        val htmlDisplay = aidenVisualDisplay(html, attachments)
+        assertEquals(html.snapshotAttachmentId, htmlDisplay.snapshot?.id)
+        assertNull(htmlDisplay.text)
+
+        val uiDisplay = aidenVisualDisplay(ui, attachments)
+        assertEquals(ui.snapshotAttachmentId, uiDisplay.snapshot?.id)
+        assertEquals(ui.fallbackText, uiDisplay.text)
+
+        // A snapshot the message does not carry is no snapshot at all.
+        val fallbackOnly = aidenVisualDisplay(ui, emptyList())
+        assertNull(fallbackOnly.snapshot)
+        assertEquals(ui.fallbackText, fallbackOnly.text)
+
+        val titleOnly = aidenVisualDisplay(html, emptyList())
+        assertNull(titleOnly.snapshot)
+        assertEquals("Weekly total", titleOnly.text)
+    }
+
+    @Test
+    fun htmlVisualWithoutASnapshotIsLeftToItsUnsupportedNotice() {
+        val message = fixtureVisualMessage()
+        val (html, ui) = message.visuals.orEmpty()
+        // With snapshots, both visuals get rows.
+        assertEquals(listOf(html.id, ui.id), aidenVisualsWithRows(message).map { it.id })
+
+        // Without one, the html visual is represented only by its notice; the ui visual keeps its fallback row.
+        val noSnapshots = message.copy(attachments = emptyList())
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(noSnapshots).map { it.id })
+        assertEquals(listOf(html.id), aidenUnsupportedHtmlArtifacts(noSnapshots).map { it.id })
+
+        // A ui visual with neither snapshot nor fallback text still shows its title.
+        val bareUi = noSnapshots.copy(visuals = listOf(ui.copy(fallbackText = null)))
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(bareUi).map { it.id })
+
+        // The chronological transcript built from those visuals carries no html row either.
+        val rows = AidenChronologicalProjection.rows(
+            noSnapshots.text, "", noSnapshots.timeline, aidenVisualsWithRows(noSnapshots)
+        )!!
+        assertEquals(listOf(ui.id), rows.mapNotNull { it.visual?.id })
+    }
+
+    @Test
+    fun lateSnapshotRefreshRetriesBrieflyForTheNewestReplyStillMissingOne() {
+        val policy = AidenVisualSnapshotRefreshPolicy()
+        val settled = fixtureVisualMessage()
+        val pending = settled.copy(attachments = emptyList())
+        val soon = pending.createdAt.plusSeconds(5)
+
+        // Every visual already has its snapshot: nothing to wait for.
+        assertNull(policy.nextDelayMillis(settled, attempt = 0, now = soon))
+        // Missing snapshots: three bounded re-reads, then stop. Measured from settlement the
+        // re-reads land at 4 s, 10 s and 20 s, the same schedule iOS uses.
+        val waits = (0..3).map { policy.nextDelayMillis(pending, it, soon) }
+        assertNull(waits.last())
+        assertEquals(listOf(4_000L, 10_000L, 20_000L), waits.filterNotNull().runningReduce { elapsed, wait -> elapsed + wait })
+        // One visual still missing its snapshot is enough to retry.
+        val partial = settled.copy(attachments = settled.attachments.orEmpty().take(1))
+        assertEquals(4_000L, policy.nextDelayMillis(partial, 0, soon))
+        // An old reply is not polled for.
+        assertNull(policy.nextDelayMillis(pending, 0, pending.createdAt.plusSeconds(180)))
+        // A long turn counts from when it finished, not from when it started.
+        val finishedRecently = pending.copy(
+            createdAt = pending.createdAt.minusSeconds(600),
+            timeline = pending.timeline!!.copy(finishedAt = soon.minusSeconds(10).toEpochMilli().toDouble())
+        )
+        assertEquals(4_000L, policy.nextDelayMillis(finishedRecently, 0, soon))
+        // No visuals, a user message, or no message: nothing to do.
+        assertNull(policy.nextDelayMillis(pending.copy(visuals = null), 0, soon))
+        assertNull(policy.nextDelayMillis(pending.copy(role = AidenChatRole.USER), 0, soon))
+        assertNull(policy.nextDelayMillis(null, 0, soon))
+
+        // Only the newest assistant reply is watched.
+        val later = AidenChatMessage("reply-later", AidenChatRole.ASSISTANT, "No visuals", createdAt = soon)
+        val question = AidenChatMessage("question", AidenChatRole.USER, "Thanks", createdAt = soon)
+        assertEquals(pending.id, policy.watchedMessage(listOf(pending, question))?.id)
+        assertEquals(later.id, policy.watchedMessage(listOf(pending, question, later))?.id)
+    }
+
+    @Test
+    fun htmlArtifactNoticeIsSuppressedOnlyWhenItsVisualHasASnapshot() {
+        val message = fixtureVisualMessage()
+        assertEquals(emptyList<AidenHtmlArtifact>(), aidenUnsupportedHtmlArtifacts(message))
+
+        val withoutSnapshot = message.copy(visuals = message.visuals?.map { it.copy(snapshotAttachmentId = null) })
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(withoutSnapshot).map { it.id })
+
+        val snapshotMissing = message.copy(attachments = emptyList())
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(snapshotMissing).map { it.id })
+
+        val noVisuals = message.copy(visuals = null)
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(noVisuals).map { it.id })
+    }
+
     @Test
     fun coldReplayRebuildsPrefixWarmReconnectUsesMemoryAndTerminalRejectsLateEvents() = assertStreamRecovery()
 
@@ -694,6 +1549,24 @@ class AidenChatTest {
                 }
                 val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
                 viewModels.put("chat", model)
+                // Sample between every task on the main thread, where Compose
+                // reads state for a frame: the reply must always be on screen
+                // exactly once, as the live card or as the final message.
+                // With an independent owner holding the first read, this
+                // model's own initial load is served the final transcript while
+                // the stream is still replaying, so only the variants where the
+                // reply can arrive solely through completion are checked.
+                val handoffViolations = mutableListOf<String>()
+                val handoffSampler = launch {
+                    while (isActive) {
+                        val hasFinal = model.chat.value?.messages?.any { it.id == "final-reply" } == true
+                        val hasLiveCard = model.liveText.value.isNotEmpty()
+                        val ended = model.streamState.value?.isTerminal == true
+                        if (hasFinal && hasLiveCard) handoffViolations += "both"
+                        if (ended && !hasFinal && !hasLiveCard) handoffViolations += "neither"
+                        yield()
+                    }
+                }
                 withTimeout(8_000) { model.streamState.first { it == AidenStreamState.DONE } }
                 if (holdInitialLoad) {
                     withTimeout(5_000) { model.hasActiveStream.first { !it } }
@@ -723,6 +1596,8 @@ class AidenChatTest {
                 assertTrue(eventPaths[1].endsWith("after=1"))
                 assertEquals(if (holdInitialLoad) null else 27, AidenChatCache(directory).loadActiveStream("instance-recovery", initial.id)?.lastSequence)
                 assertEquals(AidenStreamState.DONE, model.streamState.value)
+                handoffSampler.cancel()
+                if (!independentOwner) assertEquals(emptyList<String>(), handoffViolations.distinct())
                 model.updateDraft("Next turn")
                 assertEquals(holdInitialLoad, model.canSend)
                 assertTrue(requests.none { it.endsWith("/turns") })
@@ -1784,6 +2659,48 @@ class AidenChatTest {
     }
 
     @Test
+    fun testAgentRunActivityMatchesMacPresentationLanguage() {
+        // Persisted labels as Google Antigravity steps record them; the Mac and
+        // iOS presentation tests expect the same lines.
+        data class Case(
+            val toolName: String,
+            val label: String,
+            val status: AidenAgentStepStatus,
+            val target: String?,
+            val detail: String?,
+            val line: String
+        )
+        val expected = listOf(
+            Case("delete_file", "Delete file", AidenAgentStepStatus.RUNNING, "old.ts", null, "Deleting old.ts"),
+            Case("delete_file", "Delete file", AidenAgentStepStatus.COMPLETED, "old.ts", null, "Deleted old.ts"),
+            Case("move_file", "Move file", AidenAgentStepStatus.COMPLETED, "src/a.ts", null, "Moved src/a.ts"),
+            Case("web_fetch", "Fetch web page", AidenAgentStepStatus.COMPLETED, null, null, "Fetched web page"),
+            Case("agent_subagents", "Run subagents", AidenAgentStepStatus.COMPLETED, null, null, "Ran subagents"),
+            Case("agent_tool", "Use agent tool", AidenAgentStepStatus.RUNNING, null, null, "Using an agent tool"),
+            Case("agent_context_rebuilt", "Started a fresh agent session from this chat", AidenAgentStepStatus.COMPLETED, null, null, "Started a fresh agent session"),
+            Case("run_command", "Run command", AidenAgentStepStatus.COMPLETED, null, "a command", "Ran a command")
+        )
+        expected.forEachIndexed { index, case ->
+            val step = AidenAgentStep(
+                id = "tool-$index",
+                order = index,
+                kind = AidenAgentStep.Kind.TOOL,
+                toolCallId = "call-$index",
+                toolName = case.toolName,
+                label = case.label,
+                status = case.status,
+                startedAt = 1000.0,
+                updatedAt = 2000.0,
+                finishedAt = if (case.status == AidenAgentStepStatus.COMPLETED) 2000.0 else null,
+                contentOffset = 0,
+                target = case.target,
+                detail = case.detail
+            )
+            assertEquals(case.toolName, case.line, AidenAgentActivityPresentation.line(step))
+        }
+    }
+
+    @Test
     fun testAgentActivityPresentation() {
         val readStep = AidenAgentStep(
             id = "tool-1",
@@ -2249,6 +3166,255 @@ class AidenChatTest {
     }
 
     @Test
+    fun aTitleRefreshHoldingTheEndedRunsReplyRetiresTheLiveCard() {
+        assertTitleRefreshAfterTerminal("done", "{\"messageId\":\"final-reply\"}", outcome = null, refreshHoldsReply = true)
+    }
+
+    @Test
+    fun aTitleRefreshHoldingACancelledRunsPartialReplyRetiresTheLiveCard() {
+        assertTitleRefreshAfterTerminal("cancelled", "{\"source\":\"device\"}",
+            AidenMessageOutcomeStatus.CANCELLED, refreshHoldsReply = true)
+    }
+
+    @Test
+    fun aTitleRefreshHoldingAFailedRunsPartialReplyRetiresTheLiveCard() {
+        assertTitleRefreshAfterTerminal("error", "{\"code\":\"internal_error\",\"message\":\"Provider failed\"}",
+            AidenMessageOutcomeStatus.FAILED, refreshHoldsReply = true)
+    }
+
+    @Test
+    fun aTitleRefreshWithoutTheCancelledRunsReplyKeepsTheLiveCard() {
+        // The chat already ends with an earlier cancelled reply; that one is not this run's.
+        assertTitleRefreshAfterTerminal("cancelled", "{\"source\":\"server\"}",
+            AidenMessageOutcomeStatus.CANCELLED, refreshHoldsReply = false)
+    }
+
+    @Test
+    fun aGapReconciliationPublishingTheReplyBeforeTerminalRetiresTheLiveCard() {
+        // A mid-run read publishes the reply before the run is cancelled, so the reply
+        // is new to the stream even though the chat already held it at the terminal.
+        assertGapReconciliationRetiresLiveCard()
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun assertTitleRefreshAfterTerminal(
+        terminalType: String, terminalPayload: String, outcome: AidenMessageOutcomeStatus?, refreshHoldsReply: Boolean
+    ) {
+        val directory = kotlin.io.path.createTempDirectory("ended-reply-").toFile()
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val owners = ViewModelStore()
+        val releaseEvents = CountDownLatch(1)
+        val releaseRetries = CountDownLatch(1)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val earlier = listOf(
+            AidenChatMessage("earlier-prompt", AidenChatRole.USER, "Earlier", createdAt = Instant.EPOCH),
+            AidenChatMessage("earlier-reply", AidenChatRole.ASSISTANT, "Stopped early", createdAt = Instant.EPOCH,
+                outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.CANCELLED)))
+        val initial = AidenChat(id = "chat-ended", workspaceId = "workspace-ended", title = "Ended", messages = earlier,
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1", titlePending = true)
+        val reply = "The final reply"
+        val runReply = AidenChatMessage("final-reply", AidenChatRole.ASSISTANT, reply, createdAt = Instant.EPOCH,
+            outcome = outcome?.let { AidenMessageOutcome(it) })
+        val final = initial.copy(revision = "r2", titlePending = null,
+            messages = if (refreshHoldsReply) earlier + runReply else earlier)
+        val wire = Json { explicitNulls = false; encodeDefaults = true }
+        fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
+            "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-ended\",\"sequence\":$sequence," +
+                "\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.requestUrl!!.encodedPath.endsWith("/streams/stream-ended/events") -> {
+                    releaseEvents.await(5, TimeUnit.SECONDS)
+                    MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                        event(1, "tool_started", "{\"toolId\":\"tool-1\",\"name\":\"read_file\"}") +
+                            event(2, "tool_finished", "{\"toolId\":\"tool-1\",\"status\":\"succeeded\"}") +
+                            event(3, "text_delta", "{\"text\":\"$reply\"}") +
+                            event(4, terminalType, terminalPayload, terminal = true))
+                }
+                request.requestUrl!!.encodedPath.endsWith("/chats/chat-ended") -> when (reads.incrementAndGet()) {
+                    1 -> MockResponse().setBody(wire.encodeToString(initial))
+                    // The terminal read fails, so terminal recovery stays pending.
+                    2 -> MockResponse().setResponseCode(503).setBody(
+                        """{"error":{"code":"internal_error","message":"Held settlement","requestId":"r","retryable":true}}""")
+                    // The title refresh reads the chat with the run's reply in it.
+                    3 -> MockResponse().setBody(wire.encodeToString(final))
+                    else -> {
+                        releaseRetries.await(10, TimeUnit.SECONDS)
+                        MockResponse().setBody(wire.encodeToString(final))
+                    }
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(main)
+        var model: AidenChatViewModel? = null
+        try {
+            runBlocking(main) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(instanceId = "instance-ended", deviceId = "device-ended",
+                    endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                    capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+                val cache = AidenChatCache(directory)
+                cache.saveChat(initial, "instance-ended")
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
+                    scope = CoroutineScope(main + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-ended", "stream-ended", "turn-ended", 0),
+                    "instance-ended", initial.id)
+                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                model = vm
+                owners.put("chat", vm)
+                withTimeout(5_000) { vm.isLoading.first { !it } }
+                releaseEvents.countDown()
+                withTimeout(5_000) { vm.presentedError.first { it == "Held settlement" } }
+                assertEquals("the ended run keeps its card while its transcript is unread", reply, vm.liveText.value)
+                assertEquals(listOf("tool-1"), vm.tools.value.map { it.id })
+
+                withTimeout(5_000) { vm.chat.first { it?.revision == "r2" } }
+                assertEquals(final.messages.map { it.id }, vm.chat.value?.messages?.map { it.id })
+                // The screen keeps the card while any live output remains, tool rows included.
+                val hasLiveOutput = vm.liveText.value.isNotEmpty() || vm.reasoning.value.isNotEmpty() || vm.tools.value.isNotEmpty()
+                val showsLiveCard = AidenChatScroll.showsLiveCard(vm.streamState.value, hasLiveOutput)
+                if (refreshHoldsReply) {
+                    assertFalse("the reply must not show twice", showsLiveCard)
+                    assertFalse(vm.hasActiveStream.value)
+                    assertNull("the settled run clears its recovery warning", vm.presentedError.value)
+                } else {
+                    assertTrue("the run's output stays visible until its reply is read", showsLiveCard)
+                    assertEquals(reply, vm.liveText.value)
+                    assertTrue(vm.hasActiveStream.value)
+                }
+            }
+        } finally {
+            releaseEvents.countDown()
+            releaseRetries.countDown()
+            runBlocking(main) {
+                val job = model?.viewModelScope?.coroutineContext?.get(Job)
+                owners.clear()
+                job?.join()
+            }
+            Dispatchers.resetMain()
+            main.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun assertGapReconciliationRetiresLiveCard() {
+        val directory = kotlin.io.path.createTempDirectory("gap-reconcile-").toFile()
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val owners = ViewModelStore()
+        val scopeJob = Job()
+        val releaseEvents = CountDownLatch(1)
+        val gapRead = java.util.concurrent.atomic.AtomicBoolean(false)
+        val terminalFailed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val earlier = listOf(
+            AidenChatMessage("earlier-prompt", AidenChatRole.USER, "Earlier", createdAt = Instant.EPOCH),
+            AidenChatMessage("earlier-reply", AidenChatRole.ASSISTANT, "Stopped early", createdAt = Instant.EPOCH,
+                outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.CANCELLED)))
+        val initial = AidenChat(id = "chat-gap", workspaceId = "workspace-gap", title = "Gap", messages = earlier,
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1", titlePending = true)
+        val reply = "The final reply"
+        val runReply = AidenChatMessage("final-reply", AidenChatRole.ASSISTANT, reply, createdAt = Instant.EPOCH,
+            outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.CANCELLED))
+        val withReply = initial.copy(revision = "r2", messages = earlier + runReply)
+        val final = withReply.copy(revision = "r3", titlePending = null)
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val features = listOf(AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE, AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_METADATA_FEATURE)
+        val wire = Json { explicitNulls = false; encodeDefaults = true }
+        fun window(chat: AidenChat) = MockResponse().setBody(wire.encodeToString(AidenChatMessagesWindow(
+            chat.id, chat.revision, chat.messages, hasOlder = false, workspaceId = chat.workspaceId, title = chat.title,
+            titlePending = chat.titlePending, createdAt = chat.createdAt, updatedAt = chat.updatedAt)))
+        fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
+            "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-gap\",\"sequence\":$sequence," +
+                "\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (val path = request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-gap","name":"Gap Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":${json.encodeToString(features)},"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
+                "/api/aiden/v1/streams/stream-gap/events" -> {
+                    releaseEvents.await(5, TimeUnit.SECONDS)
+                    // Sequences 2 and 3 are missing, so the client reads the transcript mid-run.
+                    MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                        event(1, "tool_started", "{\"toolId\":\"tool-1\",\"name\":\"read_file\"}") +
+                            event(4, "text_delta", "{\"text\":\"$reply\"}") +
+                            event(5, "cancelled", "{\"source\":\"device\"}", terminal = true))
+                }
+                // Transcript reads page the latest messages. The gap read already holds
+                // the run's reply; the terminal read and every retry of it fail.
+                "/api/aiden/v1/chats/chat-gap/messages" -> when {
+                    releaseEvents.count > 0 -> window(initial)
+                    gapRead.compareAndSet(false, true) -> window(withReply)
+                    else -> {
+                        terminalFailed.set(true)
+                        MockResponse().setResponseCode(503).setBody(
+                            """{"error":{"code":"internal_error","message":"Terminal failed","requestId":"r","retryable":true}}""")
+                    }
+                }
+                // Only the title refresh reads the whole chat; its title settles after the run.
+                "/api/aiden/v1/chats/chat-gap" -> MockResponse().setBody(wire.encodeToString(when {
+                    terminalFailed.get() -> final
+                    releaseEvents.count > 0 -> initial
+                    else -> withReply
+                }))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(main)
+        var model: AidenChatViewModel? = null
+        try {
+            runBlocking(main) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(instanceId = "instance-gap", deviceId = "device-gap",
+                    endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                    capabilities = grants), null)
+                val cache = AidenChatCache(directory)
+                cache.saveChat(initial, "instance-gap")
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(main + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-gap", "stream-gap", "turn-gap", 0),
+                    "instance-gap", initial.id)
+                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                model = vm
+                owners.put("chat", vm)
+                withTimeout(5_000) { vm.isLoading.first { !it } }
+                releaseEvents.countDown()
+                withTimeout(5_000) { vm.presentedError.first { it == "Terminal failed" } }
+                assertEquals("the mid-run read already published the reply", earlier.map { it.id } + "final-reply",
+                    vm.chat.value?.messages?.map { it.id })
+                assertEquals(reply, vm.liveText.value)
+
+                // Terminal recovery never gets a page, but the title refresh reads the
+                // reply, so the cancelled run's card goes and the reply shows once.
+                withTimeout(10_000) { vm.liveText.first { it.isEmpty() } }
+                val hasLiveOutput = vm.liveText.value.isNotEmpty() || vm.reasoning.value.isNotEmpty() || vm.tools.value.isNotEmpty()
+                assertFalse(AidenChatScroll.showsLiveCard(vm.streamState.value, hasLiveOutput))
+                assertFalse(vm.hasActiveStream.value)
+                assertNull(vm.presentedError.value)
+            }
+        } finally {
+            releaseEvents.countDown()
+            runBlocking(main) {
+                val job = model?.viewModelScope?.coroutineContext?.get(Job)
+                owners.clear()
+                job?.join()
+            }
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            main.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun testChatCachePartitionAndActiveStream() {
         val tempDir = File(System.getProperty("java.io.tmpdir"), "aiden-cache-test-${UUID.randomUUID()}").apply { mkdirs() }
         try {
@@ -2377,7 +3543,11 @@ class AidenChatTest {
             "browser_evaluate" to "Evaluated page",
             "browser_wait_for" to "Waited for page",
             "browser_recording_start" to "Started browser recording",
-            "browser_recording_stop" to "Stopped browser recording"
+            "browser_recording_stop" to "Stopped browser recording",
+            "device_list" to "Listed simulators",
+            "device_open" to "Opened simulator",
+            "device_screenshot" to "Took simulator screenshot",
+            "device_close" to "Closed simulator"
         )
         for ((name, expected) in browserLabels) {
             val browserStep = AidenAgentStep(
@@ -2863,6 +4033,70 @@ class AidenChatTest {
             dispatcher.close()
             server.shutdown()
             directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun runRegisteredBetweenTheOpeningLookupAndTheFirstRosterIsShownLive() {
+        val lookups = java.util.concurrent.atomic.AtomicInteger(0)
+        val openingAnswered = CountDownLatch(1)
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                // The Mac registers its run after answering the opening lookup and
+                // before this phone's first roster arrives.
+                "/chats/chat-mac/agents" -> {
+                    openingAnswered.await(10, TimeUnit.SECONDS)
+                    MockResponse().setBody(
+                        """{"version":1,"chatId":"chat-mac","turnId":"turn-mac","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                    )
+                }
+                "/chats/chat-mac/progress/events" -> {
+                    openingAnswered.await(10, TimeUnit.SECONDS)
+                    runFeed(rosterFrame("turn-mac", 1))
+                }
+                "/chats/chat-mac/runs/current/events" -> if (lookups.incrementAndGet() == 1) {
+                    openingAnswered.countDown()
+                    MockResponse().setResponseCode(404)
+                } else {
+                    macRunFeed
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
+            assertTrue("A live foreign run offers Stop", model.canStopCurrentRun)
+        }
+    }
+
+    @Test
+    fun turnAnnouncedWhileAnOlderLookupIsOutIsLookedUpWhenItAnswers() {
+        val lookups = java.util.concurrent.atomic.AtomicInteger(0)
+        val releaseOpening = CountDownLatch(1)
+        val attach = AidenForeignRunAttachPolicy(pause = {})
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, attach = attach, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                "/chats/chat-mac/agents" -> MockResponse().setBody(
+                    """{"version":1,"chatId":"chat-mac","turnId":"turn-1","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                )
+                "/chats/chat-mac/progress/events" -> runFeed(rosterFrame("turn-2", 2))
+                "/chats/chat-mac/runs/current/events" -> if (lookups.incrementAndGet() == 1) {
+                    // The opening lookup was answered before the Mac registered turn-2's run.
+                    releaseOpening.await(10, TimeUnit.SECONDS)
+                    MockResponse().setResponseCode(404)
+                } else {
+                    macRunFeed
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-2" } }
+            assertEquals("The opening lookup is still out", 1, lookups.get())
+            releaseOpening.countDown()
+            withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
         }
     }
 }

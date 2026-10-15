@@ -1,8 +1,16 @@
 package sbtbiswas.AidenOnTheGo.models
 
 import androidx.compose.runtime.Immutable
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
@@ -239,7 +247,10 @@ data class AidenAgentStep(
     val target: String? = null,
     val detail: String? = null,
     val lineChanges: AidenAgentLineChanges? = null,
-    val producedFile: AidenProducedFile? = null
+    val producedFile: AidenProducedFile? = null,
+    /** Decoded leniently: a malformed recap is dropped, never the step. */
+    @Serializable(with = AidenQuestionnaireRecapSerializer::class)
+    val questionnaire: AidenQuestionnaireRecap? = null
 ) {
     @Serializable
     enum class Kind {
@@ -249,6 +260,17 @@ data class AidenAgentStep(
 
     val isActive: Boolean
         get() = if (kind == Kind.THINKING) finishedAt == null else status?.isActive == true
+
+    /**
+     * The recap the transcript shows in place of this step's activity line:
+     * only a completed `ask_user_question` call carries one. A recap on any
+     * other step is ignored, and that step stays an ordinary activity line.
+     */
+    val questionnaireRecap: AidenQuestionnaireRecap?
+        get() = questionnaire?.takeIf {
+            kind == Kind.TOOL && toolName == AidenQuestionnaireRecap.TOOL_NAME &&
+                status == AidenAgentStepStatus.COMPLETED && it.isValid
+        }
 }
 
 @Immutable
@@ -256,13 +278,28 @@ data class AidenChronologicalRow(
     val id: String,
     val kind: Kind,
     val text: String = "",
-    val steps: List<AidenAgentStep> = emptyList()
+    val steps: List<AidenAgentStep> = emptyList(),
+    /** Set on a [Kind.QUESTIONNAIRE] row: the owner's answers, at the step's position. */
+    val questionnaire: AidenQuestionnaireRecap? = null,
+    /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
+    val visual: AidenChatVisual? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, VISUAL }
 }
 
 object AidenChronologicalProjection {
-    fun rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?): List<AidenChronologicalRow>? {
+    /**
+     * The reply in reading order. Each of [visuals] follows the tool step whose
+     * `toolCallId` drew it (a run of same-offset tool steps splits there), and
+     * visuals no step claims trail at the end. A live reply passes no visuals:
+     * snapshots exist only once the reply commits.
+     */
+    fun rows(
+        text: String,
+        reasoning: String,
+        timeline: AidenGenerationTimeline?,
+        visuals: List<AidenChatVisual> = emptyList()
+    ): List<AidenChronologicalRow>? {
         if (timeline == null || !timeline.isRendererSafe(text.length, reasoning.length)) return null
         var reasoningCursor = 0
         var hasSpan = false
@@ -275,7 +312,15 @@ object AidenChronologicalProjection {
         }
         if ((reasoning.isNotEmpty() && !hasSpan) || reasoning.substring(reasoningCursor).isNotBlank()) return null
         val steps = timeline.steps
+        val toolCallIds = steps.mapNotNullTo(HashSet()) { step ->
+            step.toolCallId.takeIf { step.kind == AidenAgentStep.Kind.TOOL }
+        }
+        val visualsByCall = visuals.filter { it.toolCallId in toolCallIds }.groupBy { it.toolCallId }
         val result = mutableListOf<AidenChronologicalRow>()
+        fun emitVisuals(drawn: List<AidenChatVisual>) {
+            drawn.forEach { result += AidenChronologicalRow("visual-${it.id}", AidenChronologicalRow.Kind.VISUAL, visual = it) }
+        }
+        val emittedCalls = HashSet<String>()
         var cursor = 0
         var index = 0
         while (index < steps.size) {
@@ -293,12 +338,27 @@ object AidenChronologicalProjection {
                     "reasoning-${step.id}", AidenChronologicalRow.Kind.REASONING, slice, listOf(step)
                 )
                 index++
+            } else if (step.questionnaireRecap != null) {
+                // An answered questionnaire reads as its recap, not as an activity line.
+                result += AidenChronologicalRow(
+                    "questionnaire-${step.id}", AidenChronologicalRow.Kind.QUESTIONNAIRE,
+                    steps = listOf(step), questionnaire = step.questionnaireRecap
+                )
+                index++
             } else {
                 val group = mutableListOf<AidenAgentStep>()
-                while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL && steps[index].contentOffset == offset) {
-                    group += steps[index++]
+                var drawn: List<AidenChatVisual> = emptyList()
+                while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL &&
+                    steps[index].questionnaireRecap == null && steps[index].contentOffset == offset
+                ) {
+                    val step = steps[index++]
+                    group += step
+                    val callId = step.toolCallId
+                    drawn = if (callId != null && emittedCalls.add(callId)) visualsByCall[callId].orEmpty() else emptyList()
+                    if (drawn.isNotEmpty()) break
                 }
                 result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
+                emitVisuals(drawn)
             }
             cursor = offset
         }
@@ -306,6 +366,7 @@ object AidenChronologicalProjection {
             val slice = text.substring(cursor)
             if (slice.isNotBlank()) result += AidenChronologicalRow("text-$cursor", AidenChronologicalRow.Kind.TEXT, slice)
         }
+        emitVisuals(visuals.filter { it.toolCallId !in toolCallIds })
         return result
     }
 }
@@ -480,8 +541,20 @@ object AidenAgentActivityPresentation {
         "browser_wait_for" to Pair("Waiting for page", "Waited for page"),
         "browser_recording_start" to Pair("Starting browser recording", "Started browser recording"),
         "browser_recording_stop" to Pair("Stopping browser recording", "Stopped browser recording"),
+        "device_list" to Pair("Listing simulators", "Listed simulators"),
+        "device_open" to Pair("Opening simulator", "Opened simulator"),
+        "device_screenshot" to Pair("Taking simulator screenshot", "Took simulator screenshot"),
+        "device_close" to Pair("Closing simulator", "Closed simulator"),
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
-        "compact_context" to Pair("Compacting context", "Compacted context")
+        "compact_context" to Pair("Compacting context", "Compacted context"),
+        "generate_image" to Pair("Generating image", "Generated image"),
+        // Activity an ACP agent (for example, Google Antigravity) ran itself.
+        "delete_file" to Pair("Deleting", "Deleted"),
+        "move_file" to Pair("Moving", "Moved"),
+        "web_fetch" to Pair("Fetching web page", "Fetched web page"),
+        "agent_subagents" to Pair("Running subagents", "Ran subagents"),
+        "agent_tool" to Pair("Using an agent tool", "Used an agent tool"),
+        "agent_context_rebuilt" to Pair("Starting a fresh agent session", "Started a fresh agent session")
     )
 
     /** Exactly one compaction: its line carries every metric. Repeated compactions
@@ -556,8 +629,39 @@ object AidenAgentActivityPresentation {
         return if (obj != null) "$verb $obj" else verb
     }
 
+    /**
+     * The timeline without answered questionnaires, which the transcript shows
+     * as their recap instead of as activity, so they leave the activity list
+     * and its tool-call tally.
+     */
+    fun activityTimeline(timeline: AidenGenerationTimeline): AidenGenerationTimeline {
+        if (timeline.steps.none { it.questionnaireRecap != null }) return timeline
+        return timeline.copy(steps = timeline.steps.filter { it.questionnaireRecap == null })
+    }
+
+    /**
+     * Tool steps a fallback live transcript lists. The stream's own tool rows
+     * carry `tool_N` ids that never match a step's `toolCallId`, so once the
+     * timeline knows the calls it is the one source. Questionnaires are left
+     * out: they render as their recap.
+     */
+    fun liveToolSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
+
+    /** Settled questionnaires, in timeline order, for a fallback transcript's recap cards. */
+    fun questionnaireSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
+
+    /**
+     * Whether a fallback live transcript lists the stream's own tool rows. Once
+     * the timeline has a tool step, its rows or a recap card already show each
+     * call, so the live rows would only repeat them.
+     */
+    fun showsLiveToolRows(tools: List<AidenLiveTool>, timeline: AidenGenerationTimeline?): Boolean =
+        tools.isNotEmpty() && timeline?.steps.orEmpty().none { it.kind == AidenAgentStep.Kind.TOOL }
+
     fun summary(timeline: AidenGenerationTimeline): String {
-        val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL }
+        val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
         if (tools.isEmpty()) {
             return if (timeline.status == AidenGenerationTimelineStatus.RUNNING) "Thinking"
             else "Thought ${duration(timeline.steps.mapNotNull { it.durationMs }.sum())}"
@@ -613,6 +717,12 @@ data class AidenChatMessage(
     val reasoning: String? = null,
     val attachments: List<AidenMessageAttachment>? = null,
     val htmlArtifacts: List<AidenHtmlArtifact>? = null,
+    /**
+     * Inline visuals in reply order (contract revision 28). Entries this
+     * version cannot use are dropped; the message itself survives.
+     */
+    @Serializable(with = AidenChatVisualListSerializer::class)
+    val visuals: List<AidenChatVisual>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
@@ -628,6 +738,8 @@ data class AidenChatMessage(
                 (attachments?.all { it.isWireSafe } ?: true) &&
                 (htmlArtifacts?.size ?: 0) <= 40 &&
                 (htmlArtifacts?.all { it.isWireSafe } ?: true) &&
+                (visuals?.size ?: 0) <= AidenChatVisual.MAX_PER_MESSAGE &&
+                (visuals?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
                 (timeline?.isRendererSafe(text.length, reasoning?.length) ?: true)
 }
@@ -643,6 +755,73 @@ data class AidenHtmlArtifact(
                 id.length <= 256 &&
                 title.isNotEmpty() &&
                 title.length <= 120
+}
+
+/**
+ * One inline visual of an assistant reply (contract revision 28): a native
+ * `render_ui` visual or a sandboxed `render_artifact` HTML visual. Phones never
+ * draw it; they show the Mac's snapshot image, else [fallbackText], else [title].
+ */
+@Serializable
+@Immutable
+data class AidenChatVisual(
+    val id: String,
+    /** `ui` or `html`; kept as a string so an unknown kind drops only this visual. */
+    val kind: String,
+    val title: String,
+    /** The timeline tool step that drew this visual. */
+    val toolCallId: String? = null,
+    /** A text description of a native visual. */
+    val fallbackText: String? = null,
+    /** An image attachment on the same message holding the Mac's snapshot. */
+    val snapshotAttachmentId: String? = null,
+    /** `wide`, or absent. */
+    val layout: String? = null
+) {
+    val isWireSafe: Boolean
+        get() = IDENTIFIER.matches(id) &&
+                (kind == KIND_UI || kind == KIND_HTML) &&
+                title.isNotEmpty() && title.trim() == title &&
+                title.codePointCount(0, title.length) <= MAX_TITLE_LENGTH &&
+                (toolCallId == null || (toolCallId.length <= 128 && toolCallId.matches(AidenChatPatterns.TOOL_CALL_ID))) &&
+                (fallbackText == null || (fallbackText.isNotEmpty() &&
+                    fallbackText.codePointCount(0, fallbackText.length) <= MAX_FALLBACK_TEXT_LENGTH)) &&
+                (snapshotAttachmentId == null || IDENTIFIER.matches(snapshotAttachmentId)) &&
+                (layout == null || layout == LAYOUT_WIDE)
+
+    companion object {
+        const val KIND_UI = "ui"
+        const val KIND_HTML = "html"
+        const val LAYOUT_WIDE = "wide"
+        const val MAX_PER_MESSAGE = 40
+        const val MAX_TITLE_LENGTH = 120
+        const val MAX_FALLBACK_TEXT_LENGTH = 4_000
+        /** Prefix of the attachment ids the Mac gives visual snapshots. */
+        const val SNAPSHOT_ATTACHMENT_PREFIX = "visual-snapshot_"
+        private val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,256}$")
+    }
+}
+
+/**
+ * Decodes `visuals` one entry at a time, keeping the first of each id and
+ * skipping any entry this version cannot use, so one odd visual never fails
+ * its message. Additive keys inside an entry are ignored.
+ */
+object AidenChatVisualListSerializer : KSerializer<List<AidenChatVisual>> {
+    private val delegate = ListSerializer(AidenChatVisual.serializer())
+    private val entryJson = Json { ignoreUnknownKeys = true }
+    override val descriptor: SerialDescriptor = delegate.descriptor
+    override fun serialize(encoder: Encoder, value: List<AidenChatVisual>) = delegate.serialize(encoder, value)
+    override fun deserialize(decoder: Decoder): List<AidenChatVisual> {
+        val json = decoder as? JsonDecoder ?: return delegate.deserialize(decoder)
+        val entries = json.decodeJsonElement() as? JsonArray ?: return emptyList()
+        val seen = HashSet<String>()
+        return entries.mapNotNull { entry ->
+            runCatching { entryJson.decodeFromJsonElement(AidenChatVisual.serializer(), entry) }
+                .getOrNull()
+                ?.takeIf { it.isWireSafe && seen.add(it.id) }
+        }
+    }
 }
 
 @Serializable
@@ -1734,6 +1913,25 @@ data class AidenChatModelSelection(
 )
 
 object AidenChatModelAuthority {
+    /** Agent-backed providers (mirroring the Mac's ACP harness list) run only in
+     *  chats open on the Mac, so the host leaves them out of the phone's catalog. */
+    val macOnlyAgentProviders: Map<String, String> = mapOf("antigravity" to "Google Antigravity")
+
+    /** For a chat the Mac last answered with a Mac-only agent model, which model
+     *  replies from this phone use instead. Null when the chat's own model is
+     *  available here, or for Bot chats, whose model is fixed. */
+    fun macOnlyAgentNotice(chat: AidenChat, catalog: AidenModelCatalog?, replyModelLabel: String?): String? {
+        if (chat.isBotChat) return null
+        val providerId = chat.providerId ?: return null
+        val agentLabel = macOnlyAgentProviders[providerId] ?: return null
+        if (catalog?.providers?.any { it.id == providerId } == true) return null
+        return if (replyModelLabel != null) {
+            "This chat used $agentLabel, which runs only on your Mac. Replies from here use $replyModelLabel."
+        } else {
+            "This chat used $agentLabel, which runs only on your Mac. Choose a model for replies from here."
+        }
+    }
+
     fun resolvedSelection(
         chat: AidenChat,
         catalog: AidenModelCatalog?,

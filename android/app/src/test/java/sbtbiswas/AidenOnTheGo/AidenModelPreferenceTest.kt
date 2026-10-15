@@ -42,6 +42,7 @@ class AidenModelPreferenceTest {
     fun azureProviderIdentityKeepsItsArtwork() {
         assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure"))
         assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure-openai-responses"))
+        assertEquals("antigravity", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("antigravity"))
     }
 
     @get:Rule
@@ -72,6 +73,32 @@ class AidenModelPreferenceTest {
         providerId = providerId, modelId = modelId,
         messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
     )
+
+    @Test
+    fun desktopStartedAgentChatSaysWhichModelRepliesFromThisPhone() {
+        // The Mac omits agent-backed providers from the phone's catalog.
+        val inventory = catalog(catalogWithoutRemembered)
+        val chat = workspaceChat(providerId = "antigravity", modelId = "gemini-3.8-flash")
+        val resolved = AidenChatModelAuthority.resolvedSelection(
+            chat = chat,
+            catalog = inventory,
+            selectedProviderId = chat.providerId,
+            selectedModelId = chat.modelId,
+            selectedThinkingLevel = null
+        )
+        assertEquals("google", resolved.providerId)
+        assertEquals(
+            "This chat used Google Antigravity, which runs only on your Mac. Replies from here use Gemini Flash.",
+            AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, "Gemini Flash")
+        )
+        assertEquals(
+            "This chat used Google Antigravity, which runs only on your Mac. Choose a model for replies from here.",
+            AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, null)
+        )
+        // A chat on a model this phone can use, or a Bot chat, says nothing.
+        assertNull(AidenChatModelAuthority.macOnlyAgentNotice(workspaceChat("google", "gemini-flash"), inventory, "Gemini Flash"))
+        assertNull(AidenChatModelAuthority.macOnlyAgentNotice(chat.copy(botId = "bot-1"), inventory, "Gemini Flash"))
+    }
 
     @Test
     fun rememberedHostChoiceWinsOverChatPairWhileTheHostStillOffersIt() {
@@ -172,6 +199,35 @@ class AidenModelPreferenceTest {
 
         File(tempFolder.root, "model_preferences.json").writeText("{not json")
         assertNull(AidenModelPreferenceStore(tempFolder.root).selection("mac-b"))
+    }
+
+    @Test
+    fun storeKeepsRecentRoutesNewestFirstPerHostAndPurgesThemWithThePairing() {
+        val store = AidenModelPreferenceStore(tempFolder.root)
+        store.remember("mac-a", AidenChatModelSelection("openai", "gpt-5.6", "max"))
+        store.remember("mac-a", AidenChatModelSelection("deepseek", "deepseek-v3", null))
+        // A thinking change on the same route does not add a second entry.
+        store.remember("mac-a", AidenChatModelSelection("deepseek", "deepseek-v3", "high"))
+        // The same model through another provider is a separate route.
+        store.remember("mac-a", AidenChatModelSelection("opencode-go", "deepseek-v3", null))
+        store.remember("mac-a", AidenChatModelSelection("openai", "gpt-5.6", null))
+        store.remember("mac-b", AidenChatModelSelection("google", "gemini-flash", null))
+
+        val relaunched = AidenModelPreferenceStore(tempFolder.root)
+        assertEquals(
+            listOf("openai/gpt-5.6", "opencode-go/deepseek-v3", "deepseek/deepseek-v3"),
+            relaunched.recentRoutes("mac-a").map { "${it.providerId}/${it.modelId}" }
+        )
+        assertEquals(listOf("google/gemini-flash"), relaunched.recentRoutes("mac-b").map { "${it.providerId}/${it.modelId}" })
+
+        (1..8).forEach { relaunched.remember("mac-b", AidenChatModelSelection("p", "m$it", null)) }
+        assertEquals(
+            listOf("m8", "m7", "m6", "m5", "m4"),
+            AidenModelPreferenceStore(tempFolder.root).recentRoutes("mac-b").map { it.modelId }
+        )
+
+        relaunched.purge("mac-a")
+        assertEquals(emptyList<AidenChatModelSelection>(), AidenModelPreferenceStore(tempFolder.root).recentRoutes("mac-a"))
     }
 
     @Test

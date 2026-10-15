@@ -49,3 +49,11 @@ test("only incomplete setup opens onboarding automatically", () => {
   assert.equal(shouldOpenOnboarding("deferred"), false);
   assert.equal(shouldOpenOnboarding("completed"), false);
 });
+
+test("the Bots step is a persisted progress marker between provider and tour", () => {
+  assert.deepEqual(
+    parseOnboardingState({ version: 2, outcome: "incomplete", lastSatisfiedStep: "bots" }),
+    { version: 2, outcome: "incomplete", lastSatisfiedStep: "bots" },
+  );
+  assert.equal(parseOnboardingState({ version: 2, outcome: "incomplete", lastSatisfiedStep: "bot" }), null);
+});

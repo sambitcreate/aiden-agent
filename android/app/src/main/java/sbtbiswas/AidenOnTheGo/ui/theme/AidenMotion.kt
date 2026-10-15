@@ -1,12 +1,15 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
 import android.provider.Settings
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -35,21 +38,42 @@ import androidx.compose.ui.semantics.semantics
 import kotlin.math.pow
 
 /**
- * Material 3 Expressive and Aiden-tuned spring motion specifications.
+ * Aiden motion tokens.
+ *
+ * Spatial movement (slides, scale, size/shape morphs, drag settle) keeps Material 3
+ * Expressive springs. Non-spatial changes (fades, color/opacity crossfades, short state
+ * swaps) use the Untitled duration/easing tokens shared with the desktop renderer
+ * (`--motion-duration` 200ms and the large 360ms step).
  *
  * The raw springs stay available for call sites that need a [SpringSpec]. UI code should
- * prefer the reduce-motion-aware variants ([spatial], [nonSpatial], [snappy], [bouncy]),
- * which collapse to [snap] when [aidenReduceMotion] is true.
+ * prefer the reduce-motion-aware variants ([spatial], [nonSpatial], [short], [long],
+ * [snappy], [bouncy]), which collapse to [snap] when [aidenReduceMotion] is true.
  */
 object AidenMotion {
+    /** Untitled short step: 200ms, `cubic-bezier(0.16, 1, 0.3, 1)`. */
+    const val ShortDurationMillis = 200
+
+    /** Untitled long step: 360ms, `cubic-bezier(0.22, 1, 0.36, 1)`. */
+    const val LongDurationMillis = 360
+
+    val StandardEasing: Easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+    val EmphasizedEasing: Easing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
+    /** Short non-spatial transition. Collapses to an instant change under reduced motion. */
+    fun <T> short(reduceMotion: Boolean = false): FiniteAnimationSpec<T> =
+        if (reduceMotion) snap() else tween(ShortDurationMillis, easing = StandardEasing)
+
+    /** Long non-spatial transition. Collapses to an instant change under reduced motion. */
+    fun <T> long(reduceMotion: Boolean = false): FiniteAnimationSpec<T> =
+        if (reduceMotion) snap() else tween(LongDurationMillis, easing = EmphasizedEasing)
+
+    /** Reduced motion when the user opts in inside Aiden or turns system animations off. */
+    fun isReducedMotion(appPreference: Boolean, systemAnimatorScale: Float): Boolean =
+        appPreference || systemAnimatorScale == 0f
+
     fun <T> spatialExpressiveSpring(): SpringSpec<T> = spring(
         dampingRatio = 0.8f,
         stiffness = 380f
-    )
-
-    fun <T> nonSpatialExpressiveSpring(): SpringSpec<T> = spring(
-        dampingRatio = 1f,
-        stiffness = 1600f
     )
 
     fun <T> bouncySpring(): SpringSpec<T> = spring(
@@ -66,9 +90,8 @@ object AidenMotion {
     fun <T> spatial(reduceMotion: Boolean): FiniteAnimationSpec<T> =
         if (reduceMotion) snap() else spatialExpressiveSpring()
 
-    /** Spring for color and opacity changes; instant when motion is reduced. */
-    fun <T> nonSpatial(reduceMotion: Boolean): FiniteAnimationSpec<T> =
-        if (reduceMotion) snap() else nonSpatialExpressiveSpring()
+    /** Color and opacity changes: the Untitled [short] step; instant when motion is reduced. */
+    fun <T> nonSpatial(reduceMotion: Boolean): FiniteAnimationSpec<T> = short(reduceMotion)
 
     /** Critically damped spring for small indicators; instant when motion is reduced. */
     fun <T> snappy(reduceMotion: Boolean): FiniteAnimationSpec<T> =
@@ -92,13 +115,17 @@ object AidenMotion {
 fun aidenReduceMotion(): Boolean {
     val configReduce = AidenTheme.config.reduceMotion
     val context = LocalContext.current
-    val systemAnimatorOff = remember(context) {
+    val systemScale = remember(context) {
         runCatching {
-            Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-        }.getOrDefault(false)
+            Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        }.getOrDefault(1f)
     }
-    return configReduce || systemAnimatorOff
+    return AidenMotion.isReducedMotion(configReduce, systemScale)
 }
+
+/** Alias of [aidenReduceMotion] kept for the Untitled call sites. */
+@Composable
+fun rememberAidenReduceMotion(): Boolean = aidenReduceMotion()
 
 /**
  * Adds a subtle, tactile scale compression on pointer down (0.96x).

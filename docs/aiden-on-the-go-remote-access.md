@@ -120,7 +120,7 @@ requests are encrypted locally and bound to the original pairing; mobile records
 stay in the app's private storage and are scoped to that pairing.
 
 On Android, **Nearby** discovers desktops on the local network. New Android pairings
-require a desktop supporting the Android device identity (contract revision 25); an
+require a desktop supporting the Android device identity (contract revision 31); an
 older desktop shows an update prompt. QR or manual-address pairing remains available
 when nearby discovery is unavailable. Discovery only supplies an address hint;
 setup-code verification and certificate validation still establish trust. Connection

@@ -1,4 +1,4 @@
-// Reading user-attached files + bundled model capability lookups.
+// Reading user-attached files.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import {
@@ -9,7 +9,6 @@ import {
   readPickedAttachments,
   validateClipboardAttachmentPayload,
 } from "../services/attachments.js";
-import { providerModelInfo } from "../services/provider-model-info.js";
 import {
   MAX_ATTACHMENT_INLINE_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -178,12 +177,4 @@ export function registerAttachmentHandlers(): void {
       );
     },
   );
-
-  ipcMain.handle("models:info", async (_event, providerId: unknown, modelIds: unknown) => {
-    const pid = typeof providerId === "string" ? providerId : "";
-    const ids = Array.isArray(modelIds)
-      ? modelIds.filter((m): m is string => typeof m === "string")
-      : [];
-    return providerModelInfo.infoMany(pid, ids);
-  });
 }

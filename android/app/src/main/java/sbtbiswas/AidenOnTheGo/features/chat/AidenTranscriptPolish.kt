@@ -52,6 +52,8 @@ import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Elapsed-time presentation for assistant turns. Durations come from the
@@ -169,7 +171,7 @@ fun AidenMessageFooter(
         )
         if (workedFor != null) {
             Text(
-                text = "· $workedFor",
+                text = stringResource(R.string.chat_message_worked_for, workedFor),
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.secondary,
                 modifier = Modifier.testTag("aiden.message.workedFor")
@@ -179,7 +181,7 @@ fun AidenMessageFooter(
             IconButton(onClick = onCopy) {
                 Icon(
                     Icons.Default.ContentCopy,
-                    contentDescription = if (isUser) "Copy message" else "Copy response",
+                    contentDescription = if (isUser) stringResource(R.string.chat_message_copy) else stringResource(R.string.chat_message_copy_response),
                     tint = palette.secondary,
                     modifier = Modifier.size(16.dp)
                 )
@@ -189,7 +191,7 @@ fun AidenMessageFooter(
             IconButton(onClick = onReadAloud) {
                 Icon(
                     if (readAloudActive) Icons.Default.Stop else Icons.Default.VolumeUp,
-                    contentDescription = if (readAloudActive) "Stop reading aloud" else "Read response aloud",
+                    contentDescription = if (readAloudActive) stringResource(R.string.chat_read_aloud_stop) else stringResource(R.string.chat_read_aloud_start),
                     tint = palette.secondary,
                     modifier = Modifier.size(18.dp)
                 )
@@ -233,7 +235,7 @@ fun AidenSelectTextDialog(
     val currentOnDismiss by rememberUpdatedState(onDismiss)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Select text") },
+        title = { Text(stringResource(R.string.chat_select_text_title)) },
         text = {
             AndroidView(
                 modifier = Modifier
@@ -248,7 +250,7 @@ fun AidenSelectTextDialog(
                         customSelectionActionModeCallback = object : ActionMode.Callback {
                             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
                                 if (currentOnAsk != null) {
-                                    menu.add(Menu.NONE, ASK_ABOUT_MENU_ID, 0, "Ask about this")
+                                    menu.add(Menu.NONE, ASK_ABOUT_MENU_ID, 0, context.getString(R.string.chat_message_ask_about))
                                 }
                                 return true
                             }
@@ -278,11 +280,11 @@ fun AidenSelectTextDialog(
             )
         },
         confirmButton = {
-            AidenDialogConfirmButton(text = "Done", onClick = onDismiss)
+            AidenDialogConfirmButton(text = stringResource(R.string.action_done), onClick = onDismiss)
         },
         dismissButton = if (onAskAbout != null) {
             {
-                AidenDialogDismissButton(text = "Ask about all", onClick = {
+                AidenDialogDismissButton(text = stringResource(R.string.chat_select_text_ask_all), onClick = {
                     onAskAbout(text)
                     onDismiss()
                 })

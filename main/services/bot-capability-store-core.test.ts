@@ -159,33 +159,39 @@ test("strict Custom parsing rejects smuggled bindings, paths, duplicates, and ma
   );
 });
 
-test("archived read inspection preserves exact policy and chat epochs without admitting action", () => {
-  const { editor } = fixture();
-  const bot = editor.createBotPolicy({
-    botId: "bot:archived-reader",
+test("Bot delete removes its policy and chat reductions, leaves other Bots, and is idempotent", () => {
+  const { state, editor } = fixture();
+  const doomed = editor.createBotPolicy({
+    botId: "bot:doomed",
     catalog: catalog(),
     access: { accessMode: "full", catalogRevision, confirmedForeground: true },
   });
-  const chat = editor.createChatPolicy({
-    chatId: "chat:archived-reader",
-    botId: bot.botId,
-    expectedBotPolicyRevision: bot.revision,
+  editor.createChatPolicy({
+    chatId: "chat:doomed",
+    botId: doomed.botId,
+    expectedBotPolicyRevision: doomed.revision,
     catalog: catalog(),
   });
-  assert.throws(
-    () => editor.inspectArchivedReadAuthority(bot.botId, chat.chatId),
-    BotCapabilityUnavailableError,
-  );
-  editor.archiveBotAuthority(bot.botId);
-  const archived = editor.inspectArchivedReadAuthority(bot.botId, chat.chatId);
-  assert.equal(archived.policy.authorityStatus, "archived");
-  assert.equal(archived.policy.policyEpoch, 2);
-  assert.equal(archived.chat.policyEpoch, 1);
-  assert.equal(archived.effectiveCustom, undefined);
-  assert.throws(
-    () => editor.inspectArchivedReadAuthority(bot.botId, "chat:other"),
-    BotCapabilityUnavailableError,
-  );
+  const kept = editor.createBotPolicy({
+    botId: "bot:kept",
+    catalog: catalog(),
+    access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+  });
+  editor.createChatPolicy({
+    chatId: "chat:kept",
+    botId: kept.botId,
+    expectedBotPolicyRevision: kept.revision,
+    catalog: catalog(),
+  });
+
+  assert.equal(editor.deleteBotAuthority("bot:doomed"), true);
+  assert.throws(() => projectBotAccessView(state, "bot:doomed"), BotCapabilityUnavailableError);
+  assert.throws(() => projectBotChatAccessView(state, "chat:doomed"), BotCapabilityUnavailableError);
+  assert.equal(projectBotAccessView(state, "bot:kept").botId, "bot:kept");
+  assert.equal(projectBotChatAccessView(state, "chat:kept").botId, "bot:kept");
+  assert.deepEqual(editor.auditBotInventory(["bot:kept"]).orphanedBotIds, []);
+
+  assert.equal(editor.deleteBotAuthority("bot:doomed"), false);
 });
 
 test("Custom policy bindings are mandatory, private in projections, strict on disk, and drift-aware", () => {

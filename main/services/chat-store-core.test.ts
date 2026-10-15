@@ -10,6 +10,7 @@ import {
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
+import { ChatForkError } from "./chat-fork-error.js";
 
 async function testStore(t: test.TestContext) {
   const directory = await fs.mkdtemp(
@@ -95,8 +96,8 @@ test("Bot model authority changes durably without changing history or activity t
     botId: "bot:model-owner",
     providerId: "provider:old",
     model: "model:old",
-    initialAssistantMessage: "Welcome",
   });
+  await first.appendMessage(chat.id, { role: "assistant", content: "Welcome" });
   const before = await first.appendMessage(chat.id, {
     role: "user",
     content: "Keep this conversation",
@@ -1619,49 +1620,50 @@ test("does not move a chat after its conversation has started", async (t) => {
   assert.equal((await store.get(chat.id))?.workspaceId, "first");
 });
 
-test("persists Computer Use per chat without reordering the chat index", async (t) => {
+test("persists a per-chat Computer Use grant without reordering the chat index", async (t) => {
   const store = await testStore(t);
   const older = await store.create({ title: "Older" });
   await new Promise((resolve) => setTimeout(resolve, 2));
   const newer = await store.create({ title: "Newer" });
 
-  const enabled = await store.setComputerUseEnabled(older.id, true);
-  assert.equal(enabled.computerUseEnabled, true);
-  assert.equal((await store.get(older.id))?.computerUseEnabled, true);
+  const allowed = await store.setComputerUseAllowed(older.id, true);
+  assert.equal(allowed.computerUseAllowed, true);
+  assert.equal((await store.get(older.id))?.computerUseAllowed, true);
+  assert.equal((await store.get(newer.id))?.computerUseAllowed, undefined);
   assert.deepEqual(
     (await store.list()).map((chat) => chat.id),
     [newer.id, older.id],
   );
 
-  const disabled = await store.setComputerUseEnabled(older.id, false);
-  assert.equal(disabled.computerUseEnabled, false);
+  await store.setComputerUseAllowed(older.id, false);
+  assert.equal((await store.get(older.id))?.computerUseAllowed, undefined);
 });
 
-test("a stale renderer guard cannot persist a per-chat Computer Use opt-in", async (t) => {
-  const store = await testStore(t);
-  const chat = await store.create({ title: "Guarded" });
+test("a Computer Use continue marker survives reopening the store until cleared", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({ title: "Waiting on setup" });
+  await first.appendMessage(chat.id, { role: "user", content: "Open Notes" });
 
-  await assert.rejects(
-    store.setComputerUseEnabled(chat.id, true, () => false),
-    /no longer active/u,
-  );
-  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
+  const marked = await first.setComputerUsePendingContinue(chat.id, true);
+  assert.equal(marked.computerUsePendingContinue, true);
+
+  // A fresh store over the same directory stands in for relaunching Aiden.
+  const reopened = createChatStore(async () => directory);
+  const restored = await reopened.get(chat.id);
+  assert.equal(restored?.computerUsePendingContinue, true);
+  assert.equal(restored?.messages.length, 1);
+
+  const cleared = await reopened.setComputerUsePendingContinue(chat.id, false);
+  assert.equal(cleared.computerUsePendingContinue, undefined);
+  assert.equal((await createChatStore(async () => directory).get(chat.id))?.computerUsePendingContinue, undefined);
 });
 
-test("a renderer replaced while a per-chat opt-in is staged cannot commit it", async (t) => {
+test("Computer Use access setters reject a missing chat", async (t) => {
   const store = await testStore(t);
-  const chat = await store.create({ title: "Guarded during write" });
-  let checks = 0;
-
-  await assert.rejects(
-    store.setComputerUseEnabled(chat.id, true, () => {
-      checks += 1;
-      return checks === 1;
-    }),
-    /no longer active/u,
-  );
-  assert.equal(checks, 2);
-  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
+  await assert.rejects(store.setComputerUsePendingContinue("missing-chat", false), /not found/u);
+  await assert.rejects(store.setComputerUseAllowed("missing-chat", true), /not found/u);
 });
 
 test("the summary index records when assistant output was last persisted", async (t) => {
@@ -1715,4 +1717,66 @@ test("loads legacy Azure chat identities through the renamed native provider", a
 
   assert.equal((await store.list())[0]?.providerId, "azure");
   assert.equal((await store.get("legacy-chat"))?.providerId, "azure");
+});
+
+test("feature-owned chats leave regular listings but stay in the full index across a restart", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-owner-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const owner = { kind: "design-project" as const, projectId: "project-1" };
+  const store = createChatStore(async () => directory);
+  const regular = await store.create({ workspaceId: "default" });
+  const assistant = await store.create({ workspaceId: "assistant" });
+  // No workspace: an owned chat lands in "default", which is exactly where a leak would show.
+  const owned = await store.create({ owner });
+
+  assert.deepEqual(
+    new Set((await store.listRegular()).map(({ id }) => id)),
+    new Set([regular.id, assistant.id]),
+  );
+  assert.deepEqual((await store.listRegular("default")).map(({ id }) => id), [regular.id]);
+
+  const restarted = createChatStore(async () => directory);
+  assert.deepEqual(
+    new Set((await restarted.list()).map(({ id }) => id)),
+    new Set([regular.id, assistant.id, owned.id]),
+  );
+  assert.deepEqual(
+    (await restarted.listSummaryMetadata()).find(({ id }) => id === owned.id)?.owner,
+    owner,
+  );
+  assert.deepEqual((await restarted.get(owned.id))?.owner, owner);
+  assert.deepEqual((await restarted.listRegular("default")).map(({ id }) => id), [regular.id]);
+});
+
+test("an owner is main-only, exclusive with Bots, and never copied", async (t) => {
+  const store = await testStore(t);
+  const owner = { kind: "design-project" as const, projectId: "project-1" };
+  await assert.rejects(store.create({ botId: "bot-1", owner }), /Invalid chat owner/u);
+  await assert.rejects(
+    store.create({ owner: { kind: "design-project", projectId: "../escape" } }),
+    /Invalid chat owner/u,
+  );
+  const owned = await store.create({ owner });
+  await store.appendMessage(owned.id, { role: "user", content: "A pricing page" });
+  await assert.rejects(
+    store.copyVisibleHistory({ sourceChatId: owned.id }),
+    (error: unknown) => error instanceof ChatForkError && error.code === "ineligible",
+  );
+  assert.equal((await store.list()).length, 1);
+});
+
+test("renderer-authored appends cannot write into a feature-owned conversation", async (t) => {
+  const store = await testStore(t);
+  const owned = await store.create({ owner: { kind: "design-project", projectId: "project-1" } });
+  const regular = await store.create({ workspaceId: "default" });
+  await assert.rejects(
+    store.appendMessage(owned.id, { role: "user", content: "steer the design" }, { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  assert.equal((await store.get(owned.id))?.messages.length, 0);
+  // The main-owned design run still writes its own turns.
+  await store.appendMessage(owned.id, { role: "user", content: "Explore a pricing page" });
+  assert.equal((await store.get(owned.id))?.messages.length, 1);
+  await store.appendMessage(regular.id, { role: "user", content: "hello" }, { rejectFeatureOwned: true });
+  assert.equal((await store.get(regular.id))?.messages.length, 1);
 });

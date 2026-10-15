@@ -17,7 +17,7 @@ enum AidenServerTrustPolicy: Equatable, Sendable {
     case system
     case privateCA(Data)
 
-    init(pairingTrust: AidenRemoteContractFixture.PairingTrust) throws {
+    init(pairingTrust: AidenRemotePairing.PairingTrust) throws {
         switch pairingTrust.mode {
         case .system:
             self = .system

@@ -21,7 +21,14 @@ import { createBotManagedWorkspaceService } from "./bot-managed-workspace.js";
 import { configStore } from "./config-store.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import { inspectConfiguredMcpToolsForBotCatalog } from "./mcp.js";
-import { resolveBotMcpConnectionIdentities, resolveBotMcpInventory } from "./bot-mcp-inventory.js";
+import {
+  createBotMcpScopeCache,
+  resolveBotMcpConnectionIdentities,
+  resolveBotMcpInventory,
+  type BotMcpInspectionFailureReport,
+} from "./bot-mcp-inventory.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { projectDiagnosticError } from "./diagnostics-contract.js";
 import {
   resolveBotCapabilitySkills,
   resolveBotRuntimeSkillBindings,
@@ -104,10 +111,10 @@ const capabilityStateCheckpoint = createBotCapabilityStateCheckpoint({
   anchor: capabilityAuthorities.anchor,
   bootstrapMarker: capabilityAuthorities.bootstrapMarker,
   inspectInitialBootstrap: async () => {
-    const [bots, chats] = await Promise.all([botStore.list(true), chatStore.list()]);
-    const botIds = new Set(bots.map(({ id }) => id));
+    const [storedBotIds, chats] = await Promise.all([botStore.storedIds(), chatStore.list()]);
+    const botIds = new Set(storedBotIds);
     const botChats = chats.filter(({ botId }) => botId !== undefined);
-    if (bots.length === 0 && botChats.length === 0) return "clean";
+    if (botIds.size === 0 && botChats.length === 0) return "clean";
     return botChats.every(({ botId }) => botId !== undefined && botIds.has(botId))
       ? "legacy"
       : "deny";
@@ -143,6 +150,31 @@ export const botCapabilityMigrationSeal = createBotCapabilityMigrationSeal({
 
 const botProviderCredentialSignature = createBotProviderCredentialSignature();
 
+// Shared across catalog snapshots so admission and per-effect revalidation do
+// not re-open every MCP server. Any Bot inventory fence (MCP configuration or
+// credential mutation, observed drift) forces fresh inspections.
+const botMcpScopeCache = createBotMcpScopeCache({
+  generation: () => botRuntimeInventoryLeases.revision(),
+});
+
+function reportBotMcpInspectionFailure(report: BotMcpInspectionFailureReport): void {
+  const projected = projectDiagnosticError(report.error);
+  writeDiagnosticEvent({
+    level: "warn",
+    area: "mcp",
+    event: "mcp-degraded",
+    outcome: report.kind === "timed_out" ? "timed-out" : "degraded",
+    code: projected.code,
+    fields: {
+      phase: "bot-inventory",
+      transport: report.server.transport,
+      keptLastGood: report.keptLastGood,
+      errorType: projected.errorType,
+      ...(projected.fingerprint ? { fingerprint: projected.fingerprint } : {}),
+    },
+  });
+}
+
 export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
   createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: () => opaqueKeyStore.load(),
@@ -165,6 +197,8 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
         },
         inspectTools: inspectConfiguredMcpToolsForBotCatalog,
         incarnations: capabilityIncarnations,
+        scopeCache: botMcpScopeCache,
+        reportFailure: reportBotMcpInspectionFailure,
       }),
     listSkills: (target) =>
       resolveBotCapabilitySkills({

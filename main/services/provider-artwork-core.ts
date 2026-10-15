@@ -1,4 +1,5 @@
 import {
+  PROVIDER_ARTWORK_MAX_PNG_BYTES,
   normalizeProviderArtwork,
   type ProviderArtwork,
 } from "../../renderer/shared/provider-artwork.js";
@@ -69,4 +70,68 @@ export function decodeProviderArtworkSource(value: unknown): {
     throw new Error("SVG provider icons cannot contain scripts or external resources.");
   }
   return { bytes, kind: "svg", safeSvg: source };
+}
+
+const TARGET_EDGE = 64;
+
+/** The subset of Electron's NativeImage that provider artwork normalization uses. */
+export interface ProviderArtworkImage {
+  isEmpty(): boolean;
+  getSize(): { width: number; height: number };
+  resize(options: { width: number; height: number; quality: "best" }): ProviderArtworkImage;
+  toPNG(): Buffer;
+}
+
+/** Decoders for validated sources; the main process binds these to `nativeImage`. */
+export interface ProviderArtworkImageCodec {
+  fromPng(bytes: Buffer): ProviderArtworkImage;
+  /** Receives a base64 `data:image/svg+xml` URL of the already-sanitized SVG source. */
+  fromSvgDataUrl(dataUrl: string): ProviderArtworkImage;
+}
+
+export function createProviderArtworkNormalizer(codec: ProviderArtworkImageCodec) {
+  /** Validate, rasterize and downscale an uploaded PNG/SVG into display-contract artwork. */
+  function normalizeInput(value: unknown): ProviderArtwork {
+    const source = decodeProviderArtworkSource(value);
+    if (
+      source.pixelSize &&
+      (source.pixelSize.width > 8_192 || source.pixelSize.height > 8_192)
+    ) {
+      throw new Error("Provider artwork dimensions are invalid.");
+    }
+    const image = source.kind === "png"
+      ? codec.fromPng(source.bytes)
+      : codec.fromSvgDataUrl(
+          `data:image/svg+xml;base64,${Buffer.from(source.safeSvg!, "utf8").toString("base64")}`,
+        );
+    if (image.isEmpty()) throw new Error("Aiden could not decode that provider icon.");
+    const size = image.getSize();
+    if (size.width <= 0 || size.height <= 0 || size.width > 8_192 || size.height > 8_192) {
+      throw new Error("Provider artwork dimensions are invalid.");
+    }
+    const scale = Math.min(1, TARGET_EDGE / Math.max(size.width, size.height));
+    const normalized = scale < 1
+      ? image.resize({
+          width: Math.max(1, Math.round(size.width * scale)),
+          height: Math.max(1, Math.round(size.height * scale)),
+          quality: "best",
+        })
+      : image;
+    const png = normalized.toPNG();
+    if (png.length === 0 || png.length > PROVIDER_ARTWORK_MAX_PNG_BYTES) {
+      throw new Error("The normalized provider icon is too complex. Choose a simpler image.");
+    }
+    const artwork = { mimeType: "image/png" as const, dataBase64: png.toString("base64") };
+    if (!normalizeProviderArtwork(artwork)) {
+      throw new Error("The normalized provider icon is too complex. Choose a simpler image.");
+    }
+    return artwork;
+  }
+
+  return {
+    normalizeInput,
+    /** Persist only artwork that already matches the display contract, or re-encode it. */
+    persistable: (value: unknown): ProviderArtwork | undefined =>
+      persistStoredProviderArtwork(value, normalizeInput),
+  };
 }

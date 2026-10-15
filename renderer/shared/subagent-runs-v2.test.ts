@@ -109,6 +109,33 @@ test("projection provenance is optional, closed, cloned, and preserved across ad
   );
 });
 
+test("recorded child model and effort are optional, validated, and survive adapters", () => {
+  const legacy = parseSubagentRunSnapshotV1(v1());
+  assert.ok(legacy);
+  assert.equal("providerId" in legacy, false);
+  assert.equal("thinkingLevel" in legacy, false);
+  assert.ok(parseSubagentRunSnapshotV2(v2()));
+
+  const recorded = {
+    ...v2(),
+    providerId: "anthropic",
+    modelId: "claude-haiku",
+    thinkingLevel: "low" as const,
+    modelSelection: "requested" as const,
+  };
+  const parsed = parseSubagentRunSnapshot(recorded);
+  assert.equal(parsed?.providerId, "anthropic");
+  assert.equal(parsed?.thinkingLevel, "low");
+  assert.equal(parsed?.modelSelection, "requested");
+  const asV1 = parsed?.version === 2 ? adaptSubagentRunSnapshotV2ToV1(parsed) : undefined;
+  assert.equal(asV1?.thinkingLevel, "low");
+  assert.equal(parseSubagentRunSnapshotV1(asV1)?.modelSelection, "requested");
+
+  assert.equal(parseSubagentRunSnapshot({ ...recorded, thinkingLevel: "ultra" }), undefined);
+  assert.equal(parseSubagentRunSnapshot({ ...recorded, modelSelection: "guessed" }), undefined);
+  assert.equal(parseSubagentRunSnapshot({ ...recorded, providerId: "" }), undefined);
+});
+
 test("V2 lifecycle-only states project through the unchanged V1 parser", () => {
   const attention = v2("needs_attention");
   const attentionV1 = adaptSubagentRunSnapshotV2ToV1(attention);

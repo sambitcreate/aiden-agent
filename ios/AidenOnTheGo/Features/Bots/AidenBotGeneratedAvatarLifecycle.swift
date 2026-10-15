@@ -953,112 +953,6 @@ final class AidenBotGeneratedAvatarModel {
     }
 }
 
-/// Small integration surface for the existing Bot editor/profile. Image
-/// Playground presentation stays in its availability-isolated wrapper; this
-/// view owns only accepted-image preview and authenticated lifecycle actions.
-struct AidenBotGeneratedAvatarLifecycleView: View {
-    @Bindable var model: AidenBotGeneratedAvatarModel
-    let semanticAvatar: AidenBotSemanticAvatar
-    let botName: String
-    @State private var isConfirmingRevert = false
-    @Environment(\.aidenPalette) private var palette
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 16) {
-                avatarPreview
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(model.hasCandidate ? "Preview" : "Bot photo")
-                        .font(.headline)
-                    Text(statusCopy)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if model.isBusy {
-                ProgressView(progressCopy)
-            }
-
-            if model.hasCandidate {
-                HStack {
-                    Button("Cancel") { model.cancelCandidate() }
-                    Spacer()
-                    Button("Use this image") {
-                        Task { await model.useCandidate() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
-                    .disabled(!model.canUseCandidate)
-                }
-            } else if model.hasGeneratedAvatar {
-                Button("Use semantic avatar", role: .destructive) {
-                    isConfirmingRevert = true
-                }
-                .disabled(!model.canRevert)
-            }
-
-            if let errorMessage = model.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(palette.danger)
-                    .accessibilityLabel("Bot photo error: \(errorMessage)")
-            }
-        }
-        .task(id: model.sessionIdentity) {
-            await model.sessionDidChangeAndRefresh()
-        }
-        .onDisappear { model.clearForDismissal() }
-        .confirmationDialog(
-            "Return to the semantic avatar?",
-            isPresented: $isConfirmingRevert,
-            titleVisibility: .visible
-        ) {
-            Button("Use semantic avatar", role: .destructive) {
-                Task { await model.revertToSemanticAvatar() }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This removes the generated Bot photo from your paired desktop.")
-        }
-    }
-
-    @ViewBuilder
-    private var avatarPreview: some View {
-        if let image = model.displayedImage {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 96, height: 96)
-                .clipShape(Circle())
-                .accessibilityLabel("\(botName) Bot photo")
-        } else {
-            AidenBotSemanticAvatarView(
-                avatar: semanticAvatar,
-                name: botName,
-                size: 96
-            )
-        }
-    }
-
-    private var statusCopy: String {
-        if model.hasCandidate { return "Only this accepted image will be sent to your paired desktop." }
-        if model.hasGeneratedAvatar { return "Saved on your paired desktop." }
-        return "Your semantic avatar is always available."
-    }
-
-    private var progressCopy: String {
-        switch model.phase {
-        case .loading: "Loading photo…"
-        case .normalizing: "Preparing photo…"
-        case .uploading: "Saving photo…"
-        case .reverting: "Restoring avatar…"
-        case .idle, .ready, .failed: "Working…"
-        }
-    }
-}
-
 private struct AidenBotCanonicalAvatarLoadIdentity: Equatable {
     let instanceID: String?
     let deviceID: String?
@@ -1126,9 +1020,23 @@ struct AidenBotCanonicalAvatarView: View {
     let name: String
     let size: CGFloat
     var isDecorative = true
+    /// The Bot is in a running turn: the face glances, or a photo wears a glance mark.
+    var working = false
 
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.aidenReduceMotion) private var appReduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     @State private var canonicalImage: UIImage?
     @State private var loadedCacheKey: AidenBotCanonicalAvatarCacheKey?
+
+    private var cue: AidenBotWorkingCue {
+        aidenBotWorkingCue(
+            working: working,
+            hasPhoto: canonicalImage != nil,
+            motionAllowed: !systemReduceMotion && !appReduceMotion && !lowPowerMode
+        )
+    }
 
     private var loadIdentity: AidenBotCanonicalAvatarLoadIdentity {
         AidenBotCanonicalAvatarLoadIdentity(
@@ -1144,7 +1052,8 @@ struct AidenBotCanonicalAvatarView: View {
                 avatar: avatar.semantic,
                 name: name,
                 size: size,
-                isDecorative: isDecorative
+                isDecorative: isDecorative,
+                working: cue.glances
             )
             if let canonicalImage {
                 Image(uiImage: canonicalImage)
@@ -1154,6 +1063,14 @@ struct AidenBotCanonicalAvatarView: View {
                     .clipShape(Circle())
                     .accessibilityHidden(isDecorative)
                     .accessibilityLabel(isDecorative ? "" : "\(name) Bot photo")
+            }
+            // A photo can't glance, and a face holds still under Reduce Motion or Low
+            // Power: a small glance mark in its still pose says the Bot is working (R19).
+            if cue.badge {
+                AidenActivityMark(mark: .glance, size: size * 0.32, color: palette.foreground)
+                    .padding(size * 0.04)
+                    .background(palette.canvas, in: Circle())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }
         .frame(width: size, height: size)

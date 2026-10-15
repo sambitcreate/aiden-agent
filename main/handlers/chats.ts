@@ -6,7 +6,6 @@ import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
-import { computerUseStatus } from "../services/computer-use/status.js";
 import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -18,24 +17,16 @@ import {
   wrapStoredHtmlArtifact,
 } from "../services/gui-artifact-recovery.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
-import {
-  commitSkillInvocationForAppend,
-  requireSkillInvocationWorkspace,
-} from "../services/skill-invocation-turn.js";
-import { randomUUID } from "node:crypto";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import {
   admitRendererOwnedWorkspaceOperation,
   workspaceOperationRegistry,
 } from "../services/workspace-operation-registry.js";
-import { parseChatAppend } from "./chat-append-params.js";
+import { asString, createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
 import { closeDeviceSessionsForChat } from "./devices.js";
+import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
-import {
-  appendChatMessageWithReconciliation,
-  isAppendReconciliationRequiredError,
-} from "../services/chat-append-commit.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import {
@@ -48,7 +39,6 @@ import {
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
-import { applyComputerUseSettingChange } from "./chat-computer-use-setting.js";
 import {
   safeExportFileName,
   writeAidenChatExportForRenderer,
@@ -66,7 +56,6 @@ import {
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
-import { memoryStore } from "../services/memory-store-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
 import {
   chatContextPressure,
@@ -75,14 +64,24 @@ import {
 import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 
-function asString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Expected non-empty string for "${name}".`);
-  }
-  return value;
-}
-
 export function registerChatHistoryHandlers(): void {
+  const rendererChats = createRendererChatMutationHandlers({
+    chatStore,
+    chatApplicationService,
+    chatTitleService,
+    botApplicationService: {
+      deleteChat: (input) => botApplicationService.deleteChat(input),
+    },
+    hostPlatformCapabilities,
+    closeDeviceSessionsForChat,
+    chatReadMarkers,
+    rendererDocumentOwner,
+    llmClient,
+    unresolvedGuiArtifactMessage,
+    artifactRecoveryMessage,
+    workspaceMutationGate,
+    skillRegistry,
+  });
   const commitFirstMessage = createFirstMessageCommitter({
     store: chatStore,
     beginTurn: (chatId, turnId, ownerId) => llmClient.beginChatTurn(chatId, turnId, ownerId),
@@ -111,10 +110,6 @@ export function registerChatHistoryHandlers(): void {
       }
     },
     workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
-    requireComputerUseReady: async (signal) => {
-      const status = await computerUseStatus.status({ signal });
-      if (!status.ready) throw new Error(status.detail);
-    },
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
   ipcMain.handle("chats:createWithFirstMessage", (event, input: unknown) => {
@@ -275,18 +270,9 @@ export function registerChatHistoryHandlers(): void {
     }
   });
 
-  ipcMain.handle(
-    "chats:rename",
-    async (_event, id: unknown, title: unknown) => {
-      await chatApplicationService.rename(asString(id, "id"), asString(title, "title"));
-    },
-  );
+  ipcMain.handle("chats:rename", rendererChats.rename);
 
-  ipcMain.handle(
-    "chats:renameWithFoundationModels",
-    async (_event, id: unknown) =>
-      chatTitleService.renameWithFoundationModels(asString(id, "id")),
-  );
+  ipcMain.handle("chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels);
 
   ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
     chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),
@@ -452,209 +438,11 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "chats:setComputerUse",
-    async (event, id: unknown, enabled: unknown) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () =>
-          new Error(
-            "Computer Use settings require the active application document.",
-          ),
-      );
-      const chatId = asString(id, "id");
-      if (typeof enabled !== "boolean")
-        throw new Error("Invalid Computer Use chat setting.");
-      return chatForRenderer(
-        await applyComputerUseSettingChange(owner, chatId, enabled, {
-          begin: (targetChatId) =>
-            llmClient.beginComputerUseSettingChange(targetChatId),
-          status: (signal) => computerUseStatus.status({ signal }),
-          persist: (targetChatId, nextEnabled, isCurrent) =>
-            chatStore.setComputerUseEnabled(targetChatId, nextEnabled, isCurrent),
-          // Aiden Live owns separate per-session authority and is unaffected
-          // by an ordinary chat's Computer Use toggle.
-          revokeLive: () => undefined,
-        }),
-      );
-    },
-  );
+  ipcMain.handle("chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue);
 
-  ipcMain.handle("chats:remove", async (_event, id: unknown) => {
-    const chatId = asString(id, "id");
-    const chat = await chatStore.get(chatId);
-    const result = chat?.botId && hostPlatformCapabilities().bots
-      ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
-      : await chatApplicationService.remove(chatId);
-    if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
-    closeDeviceSessionsForChat(chatId);
-    void chatReadMarkers.remove(chatId).catch(() => undefined);
-    return result;
-  });
+  ipcMain.handle("chats:remove", rendererChats.remove);
 
-  ipcMain.handle(
-    "chats:appendMessage",
-    (event, id: unknown, message: unknown, meta?: unknown) => {
-      // Parse and project the entire renderer envelope synchronously. The raw
-      // IPC objects are never captured by the asynchronous persistence frame.
-      const parsed = parseChatAppend(id, message, meta);
-      const {
-        chatId,
-        role,
-        content,
-        messageModel,
-        attachments,
-        providerId,
-        metaModel,
-        autoTitle,
-        turnId,
-        skillReference,
-        retainedBytes,
-      } = parsed;
-      const owner = rendererDocumentOwner(
-        event,
-        () =>
-          new Error("Chat messages require the active application document."),
-      );
-      if (llmClient.requiresAppendReconciliation(owner.documentId)) {
-        throw new Error(appendReconciliationFailureMessage("blocked"));
-      }
-      const turn = llmClient.beginChatTurn(chatId, turnId, owner.documentId);
-      if (!turn) {
-        throw new Error(
-          "Wait for the previous response to finish saving before sending again.",
-        );
-      }
-      turn.onReleased(owner.onInvalidated(turn.release));
-      try {
-        if (skillReference) turn.reserveSkillPreparation();
-        turn.reserveAppendPayload(retainedBytes);
-      } catch (error) {
-        turn.release();
-        turn.settleAsyncWork();
-        throw error;
-      }
-
-      return (async () => {
-        let appended = false;
-        try {
-          const unresolvedSend = await unresolvedGuiArtifactMessage(chatId);
-          if (unresolvedSend) {
-            throw new Error(
-              artifactRecoveryMessage(
-                unresolvedSend,
-                "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
-              ),
-            );
-          }
-          const authoritativeChat = skillReference
-            ? await chatStore.get(chatId)
-            : undefined;
-          if (skillReference && !authoritativeChat) {
-            throw new Error("This chat is no longer available.");
-          }
-          if (!turn.isActive()) {
-            throw new Error(
-              "This message turn expired before it could be saved.",
-            );
-          }
-          const workspaceId = authoritativeChat
-            ? persistedChatWorkspaceId(authoritativeChat.workspaceId)
-            : undefined;
-          const skillWorkspaceId = skillReference
-            ? requireSkillInvocationWorkspace(workspaceId)
-            : undefined;
-          const workspaceAdmission = skillWorkspaceId
-            ? workspaceMutationGate.admit(skillWorkspaceId)
-            : undefined;
-          if (workspaceAdmission) {
-            const abortTurn = () => turn.release();
-            workspaceAdmission.signal.addEventListener("abort", abortTurn, {
-              once: true,
-            });
-            turn.onReleased(() => {
-              workspaceAdmission.signal.removeEventListener("abort", abortTurn);
-              workspaceAdmission.release();
-            });
-          }
-          const userMessageId = randomUUID();
-          const isCurrent = () =>
-            turn.isActive() && workspaceAdmission?.signal.aborted !== true;
-          const append = (skill?: {
-            provenance: {
-              version: 1;
-              name: string;
-              source: "configured" | "workspace" | "global";
-            };
-          }) =>
-            appendChatMessageWithReconciliation({
-              messageId: userMessageId,
-              append: () =>
-                chatStore.appendMessage(
-                  chatId,
-                  {
-                    id: userMessageId,
-                    role,
-                    content,
-                    model: messageModel,
-                    attachments,
-                    skill: skill?.provenance,
-                    // Reasoning and generation timelines are persisted by the trusted
-                    // main-process generation owner, never accepted from renderer data.
-                    reasoning: undefined,
-                    timeline: undefined,
-                    subagents: undefined,
-                  },
-                  {
-                    providerId,
-                    model: metaModel,
-                    autoTitle,
-                    expectedWorkspaceId: workspaceId,
-                    isCurrent,
-                  },
-                ),
-              recover: () => chatStore.get(chatId),
-            });
-          const chat = skillReference
-            ? await commitSkillInvocationForAppend(
-                {
-                  invocationId: skillReference.invocationId,
-                  role,
-                  content,
-                  attachments,
-                  workspaceId: skillWorkspaceId!,
-                  userMessageId,
-                },
-                {
-                  resolveFresh: (resolvedWorkspaceId, invocationId) =>
-                    skillRegistry.resolveFresh(
-                      resolvedWorkspaceId,
-                      invocationId,
-                    ),
-                  isCurrent,
-                  prepareLease: (prepared) =>
-                    turn.prepareSkillInvocation(prepared),
-                  append,
-                },
-              )
-            : await append();
-          appended = true;
-          return chatForRenderer(chat);
-        } catch (error) {
-          if (isAppendReconciliationRequiredError(error)) {
-            llmClient.markAppendReconciliationRequired(owner.documentId);
-            owner.onInvalidated(() => {
-              llmClient.clearAppendReconciliationRequired(owner.documentId);
-            });
-          }
-          throw error;
-        } finally {
-          if (!appended) turn.release();
-          turn.settleAsyncWork();
-        }
-      })();
-    },
-  );
+  ipcMain.handle("chats:appendMessage", rendererChats.appendMessage);
 
   ipcMain.handle(
     "chats:htmlArtifactSrcdoc",
@@ -672,6 +460,15 @@ export function registerChatHistoryHandlers(): void {
       return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
     },
   );
+
+  ipcMain.handle("chats:updateUiVisualState", async (event, input: unknown) => {
+    rendererDocumentOwner(
+      event,
+      () => new Error("Saving a visual's state requires the active application document."),
+    );
+    const update = parseUiVisualStateUpdate(input);
+    return chatStore.updateUiVisualState(update.chatId, update.messageId, update.visualId, update.state);
+  });
 
   ipcMain.handle(
     "chats:exportHtmlArtifact",

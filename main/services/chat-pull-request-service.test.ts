@@ -13,6 +13,11 @@ import {
   type ChatPullRequestServiceDeps,
 } from "./chat-pull-request-service.js";
 import { ChatPullRequestStore } from "./chat-pull-request-store.js";
+import { GitHubApi } from "./github/github-api.js";
+import { FakeGitHub } from "./github/github-fake-server.js";
+import { BatchedPullRequestReader } from "./github/github-pull-request-reader.js";
+import { fixedCredentials, recordingFetch } from "./github/github-test-fetch.js";
+import { GitHubPullRequestService } from "./github-pull-request.js";
 import type {
   GitHubPullRequestCreateResult,
   GitHubPullRequestListStatus,
@@ -499,6 +504,40 @@ test("current resolves through the precedence model with workspace context", asy
   assert.equal(current.pullRequest?.linked, true);
 });
 
+test("sidebar reads each chat's best cached PR without calling GitHub", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const merged = new Set([11, 20]);
+  const { service, calls } = fakeService(directory, {
+    getPullRequestByUrl: async (...args: never[]) => {
+      const number = Number(/\/pull\/(\d+)/u.exec(JSON.stringify(args))?.[1]);
+      return ready({
+        pullRequest: summary(number, merged.has(number) ? { state: "merged" } : {}),
+      }) as GitHubPullRequestStatus;
+    },
+  });
+  // The most recent link is merged, but an open PR still reads as current.
+  await service.link("chat-a", { url: "https://github.com/owner/repo/pull/12" });
+  await service.link("chat-a", { url: "https://github.com/owner/repo/pull/11" });
+  await service.link("chat-b", { url: "https://github.com/owner/repo/pull/20" });
+  // chat-c unlinked its only PR: the row shows none, but remembers the dismissal.
+  await service.link("chat-c", { url: "https://github.com/owner/repo/pull/30" });
+  await service.unlink("chat-c", { host: "github.com", repository: "owner/repo", number: 30 });
+  const callsBefore = { ...calls };
+
+  const rows = await service.sidebar(["chat-a", "chat-b", "chat-c", "chat-unlinked"]);
+
+  assert.deepEqual(calls, callsBefore);
+  assert.deepEqual(Object.keys(rows).sort(), ["chat-a", "chat-b", "chat-c"]);
+  assert.equal(rows["chat-a"]?.pullRequest?.number, 12);
+  assert.equal(rows["chat-a"]?.pullRequest?.state, "open");
+  assert.equal(rows["chat-a"]?.pullRequest?.checksState, "passing");
+  assert.equal(rows["chat-b"]?.pullRequest?.number, 20);
+  assert.equal(rows["chat-b"]?.pullRequest?.state, "merged");
+  assert.equal(rows["chat-c"]?.pullRequest, undefined);
+  assert.deepEqual(rows["chat-c"]?.dismissed, ["github.com/owner/repo#30"]);
+});
+
 test("deleteChat removes the link file and never calls GitHub", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -758,4 +797,132 @@ test("every unresolved create outcome notifies after its durable intent is visib
     assert.equal(visible.length, 1);
     assert.equal((await visible[0]).length, 1);
   }
+});
+
+test("a rate limit keeps cached snapshots and tells the caller when reads resume", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const retryAt = Date.now() + 10 * 60_000;
+  let limited = false;
+  let changes = 0;
+  const { service, calls } = fakeService(
+    directory,
+    {
+      getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+      getPullRequest: async () =>
+        (limited
+          ? { availability: "rate-limited", message: "paused", retryAt }
+          : ready({ pullRequest: summary(12) })) as GitHubPullRequestStatus,
+      currentPullRequest: async () =>
+        ({ availability: "rate-limited", message: "paused", retryAt }) as GitHubPullRequestStatus,
+    },
+    { onChanged: () => (changes += 1) },
+  );
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
+  const linked = changes;
+  limited = true;
+
+  const refreshed = await service.refresh(CHAT);
+  assert.equal(refreshed.rateLimitedUntil, retryAt);
+  assert.equal(refreshed.links.length, 1);
+  assert.equal(refreshed.links[0]?.checksState, "passing");
+  assert.equal(calls.getPullRequest, 1, "stops at the first rate-limited read");
+  assert.equal(changes, linked);
+
+  const current = await service.current(CHAT);
+  assert.equal(current.rateLimitedUntil, retryAt);
+  assert.equal(current.message, "paused");
+});
+
+test("refresh reads every link together and announces only real changes", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let checksState: "passing" | "failing" = "passing";
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let changes = 0;
+  const { service } = fakeService(
+    directory,
+    {
+      getPullRequestByUrl: async (_cwd: string, url: string) =>
+        ready({ pullRequest: summary(Number(url.split("/").pop())) }) as GitHubPullRequestStatus,
+      getPullRequest: async (_cwd: string, _repo: string, number: number) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setImmediate(resolve));
+        inFlight -= 1;
+        return ready({ pullRequest: summary(number, number === 13 ? { checksState } : {}) }) as GitHubPullRequestStatus;
+      },
+    } as never,
+    { onChanged: () => (changes += 1) },
+  );
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/13" });
+  const linked = changes;
+
+  await service.refresh(CHAT);
+  assert.equal(changes, linked, "an unchanged refresh is silent");
+  assert.equal(maxInFlight, 2);
+
+  checksState = "failing";
+  const refreshed = await service.refresh(CHAT);
+  assert.equal(changes, linked + 1);
+  assert.equal(refreshed.links.find((link) => link.number === 13)?.checksState, "failing");
+});
+
+test("explicit refresh bypasses a fresh background cache after remote CI changes", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const github = new FakeGitHub({
+    repositories: ["owner/repo"],
+    pullRequests: [
+      {
+        repository: "owner/repo",
+        number: 12,
+        title: "PR 12",
+        state: "OPEN",
+        headRefName: "feature/x",
+        baseRefName: "main",
+        headRefOid: "a".repeat(40),
+        headOwner: "owner",
+        checks: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  });
+  const recorded = recordingFetch(github.responder);
+  const pullRequests = new GitHubPullRequestService({
+    reader: new BatchedPullRequestReader({
+      api: new GitHubApi({
+        credentials: fixedCredentials({ "github.com": "token-a" }),
+        fetch: recorded.fetch,
+      }),
+    }),
+    repositories: {
+      resolve: async () => ({
+        ok: true,
+        repository: { host: "github.com", owner: "owner", name: "repo" },
+      }),
+    },
+    resolveBinary: async () => "gh",
+  });
+  const service = new ChatPullRequestService({
+    store: new ChatPullRequestStore(() => directory),
+    github: pullRequests,
+    gitInfo: async () => ({ isRepo: true, branch: "feature/x" }),
+    chatWorkspaceId: async () => "workspace-1",
+    workspaceFolderPath: async () => "/work/repo",
+  });
+
+  const linked = await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
+  assert.equal(linked.ok && linked.pullRequest?.checksState, "passing");
+  github.pullRequest("owner/repo", 12).checks = [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }];
+  const afterLink = recorded.requests.length;
+  const stale = await pullRequests.getPullRequest("/work/repo", "github.com/owner/repo", 12);
+  assert.equal(stale.pullRequest?.checksState, "passing");
+  assert.equal(recorded.requests.length, afterLink, "background reads reuse the cached snapshot");
+  const refreshed = await service.refresh(CHAT);
+  assert.equal(refreshed.links[0]?.checksState, "failing");
+  assert.ok(recorded.requests.length > afterLink);
 });

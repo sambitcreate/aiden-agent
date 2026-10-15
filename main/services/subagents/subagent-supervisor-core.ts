@@ -35,8 +35,12 @@ import { normalizeSubagentModelText } from "./model-text.js";
 import {
   SubagentEventProjector,
   type SubagentRunIdentity,
+  type SubagentRunModelProjection,
 } from "./subagent-event-projector.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
+import type { SubagentChildModel, SubagentChildModelResolver } from "./subagent-model-runtime.js";
+import type { SubagentChildModelBinding } from "./subagent-foreground-persistence-v2.js";
+import type { SubagentModelToolOptions } from "./subagent-model-selection.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { reportedTokens } from "../usage-accounting.js";
@@ -134,7 +138,16 @@ export interface SubagentSupervisorInput {
     signal: AbortSignal;
     stop(reason?: Error): void;
     parentAuthority?: SubagentAuthorityV2;
+    /** Host-resolved child runtime and effort; absent when the child inherits the parent. */
+    childModel?: SubagentChildModelBinding;
   }) => Promise<PreparedSubagentRun>;
+  /**
+   * Host-owned per-child model resolver. Absent means every child runs on the
+   * parent runtime. It never sees or changes capabilities or approvals.
+   */
+  selectChildModel?: SubagentChildModelResolver<ResolvedModelRuntime>;
+  /** Requestable models and efforts advertised on nested subagent tools. */
+  modelOptions?: SubagentModelToolOptions;
   projector?: SubagentEventProjector;
   healthMetrics?: SubagentHealthMetricsSink;
   policy?: SubagentSupervisorPolicy;
@@ -193,6 +206,27 @@ function logicalToolCeiling(authority: SubagentAuthorityV2): string[] {
       ),
     ),
   ].sort();
+}
+
+function childModelBinding(
+  model: SubagentChildModel<ResolvedModelRuntime> | undefined,
+): { childModel?: SubagentChildModelBinding } {
+  return model
+    ? { childModel: { runtime: model.runtime, thinkingLevel: model.selection.effort } }
+    : {};
+}
+
+function childModelProjection(
+  model: SubagentChildModel<ResolvedModelRuntime> | undefined,
+): SubagentRunModelProjection | undefined {
+  if (!model) return undefined;
+  return {
+    providerId: model.selection.providerId,
+    modelId: model.selection.modelId,
+    thinkingLevel: model.selection.effort,
+    modelSelection: model.selection.modelSource,
+    contextWindow: model.runtime.model.contextWindow,
+  };
 }
 
 function safeFailedResult(request: SubagentTaskRequest): SubagentTaskResult {
@@ -266,11 +300,26 @@ function fairSectionBudgets(
   return budgets;
 }
 
-function formatResults(results: readonly SubagentTaskResult[]): string {
+function modelResultLines(
+  model: SubagentChildModel<ResolvedModelRuntime> | undefined,
+): string[] {
+  if (!model) return [];
+  const { selection } = model;
+  return [
+    `Model: ${normalizeSubagentModelText(`${selection.providerId}/${selection.modelId}`)} (effort ${selection.effort})`,
+    ...selection.warnings.map((warning) => `Model note: ${normalizeSubagentModelText(warning)}`),
+  ];
+}
+
+function formatResults(
+  results: readonly SubagentTaskResult[],
+  models: readonly (SubagentChildModel<ResolvedModelRuntime> | undefined)[] = [],
+): string {
   const sections = results.map((result, index) =>
     [
       `## ${index + 1}. ${normalizeSubagentModelText(result.label)}`,
       `Role: ${result.role}`,
+      ...modelResultLines(models[index]),
       `Status: ${result.status}`,
       "",
       quoteUntrustedReport(result.summary || result.warning || "[No result.]"),
@@ -325,6 +374,8 @@ export class SubagentSupervisor {
   ) => Promise<SubagentTaskResult>;
   private readonly randomUUID: () => string;
   private readonly terminalHealthRuns = new Set<string>();
+  /** Depth-1 child models, so a depth-2 child inherits from its own parent. */
+  private readonly childModels = new Map<string, SubagentChildModel<ResolvedModelRuntime>>();
 
   constructor(private readonly input: SubagentSupervisorInput) {
     this.input = { ...input, compactionModelOverrides: input.compactionModelOverrides
@@ -369,6 +420,33 @@ export class SubagentSupervisor {
 
   flush(): Promise<void> {
     return this.input.projector?.flush() ?? Promise.resolve();
+  }
+
+  /**
+   * Resolve every child's model before any preparation, projection, or
+   * provider work. A refused selection fails the whole batch with the allowed
+   * values; nothing is launched and no model silently falls back.
+   */
+  private async resolveChildModels(
+    tasks: readonly SubagentTaskRequest[],
+    signal: AbortSignal,
+    inheritFrom?: SubagentChildModel<ResolvedModelRuntime>,
+  ): Promise<(SubagentChildModel<ResolvedModelRuntime> | undefined)[]> {
+    const select = this.input.selectChildModel;
+    if (!select) return tasks.map(() => inheritFrom);
+    return Promise.all(
+      tasks.map((task) =>
+        select(
+          {
+            role: task.role,
+            ...(task.model === undefined ? {} : { model: task.model }),
+            ...(task.effort === undefined ? {} : { effort: task.effort }),
+          },
+          signal,
+          inheritFrom,
+        ),
+      ),
+    );
   }
 
   private finishRun(runId: string, result: SubagentTaskResult): void {
@@ -453,6 +531,11 @@ export class SubagentSupervisor {
         "Nested subagent parent authority expired before launch.",
       );
     }
+    const childModels = await this.resolveChildModels(
+      request.tasks,
+      input.signal ?? new AbortController().signal,
+      this.childModels.get(input.parentAuthority.runId),
+    );
     this.calls += 1;
     const groupId = `${input.parentAuthority.runId}:nested-${this.calls}`;
     const identities = request.tasks.map(() => {
@@ -489,6 +572,7 @@ export class SubagentSupervisor {
             deadlineMs: liveDeadlineMs,
             signal: signals[index]!,
             parentAuthority: input.parentAuthority,
+            ...childModelBinding(childModels[index]),
             stop: (reason = new Error("Nested subagent run stopped.")) => {
               if (!controllers[index]!.signal.aborted)
                 controllers[index]!.abort(reason);
@@ -534,7 +618,8 @@ export class SubagentSupervisor {
           request.tasks.map((task, index) => ({
             node: nodes[index]!,
             deployment:
-              this.input.runtime.provider.deployment === "local"
+              (childModels[index]?.runtime ?? this.input.runtime).provider
+                .deployment === "local"
                 ? "local"
                 : "hosted",
             cancelledResult: safeInterruptedResult(task),
@@ -575,7 +660,7 @@ export class SubagentSupervisor {
                   runId: identity.runId,
                   childId: identity.childId,
                   groupId,
-                  runtime: this.input.runtime,
+                  runtime: childModels[index]?.runtime ?? this.input.runtime,
                   thinkingLevel: authority.thinkingLevel,
                   compactionEngine: this.input.compactionEngine,
                   compactionModelOverrides: this.input.compactionModelOverrides,
@@ -624,7 +709,7 @@ export class SubagentSupervisor {
                     revisionHash: context.revisionHash,
                     messages: cloneSubagentContextMessages(
                       context,
-                      this.input.runtime,
+                      childModels[index]?.runtime ?? this.input.runtime,
                     ),
                   },
                   request: task,
@@ -795,7 +880,11 @@ export class SubagentSupervisor {
       }
       try {
         for (const [index, task] of request.tasks.entries()) {
-          this.input.projector?.begin(identities[index]!, task);
+          this.input.projector?.begin(
+            identities[index]!,
+            task,
+            childModelProjection(childModels[index]),
+          );
           projected.add(identities[index]!.runId);
         }
         await this.input.projector?.flush();
@@ -810,7 +899,10 @@ export class SubagentSupervisor {
         await Promise.allSettled([nestedExecution]);
         throw reason;
       }
-      return formatResults((await nestedExecution) as SubagentTaskResult[]);
+      return formatResults(
+        (await nestedExecution) as SubagentTaskResult[],
+        childModels,
+      );
     } catch (error) {
       const reason =
         error instanceof Error
@@ -988,6 +1080,7 @@ export class SubagentSupervisor {
 
     const preparedRuns = new Map<string, PreparedSubagentRun>();
     const projectedRunIds = new Set<string>();
+    let childModels: (SubagentChildModel<ResolvedModelRuntime> | undefined)[] = [];
     let results: SubagentTaskResult[];
     try {
       const contextCapture =
@@ -1016,6 +1109,13 @@ export class SubagentSupervisor {
               generationId: this.input.generationId,
             });
       if (executionController.signal.aborted) await executionCancelled;
+      childModels = await Promise.race([
+        this.resolveChildModels(request.tasks, executionController.signal),
+        executionCancelled,
+      ]);
+      childModels.forEach((model, index) => {
+        if (model) this.childModels.set(identities[index]!.runId, model);
+      });
 
       if (this.input.prepareRun) {
         const preparations = await Promise.allSettled(
@@ -1031,6 +1131,7 @@ export class SubagentSupervisor {
               contextRevision: contextCapture.revisionHash,
               deadlineMs,
               signal: childSignals[index]!,
+              ...childModelBinding(childModels[index]),
               stop: (reason = new Error("Subagent run stopped.")) => {
                 const controller = childControllers[index]!;
                 if (!controller.signal.aborted) controller.abort(reason);
@@ -1073,7 +1174,11 @@ export class SubagentSupervisor {
       // settled, then await the canonical initial durability barrier.
       for (const [index, task] of request.tasks.entries()) {
         const identity = identities[index]!;
-        this.input.projector?.begin(identity, task);
+        this.input.projector?.begin(
+          identity,
+          task,
+          childModelProjection(childModels[index]),
+        );
         projectedRunIds.add(identity.runId);
       }
       // Once projection starts, do not let cancellation race past this exact
@@ -1119,8 +1224,9 @@ export class SubagentSupervisor {
               runId: identity.runId,
               childId: identity.childId,
               groupId,
-              runtime: this.input.runtime,
-              thinkingLevel: this.input.thinkingLevel,
+              runtime: childModels[index]?.runtime ?? this.input.runtime,
+              thinkingLevel:
+                childModels[index]?.selection.effort ?? this.input.thinkingLevel,
               compactionEngine: this.input.compactionEngine,
                   compactionModelOverrides: this.input.compactionModelOverrides,
               workspaceRoot: this.input.workspaceRoot,
@@ -1181,12 +1287,13 @@ export class SubagentSupervisor {
                           abortExecution("interrupted", reason),
                       })
                   : undefined,
+              nestedModelOptions: this.input.modelOptions,
               context: {
                 mode: contextCapture.mode,
                 revisionHash: contextCapture.revisionHash,
                 messages: cloneSubagentContextMessages(
                   contextCapture,
-                  this.input.runtime,
+                  childModels[index]?.runtime ?? this.input.runtime,
                 ),
               },
               request: task,
@@ -1402,8 +1509,6 @@ export class SubagentSupervisor {
               authority.workspaceId !== first.workspaceId ||
               authority.workspaceRevision !== first.workspaceRevision ||
               authority.ownerDocumentId !== first.ownerDocumentId ||
-              authority.providerFingerprint !== first.providerFingerprint ||
-              authority.modelFingerprint !== first.modelFingerprint ||
               authority.contextRevision !== first.contextRevision ||
               authority.execution !== "foreground" ||
               authority.depth !== 1,
@@ -1424,6 +1529,8 @@ export class SubagentSupervisor {
               workspaceRevision: first.workspaceRevision,
               ownerDocumentId: first.ownerDocumentId,
             },
+            // Siblings may run different approved models; each child's exact
+            // runtime is bound in its own authority, not in this shared root.
             runtime: {
               providerFingerprint: first.providerFingerprint,
               modelFingerprint: first.modelFingerprint,
@@ -1524,7 +1631,8 @@ export class SubagentSupervisor {
             request.tasks.map((task, index) => ({
               node: nodes[index]!,
               deployment:
-                this.input.runtime.provider.deployment === "local"
+                (childModels[index]?.runtime ?? this.input.runtime).provider
+                  .deployment === "local"
                   ? "local"
                   : "hosted",
               cancelledResult: safeInterruptedResult(task),
@@ -1598,6 +1706,6 @@ export class SubagentSupervisor {
         ? signal.reason
         : new Error("Parent generation cancelled.");
     }
-    return formatResults(results);
+    return formatResults(results, childModels);
   }
 }

@@ -123,10 +123,6 @@ export interface RemoteBotGroup {
   bots: RemoteBotChoice[];
 }
 
-function archived(row: PeerFeedRow): boolean {
-  return row.health === "archived" || text(row, "archivedAt") !== undefined;
-}
-
 /**
  * Each paired host's Bots, grouped by host. Archived Bots are left out, since
  * they cannot start or continue work. A host that cannot open Bot chats for
@@ -141,7 +137,6 @@ export function remoteBotGroups(
   const groups: RemoteBotGroup[] = [];
   for (const host of sidebarHosts(views, statuses)) {
     const bots = (feeds.get(host.id)?.bots ?? [])
-      .filter((row) => !archived(row))
       .map((row) => {
         const purpose = text(row, "purpose");
         return { id: row.id, name: text(row, "name") ?? "Untitled Bot", ...(purpose ? { purpose } : {}) };

@@ -1,6 +1,8 @@
 package sbtbiswas.AidenOnTheGo.notifications
 
 import java.time.Instant
+import sbtbiswas.AidenOnTheGo.R
+import androidx.annotation.StringRes
 
 data class AgentRunContentState(
     val sessionId: String,
@@ -15,19 +17,23 @@ data class AgentRunContentState(
     val errorSummary: String? = null
 )
 
-enum class AgentRunActivityStatus(val title: String, val compactTitle: String) {
-    STARTING("Starting", "Start"),
-    THINKING("Thinking", "Think"),
-    USING_TOOL("Using tool", "Tool"),
-    SEARCHING_FILES("Searching files", "Search"),
-    READING_FILES("Reading files", "Files"),
-    RUNNING_COMMAND("Running command", "Cmd"),
-    RESPONDING("Responding", "Reply"),
-    WAITING_FOR_APPROVAL("Waiting for approval", "Approve"),
-    WAITING_FOR_ANSWER("Waiting for answer", "Answer"),
-    COMPLETE("Complete", "Done"),
-    FAILED("Failed", "Fail"),
-    CANCELLED("Cancelled", "Stop")
+/**
+ * [title] is the English status the in-app progress line uses; notifications show the
+ * localized [titleRes] instead.
+ */
+enum class AgentRunActivityStatus(val title: String, val compactTitle: String, @StringRes val titleRes: Int) {
+    STARTING("Starting", "Start", R.string.notification_agent_status_starting),
+    THINKING("Thinking", "Think", R.string.notification_agent_status_thinking),
+    USING_TOOL("Using tool", "Tool", R.string.notification_agent_status_using_tool),
+    SEARCHING_FILES("Searching files", "Search", R.string.notification_agent_status_searching_files),
+    READING_FILES("Reading files", "Files", R.string.notification_agent_status_reading_files),
+    RUNNING_COMMAND("Running command", "Cmd", R.string.notification_agent_status_running_command),
+    RESPONDING("Responding", "Reply", R.string.notification_agent_status_responding),
+    WAITING_FOR_APPROVAL("Waiting for approval", "Approve", R.string.notification_agent_status_waiting_approval),
+    WAITING_FOR_ANSWER("Waiting for answer", "Answer", R.string.notification_agent_status_waiting_answer),
+    COMPLETE("Complete", "Done", R.string.notification_agent_status_complete),
+    FAILED("Failed", "Fail", R.string.notification_agent_status_failed),
+    CANCELLED("Cancelled", "Stop", R.string.notification_agent_status_cancelled)
 }
 
 /**

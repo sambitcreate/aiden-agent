@@ -1,7 +1,16 @@
 import * as React from "react";
-import { Button, Field, FieldSet, Input, Switch, Text } from "../ui";
+import {
+  Button, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem,
+  Field, FieldSet, Input, Select, SelectContent, SelectItem,
+  SelectTrigger, SelectValue, Switch, Text,
+} from "../ui";
 import type { ModelInfo, ProviderModelMetadata } from "../../lib/types";
-import type { CustomModelOptions } from "../../shared/custom-model-options";
+import { customModelThinkingLevels, type CustomModelOptions } from "../../shared/custom-model-options";
+import { GENERATION_THINKING_LEVELS, type GenerationThinkingLevel } from "../../shared/generation-thinking";
+
+const effortLabels: Record<GenerationThinkingLevel, string> = {
+  off: "None", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max",
+};
 
 export function CustomModelOptionsEditor({
   models,
@@ -9,6 +18,7 @@ export function CustomModelOptionsEditor({
   info,
   disabled,
   modelsStale,
+  supportsEffortControl = true,
   onChange,
   onAdd,
 }: {
@@ -17,6 +27,7 @@ export function CustomModelOptionsEditor({
   info?: Record<string, ModelInfo>;
   disabled: boolean;
   modelsStale: boolean;
+  supportsEffortControl?: boolean;
   onChange: (id: string, options: CustomModelOptions | undefined) => void;
   onAdd: (id: string) => void;
 }) {
@@ -58,6 +69,7 @@ export function CustomModelOptionsEditor({
       </Text>
       {models.map((id) => {
         const overrides = metadata[id]?.overrides ?? {};
+        const effortLevels = customModelThinkingLevels(overrides) ?? [];
         const effective = {
           ...metadata[id],
           ...(info?.[id]?.detectedCapabilities ?? info?.[id]),
@@ -91,11 +103,75 @@ export function CustomModelOptionsEditor({
                     onCheckedChange={(checked) => {
                       const next = { ...overrides, [key]: checked };
                       if (key === "vision" && checked && next.maxImages === 0) delete next.maxImages;
+                      if (key === "reasoning" && !checked) {
+                        delete next.effortControl;
+                        delete next.effortLevels;
+                      }
                       onChange(id, next);
                     }}
                   />
                 </Field>
               ))}
+              <Field
+                label="Effort request format"
+                description="Choose how your server accepts reasoning effort, then select its supported levels below."
+              >
+                <Select
+                  value={overrides.effortControl ?? "none"}
+                  disabled={disabled || !supportsEffortControl}
+                  onValueChange={(value) => {
+                    const next = { ...overrides };
+                    if (value === "none") { delete next.effortControl; delete next.effortLevels; }
+                    else if (value === "openai" || value === "glm") {
+                      next.effortControl = value;
+                      next.reasoning = true;
+                    }
+                    onChange(id, next);
+                  }}
+                >
+                  <SelectTrigger aria-label={`${id}: Effort request format`}>
+                    <SelectValue>{overrides.effortControl === "glm" ? "GLM / vLLM" : overrides.effortControl === "openai" ? "OpenAI-compatible" : "Not configured"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Not configured</SelectItem>
+                    <SelectItem value="openai">OpenAI-compatible</SelectItem>
+                    <SelectItem value="glm">GLM / vLLM</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field
+                label="Supported effort levels"
+                description="Select all levels this model supports. None disables thinking. Clear every choice to hide the composer selector."
+              >
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="small"
+                      aria-label={`${id}: Supported effort levels`}
+                      disabled={disabled || !supportsEffortControl || !overrides.effortControl}
+                      className="h-auto min-h-7 max-w-full whitespace-normal py-1 text-left"
+                    >
+                      {effortLevels.length ? effortLevels.map((level) => effortLabels[level]).join(", ") : "Select levels"}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {GENERATION_THINKING_LEVELS.map((level) => (
+                      <DropdownMenuCheckboxItem
+                        key={level}
+                        checked={effortLevels.includes(level)}
+                        onSelect={(event) => event.preventDefault()}
+                        onCheckedChange={(checked) => onChange(id, {
+                          ...overrides,
+                          effortLevels: GENERATION_THINKING_LEVELS.filter((candidate) =>
+                            candidate === level ? checked === true : effortLevels.includes(candidate)),
+                        })}
+                      >
+                        {effortLabels[level]}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </Field>
               {(
                 [
                   ["contextLength", "Context length (tokens)"],

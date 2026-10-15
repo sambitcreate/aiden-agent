@@ -1,21 +1,27 @@
 /**
  * Adapted from t3code apps/web/src/components/device/DeviceToolsPanel.tsx @ 1c127066 (MIT)
  *
- * The Device tools drawer for one open iOS simulator: the settings the
- * simulator reports, one control per typed action, and the frontmost app. The
- * accessibility overlay, event log, and host diagnostics are deferred (see the
- * Phase 3.5 plan).
+ * The Device tools drawer for one open iOS simulator or Android emulator: the
+ * settings the device reports, one control per typed action the platform
+ * supports, and the frontmost app. Callers mount the power-feature sections
+ * (accessibility overlay, event log, clipboard, erase) as children, and host
+ * diagnostics close the drawer.
  */
 import * as React from "react";
 import { X } from "lucide-react";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Text } from "./ui";
 import type { DeviceControls } from "../lib/device-controls";
-import type {
-  DeviceColorFilter,
-  DevicePermission,
-  DevicePermissionDecision,
-  DeviceTextSize,
-  DeviceToggle,
+import { DeviceHostDiagnostics } from "./device-host-diagnostics";
+import {
+  ANDROID_DEVICE_PERMISSIONS,
+  DEVICE_PLATFORM_TOGGLES,
+  type DeviceColorFilter,
+  type DeviceOrientationValue,
+  type DevicePermission,
+  type DevicePermissionDecision,
+  type DevicePlatform,
+  type DeviceTextSize,
+  type DeviceToggle,
 } from "../shared/devices";
 
 export const DEVICE_TEXT_SIZE_OPTIONS: ReadonlyArray<{ value: DeviceTextSize; label: string }> = [
@@ -33,12 +39,18 @@ const COLOR_FILTERS: ReadonlyArray<{ value: DeviceColorFilter; label: string }> 
   { value: "blue-yellow", label: "Blue / yellow (tritanopia)" },
 ];
 
-const TOGGLES: ReadonlyArray<{ setting: DeviceToggle; label: string }> = [
-  { setting: "reduceMotion", label: "Reduce Motion" },
-  { setting: "increaseContrast", label: "Increase Contrast" },
-  { setting: "reduceTransparency", label: "Reduce Transparency" },
-  { setting: "showBorders", label: "Show Borders" },
-  { setting: "voiceOver", label: "VoiceOver" },
+const TOGGLE_LABELS: Record<DeviceToggle, string> = {
+  reduceMotion: "Reduce Motion",
+  increaseContrast: "Increase Contrast",
+  reduceTransparency: "Reduce Transparency",
+  showBorders: "Show Borders",
+  voiceOver: "VoiceOver",
+  networkEnabled: "Network (Wi-Fi and data)",
+};
+
+export const DEVICE_ORIENTATION_OPTIONS: ReadonlyArray<{ value: DeviceOrientationValue; label: string }> = [
+  { value: "portrait", label: "Portrait" },
+  { value: "landscape_left", label: "Landscape" },
 ];
 
 const PERMISSIONS: ReadonlyArray<{ value: DevicePermission; label: string }> = [
@@ -63,8 +75,20 @@ export const DEVICE_LOCATION_PRESETS = [
   { label: "Tokyo", latitude: 35.6762, longitude: 139.6503 },
 ] as const;
 
-export function DeviceToolsPanel({ controls, onClose }: { controls: DeviceControls; onClose(): void }) {
+export function DeviceToolsPanel({
+  controls,
+  onClose,
+  children,
+  platform = "ios",
+}: React.PropsWithChildren<{
+  controls: DeviceControls;
+  onClose(): void;
+  /** Hides what the platform cannot do. Defaults to iOS. */
+  platform?: DevicePlatform;
+}>) {
   const { settings, pending, error, foregroundApp, disabled, act } = controls;
+  const android = platform === "android";
+  const appIdLabel = android ? "Package name" : "Bundle ID";
   return (
     <section className="device-tools" aria-labelledby="device-tools-title" aria-busy={pending}>
       <header className="device-tools-header">
@@ -83,7 +107,7 @@ export function DeviceToolsPanel({ controls, onClose }: { controls: DeviceContro
         ) : null}
         {settings === null && !error ? (
           <Text variant="small" color="secondary" className="device-tools-note" role="status">
-            Reading simulator settings…
+            {android ? "Reading emulator settings…" : "Reading simulator settings…"}
           </Text>
         ) : null}
 
@@ -119,15 +143,15 @@ export function DeviceToolsPanel({ controls, onClose }: { controls: DeviceContro
             onSubmit={(url) => act({ type: "openUrl", url })}
           />
           <SubmitRow
-            label="Bundle ID to launch"
-            placeholder="Bundle ID to launch"
+            label={`${appIdLabel} to launch`}
+            placeholder={`${appIdLabel} to launch`}
             action="Launch"
             disabled={disabled}
             onSubmit={(appId) => act({ type: "launchApp", appId })}
           />
         </ToolsSection>
 
-        <ToolsSection title="Simulator">
+        <ToolsSection title={android ? "Emulator" : "Simulator"}>
           <Row label="Appearance">
             <Segmented
               label="Appearance"
@@ -149,36 +173,51 @@ export function DeviceToolsPanel({ controls, onClose }: { controls: DeviceContro
               onChange={(value) => void act({ type: "setTextSize", value })}
             />
           </Row>
-          <Row label="Liquid Glass">
-            <Segmented
-              label="Liquid Glass"
-              value={settings?.liquidGlass}
-              options={[
-                { value: "clear", label: "Clear" },
-                { value: "tinted", label: "Tinted" },
-              ]}
-              disabled={disabled || settings?.liquidGlass === undefined}
-              onChange={(value) => void act({ type: "setLiquidGlass", value })}
-            />
-          </Row>
-          <Row label="Color filter">
-            <ChoiceSelect
-              label="Color filter"
-              value={settings?.colorFilter}
-              options={COLOR_FILTERS}
-              disabled={disabled || settings?.colorFilter === undefined}
-              onChange={(value) => void act({ type: "setColorFilter", value })}
-            />
-          </Row>
-          {TOGGLES.map((toggle) => {
-            const checked = settings?.[toggle.setting];
+          {android ? (
+            <Row label="Orientation">
+              <Segmented
+                label="Orientation"
+                value={undefined}
+                options={DEVICE_ORIENTATION_OPTIONS}
+                disabled={disabled}
+                onChange={(value) => void act({ type: "setOrientation", value })}
+              />
+            </Row>
+          ) : (
+            <>
+              <Row label="Liquid Glass">
+                <Segmented
+                  label="Liquid Glass"
+                  value={settings?.liquidGlass}
+                  options={[
+                    { value: "clear", label: "Clear" },
+                    { value: "tinted", label: "Tinted" },
+                  ]}
+                  disabled={disabled || settings?.liquidGlass === undefined}
+                  onChange={(value) => void act({ type: "setLiquidGlass", value })}
+                />
+              </Row>
+              <Row label="Color filter">
+                <ChoiceSelect
+                  label="Color filter"
+                  value={settings?.colorFilter}
+                  options={COLOR_FILTERS}
+                  disabled={disabled || settings?.colorFilter === undefined}
+                  onChange={(value) => void act({ type: "setColorFilter", value })}
+                />
+              </Row>
+            </>
+          )}
+          {DEVICE_PLATFORM_TOGGLES[platform].map((setting) => {
+            const checked = settings?.[setting];
+            const label = TOGGLE_LABELS[setting];
             return (
-              <Row key={toggle.setting} label={toggle.label}>
+              <Row key={setting} label={label}>
                 <Switch
-                  aria-label={toggle.label}
+                  aria-label={label}
                   checked={checked ?? false}
                   disabled={disabled || checked === undefined}
-                  onCheckedChange={(value) => void act({ type: "setToggle", setting: toggle.setting, value })}
+                  onCheckedChange={(value) => void act({ type: "setToggle", setting, value })}
                 />
               </Row>
             );
@@ -187,38 +226,48 @@ export function DeviceToolsPanel({ controls, onClose }: { controls: DeviceContro
 
         <LocationSection
           disabled={disabled}
+          // The emulator keeps its last fix; there is nothing to clear.
+          clearable={!android}
           onSet={(latitude, longitude) => act({ type: "setLocation", latitude, longitude })}
           onClear={() => act({ type: "clearLocation" })}
         />
 
         <PermissionsSection
           defaultAppId={foregroundApp?.id ?? ""}
+          appIdLabel={appIdLabel}
+          permissions={android ? PERMISSIONS.filter((option) => isAndroidPermission(option.value)) : PERMISSIONS}
+          // Android has no reset; a revoke returns a runtime permission to "ask".
+          decisions={android ? ["grant", "revoke"] : ["grant", "revoke", "reset"]}
           disabled={disabled}
           onDecide={(appId, permission, decision) => act({ type: "setPermission", appId, permission, decision })}
         />
 
-        <ToolsSection title="Push notification">
-          <SubmitRow
-            label="Notification text"
-            placeholder="Alert text"
-            action="Send"
-            disabled={disabled || !foregroundApp}
-            onSubmit={(payload) =>
-              foregroundApp ? act({ type: "sendPush", appId: foregroundApp.id, payload }) : Promise.resolve(false)
-            }
-          />
-          {!foregroundApp ? (
-            <Text variant="small" color="secondary">
-              Open an app first. The notification goes to the frontmost app.
-            </Text>
-          ) : null}
-        </ToolsSection>
+        {android ? null : (
+          <ToolsSection title="Push notification">
+            <SubmitRow
+              label="Notification text"
+              placeholder="Alert text"
+              action="Send"
+              disabled={disabled || !foregroundApp}
+              onSubmit={(payload) =>
+                foregroundApp ? act({ type: "sendPush", appId: foregroundApp.id, payload }) : Promise.resolve(false)
+              }
+            />
+            {!foregroundApp ? (
+              <Text variant="small" color="secondary">
+                Open an app first. The notification goes to the frontmost app.
+              </Text>
+            ) : null}
+          </ToolsSection>
+        )}
+        {children}
+        <DeviceHostDiagnostics />
       </div>
     </section>
   );
 }
 
-function ToolsSection({ title, children }: React.PropsWithChildren<{ title: string }>) {
+export function ToolsSection({ title, children }: React.PropsWithChildren<{ title: string }>) {
   const id = React.useId();
   return (
     <section className="device-tools-section" aria-labelledby={id}>
@@ -230,7 +279,7 @@ function ToolsSection({ title, children }: React.PropsWithChildren<{ title: stri
   );
 }
 
-function Row({ label, children }: React.PropsWithChildren<{ label: string }>) {
+export function Row({ label, children }: React.PropsWithChildren<{ label: string }>) {
   return (
     <div className="device-tools-row">
       <Text variant="small" color="secondary" className="shrink-0">
@@ -335,6 +384,8 @@ function SubmitRow(props: {
   );
 }
 
+const DECISION_LABELS: Record<DevicePermissionDecision, string> = { grant: "Grant", revoke: "Revoke", reset: "Reset" };
+
 export function parseCoordinates(latitude: string, longitude: string): { latitude: number; longitude: number } | null {
   if (latitude.trim() === "" || longitude.trim() === "") return null;
   const parsed = { latitude: Number(latitude), longitude: Number(longitude) };
@@ -343,8 +394,12 @@ export function parseCoordinates(latitude: string, longitude: string): { latitud
   return parsed;
 }
 
+const isAndroidPermission = (permission: DevicePermission) =>
+  (ANDROID_DEVICE_PERMISSIONS as readonly DevicePermission[]).includes(permission);
+
 function LocationSection(props: {
   disabled: boolean;
+  clearable: boolean;
   onSet(latitude: number, longitude: number): Promise<boolean>;
   onClear(): Promise<boolean>;
 }) {
@@ -404,18 +459,20 @@ function LocationSection(props: {
         >
           Set
         </Button>
-        <Button
-          size="small"
-          variant="transparent"
-          disabled={props.disabled}
-          onClick={() => {
-            setLatitude("");
-            setLongitude("");
-            void props.onClear();
-          }}
-        >
-          Clear
-        </Button>
+        {props.clearable ? (
+          <Button
+            size="small"
+            variant="transparent"
+            disabled={props.disabled}
+            onClick={() => {
+              setLatitude("");
+              setLongitude("");
+              void props.onClear();
+            }}
+          >
+            Clear
+          </Button>
+        ) : null}
       </div>
     </ToolsSection>
   );
@@ -423,6 +480,9 @@ function LocationSection(props: {
 
 function PermissionsSection(props: {
   defaultAppId: string;
+  appIdLabel: string;
+  permissions: ReadonlyArray<{ value: DevicePermission; label: string }>;
+  decisions: readonly DevicePermissionDecision[];
   disabled: boolean;
   onDecide(appId: string, permission: DevicePermission, decision: DevicePermissionDecision): Promise<boolean>;
 }) {
@@ -434,9 +494,9 @@ function PermissionsSection(props: {
   return (
     <ToolsSection title="Permissions">
       <Input
-        aria-label="Bundle ID for permissions"
+        aria-label={`${props.appIdLabel} for permissions`}
         className="device-tools-input"
-        placeholder={props.defaultAppId || "Bundle ID"}
+        placeholder={props.defaultAppId || props.appIdLabel}
         value={appId}
         disabled={props.disabled}
         spellCheck={false}
@@ -447,19 +507,21 @@ function PermissionsSection(props: {
         <ChoiceSelect<DevicePermission>
           label="Permission"
           value={permission}
-          options={PERMISSIONS}
+          options={props.permissions}
           disabled={props.disabled}
           onChange={(value) => setPermission(value)}
         />
-        <Button size="small" variant="muted" disabled={unavailable} onClick={() => decide("grant")}>
-          Grant
-        </Button>
-        <Button size="small" variant="muted" disabled={unavailable} onClick={() => decide("revoke")}>
-          Revoke
-        </Button>
-        <Button size="small" variant="transparent" disabled={unavailable} onClick={() => decide("reset")}>
-          Reset
-        </Button>
+        {props.decisions.map((decision) => (
+          <Button
+            key={decision}
+            size="small"
+            variant={decision === "reset" ? "transparent" : "muted"}
+            disabled={unavailable}
+            onClick={() => decide(decision)}
+          >
+            {DECISION_LABELS[decision]}
+          </Button>
+        ))}
       </div>
     </ToolsSection>
   );

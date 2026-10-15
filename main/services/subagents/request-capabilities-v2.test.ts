@@ -658,3 +658,26 @@ test("subagents can never request or receive simulator device tools", () => {
     assert.deepEqual(tools.filter(({ name }) => isDeviceToolName(name)), [], role);
   }
 });
+
+test("per-task model and effort are optional, independently revalidated, and never widen capabilities", () => {
+  const plain = parseSubagentToolRequest({
+    tasks: [{ role: "scout", label: "Inspect", task: "Inspect files" }],
+  });
+  assert.equal("model" in plain.tasks[0]!, false);
+  assert.equal("effort" in plain.tasks[0]!, false);
+  const chosen = parseSubagentToolRequest({
+    tasks: [{ role: "scout", label: "Inspect", task: "Inspect files", model: "openrouter/qwen/qwen3", effort: "low" }],
+  });
+  assert.equal(chosen.tasks[0]?.model, "openrouter/qwen/qwen3");
+  assert.equal(chosen.tasks[0]?.effort, "low");
+  assert.deepEqual(
+    effectiveSubagentTaskCapabilities(chosen, chosen.tasks[0]!),
+    effectiveSubagentTaskCapabilities(plain, plain.tasks[0]!),
+  );
+  for (const invalid of [{ model: "no-provider" }, { model: " anthropic/x" }, { model: 7 }, { effort: "turbo" }]) {
+    assert.throws(
+      () => parseSubagentToolRequest({ tasks: [{ role: "scout", label: "Inspect", task: "Inspect files", ...invalid }] }),
+      /Invalid subagent (model|effort)/u,
+    );
+  }
+});

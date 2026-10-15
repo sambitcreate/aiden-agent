@@ -18,6 +18,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import sbtbiswas.AidenOnTheGo.config.AidenAppearanceConfig
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.AidenStillBottomSheetTag
 import sbtbiswas.AidenOnTheGo.models.AidenComposerSuggestion
 import sbtbiswas.AidenOnTheGo.models.AidenModel
 import sbtbiswas.AidenOnTheGo.models.AidenProvider
@@ -61,6 +63,35 @@ class AidenComposerUiTest {
         compose.onNodeWithContentDescription("Add attachment").performClick()
         compose.onNodeWithText("Choose File").assertExists().performClick()
         compose.runOnIdle { assertEquals(1, fileClicks) }
+    }
+
+    @Test
+    fun sameNamedAttachmentsRenderAndRemoveIndependently() {
+        val removed = mutableListOf<String>()
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = true,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    pendingAttachments = listOf(
+                        AidenComposerPendingAttachment(id = "first", name = "notes.txt", isImage = false),
+                        AidenComposerPendingAttachment(id = "second", name = "notes.txt", isImage = false)
+                    ),
+                    onRemoveAttachment = { removed += it.id }
+                )
+            }
+        }
+
+        val removeButtons = compose.onAllNodesWithContentDescription("Remove notes.txt")
+        removeButtons.assertCountEquals(2)
+        removeButtons[1].performClick()
+        compose.runOnIdle { assertEquals(listOf("second"), removed) }
     }
 
     /** Hosts the busy composer with the mode held the way the chat screen
@@ -428,6 +459,44 @@ class AidenComposerUiTest {
         compose.onNodeWithText("Model & Thinking").assertDoesNotExist()
         compose.onNode(hasText("Deep model") and isSelectable()).assertDoesNotExist()
         compose.onNodeWithText("Deep model").assertIsDisplayed()
+    }
+
+    @Test
+    fun aChatOnTheMacDefaultShowsACheckedDefaultRowNamingTheResolvedModel() {
+        val fast = AidenModel(id = "fast", label = "Fast model")
+        val deep = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    selectedProvider = null,
+                    selectedModel = null,
+                    availableProviders = listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(fast, deep))),
+                    onSelectModel = { p, m, l -> picks += PickedModel(p.id, m.id, l) },
+                    defaultModelRoute = AidenModelRoute("custom", "deep")
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.onNode(hasText("Default") and isSelectable()).assertIsSelected()
+        compose.onNodeWithText("Uses Deep model · Custom").assertIsDisplayed()
+        compose.onNode(hasText("Fast model") and isSelectable()).assertIsNotSelected()
+        compose.onNode(hasText("Deep model") and isSelectable()).assertIsNotSelected()
+
+        compose.onNode(hasText("Fast model") and isSelectable()).performClick()
+        compose.runOnIdle {
+            assertEquals("custom", picks.single().providerId)
+            assertEquals("fast", picks.single().modelId)
+        }
     }
 
     @Test

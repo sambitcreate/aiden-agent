@@ -1,6 +1,8 @@
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
-import { parseAgentsInstructionNotices, type AgentsInstructionNotice } from "../shared/agents-instructions-notice";
+import type { ModelPaceSummary } from "../shared/model-pace";
+import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
+import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
   TtsJobSnapshot,
@@ -45,8 +47,12 @@ import type {
   GitWorktree,
   LocalVoiceModel,
   McpServer,
+  McpLiveStatus,
   McpPresetState,
+  McpServerDependents,
   McpStatus,
+  McpToolSummary,
+  McpPendingLaunchApproval,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -92,7 +98,6 @@ import type {
   WebSearchKeyPoolStrategy,
 } from "../shared/web-search-key-pool";
 import {
-  parseAskUserQuestionPrompt,
   type AskUserQuestionAnswerStatus,
   type AskUserQuestionPromptV1,
   type AskUserQuestionResponseV1,
@@ -102,15 +107,13 @@ import type {
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
 } from "../shared/diagnostics";
+import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service";
 import type {
-  BotAvatarSuggestion,
-  BotAvatarSuggestionInput,
   BotCreateInput,
   BotDefinition,
   BotRendererCanonicalPhoto,
   BotUpdateInput,
 } from "../shared/bots";
-import { botAvatarSuggestionErrorMessage } from "../shared/bots";
 import type {
   BotAccessUpdate,
   BotAccessView,
@@ -125,7 +128,7 @@ export interface BotAccessState {
   modelSelection?: { providerId: string; modelId: string };
   visionModelSelection?: { providerId: string; modelId: string };
 }
-import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
+import type { GenerationTimeline } from "../shared/generation-timeline";
 import type {
   ChatRunInputAdmissionResult,
   ChatRunInputMode,
@@ -134,7 +137,6 @@ import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
 import {
   parseSubagentHistoryDetailV1,
-  parseSubagentRunSnapshot,
   type SubagentHistoryDetailV1,
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
@@ -160,26 +162,26 @@ import {
   parseChatReadResponse,
   rememberChatReadReconciliation,
   rememberDetachedLifecycleStream,
+  rememberOwnGenerationStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
-import {
-  restoreUndeliveredGuidance,
-  undeliveredGuidanceFromTerminal,
-} from "./composer-draft-store";
 import type {
   AidenRemoteConnectionMode,
   AidenRemoteBeginPairingResult,
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
-import {
-  chatArtifactIdentity,
-  parseChatArtifactEventV1,
-  type ChatArtifactEventV1,
-  type ChatArtifactV1,
-} from "../shared/chat-artifacts";
-import { mergeSubagentSnapshots } from "./subagent-view-state";
+import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type {
+  ImageGenerationActionResult,
+  ImageGenerationAddCustomModelRequest,
+  ImageGenerationProviderId,
+  ImageGenerationState,
+  ImageModelRef,
+  ImageGenerationSetModelEnabledRequest,
+} from "../shared/image-generation/types";
+import { subscribeGenerationStream } from "./generation-stream";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import type {
   ChatPullRequestCandidatesResult,
@@ -190,8 +192,14 @@ import type {
   ChatPullRequestPendingCreate,
   ChatPullRequestRef,
   ChatPullRequestView,
+  ChatSidebarPullRequests,
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import {
+  parseDeviceHostCheck,
+  type DeviceHostCheck,
+  type SshDeviceHostConfig,
+} from "../shared/device-ssh-hosts";
 import {
   parseChatContextPressure,
   parseChatContextPressureNotification,
@@ -210,6 +218,14 @@ import {
   type DeviceStreamGrant,
   type DeviceToolchainState,
 } from "../shared/devices";
+import {
+  parseDeviceRecordingInfo,
+  parseDeviceRecordingList,
+  parseDeviceSaveResult,
+  type DeviceFeatureTarget,
+  type DeviceRecordingInfo,
+  type DeviceSaveResult,
+} from "../shared/device-features";
 import type {
   PeerDiscoveryState,
   PeerHostFeedMessage,
@@ -225,6 +241,7 @@ import type {
   PeerRunTarget,
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
+import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -237,6 +254,23 @@ export interface AppInfo {
   capabilities: AppCapabilities;
 }
 
+
+/**
+ * Runs this Mac hosts but this window did not start (a paired phone's turn,
+ * another window's). Frames arrive batched, only for this window's own
+ * observations.
+ */
+export const localRunsApi = {
+  observe: (chatId: string, cursor?: LocalRunCursor) =>
+    invoke<PeerRunSubscription>("runs:observeLocal", chatId, cursor ?? null),
+  unobserve: (subscriptionId: string) => invoke<boolean>("runs:unobserveLocal", subscriptionId),
+  onFrame: (handler: (message: LocalRunFrameMessage) => void) =>
+    onNotification<LocalRunFrameMessage>("runs:local-frame", handler),
+  /** Host-authority Stop for a run this window observes; false when it already finished. */
+  stop: (runId: string) => invoke<boolean>("runs:stopLocal", runId),
+  /** The given runs that have finished for good on this Mac. */
+  settled: (runIds: readonly string[]) => invoke<string[]>("runs:settledLocal", [...runIds]),
+};
 
 export const peerHostsApi = {
   removeRoute: (hostId: string, routeId: string) => invoke<void>("remote:peerRouteRemove", hostId, routeId),
@@ -301,7 +335,7 @@ export const appApi = {
     invoke<OnboardingSnapshot>("app:getOnboardingState", legacyComplete),
   setOnboardingOutcome: (outcome: OnboardingOutcome, selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
-  setOnboardingProgress: (step: "profile" | "provider", selectedProviderId?: string) =>
+  setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
@@ -376,6 +410,25 @@ export const providersApi = {
     onNotification("providers:auth:status-changed", handler),
 };
 
+async function harnessStatus(channel: string, providerId: string): Promise<AcpHarnessStatus> {
+  const status = parseAcpHarnessStatus(await invoke<unknown>(channel, providerId));
+  if (!status) throw new Error("Aiden returned an invalid runtime status.");
+  return status;
+}
+
+/** Managed runtimes for agent-backed providers such as Google Antigravity. */
+export const harnessApi = {
+  status: (providerId: string) => harnessStatus("providers:harness:status", providerId),
+  install: (providerId: string) => harnessStatus("providers:harness:install", providerId),
+  cancelInstall: (providerId: string) => invoke<void>("providers:harness:cancel", providerId),
+  remove: (providerId: string) => harnessStatus("providers:harness:remove", providerId),
+  onChanged: (handler: (status: AcpHarnessStatus) => void) =>
+    onNotification<unknown>(ACP_HARNESS_STATUS_CHANNEL, (payload) => {
+      const status = parseAcpHarnessStatus(payload);
+      if (status) handler(status);
+    }),
+};
+
 
 export const assistantApi = {
   config: () => invoke<AssistantConfigSnapshot>("assistant:get-config"),
@@ -407,10 +460,41 @@ export const modelInsightsApi = {
   disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
 };
 
+/** Settings → Image Generation. Keys go in only; state is redacted. */
+export const imageGenerationApi = {
+  state: () => invoke<ImageGenerationState>("imageGeneration:state"),
+  setKey: (provider: ImageGenerationProviderId, key: string) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setKey", { provider, key }),
+  removeKey: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeKey", { provider }),
+  setModelEnabled: (provider: ImageGenerationProviderId, id: string, enabled: boolean) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelEnabled", { provider, id, enabled }),
+  /** One write for many enable choices (Settings' bulk actions). */
+  setModelsEnabled: (changes: ImageGenerationSetModelEnabledRequest[]) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelsEnabled", { changes }),
+  setDefaultModel: (model: ImageModelRef | null) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setDefaultModel", model),
+  addCustomModel: (request: ImageGenerationAddCustomModelRequest) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:addCustomModel", request),
+  removeCustomModel: (model: ImageModelRef) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeCustomModel", model),
+  /** User-initiated only: the one network path on this page. */
+  fetchModels: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:fetchModels", { provider }),
+};
+
+/** Device-local measured pace; reads never touch the network. */
+export const modelPaceApi = {
+  summaries: () => invoke<Record<string, ModelPaceSummary>>("modelPace:summaries"),
+  clear: () => invoke<void>("modelPace:clear"),
+};
+
 export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+  /** Clear every chat's Computer Use grant and turn off Always allow. */
+  resetChatGrants: () => invoke<{ cleared: number }>("computerUse:resetChatGrants"),
 };
 
 export const formFillApi = {
@@ -478,12 +562,31 @@ export const mcpApi = {
   /** Save (or clear, with an empty string) a preset's API key. Keys never come back. */
   setPresetKey: (serverId: string, key: string) =>
     invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
-  save: (server: McpServer) => invoke<McpServer>("mcp:save", server),
+  /** Resolves to the stored record (env/header values replaced by markers). `approveLaunch`: the editor, which shows the command, approves a local server to run. `fromEditor`: an editor save (sign-in and provider consent included), so kept values may follow an address it changed. */
+  save: (server: McpServer, options?: { approveLaunch?: boolean; fromEditor?: boolean }) => invoke<McpServer>("mcp:save", server, options),
+  /** Local servers not approved to run on this device (added or changed outside Aiden). */
+  launchApprovals: () => invoke<McpPendingLaunchApproval[]>("mcp:launchApprovals"),
+  approveLaunch: (id: string, fingerprint: string) => invoke<{ approved: true }>("mcp:approveLaunch", id, fingerprint),
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) => invoke<{ authorized: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+  /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
+  cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
+  /** Forget this server's OAuth session and disconnect it. */
+  signOut: (id: string) => invoke<{ authorized: false }>("mcp:signOut", id),
+  /** Connect to an unsaved draft without persisting it. `apiKey` is a pasted, unsaved preset key. */
+  testDraft: (server: McpServer, apiKey?: string) => invoke<McpStatus>("mcp:testDraft", server, apiKey),
+  /** Schedules and Bots that rely on this server. */
+  dependents: (id: string) => invoke<McpServerDependents>("mcp:dependents", id),
+  /** Current per-server live status; changes arrive on `mcp:statusChanged`. */
+  liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
+  /** The server's tools from its last discovery (never connects); null when none yet. */
+  toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
+  onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
+    onNotification<McpLiveStatus>("mcp:statusChanged", handler),
+  oauthStatus: (id: string) =>
+    invoke<{ authorized: boolean; needsSignIn?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
   providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
@@ -646,6 +749,10 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
   pendingApproval: (chatId: string) =>
     invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
+  pendingQuestion: (chatId: string) =>
+    invoke<(AskUserQuestionPromptV1 & { source: "remote" }) | null>("remote:getPendingQuestion", chatId),
+  respondQuestion: (chatId: string, promptId: string, response: AskUserQuestionResponseV1) =>
+    invoke<{ status: "answered" | "elsewhere" }>("remote:respondQuestionFromHost", chatId, promptId, response),
   respondApproval: (
     chatId: string,
     approvalId: string,
@@ -692,7 +799,7 @@ export interface ModelDownloadProgress {
   downloaded: number;
   total: number;
   percentage: number;
-  phase: "download" | "extract";
+  phase: "download" | "verify" | "extract";
 }
 
 export const shortcutApi = {
@@ -810,6 +917,11 @@ export const browserApi = {
     ),
   onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+  linkPreference: () =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:link-preference"),
+  setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
+  openExternal: (url: string) => invoke<void>("browser:open-external", url),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
@@ -863,18 +975,80 @@ export const devicesApi = {
   pruneTools: () => invokeDeviceToolchain("devices:prune-tools"),
   /** Turns every simulator permission off and deletes the installed helpers. */
   removeTools: () => invokeDeviceState("devices:remove-tools"),
+  /** An explicit Start, Connect, or Retry for one host; approved outdated helpers update here. */
+  startHost: (hostId: string) => invokeDeviceState("devices:start-host", hostId),
+  /** Installs or updates one pinned helper on a host after the user confirmed it. */
+  updateTool: (input: { hostId: string; tool: "hub" | "agent" }) => invokeDeviceState("devices:update-tool", input),
+  /** Reads helper versions; contacts SSH hosts but never installs or starts anything. */
+  inspectTools: () => invokeDeviceState("devices:inspect-tools"),
+  saveSshHost: (config: SshDeviceHostConfig) => invokeDeviceState("devices:ssh-save", config),
+  removeSshHost: (hostId: string) => invokeDeviceState("devices:ssh-remove", hostId),
+  /** **Test connection**: contacts the host once; never installs or starts anything there. */
+  testSshHost: async (config: SshDeviceHostConfig): Promise<DeviceHostCheck> => {
+    const check = parseDeviceHostCheck(await invoke<unknown>("devices:ssh-test", config));
+    if (!check) throw new Error("The connection check response was invalid.");
+    return check;
+  },
   onState: (handler: (state: DeviceServiceState) => void) =>
     onNotification<unknown>("devices:state", (payload) => {
       const state = parseDeviceServiceState(payload);
       if (state) handler(state);
     }),
-  /** An agent opened a simulator for this chat; the Simulator tab should come forward. */
-  onReveal: (handler: (chatId: string) => void) =>
+  /** The native trackpad gesture ended (Electron's `gestureScrollEnd`), so a 3D orbit can settle. */
+  onTrackpadScrollEnd: (handler: () => void) => onNotification<unknown>("devices:trackpad-scroll-end", () => handler()),
+  /** An agent opened a device for this chat; it floats over the chat or its tab comes forward. */
+  onReveal: (handler: (chatId: string, target?: { hostId: string; deviceId: string }) => void) =>
     onNotification<unknown>("devices:reveal", (payload) => {
-      const chatId = (payload as { chatId?: unknown } | null)?.chatId;
-      if (typeof chatId === "string" && chatId) handler(chatId);
+      const value = (payload ?? {}) as { chatId?: unknown; hostId?: unknown; deviceId?: unknown };
+      if (typeof value.chatId !== "string" || !value.chatId) return;
+      const target =
+        typeof value.hostId === "string" && value.hostId && typeof value.deviceId === "string" && value.deviceId
+          ? { hostId: value.hostId, deviceId: value.deviceId }
+          : undefined;
+      handler(value.chatId, target);
+    }),
+  /** Shuts the device down if it is booted, then erases it. `deviceId` is its id now (an emulator goes back to its AVD name). */
+  erase: (target: DeviceFeatureTarget) => invoke<{ wasBooted: boolean; deviceId: string }>("devices:erase", target),
+  /** Host clipboard text to the device: the simulator pasteboard (send Cmd+V afterwards), or typed into the emulator. */
+  pasteClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-paste", target),
+  /** The simulator's pasteboard text onto the host clipboard. */
+  copyClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-copy", target),
+  recordings: async (): Promise<DeviceRecordingInfo[]> => {
+    const list = parseDeviceRecordingList(await invoke<unknown>("devices:recordings-list"));
+    if (!list) throw new Error("The simulator recordings response was invalid.");
+    return list;
+  },
+  startRecording: async (input: DeviceFeatureTarget & { chatId: string }): Promise<DeviceRecordingInfo> => {
+    const info = parseDeviceRecordingInfo(await invoke<unknown>("devices:recording-start", input));
+    if (!info) throw new Error("The simulator recording response was invalid.");
+    return info;
+  },
+  stopRecording: async (id: string): Promise<DeviceRecordingInfo> => {
+    const info = parseDeviceRecordingInfo(await invoke<unknown>("devices:recording-stop", { id }));
+    if (!info) throw new Error("The simulator recording response was invalid.");
+    return info;
+  },
+  /** Shows the save dialog; a cancelled dialog deletes the recording. */
+  saveRecording: (id: string) => invokeDeviceSave("devices:recording-save", { id }),
+  discardRecording: (id: string) => invoke<void>("devices:recording-discard", { id }),
+  saveScreenshot: (input: { hostId: string; deviceId: string }) => invokeDeviceSave("devices:screenshot-save", input),
+  /** Saves the 3D view's framed-device PNG through the same save dialog. */
+  saveFramedScreenshot: (input: { hostId: string; deviceId: string; png: Uint8Array }) =>
+    invokeDeviceSave("devices:framed-screenshot-save", input),
+  /** Reveals a file this launch saved from the Simulator tab. */
+  revealSaved: (path: string) => invoke<void>("devices:reveal-saved", { path }),
+  onRecordings: (handler: (recordings: DeviceRecordingInfo[]) => void) =>
+    onNotification<unknown>("devices:recordings", (payload) => {
+      const list = parseDeviceRecordingList(payload);
+      if (list) handler(list);
     }),
 };
+
+async function invokeDeviceSave(channel: string, input: unknown): Promise<DeviceSaveResult> {
+  const result = parseDeviceSaveResult(await invoke<unknown>(channel, input));
+  if (!result) throw new Error("The save response was invalid.");
+  return result;
+}
 
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
@@ -904,8 +1078,12 @@ export const gitApi = {
   checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
   createBranch: (workspaceId: string, name: string) =>
     invoke<void>("git:createBranch", workspaceId, name),
-  pullRequestStatus: (workspaceId: string) =>
-    invoke<GitHubPullRequestStatus>("git:pullRequestStatus", workspaceId),
+  pullRequestStatus: (workspaceId: string, options?: { interactive?: boolean }) =>
+    invoke<GitHubPullRequestStatus>(
+      "git:pullRequestStatus",
+      workspaceId,
+      options?.interactive === true,
+    ),
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
@@ -921,10 +1099,13 @@ export const gitApi = {
 export const pullRequestsApi = {
   list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
   current: (chatId: string) =>
-    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string }>(
+    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string; rateLimitedUntil?: number }>(
       "pullRequests:current",
       chatId,
     ),
+  /** Cache-only: each listed chat's best linked PR and dismissed refs, for sidebar rows. */
+  sidebar: (chatIds: readonly string[]) =>
+    invoke<Record<string, ChatSidebarPullRequests>>("pullRequests:sidebar", chatIds),
   candidates: (chatId: string, workspaceId?: string) =>
     invoke<ChatPullRequestCandidatesResult>("pullRequests:candidates", chatId, workspaceId),
   link: (chatId: string, input: { url: string }) =>
@@ -1076,10 +1257,10 @@ export const chatsApi = {
   createWithFirstMessage: (input: {
     draftId: string;
     title?: string;
-    workspaceId: string;
+    /** Ignored by main: a Bot chat always lives in its managed home. */
+    workspaceId?: string;
     providerId?: string;
     model?: string;
-    computerUseEnabled?: boolean;
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
@@ -1107,10 +1288,18 @@ export const chatsApi = {
   cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
   skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
+  /** Save a stored chat image to Downloads under a new name; returns the saved path. */
+  saveImageToDownloads: (chatId: string, attachmentId: string) =>
+    invoke<{ path: string }>("chats:saveImageToDownloads", { chatId, attachmentId }),
+  copyImage: (chatId: string, attachmentId: string) =>
+    invoke<boolean>("chats:copyImage", { chatId, attachmentId }),
+  /** Reveal a file saved by saveImageToDownloads in Finder. */
+  showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
-  setComputerUse: (id: string, enabled: boolean) =>
-    invoke<Chat>("chats:setComputerUse", id, enabled),
+  /** Clear the post-restart "continue Computer Use" callout without resuming. */
+  dismissComputerUseContinue: (chatId: string) =>
+    invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
@@ -1122,6 +1311,8 @@ export const chatsApi = {
       foreground?: string;
       secondary?: string;
       accent?: string;
+      /** Allowlisted semantic tokens; main sanitizes them again. */
+      vars?: Record<string, string>;
     },
   ) =>
     invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
@@ -1129,6 +1320,9 @@ export const chatsApi = {
       mediaId,
       theme,
     }),
+  /** Remember a native visual's local state (tabs, filters, sliders) on its message. */
+  updateUiVisualState: (chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) =>
+    invoke<boolean>("chats:updateUiVisualState", { chatId, messageId, visualId, state }),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,
@@ -1186,32 +1380,105 @@ export const botsApi = {
     invoke<BotRendererCanonicalPhoto | null>("bots:getCanonicalPhoto", id),
   create: (input: { bot: BotCreateInput; access: BotAccessUpdate }) =>
     invoke<BotDefinition>("bots:create", input),
-  suggestAvatar: async (input: BotAvatarSuggestionInput) => {
-    try {
-      return await invoke<BotAvatarSuggestion>("bots:suggestAvatar", input);
-    } catch (error) {
-      throw new Error(botAvatarSuggestionErrorMessage(error));
-    }
-  },
-  cancelAvatarSuggestion: (requestId: string) =>
-    invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
   getCapabilityCatalog: (botId?: string) =>
     invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
-  archive: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:archive", input),
-  restore: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:restore", input),
-  listChats: (id: string) => invoke<ChatMeta[]>("bots:listChats", id),
-  createChat: (input: {
+  /** Permanently erases the Bot: chat, memory, routines, files, photo, Telegram link. */
+  delete: (botId: string) => invoke<void>("bots:delete", botId),
+  sessionState: (botId: string) => invoke<BotSessionState>("bots:sessionState", botId),
+  /** Send to the Bot's one conversation. `requestId` is a fresh UUID per send, so a retry never doubles it. */
+  send: (input: {
     botId: string;
-    workspaceId: string;
-    providerId?: string;
-    model?: string;
-  }) => invokeChatMutation<Chat>("bots:createChat", input),
+    text: string;
+    requestId: string;
+    whenBusy?: "steer" | "followUp";
+    attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
+  }) => invoke<{ submissionId: string; deduped: boolean }>("bots:send", input),
+  resume: (botId: string, requestId: string) =>
+    invoke<BotSessionState>("bots:resume", { botId, requestId }),
+  dismiss: (botId: string, requestId: string) =>
+    invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
+  /** Stop the reply that is running now. */
+  stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Remove a queued message before its turn starts. */
+  withdraw: (botId: string, submissionId: string) =>
+    invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>("bots:withdraw", {
+      botId,
+      submissionId,
+    }),
+  /** Answer a Bot tool approval by its wait id; the first answer wins. */
+  approve: (waitId: string, decision: "allow" | "deny") =>
+    invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  /**
+   * Answer the Bot's A–E question by its wait id; `answered` is false once the
+   * question is no longer waiting (answered elsewhere or withdrawn).
+   */
+  answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
+    invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  pendingApprovals: (botId: string) =>
+    invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
+      "bots:pendingApprovals",
+      botId,
+    ),
+  onApproval: (handler: (prompt: import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt) => void) =>
+    onNotification("bots:approval", handler),
+  onApprovalSettled: (handler: (settled: { botId: string; waitId: string; outcome: string }) => void) =>
+    onNotification("bots:approval-settled", handler),
+  liveSubscribe: (botId: string) =>
+    invoke<import("../shared/bot-live").BotLiveSnapshot>("bots:live:subscribe", botId),
+  liveUnsubscribe: (botId: string) => invoke<void>("bots:live:unsubscribe", botId),
+  liveSummary: (botId: string) =>
+    invoke<import("../shared/bot-live").BotLiveSummary>("bots:live:summary", botId),
+  onLiveEvent: (handler: (event: import("../shared/bot-live").BotLiveEvent) => void) =>
+    onNotification<import("../shared/bot-live").BotLiveEvent>("bots:live:event", handler),
+  /** Start Chat on a starter Bot: the same Bot every time; only the first call reports `created`. */
+  createFromPreset: (input: { presetId: string; access?: BotAccessUpdate }) =>
+    invoke<{ bot: BotDefinition; created: boolean }>("bots:createFromPreset", input),
+  /** The one-time self-intro of a Bot made with the create flow. */
+  introduce: (botId: string) => invoke<boolean>("bots:introduce", botId),
+  /** Read-only Files: the Bot's own folder. */
+  files: {
+    list: (botId: string) => invoke<import("./types").WorkspaceFileIndex>("bots:files:list", botId),
+    read: (botId: string, path: string) =>
+      invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
+  },
+  /** Not now on a connect card: this Bot won't suggest that connection again. */
+  dismissConnection: (botId: string, pluginId: string) =>
+    invoke<void>("bots:connections:dismiss", botId, pluginId),
+  setPhoto: (botId: string, photo: { mimeType: "image/png" | "image/jpeg"; data: string }) =>
+    invoke<void>("bots:photo:set", botId, photo),
+  removePhoto: (botId: string) => invoke<void>("bots:photo:remove", botId),
+  routines: {
+    list: (botId: string) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine[]>("bots:routines:list", botId),
+    create: (input: import("../../main/services/scheduled-bot-routines").BotRoutineCreateInput) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:create", input),
+    update: (input: import("../../main/services/scheduled-bot-routines").BotRoutineUpdateInput) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
+    delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
+      invoke<void>("bots:routines:delete", input),
+  },
+  /** What a Bot remembers (USER.md and MEMORY.md), and the person's edits to it. */
+  memory: {
+    get: (botId: string) => invoke<import("../shared/bot-memory").BotMemoryView>("bots:memory:get", botId),
+    /** A replace, remove or clear; a stale entry id answers `entry_not_found` with the fresh view. */
+    edit: (input: import("../shared/bot-memory").BotMemoryEditInput) =>
+      invoke<import("../shared/bot-memory").BotMemoryEditResult>("bots:memory:edit", input),
+  },
+  /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
+  onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>
+    onNotification<import("../shared/bot-memory").BotMemoryChangedEvent>("bots:memory:changed", handler),
+  routineProposals: {
+    /** Add routine or Not now on a Bot's proposal card; a repeated answer returns the settled status. */
+    respond: (input: import("../shared/bot-routine-proposals").BotRoutineProposalRespondInput) =>
+      invoke<import("../shared/bot-routine-proposals").BotRoutineProposalRespondResult>(
+        "bots:routineProposals:respond",
+        input,
+      ),
+  },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>
@@ -1260,50 +1527,9 @@ export const subagentsApi = {
 };
 
 // ── Streaming generation ──────────────────────────────────────────────
-interface ChatDelta {
-  streamId: string;
-  delta: string;
-  /** Discard deltas from a failed overflow attempt before its retry starts. */
-  reset?: boolean;
-}
-interface ChatReasoningDelta {
-  streamId: string;
-  delta: string;
-}
-interface ChatArtifactNotification {
-  streamId: string;
-  event: unknown;
-}
 export type ChatStatusPhase = "model_loading" | "model_ready";
-interface ChatStatus {
-  streamId: string;
-  phase: ChatStatusPhase | "agents_instructions_limited";
-  notices?: unknown;
-}
-interface ChatDone {
-  streamId: string;
-  content: string;
-  reasoning?: string;
-  timeline?: GenerationTimeline;
-  chat?: Chat;
-  undeliveredGuidance?: string[];
-}
-interface ChatError {
-  streamId: string;
-  message: string;
-  content?: string;
-  reasoning?: string;
-  timeline?: GenerationTimeline;
-  chat?: Chat;
-  undeliveredGuidance?: string[];
-}
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
-interface ChatTool {
-  streamId: string;
-  phase: ToolPhase;
-  toolName: string;
-}
 
 export interface ApprovalPrompt {
   approvalId: string;
@@ -1328,18 +1554,6 @@ export interface RemoteApprovalPrompt {
   canAllow: boolean;
   scopes?: ToolApprovalScope[];
   details?: ToolApprovalDetails;
-}
-interface ChatApproval extends ApprovalPrompt {
-  streamId: string;
-}
-type ChatQuestionnaire = AskUserQuestionPromptV1;
-interface ChatSubagents {
-  streamId: string;
-  snapshot: unknown;
-}
-interface ChatTodo {
-  streamId: string;
-  snapshot: unknown;
 }
 
 export interface GenerationHandle {
@@ -1413,157 +1627,13 @@ export function startGeneration(
   messageTurnId: string,
 ): GenerationHandle {
   const streamId = messageTurnId;
-  let projectedContent = "";
-  let projectedLastTextDeltaAt: number | null = null;
-  let projectedReasoning = "";
-  let projectedTimeline: GenerationTimeline | null = null;
-  let projectedArtifacts: ChatArtifactV1[] = [];
-  let projectedSubagents: SubagentRunSnapshot[] = [];
-  const unsubs: Array<() => void> = [];
-  const dispose = () => {
-    for (const u of unsubs) u();
-    unsubs.length = 0;
-  };
-
-  unsubs.push(
-    onNotification<ChatDelta>("chat:delta", (p) => {
-      if (p.streamId !== streamId) return;
-      if (p.reset) {
-        projectedContent = "";
-        projectedLastTextDeltaAt = null;
-        projectedReasoning = "";
-        callbacks.onReset?.();
-      } else {
-        projectedContent += p.delta;
-        if (p.delta) projectedLastTextDeltaAt = Date.now();
-        callbacks.onDelta(p.delta);
-      }
-    }),
+  rememberOwnGenerationStream(streamId);
+  const stream = subscribeGenerationStream(
+    streamId,
+    { chatId: params.chatId, workspaceId: params.workspaceId },
+    callbacks,
   );
-  unsubs.push(
-    onNotification<ChatReasoningDelta>("chat:reasoning-delta", (p) => {
-      if (p.streamId === streamId) {
-        projectedReasoning += p.delta;
-        callbacks.onReasoningDelta?.(p.delta);
-      }
-    }),
-  );
-  unsubs.push(
-    onNotification<ChatStatus>("chat:status", (p) => {
-      if (p.streamId !== streamId) return;
-      if (p.phase === "agents_instructions_limited") {
-        const notices = parseAgentsInstructionNotices(p.notices);
-        if (notices) callbacks.onAgentsInstructionNotices?.(notices);
-      } else {
-        callbacks.onStatus?.(p.phase);
-      }
-    }),
-  );
-  unsubs.push(
-    onNotification<unknown>("chat:context-pressure", (p) => {
-      const event = parseChatContextPressureNotification(p);
-      if (event && event.streamId === streamId) {
-        callbacks.onContextPressure?.(event.pressure);
-      }
-    }),
-  );
-  unsubs.push(
-    onNotification<ChatDone>("chat:done", (p) => {
-      if (p.streamId !== streamId) return;
-      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
-      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
-        .catch((error: unknown) =>
-          callbacks.onError(error instanceof Error ? error.message : String(error)),
-        )
-        .finally(dispose);
-    }),
-  );
-  unsubs.push(
-    onNotification<ChatError>("chat:error", (p) => {
-      if (p.streamId !== streamId) return;
-      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
-      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
-      dispose();
-    }),
-  );
-  unsubs.push(
-    onNotification<ChatTimelineNotification>("chat:timeline", (p) => {
-      if (p.streamId === streamId) {
-        projectedTimeline = p.timeline;
-        callbacks.onTimeline?.(p.timeline);
-      }
-    }),
-  );
-  if (callbacks.onArtifactEvent) {
-    unsubs.push(
-      onNotification<ChatArtifactNotification>("chat:artifact", (p) => {
-        if (p.streamId !== streamId) return;
-        const event = parseChatArtifactEventV1(p.event);
-        if (!event) return;
-        if (event.operation === "reset") {
-          projectedArtifacts = [];
-        } else {
-          const identity = chatArtifactIdentity(event.artifact);
-          const index = projectedArtifacts.findIndex(
-            (candidate) => chatArtifactIdentity(candidate) === identity,
-          );
-          projectedArtifacts =
-            index >= 0
-              ? projectedArtifacts.map((candidate, i) => (i === index ? event.artifact : candidate))
-              : [...projectedArtifacts, event.artifact];
-        }
-        callbacks.onArtifactEvent?.(event);
-      }),
-    );
-  }
-  if (callbacks.onSubagents) {
-    unsubs.push(
-      onNotification<ChatSubagents>("chat:subagents", (p) => {
-        if (p.streamId !== streamId) return;
-        const snapshot = parseSubagentRunSnapshot(p.snapshot);
-        if (snapshot?.generationId === streamId) {
-          projectedSubagents = mergeSubagentSnapshots(projectedSubagents, [snapshot], {
-            chatId: params.chatId,
-            workspaceId: params.workspaceId ?? "default",
-          });
-          callbacks.onSubagents?.(snapshot);
-        }
-      }),
-    );
-  }
-  unsubs.push(
-    onNotification<ChatTool>("chat:tool", (p) => {
-      if (p.streamId === streamId) callbacks.onTool?.(p.phase, p.toolName);
-    }),
-  );
-  unsubs.push(
-    onNotification<ChatApproval>("chat:approval", (p) => {
-      if (p.streamId === streamId)
-        callbacks.onApproval?.({
-          approvalId: p.approvalId,
-          toolCallId: p.toolCallId,
-          toolName: p.toolName,
-          summary: p.summary,
-          details: p.details,
-        });
-    }),
-  );
-  unsubs.push(
-    onNotification<ChatQuestionnaire>("chat:questionnaire", (payload) => {
-      if (payload.streamId !== streamId) return;
-      const prompt = parseAskUserQuestionPrompt(payload);
-      if (prompt) callbacks.onQuestionnaire?.(prompt);
-    }),
-  );
-  if (callbacks.onTodo) {
-    unsubs.push(
-      onNotification<ChatTodo>("chat:todo", (payload) => {
-        if (payload.streamId !== streamId) return;
-        const snapshot = parseTodoSnapshotView(payload.snapshot);
-        if (snapshot?.chatId === params.chatId) callbacks.onTodo?.(snapshot);
-      }),
-    );
-  }
+  const dispose = stream.dispose;
 
   const started: Promise<GenerationStartResult> = invoke<{
     streamId: string;
@@ -1612,14 +1682,7 @@ export function startGeneration(
             chatId: params.chatId,
             workspaceId: params.workspaceId ?? "default",
           },
-          {
-            content: projectedContent,
-            lastTextDeltaAt: projectedLastTextDeltaAt,
-            reasoning: projectedReasoning,
-            timeline: projectedTimeline,
-            artifacts: projectedArtifacts,
-            subagents: projectedSubagents,
-          },
+          stream.projection(),
         );
         dispose();
         // Renderer lifecycle only releases this document's subscriptions. The

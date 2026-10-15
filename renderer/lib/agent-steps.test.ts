@@ -54,6 +54,24 @@ test("all browser actions have readable activity labels", () => {
   }
 });
 
+test("simulator device tools read as compact timeline rows", () => {
+  const rows = [
+    ["device_list", "List simulators", "Listed simulators"],
+    ["device_open", "Open simulator", "Opened simulator"],
+    ["device_screenshot", "Screenshot simulator", "Took simulator screenshot"],
+    ["device_close", "Close simulator", "Closed simulator"],
+  ];
+  for (const [name, label, complete] of rows) {
+    assert.equal(activityLineText(step(name, 0, name, "completed", { label })), complete);
+    // Failures and approval waits keep the tool's own label, so the row still names the device action.
+    assert.equal(activityLineText(step(name, 0, name, "failed", { label })), `${label} failed`);
+  }
+  assert.equal(
+    activityLineText(step("close", 0, "device_close", "awaiting_approval", { label: "Shut down simulator" })),
+    "Shut down simulator needs approval",
+  );
+});
+
 function thinking(id: string, order: number, durationMs?: number): AgentThinkingStep {
   return {
     id,
@@ -143,7 +161,7 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
         ? [row.kind, row.content]
         : row.kind === "activity"
           ? [row.kind, row.steps.map((entry) => entry.id)]
-          : [row.kind, row.content],
+          : [row.kind],
     ),
     [
       ["text", "Before."],
@@ -152,6 +170,49 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
       ["activity", ["tool-2", "tool-3"]],
       ["text", "After."],
     ],
+  );
+});
+
+test("an answered questionnaire becomes its own row and leaves the activity group", () => {
+  const recap = {
+    version: 1 as const,
+    outcome: "answered" as const,
+    items: [{ question: "Which database?", header: "Database", kind: "option" as const, answers: ["Postgres"] }],
+  };
+  const asked = step("ask", 1, "ask_user_question", "completed", { contentOffset: 7, questionnaire: recap });
+  const rows = assistantPresentationRows(
+    "Before.After.",
+    timeline("completed", [
+      positionedTool(0, 7),
+      asked,
+      positionedTool(2, 7, "grep"),
+    ]),
+  );
+  assert.deepEqual(
+    rows?.map((row) =>
+      row.kind === "text"
+        ? [row.kind, row.content]
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : row.kind === "questionnaire"
+            ? [row.kind, row.step.questionnaire.items[0]?.answers]
+            : [row.kind],
+    ),
+    [
+      ["text", "Before."],
+      ["activity", ["tool-1"]],
+      ["questionnaire", ["Postgres"]],
+      ["activity", ["tool-3"]],
+      ["text", "After."],
+    ],
+  );
+
+  // A questionnaire that settled without a recap (a stopped run) keeps its activity line.
+  const stopped = step("ask", 1, "ask_user_question", "cancelled", { contentOffset: 7 });
+  const stoppedRows = assistantPresentationRows("Before.", timeline("cancelled", [stopped]));
+  assert.deepEqual(
+    stoppedRows?.map((row) => row.kind),
+    ["text", "activity"],
   );
 });
 
@@ -176,7 +237,7 @@ test("reasoning rows follow prose and tools in event order", () => {
     { ...thinking("think-2", 2, 600), contentOffset: 7, reasoningStartOffset: 7, reasoningEndOffset: 13 },
   ];
   const rows = assistantPresentationRows("Before.After.", timeline("completed", steps), "First\n\nSecond");
-  assert.deepEqual(rows?.map((row) => [row.kind, row.kind === "activity" ? row.steps[0]?.id : row.content]), [
+  assert.deepEqual(rows?.map((row) => [row.kind, row.kind === "activity" ? row.steps[0]?.id : "content" in row ? row.content : row.step.id]), [
     ["reasoning", "First"],
     ["activity", "tool-2"],
     ["text", "Before."],
@@ -379,4 +440,51 @@ test("active thinking and named tool helpers match live timeline steps", () => {
   assert.equal(hasActiveToolStep(rendering, "render_artifact"), true);
   assert.equal(hasActiveToolStep(rendering, "read_file"), false);
   assert.equal(isToolStep(rendering.steps[0]!), true);
+});
+
+test("agent-run activity changes tense like Aiden's own tools, with the same lines as both phone apps", () => {
+  // Persisted labels as Google Antigravity steps record them; the expected lines
+  // are mirrored in the iOS and Android presentation tests.
+  const expected: Array<[string, string, "running" | "completed", string | undefined, string | undefined, string]> = [
+    ["delete_file", "Delete file", "running", "old.ts", undefined, "Deleting old.ts"],
+    ["delete_file", "Delete file", "completed", "old.ts", undefined, "Deleted old.ts"],
+    ["move_file", "Move file", "completed", "src/a.ts", undefined, "Moved src/a.ts"],
+    ["web_fetch", "Fetch web page", "completed", undefined, undefined, "Fetched web page"],
+    ["agent_subagents", "Run subagents", "completed", undefined, undefined, "Ran subagents"],
+    ["agent_tool", "Use agent tool", "running", undefined, undefined, "Using an agent tool"],
+    ["agent_context_rebuilt", "Started a fresh agent session from this chat", "completed", undefined, undefined, "Started a fresh agent session"],
+    ["run_command", "Run command", "completed", undefined, "a command", "Ran a command"],
+  ];
+  for (const [toolName, label, status, target, detail, line] of expected) {
+    const row = { ...step(toolName, 0, toolName, status), label, ...(target ? { target } : {}), ...(detail ? { detail } : {}) };
+    assert.equal(activityLineText(row), line);
+  }
+});
+
+test("an image generation row reads naturally and names its ratio once settled", () => {
+  const base = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool" as const,
+    toolCallId: "call-1",
+    toolName: "generate_image",
+    label: "Generate image",
+    startedAt: 1,
+    updatedAt: 1,
+    detail: "16:9",
+  };
+  assert.equal(activityLineText({ ...base, status: "running" }), "Generating image");
+  assert.equal(activityLineText({ ...base, status: "completed" }), "Generated image 16:9");
+  assert.equal(activityLineText({ ...base, status: "failed" }), "Generate image failed 16:9");
+  // The model id never shows raw: a curated name, else the id's last segment.
+  assert.equal(
+    activityLineText({ ...base, status: "completed", target: "fal/fal-ai/nano-banana-pro" }),
+    "Generated image 16:9 · Nano Banana Pro",
+  );
+  const { detail: _ratio, ...unshaped } = base;
+  assert.equal(
+    activityLineText({ ...unshaped, status: "completed", target: "openrouter/google/gemini-2.5-flash-image" }),
+    "Generated image gemini-2.5-flash-image",
+  );
+  assert.equal(activityLineText({ ...unshaped, status: "completed", target: "unknown/model" }), "Generated image");
 });

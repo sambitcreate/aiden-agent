@@ -18,7 +18,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "../ui";
-import { AidenLiveOrb, type AidenLiveOrbState } from "./aiden-live-orb";
+import { AidenLiveMark, type AidenLiveMarkState } from "./aiden-live-mark";
 import type { AssistantLiveCaption, AssistantLiveController } from "./use-assistant-live";
 
 export const ASSISTANT_LIVE_FOCUS_CLASS =
@@ -43,10 +43,10 @@ export function assistantLiveTranscriptFollowsLatest(
   return scrollHeight - scrollTop - clientHeight <= 24;
 }
 
-export function assistantLiveOrbState(
+export function assistantLiveMarkState(
   live: AssistantLiveController,
   approvalPending = false,
-): AidenLiveOrbState {
+): AidenLiveMarkState {
   if (!live.available && !live.setupComplete) return "unavailable";
   if (live.error || ["failed", "disconnected"].includes(live.state)) return "error";
   if (approvalPending) return "approval";
@@ -134,7 +134,7 @@ export function AssistantLiveSetupDialog({
       onConfirm={live.start}
     >
       <div className="gemini-live-setup-hero">
-        <AidenLiveOrb state={live.setupComplete ? "ready" : "connecting"} />
+        <AidenLiveMark state={live.setupComplete ? "ready" : "connecting"} />
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-sm font-medium text-primary">Aiden, ready to listen and act</p>
@@ -310,23 +310,23 @@ function Transcript({ captions }: { captions: readonly AssistantLiveCaption[] })
 
 export function AssistantLiveHud({
   live,
-  orbState,
+  markState,
   children,
 }: {
   live: AssistantLiveController;
-  orbState: AidenLiveOrbState;
+  markState: AidenLiveMarkState;
   children?: React.ReactNode;
 }): React.ReactElement {
   return (
     <section className="gemini-live-hud" aria-label="Aiden Live conversation">
       <div className="gemini-live-hud-header">
-        <AidenLiveOrb state={orbState} level={live.microphoneLevel} />
+        <AidenLiveMark state={markState} level={live.microphoneLevel} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p role="status" aria-live="polite" className="text-sm font-medium text-primary">
               {STATE_LABEL[live.state]}
             </p>
-            {orbState === "approval" ? <Badge color="blue">Approval needed</Badge> : null}
+            {markState === "approval" ? <Badge color="blue">Approval needed</Badge> : null}
             {live.screenActive ? (
               <Badge color="blue">
                 <Monitor className="size-3" aria-hidden="true" />
@@ -371,13 +371,13 @@ export function AssistantLive({
   if (!live.visible) return null;
   return (
     <>
-      {live.active ? <AssistantLiveHud live={live} orbState={assistantLiveOrbState(live)} /> : null}
+      {live.active ? <AssistantLiveHud live={live} markState={assistantLiveMarkState(live)} /> : null}
       <AssistantLiveSetupDialog live={live} onOpenSettings={() => undefined} />
     </>
   );
 }
 
-/** @deprecated The window-level Live orb is now the only entry point. */
+/** @deprecated The window-level Live mark is now the only entry point. */
 export function AssistantLiveEntryPoint({
   live,
 }: {

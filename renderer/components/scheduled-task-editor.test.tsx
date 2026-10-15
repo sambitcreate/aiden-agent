@@ -1,6 +1,47 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement, createRef } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { scheduledTaskProviderGuardrail } from "../lib/scheduled-task-view.js";
+import type { Provider } from "../lib/types.js";
+import { ScheduledTaskProviderWarning, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
+import { ChatApprovalCard } from "./chat-approval-card";
+import type { ScheduledTaskApprovalDetails } from "../shared/assistant";
+
+const approval: ScheduledTaskApprovalDetails = {
+  kind: "scheduled-task", action: "create", taskId: null, expectedUpdatedAt: null,
+  enabled: true, name: "Inbox brief", prompt: "Summarize unread messages without sending replies.",
+  script: null, cron: "0 9 * * *", timezone: "America/New_York", nextRunAt: 1_900_000_000_000,
+  notify: true, mode: "llm", permission: "full", workspaceId: null, workspaceName: null,
+  mcpServerIds: ["mail-1"], mcpServerNames: ["Email"], providerId: "local",
+  providerName: "Local provider", model: "brief-model", modelName: "Brief model",
+  legacyGlobalMcp: false, schedulerEnabled: false,
+};
+
+function renderApproval(details: unknown) {
+  return renderToStaticMarkup(createElement(ChatApprovalCard, {
+    pending: { approvalId: "approval-1", toolCallId: "call-1", toolName: "schedule_task", summary: "Create daily brief", details: details as ScheduledTaskApprovalDetails },
+    deciding: false, onDecide: () => undefined,
+    cardRef: createRef<HTMLElement>(), denyRef: createRef<HTMLButtonElement>(),
+  }));
+}
+
+test("task approval discloses instructions, runtime, exact connectors and paused scheduling", () => {
+  const markup = renderApproval(approval);
+  for (const text of ["Summarize unread messages without sending replies.", "Local provider", "Brief model", "Email (mail-1)", "America/New_York", "will not run automatically"]) {
+    assert.ok(markup.includes(text), `Missing approval disclosure: ${text}`);
+  }
+  assert.ok(markup.includes("Allow once"));
+  assert.ok(!markup.includes("Remember this exact action"));
+});
+
+test("malformed schedule approval withholds Allow instead of presenting incomplete consent", () => {
+  const markup = renderApproval({ ...approval, providerName: undefined });
+  assert.ok(markup.includes("Invalid privileged approval blocked"));
+  assert.ok(!markup.includes("Allow once"));
+});
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -17,19 +58,30 @@ test("scheduled task editor offers an explicit App default and pins provider/mod
   assert.match(editor, /disabled=\{assistantOwned\}/u);
 });
 
-test("provider guardrail is a soft inline warning only for LLM tasks without a provider", () => {
-  const editor = source("./scheduled-task-editor.tsx");
-  assert.match(editor, /scheduledTaskProviderGuardrail\(/u);
-  assert.match(editor, /providerGuardrail \?/u);
+test("provider guardrail is a soft inline warning only for LLM tasks that may not run", () => {
+  const providers = [
+    { id: "openai", label: "OpenAI", models: ["gpt-5.6"], hasKey: true, needsKey: true },
+    { id: "antigravity", label: "Google Antigravity", models: ["gemini-3.8-flash"], hasKey: true, needsKey: true },
+  ] as unknown as Provider[];
+  const warning = (appDefault: string | undefined, pinned?: string) =>
+    renderToStaticMarkup(
+      <ScheduledTaskProviderWarning message={scheduledTaskProviderGuardrail("llm", pinned, appDefault, providers)} />,
+    );
+
+  // No app default at all.
+  const absent = warning(undefined);
+  assert.match(absent, /role="status"[^>]*>.*No provider pinned\. If no app default is available, this task cannot run\./u);
+  // An agent-backed default exists but cannot run unattended; the warning says so by name.
   assert.match(
-    editor,
-    /rounded-control bg-status-warning-surface px-2\.5 py-1\.5 text-small text-status-warning/u,
+    warning("antigravity"),
+    /No provider pinned, and the app default \(Google Antigravity\) runs only in chats you have open on this computer\. Pin a provider so this task can run\./u,
   );
-  assert.doesNotMatch(
-    editor,
-    /bg-status-warning-surface px-2\.5 py-1\.5 text-small text-status-warning[^"]*(?:border|ring|outline)/u,
-  );
-  assert.match(editor, /No provider pinned\./u);
+  // A usable default, or a pinned provider, shows nothing.
+  assert.equal(warning("openai"), "");
+  assert.equal(warning(undefined, "openai"), "");
+  // Status reads through a soft semantic fill, never a decorative border, ring or outline.
+  const classes = absent.match(/class="([^"]*)"/u)?.[1] ?? "";
+  assert.doesNotMatch(classes, /\b(?:border|ring|outline)\b/u);
 });
 
 test("the Model select stays bound to the helper's pinned model and never re-filters its options", () => {
@@ -54,5 +106,45 @@ test("the Model select stays bound to the helper's pinned model and never re-fil
     editor,
     /current\.providerId === provider\.id \? current\.model : undefined/u,
     "a stale pinned model from another provider never leaks into the new provider",
+  );
+});
+
+test("a selected MCP server that no longer exists is listed by its id, not a generic label", () => {
+  const { unavailableMcpIds, visibleMcpServers } = scheduledTaskMcpServerChoices(
+    [
+      { id: "gmail", name: "Gmail", enabled: true },
+      { id: "notion", name: "Notion", enabled: false },
+      { id: "linear", name: "Linear", enabled: false },
+    ],
+    ["notion", "github-work"],
+  );
+  assert.deepEqual(unavailableMcpIds, ["notion", "github-work"]);
+  assert.deepEqual(
+    visibleMcpServers.map(({ id, name, enabled }) => [id, name, enabled]),
+    [
+      ["gmail", "Gmail", true],
+      // A disabled but still configured selection keeps its own name.
+      ["notion", "Notion", false],
+      ["github-work", "Unavailable MCP server (github-work)", false],
+    ],
+  );
+});
+
+test("a selected server switched off for the model is shown as unavailable with that reason, and unselected ones are not offered", () => {
+  const { unavailableMcpIds, visibleMcpServers } = scheduledTaskMcpServerChoices(
+    [
+      { id: "gmail", name: "Gmail", enabled: true },
+      { id: "drive", name: "Drive", enabled: true, exposure: "hidden" },
+      { id: "notes", name: "Notes", enabled: true, exposure: "hidden" },
+    ],
+    ["drive"],
+  );
+  assert.deepEqual(unavailableMcpIds, ["drive"]);
+  assert.deepEqual(
+    visibleMcpServers.map(({ id, enabled, unavailableReason }) => [id, enabled, unavailableReason]),
+    [
+      ["gmail", true, undefined],
+      ["drive", false, "Off for the model in Settings → Plugins"],
+    ],
   );
 });

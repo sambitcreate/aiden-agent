@@ -133,3 +133,18 @@ test("completed state reopens when authoritative setup readiness is lost", () =>
     "deferred",
   );
 });
+
+test("the Bots step keeps the chosen provider as first-run evidence", () => {
+  const configured = provider();
+  const state = {
+    version: 2 as const,
+    outcome: "incomplete" as const,
+    lastSatisfiedStep: "bots" as const,
+    selectedProviderId: "openai",
+  };
+  assert.equal(onboardingEvidenceProvider([configured], state), configured);
+  assert.equal(
+    onboardingEvidenceProvider([configured], { ...state, lastSatisfiedStep: "profile" }),
+    undefined,
+  );
+});

@@ -17,9 +17,10 @@ test("Live audio player ownership survives asynchronous capability refresh", () 
   assert.match(source, /\.\.\.audioDependencies,\s+geminiLive,/);
 });
 import { renderToStaticMarkup } from "react-dom/server";
-import { AssistantDockPresentation, liveDockClickAction } from "./assistant-dock.js";
-import { aidenLiveOrbVisual, AidenLiveOrb } from "./aiden-live-orb.js";
-import { assistantLiveOrbState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
+import { AssistantDockPresentation, liveDockClickAction, liveTriggerLabel } from "./assistant-dock.js";
+import { AidenLiveSwitches } from "../settings/gemini-live-settings.js";
+import { aidenLiveMark, AidenLiveMark } from "./aiden-live-mark.js";
+import { assistantLiveMarkState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
 import {
   assistantLiveVoiceApprovalDecision,
   assistantLiveVoiceApprovalForReceipt,
@@ -74,17 +75,16 @@ const idleLive: AssistantLiveController = {
   cancelSetup: async () => undefined,
 };
 
-test("duplex visuals remain stable through voice and action changes", () => {
-  for (const state of ["listening", "thinking", "speaking", "acting"] as const) {
-    assert.equal(aidenLiveOrbVisual(state), "duplex");
-    const markup = renderToStaticMarkup(<AidenLiveOrb state={state} level={NaN} />);
-    assert.match(markup, /data-visual="duplex"/);
+test("Live voice and action states share the animated duplex helix", () => {
+  for (const state of ["thinking", "speaking", "acting"] as const) {
+    assert.deepEqual(aidenLiveMark(state), { mark: "helix-duplex", active: true });
+    const markup = renderToStaticMarkup(<AidenLiveMark state={state} level={NaN} />);
+    assert.match(markup, /data-aiden-mark="helix-duplex"/);
+    assert.doesNotMatch(markup, /data-paused/);
     assert.doesNotMatch(markup, /NaN/);
   }
-  assert.equal(aidenLiveOrbVisual("error"), "rest");
-  assert.equal(aidenLiveOrbVisual("connecting"), "connecting");
-  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: false }), "listening");
-  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, busy: true, state: "closing" }), "ready");
+  assert.equal(assistantLiveMarkState({ ...idleLive, active: true, state: "open", microphoneActive: false }), "listening");
+  assert.equal(assistantLiveMarkState({ ...idleLive, active: true, busy: true, state: "closing" }), "ready");
 });
 
 test("dock requires reveal then stop, including mic-off and first-session startup", () => {
@@ -99,31 +99,31 @@ test("dock requires reveal then stop, including mic-off and first-session startu
   assert.equal(liveDockClickAction({ ...idleLive, setupComplete: false }, true, false), "settings");
 });
 
-test("Aiden Live orb state prioritizes errors, approvals, and connection work", () => {
-  assert.equal(assistantLiveOrbState(idleLive), "ready");
+test("Aiden Live mark state prioritizes errors, approvals, and connection work", () => {
+  assert.equal(assistantLiveMarkState(idleLive), "ready");
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: true }),
+    assistantLiveMarkState({ ...idleLive, active: true, state: "open", microphoneActive: true }),
     "listening",
   );
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, active: true, state: "connecting", busy: true }),
+    assistantLiveMarkState({ ...idleLive, active: true, state: "connecting", busy: true }),
     "connecting",
   );
-  assert.equal(assistantLiveOrbState({ ...idleLive, active: true }, true), "approval");
+  assert.equal(assistantLiveMarkState({ ...idleLive, active: true }, true), "approval");
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, active: true, computerUseActing: true }),
+    assistantLiveMarkState({ ...idleLive, active: true, computerUseActing: true }),
     "acting",
   );
-  assert.equal(assistantLiveOrbState({ ...idleLive, error: "Disconnected" }), "error");
+  assert.equal(assistantLiveMarkState({ ...idleLive, error: "Disconnected" }), "error");
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, available: false, setupComplete: false }),
+    assistantLiveMarkState({ ...idleLive, available: false, setupComplete: false }),
     "unavailable",
   );
 });
 
-test("a final user caption moves the active orb to thinking", () => {
+test("a final user caption moves the active mark to thinking", () => {
   assert.equal(
-    assistantLiveOrbState({
+    assistantLiveMarkState({
       ...idleLive,
       active: true,
       state: "open",
@@ -134,9 +134,9 @@ test("a final user caption moves the active orb to thinking", () => {
   );
 });
 
-test("an active output caption moves the orb to speaking", () => {
+test("an active output caption moves the mark to speaking", () => {
   assert.equal(
-    assistantLiveOrbState({
+    assistantLiveMarkState({
       ...idleLive,
       active: true,
       state: "open",
@@ -201,22 +201,18 @@ test("batched voice receipts are examined FIFO and the earliest exact command wi
   );
 });
 
-test("dock replaces the retired Assistant panel with setup logo then Live orb", () => {
+test("dock replaces the retired Assistant panel with one Live trigger", () => {
   const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
-  assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
   assert.match(dock, /AIDEN_LIVE_SETUP_COMPLETE_KEY/u);
   assert.match(
     dock,
     /if \(!live\.active \|\| !live\.microphoneActive \|\| setupCompleted\) return/u,
   );
   assert.match(dock, /AssistantLiveSetupDialog/u);
-  assert.match(dock, /AidenLiveOrb/u);
   assert.match(dock, /AssistantComputerUseApproval/u);
   assert.doesNotMatch(dock, /useAssistantLiveApprovals\(/u);
   assert.match(dock, /chat=\{SESSION_ACTIONS\}/u);
-  assert.match(dock, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
   assert.doesNotMatch(dock, /onDecision=/u);
-  assert.doesNotMatch(dock, /useAssistantChat/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
 });
 
@@ -246,6 +242,110 @@ test("a disconnected Live error stays visible and microphone status is screen-re
   assert.match(render({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }), /The Live provider sent an invalid event\./);
   assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /Listening · mic on/);
   assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /class="sr-only"/);
+});
+
+function renderDock(
+  live: AssistantLiveController,
+  options: {
+    enabled?: boolean;
+    buttonVisible?: boolean;
+    approvalPending?: boolean;
+  } = {},
+): { markup: string; commandEnabled: boolean } {
+  let commandEnabled = false;
+  const markup = renderToStaticMarkup(
+    <AssistantDockPresentation
+      chat={{
+        approvals: options.approvalPending
+          ? [{ approvalId: "a1", toolName: "computer_use", summary: "Click Send" } as never]
+          : [],
+        decidingApprovalId: null,
+        decideApproval: async () => undefined,
+      }}
+      live={live}
+      enabled={options.enabled}
+      buttonVisible={options.buttonVisible}
+      useCommand={(commandId, _handler, enabled = true) => {
+        if (commandId === "assistant.open") commandEnabled = enabled;
+      }}
+    />,
+  );
+  return { markup, commandEnabled };
+}
+
+function triggerLabel(markup: string): string | null {
+  return /class="aiden-live-trigger-label">([^<]*)</u.exec(markup)?.[1] ?? null;
+}
+
+test("the idle Live trigger is a pill labelled Live with its setup name", () => {
+  const { markup, commandEnabled } = renderDock(idleLive);
+  assert.equal(triggerLabel(markup), "Live");
+  assert.match(markup, /aria-label="Set up Aiden Live"/u);
+  assert.match(markup, /data-aiden-mark="helix-calm"/u);
+  assert.doesNotMatch(markup, /<img/u);
+  assert.equal(commandEnabled, true);
+  assert.equal(triggerLabel(renderDock({ ...idleLive, available: false, setupComplete: false }).markup), "Live");
+});
+
+test("the Live pill names each session state", () => {
+  const open = { ...idleLive, active: true, state: "open" as const, microphoneActive: true };
+  const cases: Array<[string, AssistantLiveController, boolean?]> = [
+    ["Connecting…", { ...idleLive, active: true, busy: true, state: "connecting" }],
+    ["Listening", open],
+    ["Thinking", { ...open, captions: [{ id: 1, direction: "input", text: "Hi", final: true, sealed: false }] }],
+    ["Speaking", { ...open, captions: [{ id: 1, direction: "output", text: "Hi", final: false, sealed: false }] }],
+    ["Working", { ...open, computerUseActing: true }],
+    ["Approve", open, true],
+    ["Disconnected", { ...idleLive, state: "disconnected", error: "Connection lost." }],
+    ["Stopping…", { ...idleLive, active: true, busy: true, state: "closing" }],
+  ];
+  for (const [label, live, approvalPending] of cases) {
+    const { markup } = renderDock(live, { approvalPending });
+    assert.equal(triggerLabel(markup), label, label);
+    // Label in name: voice control must be able to target what the pill shows.
+    const name = /<button[^>]*class="aiden-live-trigger[^"]*"[^>]*aria-label="([^"]*)"/u.exec(markup)?.[1] ?? "";
+    assert.ok(name.toLowerCase().includes(label.toLowerCase()), `${label} not in accessible name "${name}"`);
+  }
+  assert.match(renderDock(open, { approvalPending: true }).markup, /aiden-live-trigger-badge/u);
+  assert.match(
+    renderDock({ ...idleLive, active: true, busy: true, state: "closing" }).markup,
+    /<button[^>]*class="aiden-live-trigger[^"]*"[^>]*disabled=""/u,
+  );
+  assert.equal(liveTriggerLabel("listening", false, true), "Stop");
+  assert.equal(liveTriggerLabel("listening", true, true), "Stopping…");
+});
+
+test("hiding the Live button removes only the idle pill; the shortcut still works", () => {
+  const hidden = renderDock(idleLive, { buttonVisible: false });
+  assert.equal(triggerLabel(hidden.markup), null);
+  assert.equal(hidden.commandEnabled, true);
+
+  const active = { ...idleLive, active: true, state: "open" as const, microphoneActive: true };
+  for (const [name, live, approvalPending] of [
+    ["active", active, false],
+    ["connecting", { ...idleLive, busy: true, state: "connecting" as const }, false],
+    ["closing", { ...idleLive, active: true, busy: true, state: "closing" as const }, false],
+    ["approval", active, true],
+    ["error", { ...idleLive, state: "failed" as const, error: "The Live provider sent an invalid event." }, false],
+  ] as const) {
+    assert.notEqual(triggerLabel(renderDock(live, { buttonVisible: false, approvalPending }).markup), null, name);
+  }
+  assert.match(
+    renderDock({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }, { buttonVisible: false }).markup,
+    /The Live provider sent an invalid event\./u,
+  );
+});
+
+test("turning Aiden Live off renders nothing and ignores the Live command, even mid-session", () => {
+  for (const live of [
+    idleLive,
+    { ...idleLive, active: true, state: "open" as const, microphoneActive: true },
+    { ...idleLive, state: "failed" as const, error: "Disconnected" },
+  ]) {
+    const { markup, commandEnabled } = renderDock(live, { enabled: false });
+    assert.equal(markup, "");
+    assert.equal(commandEnabled, false);
+  }
 });
 
 test("legacy voice approval presentation remains isolated from the direct-action dock", () => {
@@ -296,32 +396,52 @@ test("Aiden Live is visibly marked beta in setup and settings", () => {
   assert.match(settings, /Availability and\s+supported actions may change during beta\./u);
 });
 
-test("the Live orb maps all user-visible states onto the shared Libraries.dev orb", () => {
-  const orb = readFileSync(new URL("./aiden-live-orb.tsx", import.meta.url), "utf8");
-  const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
-  const packageJson = readFileSync(new URL("../../../package.json", import.meta.url), "utf8");
-  for (const state of [
-    "ready",
-    "connecting",
-    "listening",
-    "thinking",
-    "speaking",
-    "acting",
-    "approval",
-    "error",
-    "unavailable",
-  ]) {
-    assert.match(orb, new RegExp(`\\b${state}\\b`, "u"));
-  }
-  assert.match(orb, /import \{ AidenOrb \} from "\.\.\/aiden-orb"/u);
-  assert.match(orb, /state="listening"/u);
-  assert.match(orb, /state="weaving"/u);
-  assert.doesNotMatch(orb, /Rive|\.riv/u);
-  assert.match(styles, /\.aiden-live-orb-canvas[\s\S]*filter:[\s\S]*hue-rotate\(209deg\)/u);
-  assert.match(
-    styles,
-    /\.aiden-live-trigger\[data-kind="orb"\][\s\S]*background: transparent;[\s\S]*box-shadow: none;/u,
+test("Live settings offer the button switch only while Aiden Live is on", () => {
+  const switches = (markup: string) =>
+    Object.fromEntries(
+      [...markup.matchAll(/<button[^>]*role="switch"[^>]*>/gu)].map(([tag]) => [
+        /aria-label="([^"]*)"/u.exec(tag)?.[1],
+        /aria-checked="true"/u.test(tag),
+      ]),
+    );
+  const on = renderToStaticMarkup(
+    <AidenLiveSwitches enabled buttonVisible={false} onChange={() => undefined} />,
   );
-  assert.match(packageJson, /"thinking-orbs": "0\.3\.1"/u);
-  assert.doesNotMatch(packageJson, /@rive-app/u);
+  assert.deepEqual(switches(on), { "Aiden Live": true, "Show Live button": false });
+  assert.match(on, /The shortcut still works when it’s hidden\./u);
+  const off = renderToStaticMarkup(
+    <AidenLiveSwitches enabled={false} buttonVisible onChange={() => undefined} />,
+  );
+  assert.deepEqual(switches(off), { "Aiden Live": false });
+  assert.match(off, /Turns voice and on-screen actions on or off\./u);
+});
+
+test("every Live state renders a Helix-family mark, frozen when idle or unavailable", () => {
+  const expected = {
+    ready: ["helix-calm", false],
+    connecting: ["helix-twist", true],
+    listening: ["helix-swell", true],
+    thinking: ["helix-duplex", true],
+    speaking: ["helix-duplex", true],
+    acting: ["helix-duplex", true],
+    approval: ["glance", true],
+    error: ["helix-flat", false],
+    unavailable: ["helix-flat", false],
+  } as const;
+  for (const [state, [mark, active]] of Object.entries(expected)) {
+    const markup = renderToStaticMarkup(<AidenLiveMark state={state as keyof typeof expected} />);
+    assert.match(markup, new RegExp(`data-mark="${mark}"`), state);
+    assert.match(markup, new RegExp(`data-aiden-mark="${mark}"`), state);
+    assert.equal(markup.includes("data-paused"), !active, state);
+    assert.doesNotMatch(markup, /<canvas/u);
+  }
+});
+
+test("Live listening sizes the swell wave from the microphone level", () => {
+  const quiet = renderToStaticMarkup(<AidenLiveMark state="listening" level={0} />);
+  const loud = renderToStaticMarkup(<AidenLiveMark state="listening" level={1} />);
+  const clipped = renderToStaticMarkup(<AidenLiveMark state="listening" level={7} />);
+  assert.match(quiet, /data-level="0"/u);
+  assert.match(loud, /data-level="4"/u);
+  assert.match(clipped, /data-level="4"/u);
 });

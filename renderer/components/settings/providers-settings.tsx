@@ -30,6 +30,7 @@ import { ProviderIcon } from "../provider-icon";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
+import { ProviderSetupRow } from "./provider-setup-row";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
@@ -123,32 +124,25 @@ function BuiltinProviderRows({
   return providers.map((provider, index) => (
     <React.Fragment key={provider.id}>
       {index > 0 ? <Separator /> : null}
-      <div className="flex items-center gap-3 px-4 py-3">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+      <ProviderSetupRow
+        icon={
           <ProviderIcon
             providerId={provider.id}
             providerLabel={provider.label}
             artwork={provider.artwork}
             className="size-4.5"
           />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <Text variant="strong" truncate>
-              {provider.label}
-            </Text>
-            {statusBadge(provider)}
-          </div>
-          <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-            {provider.id === GOOGLE_PROVIDER_ID && geminiUsageScope === "transcription_only"
-              ? "Transcription only · chat models hidden"
-              : `${provider.models.length} available model${provider.models.length === 1 ? "" : "s"}`}
-          </Text>
-        </div>
-        <Button variant="filled" size="small" onClick={() => onSetUp(provider)}>
-          {provider.hasKey ? "Manage" : "Set up"}
-        </Button>
-      </div>
+        }
+        name={provider.label}
+        badge={statusBadge(provider)}
+        subtitle={
+          provider.id === GOOGLE_PROVIDER_ID && geminiUsageScope === "transcription_only"
+            ? "Transcription only · chat models hidden"
+            : `${provider.models.length} available model${provider.models.length === 1 ? "" : "s"}`
+        }
+        actionLabel={provider.hasKey ? "Manage" : "Set up"}
+        onAction={() => onSetUp(provider)}
+      />
     </React.Fragment>
   ));
 }
@@ -437,7 +431,7 @@ export function ProvidersSettings() {
 
       {capabilities.appleFoundationModels && foundationModels.data ? (
         <div
-          className="settings-card rounded-card border border-separator"
+          className="settings-card rounded-card"
           aria-busy={refreshingFoundationModels}
         >
           <div className="flex items-start gap-3 px-4 py-3">
@@ -515,7 +509,7 @@ export function ProvidersSettings() {
           </details>
         </div>
       ) : !capabilities.appleFoundationModels ? (
-        <div className="rounded-card border border-separator px-3.5 py-3">
+        <div className="rounded-card bg-well px-3.5 py-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <Text variant="small-strong" as="p">
@@ -565,7 +559,7 @@ export function ProvidersSettings() {
             Connect with credentials when required; Aiden keeps their model catalogs current.
           </Text>
         </div>
-        <div className="settings-card rounded-card border border-separator">
+        <div className="settings-card rounded-card">
           <BuiltinProviderRows
             providers={featuredBuiltins}
             onSetUp={openBuiltinSetup}
@@ -594,7 +588,7 @@ export function ProvidersSettings() {
           ) : null}
         </div>
         {showMoreBuiltinProviders && moreBuiltins.length > 0 ? (
-          <div id="more-pi-providers" className="settings-card rounded-card border border-separator">
+          <div id="more-pi-providers" className="settings-card rounded-card">
             <div className="px-4 py-3">
               <Text variant="small-strong">More built-in providers</Text>
               <Text variant="small" color="tertiary" className="mt-0.5 block">
@@ -619,7 +613,7 @@ export function ProvidersSettings() {
               Configure local, private, and vendor-compatible endpoints here.
             </Text>
           </div>
-          <div className="settings-card rounded-card border border-separator">
+          <div className="settings-card rounded-card">
             {customProviders.map((p, i) => (
               <React.Fragment key={p.id}>
                 {i > 0 ? <Separator /> : null}
@@ -679,7 +673,7 @@ export function ProvidersSettings() {
             Provider catalogs determine what can run; model details improve names and capability hints.
           </Text>
         </div>
-        <div className="settings-card rounded-card border border-separator px-4 py-3">
+        <div className="settings-card rounded-card px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Text variant="small" color="secondary" aria-live="polite">
               {catalogOutcome ??

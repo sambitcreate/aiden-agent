@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import readline from "node:readline";
+import { FakeCuaDriver, TOOL_DEFINITIONS, toolListResult } from "./cua-driver-catalog.mjs";
 
 const argv = process.argv.slice(2);
 function option(name) {
@@ -32,161 +33,12 @@ const command = argv.includes("--bridge")
     ? "broker"
     : argv.find((value) => explicitCommands.has(value)) ?? "unknown";
 
-const ALLOWED_TOOLS = [
-  "start_session",
-  "end_session",
-  "health_report",
-  "check_permissions",
-  "list_apps",
-  "list_windows",
-  "get_screen_size",
-  "get_accessibility_tree",
-  "get_desktop_state",
-  "get_window_state",
-  "bring_to_front",
-  "click",
-  "double_click",
-  "right_click",
-  "drag",
-  "scroll",
-  "type_text",
-  "press_key",
-  "hotkey",
-  "set_value",
-];
-
-const TOOL_PROPERTIES = {
-  start_session: ["session"],
-  end_session: ["session"],
-  health_report: ["include", "skip"],
-  check_permissions: ["prompt"],
-  list_apps: [],
-  list_windows: ["on_screen_only", "pid"],
-  get_screen_size: [],
-  get_accessibility_tree: [],
-  get_desktop_state: ["screenshot_out_file", "session"],
-  get_window_state: [
-    "capture_mode",
-    "include_screenshot",
-    "max_depth",
-    "max_elements",
-    "pid",
-    "query",
-    "screenshot_out_file",
-    "session",
-    "window_id",
-  ],
-  bring_to_front: ["pid", "window_id"],
-  click: [
-    "action",
-    "button",
-    "count",
-    "debug_image_out",
-    "delivery_mode",
-    "element_index",
-    "element_token",
-    "from_zoom",
-    "modifier",
-    "pid",
-    "scope",
-    "session",
-    "window_id",
-    "x",
-    "y",
-  ],
-  double_click: [
-    "delivery_mode",
-    "element_index",
-    "element_token",
-    "pid",
-    "session",
-    "window_id",
-    "x",
-    "y",
-  ],
-  right_click: [
-    "delivery_mode",
-    "element_index",
-    "element_token",
-    "modifier",
-    "pid",
-    "session",
-    "window_id",
-    "x",
-    "y",
-  ],
-  drag: [
-    "button",
-    "delivery_mode",
-    "duration_ms",
-    "from_element",
-    "from_x",
-    "from_y",
-    "from_zoom",
-    "modifier",
-    "pid",
-    "session",
-    "steps",
-    "to_element",
-    "to_x",
-    "to_y",
-    "window_id",
-  ],
-  scroll: [
-    "amount",
-    "by",
-    "delivery_mode",
-    "direction",
-    "element_index",
-    "element_token",
-    "pid",
-    "session",
-    "window_id",
-    "x",
-    "y",
-  ],
-  type_text: [
-    "delay_ms",
-    "delivery_mode",
-    "element_index",
-    "element_token",
-    "pid",
-    "session",
-    "text",
-    "window_id",
-    "x",
-    "y",
-  ],
-  press_key: [
-    "delivery_mode",
-    "element_index",
-    "element_token",
-    "key",
-    "modifiers",
-    "pid",
-    "session",
-    "window_id",
-    "x",
-    "y",
-  ],
-  hotkey: ["delivery_mode", "keys", "pid", "session", "window_id", "x", "y"],
-  set_value: ["element_index", "element_token", "pid", "session", "value", "window_id"],
-};
-
-const TOOL_REQUIRED = {
-  start_session: ["session"],
-  end_session: ["session"],
-  get_window_state: ["pid", "window_id"],
-  bring_to_front: ["pid"],
-  double_click: ["pid"],
-  right_click: ["pid"],
-  drag: ["pid"],
-  scroll: ["direction"],
-  type_text: ["pid", "text"],
-  press_key: ["pid", "key"],
-  hotkey: ["pid", "keys"],
-  set_value: ["pid", "value"],
-};
+// The native bridge forwards only Aiden's allowlist, so the fake lists exactly
+// those tools in their 0.34.1 shapes.
+const ALLOWED_TOOLS = Object.keys(TOOL_DEFINITIONS);
+const driver = new FakeCuaDriver({
+  hostBundleId: process.env.CUA_DRIVER_HOST_BUNDLE_ID,
+});
 
 function log(event) {
   if (!logPath) return;
@@ -388,46 +240,7 @@ if (command === "hold-stdio") {
   });
 
   function startMcp() {
-    const tools = ALLOWED_TOOLS.filter((name) => name !== omittedTool).map((name) => ({
-      name,
-      description: `Fake ${name}`,
-      inputSchema: {
-        type: "object",
-        additionalProperties: name === "start_session" || name === "end_session",
-        properties: Object.fromEntries(
-          TOOL_PROPERTIES[name].map((property) => [
-            property,
-            property === "session" ? { type: "string" } : {},
-          ]),
-        ),
-        required: TOOL_REQUIRED[name] ?? [],
-      },
-      annotations: {
-        readOnlyHint: [
-          "health_report",
-          "check_permissions",
-          "list_apps",
-          "list_windows",
-          "get_screen_size",
-          "get_accessibility_tree",
-          "get_desktop_state",
-          "get_window_state",
-        ].includes(name),
-        destructiveHint: ![
-          "health_report",
-          "check_permissions",
-          "list_apps",
-          "list_windows",
-          "get_screen_size",
-          "get_accessibility_tree",
-          "get_desktop_state",
-          "get_window_state",
-        ].includes(name),
-        idempotentHint: false,
-        openWorldHint: false,
-      },
-      capabilities: name === "get_window_state" ? ["accessibility.element_tokens"] : [],
-    }));
+    const listing = toolListResult(ALLOWED_TOOLS.filter((name) => name !== omittedTool));
     const pending = new Map();
     const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
     let inputLineBytes = 0;
@@ -463,7 +276,7 @@ if (command === "hold-stdio") {
           result: {
             protocolVersion: message.params?.protocolVersion ?? "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "fake-aiden-cua-bridge", version: "0.8.3" },
+            serverInfo: { name: "fake-aiden-cua-bridge", version: "0.34.1" },
           },
         });
       } else if (message.method === "notifications/initialized") {
@@ -472,12 +285,7 @@ if (command === "hold-stdio") {
         send({
           jsonrpc: "2.0",
           id: message.id,
-          result: {
-            tools: malformedToolCatalog ? "corrupt-tool-catalog" : tools,
-            capability_version: "1",
-            schema_version: "1",
-            tool_observation_owner: "daemon",
-          },
+          result: malformedToolCatalog ? { ...listing, tools: "corrupt-tool-catalog" } : listing,
         });
       } else if (message.method === "tools/call") {
         const name = message.params?.name;
@@ -488,20 +296,6 @@ if (command === "hold-stdio") {
             jsonrpc: "2.0",
             id: message.id,
             error: { code: -32601, message: "tool is not allowed" },
-          });
-          return;
-        }
-        const allowedArguments = new Set(TOOL_PROPERTIES[name]);
-        const unlistedArguments = Object.keys(args).filter((key) => !allowedArguments.has(key));
-        const missingArguments = (TOOL_REQUIRED[name] ?? []).filter(
-          (key) => !Object.hasOwn(args, key),
-        );
-        if (unlistedArguments.length > 0 || missingArguments.length > 0) {
-          log({ event: "bridge-rejected-arguments", name, unlistedArguments, missingArguments });
-          send({
-            jsonrpc: "2.0",
-            id: message.id,
-            error: { code: -32602, message: "tool arguments did not match the strict schema" },
           });
           return;
         }
@@ -518,28 +312,15 @@ if (command === "hold-stdio") {
                 content: [{ type: "text", text: "fake start_session failure" }],
               },
             });
-          } else if (name === "get_window_state" && args.include_screenshot === true) {
-            send({
-              jsonrpc: "2.0",
-              id: message.id,
-              result: {
-                content: [
-                  { type: "text", text: "capture summary" },
-                  { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
-                ],
-                structuredContent: { width: 10, height: 10 },
-              },
-            });
-          } else {
-            send({
-              jsonrpc: "2.0",
-              id: message.id,
-              result: {
-                content: [{ type: "text", text: JSON.stringify({ name, args }) }],
-                structuredContent: { name, args },
-              },
-            });
+            return;
           }
+          // The driver's own dispatch boundary refuses unknown arguments of a
+          // closed schema as a tool result, not a JSON-RPC error.
+          const result = driver.call(name, args);
+          if (result.structuredContent?.refusal?.code === "invalid_arguments") {
+            log({ event: "driver-refused-arguments", name, args });
+          }
+          send({ jsonrpc: "2.0", id: message.id, result });
         };
         const delay =
           name === "start_session" ? startSessionDelayMs : name === "health_report" ? toolDelayMs : 0;

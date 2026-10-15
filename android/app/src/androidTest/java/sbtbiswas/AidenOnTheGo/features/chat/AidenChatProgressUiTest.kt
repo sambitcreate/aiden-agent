@@ -1,11 +1,14 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.activity.ComponentDialog
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.test.espresso.Espresso
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.onNodeWithText
@@ -34,6 +37,25 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 class AidenChatProgressUiTest {
     @get:Rule
     val compose = createComposeRule()
+
+    /**
+     * Presses Back on the roster sheet the way the system delivers it. The app
+     * opts into OnBackInvokedCallback, so system Back reaches the sheet's
+     * ComponentDialog through its OnBackPressedDispatcher, where both the
+     * detail BackHandler and Material's dismiss callback are registered.
+     *
+     * An Espresso key-event Back would instead have to pick the sheet's window
+     * and wait for it to hold input focus. Right after a state restore on a
+     * slow emulator, Espresso picked a dialog root that never gained focus and
+     * timed out (RootViewWithoutFocusException), whichever root matcher was used.
+     */
+    private fun pressBackInSheet() {
+        val sheets = compose.onAllNodes(isRoot()).fetchSemanticsNodes().mapNotNull { node ->
+            (node.root as? ViewRootForTest)?.view?.findViewTreeOnBackPressedDispatcherOwner() as? ComponentDialog
+        }.distinct()
+        assertEquals("Expected exactly one roster sheet window", 1, sheets.size)
+        compose.runOnUiThread { sheets.single().onBackPressedDispatcher.onBackPressed() }
+    }
 
     @Test
     fun chatInspectorOwnerRestoresAfterDelayedNegotiationAndRosterHydration() {
@@ -65,12 +87,12 @@ class AidenChatProgressUiTest {
         compose.onNodeWithText("Child").assertDoesNotExist()
         compose.runOnIdle { roster.value = hydrated }
         compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Sub-agents").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Agents").assertExists()
         compose.runOnIdle { assertEquals(0, dismissals) }
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.runOnIdle { assertEquals(1, dismissals) }
     }
 
@@ -134,14 +156,14 @@ class AidenChatProgressUiTest {
         compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Sub-agents").assertExists()
         compose.onNodeWithText("Back").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Agents").assertExists()
         compose.onNodeWithText("Back").assertDoesNotExist()
         compose.runOnIdle { assertEquals(false, dismissed) }
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.runOnIdle { assertEquals(true, dismissed) }
     }
 

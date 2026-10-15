@@ -39,10 +39,9 @@ test("live child snapshots are durable before owner-bound renderer delivery", as
 });
 
 test("historical inspector reads require a live document and matching chat owner", async () => {
-  const [handler, historyRead, rendererIpc] = await Promise.all([
+  const [handler, historyRead] = await Promise.all([
     source("main/handlers/subagents.ts"),
     source("main/services/subagents/subagent-history-read-core.ts"),
-    source("renderer/lib/ipc.ts"),
   ]);
   assert.match(handler, /rendererDocumentOwner\(/u);
   assert.match(handler, /readSubagentHistoryDetailForOwner\(/u);
@@ -60,15 +59,13 @@ test("historical inspector reads require a live document and matching chat owner
   assert.doesNotMatch(handler, /broadcast\(/u);
   assert.doesNotMatch(handler, /throw error|error\.message/u);
   assert.match(handler, /Aiden could not load subagent history/u);
-  assert.match(rendererIpc, /parseSubagentRunSnapshot\(/u);
-  assert.match(rendererIpc, /snapshot\?\.generationId === streamId/u);
 });
 
 test("run-store failures keep filesystem details out of renderer-visible errors", async () => {
   const [llm, historyHandler, chatHandler, chatApplicationService] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/handlers/subagents.ts"),
-    source("main/handlers/chats.ts"),
+    source("main/handlers/chat-renderer-mutations.ts"),
     source("main/services/chat-application-service.ts"),
   ]);
   assert.match(llm, /error: "local storage failed"/u);
@@ -114,13 +111,13 @@ test("private run-store I/O is descriptor-bound, generation-checked, and package
 
 test("chat removal deletes private child history before the chat can disappear", async () => {
   const [handler, applicationService, llm] = await Promise.all([
-    source("main/handlers/chats.ts"),
+    source("main/handlers/chat-renderer-mutations.ts"),
     source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
   assert.match(
     handler,
-    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\)[\s\S]*return result/u,
+    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\b[\s\S]*return result/u,
   );
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
@@ -258,19 +255,21 @@ test("empty-chat workspace moves serialize against generation authority and term
 });
 
 test("renderer message appends serialize against detached terminal persistence", async () => {
-  const [handler, llm, schedule, surfaces] = await Promise.all([
+  const [handler, appendSource, llm, schedule, surfaces] = await Promise.all([
     source("main/handlers/chats.ts"),
+    // The append handler lives beside chats.ts so it can be invoked in tests.
+    source("main/handlers/chat-renderer-mutations.ts"),
     source("main/services/llm-client.ts"),
     source("main/services/schedule-execution.ts"),
     source("main/services/conversation-surface-generation.ts"),
   ]);
-  const appendHandler = ipcHandlerStart(handler, "chats:appendMessage");
-  const beginAppend = handler.indexOf(
+  const appendHandler = appendSource.indexOf("appendMessage:");
+  const beginAppend = appendSource.indexOf(
     "llmClient.beginChatTurn(chatId, turnId, owner.documentId)",
     appendHandler,
   );
-  const persist = handler.indexOf("chatStore.appendMessage(", beginAppend);
-  const failureRelease = handler.indexOf("if (!appended) turn.release();", persist);
+  const persist = appendSource.indexOf("chatStore.appendMessage(", beginAppend);
+  const failureRelease = appendSource.indexOf("if (!appended) turn.release();", persist);
 
   assert.ok(appendHandler >= 0);
   assert.ok(beginAppend > appendHandler);
@@ -314,10 +313,9 @@ test("renderer message appends serialize against detached terminal persistence",
 });
 
 test("renderer turn tokens cross append and generation IPC without an admission gap", async () => {
-  const [ipc, pane, assistant] = await Promise.all([
+  const [ipc, pane] = await Promise.all([
     source("renderer/lib/ipc.ts"),
     source("renderer/main/chat-pane.tsx"),
-    source("renderer/components/assistant/use-assistant-chat.ts"),
   ]);
 
   assert.match(ipc, /appendMessage:[\s\S]{0,500}turnId: string[\s\S]{0,260}"chats:appendMessage"/u);
@@ -330,12 +328,6 @@ test("renderer turn tokens cross append and generation IPC without an admission 
   const append = pane.indexOf("turnId: messageTurnId", turn);
   const generation = pane.indexOf("runGeneration(messageTurnId)", append);
   assert.ok(turn >= 0 && append > turn && generation > append);
-  assert.match(
-    assistant,
-    /const messageTurnId = createChatTurnId\(\)[\s\S]{0,4200}startGeneration\([\s\S]{0,2600}messageTurnId/u,
-  );
-  assert.match(assistant, /appendMessage\([\s\S]{0,360}turnId: messageTurnId/u);
-  assert.match(assistant, /chatsApi\.abandonTurn\(chat\.id, messageTurnId\)/u);
 });
 
 test("main announces normalized settlement only after generation ownership exits", async () => {
@@ -660,7 +652,10 @@ test("every workspace path capability is renderer-document owned and mutation ad
 
   assert.match(ipcHandlerSource(workspaces, "workspaces:gitInfo"), /gitInfo\(.+signal\)/u);
   assert.match(ipcHandlerSource(workspaces, "git:branches"), /gitBranches\(.+signal\)/u);
-  assert.match(ipcHandlerSource(workspaces, "git:pullRequestStatus"), /githubCurrentPullRequest\(.+signal\)/u);
+  assert.match(
+    ipcHandlerSource(workspaces, "git:pullRequestStatus"),
+    /githubCurrentPullRequest\([\s\S]+resolved\.folderPath[\s\S]+signal[\s\S]*\)/u,
+  );
   assert.match(ipcHandlerSource(workspaces, "git:worktrees"), /gitWorktrees\(.+signal\)/u);
   assert.match(git, /async info\(cwd: string, signal\?: AbortSignal\)/u);
   assert.match(git, /async branches\(cwd: string, signal\?: AbortSignal\)/u);

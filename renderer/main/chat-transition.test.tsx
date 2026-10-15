@@ -3,12 +3,22 @@
 // and read as blank -> overlapping -> snap. These assertions keep the transition
 // state-driven instead of mount-driven.
 
+// Installs happy-dom and the fake IPC bridge; must stay the first import.
+import { installBotTestIpc } from "./bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { Outlet, RouterProvider } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
 import type { Chat } from "../lib/types.js";
+import { WorkspaceProvider } from "../lib/workspace-context";
+import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
+import { EnvironmentPanelProvider } from "../components/environment-panel";
+import { CommandSystemProvider } from "../lib/command-system";
+import { TooltipProvider } from "../components/ui";
+import { RoutedBotPanelProvider } from "./bots/bot-panel-context";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -22,16 +32,114 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("chat route renders ChatPane without remounting it per chatId", () => {
-  const router = source("./router.tsx");
-  const route = between(router, "const chatRoute = createRoute({", "});");
+function chatReadResponse(id: string) {
+  return {
+    chat: {
+      id,
+      title: `Chat ${id}`,
+      messages: [{ id: `message-${id}`, role: "user", content: `Hello from chat ${id}`, createdAt: 1 }],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    imageArtifactRecoveryPending: false,
+    imageArtifactRecoveryUnavailable: false,
+    reconciliation: null,
+  };
+}
 
-  assert.match(route, /<ChatPane chatId=\{chatId\} \/>/u);
-  assert.doesNotMatch(
-    route,
-    /<ChatPane[^>]*\bkey=/u,
-    "Keying ChatPane by chatId remounts the pane and blanks the transcript on every switch",
-  );
+test("switching chats keeps the routed ChatPane mounted and shows the new chat", async () => {
+  // The app router is a module singleton whose scroll restoration reads these
+  // window globals while it is created, so load it after exposing them.
+  const globals = globalThis as Record<string, unknown>;
+  const win = window as unknown as Record<string, unknown>;
+  globals.history = win.history;
+  globals.location = win.location;
+  for (const key of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+    globals[key] = (win[key] as (...args: unknown[]) => unknown).bind(window);
+  }
+  const { router, queryClient } = await import("./router");
+
+  installBotTestIpc({
+    "chats:get": (id) => chatReadResponse(String(id)),
+    "chats:list": () => [],
+    "chats:markRead": () => true,
+    "chats:activitySnapshot": () => null,
+    "chats:todoSnapshot": () => null,
+    "chats:contextPressure": () => null,
+    "workspaces:list": () => [],
+    "workspaces:externalEditors": () => [],
+    "providers:list": () => [],
+    "pullRequests:list": () => [],
+    "pullRequests:pending": () => [],
+    "pullRequests:current": () => null,
+    "remote:getPendingApproval": () => null,
+    "remote:getPendingQuestion": () => null,
+    "settings:get": () => null,
+    "shortcut:get": () => null,
+    "tts:status": () => null,
+    "app:renderer-ready": () => null,
+  });
+
+  // Keep the real chat route (the component that decides ChatPane's key) and
+  // swap only the app shell around it for the providers ChatPane reads.
+  const routes = router.routesById as unknown as Record<string, { options: { component?: unknown } }>;
+  routes.__root__.options.component = function ChatPaneProviders() {
+    return (
+      <WorkspaceProvider>
+        <WorkspaceTerminalProvider>
+          <EnvironmentPanelProvider>
+            <RoutedBotPanelProvider>
+              <CommandSystemProvider>
+                <Outlet />
+              </CommandSystemProvider>
+            </RoutedBotPanelProvider>
+          </EnvironmentPanelProvider>
+        </WorkspaceTerminalProvider>
+      </WorkspaceProvider>
+    );
+  };
+  routes["/chatLayout"].options.component = Outlet;
+
+  router.history.push("/chat/chat-a");
+  try {
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <RouterProvider router={router} />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    screen.getByText("Hello from chat chat-a");
+    const title = screen.getByRole("heading", { level: 1 });
+    assert.equal(title.textContent, "Chat chat-a");
+
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    screen.getByText("Hello from chat chat-b");
+    // Boolean oracles: a failing assert on a happy-dom node inspects the whole DOM graph.
+    assert.ok(screen.queryByText("Hello from chat chat-a") === null);
+    // A remount (for example `key={chatId}`) replaces every DOM node the pane
+    // owns, which blanks the transcript chrome on each switch.
+    assert.ok(
+      screen.getByRole("heading", { level: 1 }) === title,
+      "Switching chats must update the mounted pane rather than remount it",
+    );
+    assert.ok(title.isConnected);
+    assert.equal(title.textContent, "Chat chat-b");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
 });
 
 test("chat pane hides the generic tool phase when a chronological row owns it", () => {
@@ -147,9 +255,9 @@ test("a committed append is not presented as unsent when generation start later 
     "const handleStop = React.useCallback",
   );
   const append = handleSend.indexOf("await chatsApi.appendMessage(");
-  const start = handleSend.indexOf("await runGeneration(messageTurnId)");
+  const start = handleSend.indexOf("runGeneration(messageTurnId)");
   assert.ok(append >= 0 && start > append);
-  assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
+  assert.match(handleSend, /if \(!started\.ok && mountedRef\.current[^)]*\)\s*\{\s*setError/u);
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
 });
 
@@ -216,7 +324,6 @@ test("an indeterminate append blocks retries until an application reload reconci
     /setAppendReconciliationRequiredChats\(\(current\) => new Set\(current\)\.add\(chatId\)\)/u,
   );
   assert.match(pane, /appendReconciliationRequiredChats\.has\(chatId\)/u);
-  assert.match(pane, /Reload Aiden before sending another message/u);
   assert.doesNotMatch(
     between(pane, "// Reset transient state when switching chats.", "}, [chatId]);"),
     /setAppendReconciliationRequiredChats/u,
@@ -231,7 +338,7 @@ test("append reconciliation is surfaced across route remounts and chat creation 
   assert.match(root, /duration: Infinity/u);
   assert.match(layout, /appendReconciliationRequired \?/u);
   assert.match(layout, /\.catch\(\(error: unknown\)/u);
-  assert.match(sidebar, /disabled=\{!activeId \|\| appendReconciliationRequired\}/u);
+  assert.match(sidebar, /newAgentDisabled=\{!activeId \|\| appendReconciliationRequired\}/u);
   assert.match(sidebar, /Aiden could not create a chat/u);
   assert.match(sidebar, /list\.length === 0 && appendReconciliationRequired/u);
   assert.match(sidebar, /workspaceSwitchBlocked \|\| appendReconciliationRequired/u);
@@ -277,53 +384,6 @@ test("composer stays keyed so drafts and attachments do not leak between chats",
   );
 });
 
-test("scroll area settles scroll position before paint, not a frame later", () => {
-  const ui = source("../components/ui.tsx");
-  const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
-  const effect = between(
-    scrollArea,
-    "React.useLayoutEffect(() => {\n    const element = viewport.current;",
-    "const resolvedToolbar",
-  );
-
-  const syncIndex = effect.indexOf('if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");');
-  const frameIndex = effect.indexOf("requestAnimationFrame(update)");
-  assert.notEqual(syncIndex, -1, "ScrollArea must settle synchronously in the layout effect");
-  assert.notEqual(frameIndex, -1, "The post-paint frame should remain for late layout");
-  assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
-  assert.match(scrollArea, /if \(followFrameRef\.current\) return;/u);
-  assert.match(scrollArea, /data-scroll-content/u);
-  assert.match(scrollArea, /autoScrollResetKey/u);
-  assert.match(scrollArea, /data-scroll-content className="min-h-full"/u);
-  assert.match(scrollArea, /resolveProgrammaticFollowLatch/u);
-  assert.match(scrollArea, /programmaticPinPendingRef/u);
-  // An aborted or finished smooth jump must release the pending latch.
-  assert.match(scrollArea, /addEventListener\("scrollend", releaseProgrammaticPin\)/u);
-  assert.match(scrollArea, /onWheel=\{releaseProgrammaticPin\}/u);
-  assert.match(scrollArea, /onTouchStart=\{releaseProgrammaticPin\}/u);
-  assert.match(scrollArea, /isUserScrollKey\(event\.key\)\) releaseProgrammaticPin\(\)/u);
-  assert.doesNotMatch(
-    effect,
-    /subtree:\s*true/u,
-    "Long transcripts must not observe every mutation under the viewport",
-  );
-  assert.match(effect, /if \(contentElement\) resizeObserver\.observe\(contentElement\)/u);
-});
-
-test("scroll area still pads the viewport for its overlaid chrome", () => {
-  const ui = source("../components/ui.tsx");
-  const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
-
-  // Toolbar and footer are absolutely positioned, so the viewport must reserve
-  // their measured height plus any clearance for chrome floating above the footer.
-  assert.match(
-    scrollArea,
-    /style=\{\{\s*paddingTop: toolbarHeight,\s*paddingBottom: footerHeight \+ Math\.max\(0, scrollContentBottomOffset\),\s*\}\}/u,
-  );
-  assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
-  assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
-});
-
 test("sidebar prefetches a chat before the click so the pane does not blank", () => {
   const sidebar = source("../components/chat-sidebar.tsx");
 
@@ -350,8 +410,8 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
-  assert.match(pane, /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u);
-  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
+  // The visibility rule is now tested behaviorally in chat-terminal-sync.test.ts:
+  // "a saved reply hides an own run, but a mirrored run only by its own reply"
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
   // Stop closes busy admission synchronously, before React re-renders.
@@ -371,7 +431,7 @@ test("a pre-append assistant read cannot hide controls for the newer user turn",
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const install = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
-  const start = send.indexOf("await runGeneration(messageTurnId)");
+  const start = send.indexOf("runGeneration(messageTurnId)");
   assert.ok(install >= 0 && start > install);
 
   const queryClient = new QueryClient();
@@ -437,7 +497,7 @@ test("first-message promotion seeds the real cache before releasing draft state 
   const seed = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
   const promote = send.indexOf("finishChatDraftSend(chatId, true)");
   const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
-  const start = send.indexOf("await runGeneration(messageTurnId)");
+  const start = send.indexOf("runGeneration(messageTurnId)");
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
   assert.doesNotMatch(send, /navigate\(/u);

@@ -2,7 +2,7 @@ package sbtbiswas.AidenOnTheGo
 
 import org.junit.Assert.*
 import org.junit.Test
-import sbtbiswas.AidenOnTheGo.features.bots.AidenBotAvatarColors
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotAvatarExpectedRevision
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotGeneratedAvatarNormalizer
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotAvatarPresentation
 import sbtbiswas.AidenOnTheGo.models.*
@@ -12,45 +12,37 @@ import java.util.Base64
 
 class AidenBotGeneratedAvatarTest {
     @Test
-    fun testAllAvatarRecipePermutations() {
-        for (shape in AidenBotAvatarShape.values()) {
-            for (color in AidenBotAvatarColor.values()) {
-                for (eyes in AidenBotAvatarEyes.values()) {
-                    for (detail in AidenBotAvatarDetail.values()) {
-                        val recipe = AidenBotAvatarRecipe(
-                            shape = shape,
-                            color = color,
-                            eyes = eyes,
-                            detail = detail
-                        )
-                        val presentation = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Recipe(recipe))
-                        assertEquals(shape, presentation.shape)
-                        assertEquals(color, presentation.color)
-                        assertEquals(eyes, presentation.eyes)
-                        assertEquals(detail, presentation.detail)
-
-                        val gradient = AidenBotAvatarColors.getGradient(color)
-                        assertEquals(2, gradient.size)
-
-                        val glyph = AidenBotAvatarColors.getEyeGlyph(eyes)
-                        assertTrue(glyph.isNotEmpty())
+    fun testRetiredEyesAndAccessoryAreAcceptedButNeverChangeTheLookOrTheWire() {
+        val json = AidenBotWireJson.json
+        for (shape in AidenBotAvatarShape.entries) {
+            for (color in AidenBotAvatarColor.entries) {
+                val shapeWire = json.encodeToJsonElement(AidenBotAvatarShape.serializer(), shape)
+                val colorWire = json.encodeToJsonElement(AidenBotAvatarColor.serializer(), color)
+                val withRetired = """{"version":1,"shape":$shapeWire,"color":$colorWire,"eyes":"wide","detail":"orbit"}"""
+                val recipe = json.decodeFromString(AidenBotAvatarRecipe.serializer(), withRetired)
+                val presentation = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Recipe(recipe))
+                assertEquals(shape, presentation.shape)
+                assertEquals(color, presentation.color)
+                assertEquals(
+                    setOf("version", "shape", "color"),
+                    json.parseToJsonElement(json.encodeToString(AidenBotAvatarRecipe.serializer(), recipe)).let {
+                        (it as kotlinx.serialization.json.JsonObject).keys
                     }
-                }
+                )
             }
         }
     }
 
     @Test
-    fun testLegacyAvatarMappings() {
-        val orbitPres = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT))
-        assertEquals(AidenBotAvatarShape.ORB, orbitPres.shape)
-        assertEquals(AidenBotAvatarColor.LILAC, orbitPres.color)
-        assertEquals(AidenBotAvatarEyes.FOCUS, orbitPres.eyes)
-        assertEquals(AidenBotAvatarDetail.ORBIT, orbitPres.detail)
-
-        val sparkPres = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.SPARK))
-        assertEquals(AidenBotAvatarShape.WISP, sparkPres.shape)
-        assertEquals(AidenBotAvatarColor.SUN, sparkPres.color)
+    fun testRecipeRejectsUnknownColoursAndRetiredLegacyIds() {
+        val json = AidenBotWireJson.json
+        assertThrows(Exception::class.java) {
+            json.decodeFromString(AidenBotAvatarRecipe.serializer(), """{"version":1,"shape":"orb","color":"teal"}""")
+        }
+        assertThrows(Exception::class.java) {
+            json.decodeFromString(AidenBotSemanticAvatar.serializer(), "\"orbit\"")
+        }
+        assertEquals(12, AidenBotAvatarColor.entries.size)
     }
 
     @Test
@@ -107,15 +99,11 @@ class AidenBotGeneratedAvatarTest {
 
     @Test
     fun testExpectedRevisionUsesBotRevisionFirstThenAssetRevision() {
-        fun aidenBotAvatarExpectedRevision(botSummary: AidenBotSummary): String {
-            return botSummary.avatar.asset?.assetRevision ?: botSummary.revision
-        }
-
         val summaryWithoutAsset = AidenBotSummary(
             id = "bot-1",
             name = "Bot",
             purpose = "Purpose",
-            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
+            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
             health = AidenBotHealth.READY,
             createdAt = java.time.Instant.now(),
             updatedAt = java.time.Instant.now(),
@@ -125,7 +113,7 @@ class AidenBotGeneratedAvatarTest {
 
         val summaryWithAsset = summaryWithoutAsset.copy(
             avatar = AidenBotAvatarView(
-                semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT),
+                semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC)),
                 asset = AidenBotAvatarAsset(
                     assetRevision = "avatar_rev_42",
                     mimeType = AidenBotAvatarAssetMimeType.PNG,
