@@ -1,6 +1,6 @@
 # MCP and Plugins remediation (Pi 1.2.0 parity)
 
-Status: Active (2026-10-13). Delivered as one twelve-PR stacked series, [#460](https://github.com/sambitcreate/aiden-agent/pull/460)–[#471](https://github.com/sambitcreate/aiden-agent/pull/471); each slice below is one PR, based on the previous one, and they merge in order. Slices with disjoint files are built in parallel waves (2–4, then 5–6, then 7–8), and the stack order follows that.
+Status: Complete (merged 2026-10-15). Delivered as one twelve-PR stacked series, [#460](https://github.com/sambitcreate/aiden-agent/pull/460)–[#471](https://github.com/sambitcreate/aiden-agent/pull/471); each slice below is one PR, based on the previous one, and they merge in order. Slices with disjoint files are built in parallel waves (2–4, then 5–6, then 7–8), and the stack order follows that.
 
 ## Why
 
