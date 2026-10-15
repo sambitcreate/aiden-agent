@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { StoredProvider } from "./types.js";
+import type { ChatStartParams, StoredProvider } from "./types.js";
 
 export const SCHEDULED_PROVIDER_FINGERPRINT = /^[a-f0-9]{64}$/u;
 
@@ -33,5 +33,20 @@ export function assertScheduledProviderFingerprint(
     throw new Error(
       "The approved provider connection changed after this automation was confirmed. Review and approve its provider and model again.",
     );
+  }
+}
+
+/**
+ * Unattended Assistant runs (global and project automations) execute only on
+ * the provider connection the user approved; attended and ordinary chats are
+ * not bound to an approval fingerprint.
+ */
+export function assertScheduledGenerationProvider(
+  mode: ChatStartParams["mode"],
+  provider: StoredProvider,
+  expected: string | undefined,
+): void {
+  if (mode === "assistant-automation" || mode === "assistant-unattended") {
+    assertScheduledProviderFingerprint(provider, expected);
   }
 }
