@@ -699,10 +699,13 @@ actor AidenBotOutboxStore {
             AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
             return
         }
-        let url = fileURL(key)
+        try writeProtected(data, to: fileURL(key))
+    }
+
+    /// Protected until first unlock, and never in a backup: what waits to reach the Mac stays on this device.
+    private func writeProtected(_ data: Data, to url: URL) throws {
         let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true, attributes: protection)
-        // Unsent messages stay on this device: never in a backup.
         var excluded = URLResourceValues()
         excluded.isExcludedFromBackup = true
         var backupRoot = root
@@ -712,9 +715,78 @@ actor AidenBotOutboxStore {
     }
 
     private func fileURL(_ key: AidenBotSessionKey) -> URL {
-        root.appending(path: digest(key.instanceId), directoryHint: .isDirectory)
-            .appending(path: digest(key.deviceId), directoryHint: .isDirectory)
+        pairingDirectory(instanceId: key.instanceId, deviceId: key.deviceId)
             .appending(path: "\(digest(key.botID)).json")
+    }
+
+    private func pairingDirectory(instanceId: String, deviceId: String) -> URL {
+        root.appending(path: digest(instanceId), directoryHint: .isDirectory)
+            .appending(path: digest(deviceId), directoryHint: .isDirectory)
+    }
+
+    // MARK: A New Bot on its way (R15)
+
+    /// The pairing's one New Bot on its way, beside its chats' outboxes, so it has their
+    /// protection and goes with an unpair's purge. A chat file is named by a 64-character digest,
+    /// so this name never meets one.
+    private func pendingCreateURL(instanceId: String, deviceId: String) -> URL {
+        pairingDirectory(instanceId: instanceId, deviceId: deviceId).appending(path: "create.json")
+    }
+
+    private struct CreateEnvelope: Codable {
+        let version: Int
+        let instanceId: String
+        let deviceId: String
+        let create: AidenBotPendingCreate
+    }
+
+    /// The New Bot an earlier launch left on its way for this pairing, if any. One whose Bot
+    /// the Mac already made is the Mac's after 24 hours and is dropped; one not made stays,
+    /// so its answers are never silently gone. A file this build can't read is set aside.
+    func pendingCreate(instanceId: String, deviceId: String) -> AidenBotPendingCreate? {
+        knownDevices[instanceId, default: []].insert(deviceId)
+        let url = pendingCreateURL(instanceId: instanceId, deviceId: deviceId)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return nil
+        }
+        // The Bot cache's date rules, so a made Bot reads back as the Mac sent it.
+        guard let envelope = try? JSONDecoder.aidenRemote().decode(CreateEnvelope.self, from: data), envelope.version == 1,
+              envelope.instanceId == instanceId, envelope.deviceId == deviceId else {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
+            let aside = url.deletingPathExtension().appendingPathExtension("\(UUID().uuidString).unreadable")
+            if (try? fileManager.moveItem(at: url, to: aside)) == nil {
+                AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
+            }
+            return nil
+        }
+        if envelope.create.frozen?.created != nil, envelope.create.createdAt <= now().addingTimeInterval(-Self.lifetime) {
+            try? fileManager.removeItem(at: url)
+            return nil
+        }
+        return envelope.create
+    }
+
+    /// Keeps the pairing's New Bot on its way; never for a pairing an unpair purged.
+    func savePendingCreate(_ create: AidenBotPendingCreate, instanceId: String, deviceId: String) {
+        knownDevices[instanceId, default: []].insert(deviceId)
+        guard !revokedDevices.contains(Self.pairing(AidenBotSessionKey(instanceId: instanceId, deviceId: deviceId, botID: ""))) else {
+            return
+        }
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(CreateEnvelope(version: 1, instanceId: instanceId, deviceId: deviceId, create: create))
+            try writeProtected(data, to: pendingCreateURL(instanceId: instanceId, deviceId: deviceId))
+        } catch {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
+        }
+    }
+
+    func removePendingCreate(instanceId: String, deviceId: String) {
+        try? fileManager.removeItem(at: pendingCreateURL(instanceId: instanceId, deviceId: deviceId))
     }
 
     private func digest(_ value: String) -> String {

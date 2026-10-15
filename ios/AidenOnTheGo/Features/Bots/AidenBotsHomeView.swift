@@ -278,8 +278,8 @@ struct AidenBotsHomeView: View {
     @State private var isStartingPreset = false
     /// Bot creation outlives New Bot (R15): the row shows at once, a failure offers Try Again.
     @State private var createFlow = AidenBotCreateFlow()
-    /// What New Bot reopens with after a failed create.
-    @State private var createPrefill: AidenBotCreateInput?
+    /// The failed create New Bot reopens with after Try Again.
+    @State private var createPrefill: AidenBotCreateFlow.Failure?
     @FocusState private var searchIsFocused: Bool
 
     private var loadID: AidenBotsHomeLoadID {
@@ -381,10 +381,16 @@ struct AidenBotsHomeView: View {
                 homeScroll
             }
         }
-        .sheet(item: $presentedSheet) { sheet in
+        .sheet(item: $presentedSheet, onDismiss: {
+            // Try Again reopened New Bot and it closed without Create: that Bot is let go.
+            if let reopened = createPrefill {
+                createPrefill = nil
+                createFlow.discard(reopened)
+            }
+        }) { sheet in
             switch sheet {
             case .create:
-                AidenBotCreateView(coordinator: coordinator, initial: createPrefill) { input in
+                AidenBotCreateView(coordinator: coordinator, initial: createPrefill?.input) { input in
                     startCreate(input)
                 }
             case let .profile(bot):
@@ -427,13 +433,18 @@ struct AidenBotsHomeView: View {
             presenting: createFlow.failure
         ) { failure in
             Button("Try Again") {
-                createPrefill = failure.input
                 createFlow.failure = nil
-                presentedSheet = .create
+                if failure.replays {
+                    // An earlier launch's create: the same request, on the same key.
+                    startCreate(failure.input)
+                } else {
+                    createPrefill = failure
+                    presentedSheet = .create
+                }
             }
             Button("OK", role: .cancel) {
                 createPrefill = nil
-                createFlow.failure = nil
+                createFlow.discard(failure)
             }
         } message: { failure in
             Text(failure.message)
@@ -450,6 +461,10 @@ struct AidenBotsHomeView: View {
             Text(deleteError ?? "Please try again.")
         }
         .task(id: loadID) {
+            // A New Bot an earlier launch left on its way comes back with Try Again.
+            if loadID.isBotSurfaceActive, let installation = coordinator.installationStore.activeInstallation {
+                await createFlow.restore(instanceId: installation.id, deviceId: installation.deviceId)
+            }
             await load()
         }
         .task(id: searchID) {
@@ -704,7 +719,8 @@ struct AidenBotsHomeView: View {
         createPrefill = nil
         let coordinator = coordinator
         let operations = AidenBotCreateOperations(
-            scope: "\(context.instanceId)|\(context.deviceId)",
+            instanceId: context.instanceId,
+            deviceId: context.deviceId,
             usesDurableSession: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator),
             waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
             catalog: { try await coordinator.remoteClient(for: context).botCapabilityCatalog() },

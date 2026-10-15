@@ -2,17 +2,40 @@ import Observation
 import SwiftUI
 
 /// What New Bot was asked for, kept so a failed create can be tried again as it was.
-struct AidenBotCreateInput: Equatable {
+struct AidenBotCreateInput: Codable, Equatable, Sendable {
     var name: String
     var purpose: String
     /// The model the person picked; nil uses the Mac's recommended one.
     var draft: AidenBotEditorDraft?
 }
 
+/// A New Bot on its way, kept on disk per pairing (in `AidenBotOutboxStore`, with the
+/// outbox's protection and purge) so a relaunch mid-create never loses it (R15, R17).
+struct AidenBotPendingCreate: Codable, Equatable, Sendable {
+    /// The request as it first went out, with its keys: a retry sends exactly this.
+    struct Frozen: Codable, Equatable, Sendable {
+        let request: AidenBotCreateRequest
+        /// The model the request was built from, for the chat step.
+        let draft: AidenBotEditorDraft?
+        let key: UUID
+        let chatKey: UUID
+        /// The Bot, once the Mac made it.
+        var created: AidenBotDetail?
+    }
+
+    let input: AidenBotCreateInput
+    /// Nil until the request was built: nothing of it can have reached the Mac.
+    var frozen: Frozen?
+    /// When this ask was made; the 24-hour clock starts here.
+    let createdAt: Date
+}
+
 /// The requests one Bot create makes; the remote client provides them, tests a fake.
 struct AidenBotCreateOperations {
-    /// The pairing the create is for, so a retry matches only its own attempt.
-    var scope: String
+    /// The pairing the create is for: a retry matches only its own attempt, and
+    /// what waits on disk is kept under it.
+    var instanceId: String
+    var deviceId: String
     var usesDurableSession: Bool
     var waitForConnection: @MainActor (Duration) async -> Bool
     var catalog: @MainActor () async throws -> AidenBotCapabilityCatalog
@@ -24,6 +47,8 @@ struct AidenBotCreateOperations {
     var isCurrent: @MainActor () -> Bool = { true }
     /// True when the error revoked this phone; the create then stops quietly.
     var handleRevocation: @MainActor (Error) async -> Bool = { _ in false }
+
+    var scope: String { AidenBotCreateFlow.scope(instanceId: instanceId, deviceId: deviceId) }
 }
 
 /// Bot creation that never waits on the sheet (R15). Create closes New Bot at
@@ -31,6 +56,10 @@ struct AidenBotCreateOperations {
 /// for the Mac, and a failure takes the row away with an error and Try Again,
 /// which reopens New Bot as it was. The same request keeps its Idempotency-Key
 /// (and a Bot already made) across tries, so a retry never makes two Bots.
+///
+/// The ask is on disk before anything goes out and until the Bot is made or the
+/// person lets it go, so a relaunch mid-create brings it back to Bots home as not
+/// made, and its Try Again sends the same request on the same key.
 @MainActor
 @Observable
 final class AidenBotCreateFlow {
@@ -43,9 +72,16 @@ final class AidenBotCreateFlow {
     struct Failure: Equatable {
         let message: String
         let input: AidenBotCreateInput
+        /// An earlier launch's create that may have reached the Mac: Try Again sends
+        /// its frozen request again rather than reopening New Bot.
+        var replays = false
+        /// The pairing it was for.
+        var instanceId = ""
+        var deviceId = ""
     }
 
     static let unreachable = "Aiden couldn’t reach your Mac, so the Bot wasn’t made. Try again."
+    static let interrupted = "Aiden closed before the Bot was ready. Try again to finish making it."
 
     private(set) var pending: Pending?
     var failure: Failure?
@@ -54,95 +90,220 @@ final class AidenBotCreateFlow {
         let scope: String
         /// What the person asked for; a retry is the same attempt while this is unchanged.
         let input: AidenBotCreateInput
-        let request: AidenBotCreateRequest
-        /// The model the request was built from, for the chat step.
-        let draft: AidenBotEditorDraft?
-        let key: UUID
-        let chatKey: UUID
-        var created: AidenBotDetail?
+        var frozen: AidenBotPendingCreate.Frozen
+        let createdAt: Date
     }
 
     @ObservationIgnored private var retained: Attempt?
     @ObservationIgnored private let connectionHold: Duration
     @ObservationIgnored private let requestLimit: Duration
+    @ObservationIgnored private let store: AidenBotOutboxStore?
+    @ObservationIgnored private let now: () -> Date
+    /// The disk writes, made one after another in the order they were asked for.
+    @ObservationIgnored private var writes: Task<Void, Never>?
+    /// Pairings this flow already looked on disk for; an earlier launch's create comes back once.
+    @ObservationIgnored private var restoredScopes: Set<String> = []
+    /// Pairings a create of this launch is sending for, in any flow: theirs is never shown as cut off.
+    private static var sending: Set<String> = []
 
-    init(connectionHold: Duration = .seconds(8), requestLimit: Duration = .seconds(12)) {
+    init(
+        connectionHold: Duration = .seconds(8),
+        requestLimit: Duration = .seconds(12),
+        store: AidenBotOutboxStore? = .shared,
+        now: @escaping () -> Date = { Date() }
+    ) {
         self.connectionHold = connectionHold
         self.requestLimit = requestLimit
+        self.store = store
+        self.now = now
     }
 
-    /// Makes the Bot; returns once it exists on the Mac (and `onCreated` ran) or failed.
+    nonisolated static func scope(instanceId: String, deviceId: String) -> String { "\(instanceId)|\(deviceId)" }
+
+    /// Makes the Bot; returns once it exists on the Mac (and `onCreated` ran) or failed,
+    /// with what waits on disk written.
     func submit(
         _ input: AidenBotCreateInput,
         operations: AidenBotCreateOperations,
         onCreated: @MainActor (AidenBotDetail) async -> Void
     ) async {
         guard pending == nil else { return }
+        await make(input, operations: operations, onCreated: onCreated)
+        await writes?.value
+    }
+
+    private func make(
+        _ input: AidenBotCreateInput,
+        operations: AidenBotCreateOperations,
+        onCreated: @MainActor (AidenBotDetail) async -> Void
+    ) async {
+        let scope = operations.scope
         failure = nil
         pending = Pending(
             id: UUID(),
             name: input.name.trimmingCharacters(in: .whitespacesAndNewlines),
             purpose: input.purpose.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        defer { pending = nil }
+        Self.sending.insert(scope)
+        defer {
+            pending = nil
+            Self.sending.remove(scope)
+        }
+        // The same ask as a failed try: its frozen request and key, whatever the catalog says now.
+        let replay = retained.flatMap { $0.scope == scope && Self.isSameAsk($0, input) ? $0 : nil }
+        // On disk before anything goes out, so a relaunch never loses it.
+        await persist(
+            AidenBotPendingCreate(input: input, frozen: replay?.frozen, createdAt: replay?.createdAt ?? now()),
+            operations
+        ).value
         var sent = false
         do {
             guard await operations.waitForConnection(connectionHold) else {
-                failure = Failure(message: Self.unreachable, input: input)
+                failure = makeFailure(Self.unreachable, input, operations)
                 return
             }
             guard operations.isCurrent() else { return }
             var attempt: Attempt
-            if let retained, retained.scope == operations.scope, Self.isSameAsk(retained, input) {
-                // The same ask as a failed try: its frozen request and key, whatever the catalog says now.
-                attempt = retained
+            if let replay {
+                attempt = replay
             } else {
                 let (request, draft) = try await resolve(input, operations: operations)
                 attempt = Attempt(
-                    scope: operations.scope,
+                    scope: scope,
                     input: input,
-                    request: request,
-                    draft: draft,
-                    key: UUID(),
-                    chatKey: UUID()
+                    frozen: AidenBotPendingCreate.Frozen(request: request, draft: draft, key: UUID(), chatKey: UUID()),
+                    createdAt: now()
                 )
+                await persist(record(attempt), operations).value
             }
             retained = attempt
             sent = true
             let created: AidenBotDetail
-            if let made = attempt.created {
+            if let made = attempt.frozen.created {
                 created = made
             } else {
-                created = try await bounded { try await operations.create(attempt.request, attempt.key) }
-                attempt.created = created
+                let frozen = attempt.frozen
+                created = try await bounded { try await operations.create(frozen.request, frozen.key) }
+                attempt.frozen.created = created
                 retained = attempt
+                persist(record(attempt), operations)
             }
             guard operations.isCurrent() else { return }
-            if !operations.usesDurableSession, let draft = attempt.draft {
+            if !operations.usesDurableSession, let draft = attempt.frozen.draft {
                 let chat = try AidenBotChatCreateRequest(
                     providerId: draft.customAccess.providerID,
                     modelId: draft.customAccess.modelID
                 )
-                try await bounded { try await operations.createChat(created.id, chat, attempt.chatKey) }
+                let chatKey = attempt.frozen.chatKey
+                try await bounded { try await operations.createChat(created.id, chat, chatKey) }
                 guard operations.isCurrent() else { return }
             }
             let authoritative = try await bounded { try await operations.readBot(created.id) }
             guard operations.isCurrent() else { return }
             retained = nil
+            persist(nil, operations)
             await onCreated(authoritative)
         } catch is CancellationError {
             return
         } catch {
             if await operations.handleRevocation(error) {
                 retained = nil
+                persist(nil, operations)
                 return
+            }
+            if Self.isAccessLoss(error) {
+                // Access ended: nothing of this ask is kept on disk.
+                retained = nil
+                persist(nil, operations)
+            } else if sent, retained?.frozen.created == nil, !aidenBotEditorCreateFailureIsAmbiguous(error) {
+                // Refused before anything was made: a retry is a new request. The answers stay.
+                retained = nil
+                persist(AidenBotPendingCreate(input: input, frozen: nil, createdAt: now()), operations)
             }
             guard operations.isCurrent() else { return }
             // A Bot already made, or a request that may have arrived, is tried again as it was.
-            if sent, retained?.created == nil, !aidenBotEditorCreateFailureIsAmbiguous(error) {
-                retained = nil
+            failure = makeFailure(aidenBotFriendlyLoadError(error), input, operations)
+        }
+    }
+
+    /// Brings back the New Bot an earlier launch left on its way for this pairing: Bots home
+    /// shows it as not made, and Try Again sends the same request on the same key. It looks
+    /// once per pairing, and never over a create or failure of this launch.
+    func restore(instanceId: String, deviceId: String) async {
+        let scope = Self.scope(instanceId: instanceId, deviceId: deviceId)
+        guard let store, isFree(for: scope), restoredScopes.insert(scope).inserted else { return }
+        await writes?.value
+        guard let saved = await store.pendingCreate(instanceId: instanceId, deviceId: deviceId),
+              isFree(for: scope) else { return }
+        if let frozen = saved.frozen {
+            retained = Attempt(scope: scope, input: saved.input, frozen: frozen, createdAt: saved.createdAt)
+        }
+        failure = Failure(
+            message: Self.interrupted,
+            input: saved.input,
+            replays: saved.frozen != nil,
+            instanceId: instanceId,
+            deviceId: deviceId
+        )
+    }
+
+    /// The person let the failed Bot go (OK, or New Bot closed after Try Again): it no
+    /// longer waits on disk. In memory its key stays for the same ask, so asking again
+    /// can't make a second Bot. Returns the write, for tests.
+    @discardableResult
+    func discard(_ failure: Failure) -> Task<Void, Never>? {
+        if self.failure == failure { self.failure = nil }
+        guard pending == nil, !Self.sending.contains(Self.scope(instanceId: failure.instanceId, deviceId: failure.deviceId)) else { return nil }
+        return persist(nil, instanceId: failure.instanceId, deviceId: failure.deviceId)
+    }
+
+    private func isFree(for scope: String) -> Bool {
+        pending == nil && failure == nil && retained?.scope != scope && !Self.sending.contains(scope)
+    }
+
+    private func makeFailure(_ message: String, _ input: AidenBotCreateInput, _ operations: AidenBotCreateOperations) -> Failure {
+        Failure(message: message, input: input, instanceId: operations.instanceId, deviceId: operations.deviceId)
+    }
+
+    private func record(_ attempt: Attempt) -> AidenBotPendingCreate {
+        AidenBotPendingCreate(input: attempt.input, frozen: attempt.frozen, createdAt: attempt.createdAt)
+    }
+
+    @discardableResult
+    private func persist(_ create: AidenBotPendingCreate?, _ operations: AidenBotCreateOperations) -> Task<Void, Never> {
+        persist(create, instanceId: operations.instanceId, deviceId: operations.deviceId)
+    }
+
+    /// Queues a write behind the ones before it; nil removes what waits.
+    @discardableResult
+    private func persist(_ create: AidenBotPendingCreate?, instanceId: String, deviceId: String) -> Task<Void, Never> {
+        let previous = writes
+        let store = store
+        let task = Task {
+            await previous?.value
+            guard let store else { return }
+            if let create {
+                await store.savePendingCreate(create, instanceId: instanceId, deviceId: deviceId)
+            } else {
+                await store.removePendingCreate(instanceId: instanceId, deviceId: deviceId)
             }
-            failure = Failure(message: aidenBotFriendlyLoadError(error), input: input)
+        }
+        writes = task
+        return task
+    }
+
+    /// 401 or 403, or a credential that's gone: this phone can no longer make Bots on this
+    /// Mac. A pairing that merely stopped being the active one is not access loss; its ask
+    /// stays for when it is active again.
+    private static func isAccessLoss(_ error: Error) -> Bool {
+        guard let error = error as? AidenRemoteClientError else { return false }
+        switch error {
+        case let .server(status, _), let .unexpectedStatus(status):
+            return status == 401 || status == 403
+        case .missingCredential:
+            return true
+        default:
+            return false
         }
     }
 
@@ -183,7 +344,7 @@ final class AidenBotCreateFlow {
     private static func isSameAsk(_ attempt: Attempt, _ input: AidenBotCreateInput) -> Bool {
         if attempt.input == input { return true }
         guard attempt.input.name == input.name, attempt.input.purpose == input.purpose,
-              attempt.input.draft == nil, let made = attempt.draft, let draft = input.draft else { return false }
+              attempt.input.draft == nil, let made = attempt.frozen.draft, let draft = input.draft else { return false }
         return made.customAccess.providerID == draft.customAccess.providerID
             && made.customAccess.modelID == draft.customAccess.modelID
             && made.visionProviderID == draft.visionProviderID

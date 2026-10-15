@@ -36,7 +36,7 @@ struct AidenBotCustomAccessSessionIdentity: Equatable {
     }
 }
 
-struct AidenBotCustomAccessDraft: Equatable {
+struct AidenBotCustomAccessDraft: Codable, Equatable {
     var providerID: String
     var modelID: String
     var fileScopeIDs: Set<String>
@@ -185,7 +185,7 @@ extension AidenBotCapabilityCatalog {
     }
 }
 
-struct AidenBotEditorDraft: Equatable {
+struct AidenBotEditorDraft: Codable, Equatable {
     var name: String
     var purpose: String
     var instructions: String

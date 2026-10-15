@@ -661,11 +661,13 @@ final class AidenBotInstantEditTests: XCTestCase {
         _ mac: CreateMac,
         connected: Bool = true,
         durable: Bool = true,
-        catalogRevision: String? = nil
+        catalogRevision: String? = nil,
+        deviceId: String = "device_1"
     ) throws -> AidenBotCreateOperations {
         let catalog = try catalog(revision: catalogRevision)
         return AidenBotCreateOperations(
-            scope: "mac_a|device_1",
+            instanceId: "mac_a",
+            deviceId: deviceId,
             usesDurableSession: durable,
             waitForConnection: { _ in connected },
             catalog: { catalog },
@@ -685,10 +687,31 @@ final class AidenBotInstantEditTests: XCTestCase {
 
     private let input = AidenBotCreateInput(name: "  Planner ", purpose: "Plans my week", draft: nil)
 
+    private var roots: [URL] = []
+
+    override func tearDown() {
+        for root in roots { try? FileManager.default.removeItem(at: root) }
+        roots = []
+        super.tearDown()
+    }
+
+    /// A store on its own folder; a second store on the same folder is the next launch.
+    private func createRoot() -> URL {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bot-create-\(UUID().uuidString)", directoryHint: .isDirectory)
+        roots.append(root)
+        return root
+    }
+
+    /// A New Bot flow that keeps what waits under `root` (a fresh folder by default).
+    @MainActor
+    private func createFlow(_ root: URL? = nil, now: @escaping @Sendable () -> Date = { Date() }) -> AidenBotCreateFlow {
+        AidenBotCreateFlow(store: AidenBotOutboxStore(root: root ?? createRoot(), now: now), now: now)
+    }
+
     func testCreateShowsTheBotAtOnceAndOpensItOnceTheMacHasIt() async throws {
         let mac = CreateMac()
         mac.holds = true
-        let flow = AidenBotCreateFlow()
+        let flow = createFlow()
         var created: [AidenBotDetail] = []
         let operations = try createOperations(mac)
         let task = Task { await flow.submit(self.input, operations: operations) { created.append($0) } }
@@ -710,7 +733,7 @@ final class AidenBotInstantEditTests: XCTestCase {
 
     func testAFailedCreateOffersTryAgainWithTheSameBotAndNeverMakesTwo() async throws {
         let mac = CreateMac()
-        let flow = AidenBotCreateFlow()
+        let flow = createFlow()
         var created = 0
 
         // Lost on the way: Try Again replays the same key.
@@ -734,7 +757,7 @@ final class AidenBotInstantEditTests: XCTestCase {
     func testTryAgainAfterALostCreateReplaysTheSameRequestThroughACatalogChange() async throws {
         let mac = CreateMac()
         mac.createErrors = [URLError(.networkConnectionLost)]
-        let flow = AidenBotCreateFlow()
+        let flow = createFlow()
         var created = 0
 
         // The Create answer is lost; while the person is away the Mac's catalog moves on.
@@ -761,7 +784,7 @@ final class AidenBotInstantEditTests: XCTestCase {
     func testABotMadeBeforeItsChatFailedIsNotMadeAgain() async throws {
         let mac = CreateMac()
         mac.chatErrors = [URLError(.timedOut)]
-        let flow = AidenBotCreateFlow()
+        let flow = createFlow()
         await flow.submit(input, operations: try createOperations(mac, durable: false)) { _ in }
         XCTAssertNotNil(flow.failure)
         await flow.submit(input, operations: try createOperations(mac, durable: false)) { _ in }
@@ -771,9 +794,133 @@ final class AidenBotInstantEditTests: XCTestCase {
         XCTAssertNil(flow.failure)
     }
 
+    @MainActor
+    func testACreateCutOffByARelaunchComesBackWithTryAgainAndMakesOneBot() async throws {
+        let root = createRoot()
+        let mac = CreateMac()
+        mac.holds = true
+        let first = createFlow(root)
+        let operations = try createOperations(mac)
+        let task = Task { await first.submit(self.input, operations: operations) { _ in } }
+        let deadline = Date().addingTimeInterval(5)
+        while mac.hold == nil {
+            guard Date() < deadline else { return XCTFail("the create never went out") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        // While this launch is still sending it, another Bots home never shows it as cut off.
+        let beside = createFlow(root)
+        await beside.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertNil(beside.failure)
+
+        // The app goes away with the request on its way to the Mac.
+        task.cancel()
+        await task.value
+        mac.hold?.resume()
+
+        // The next launch: Bots home shows the Bot as not made, with its answers.
+        let relaunched = createFlow(root)
+        await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+        let failure = try XCTUnwrap(relaunched.failure, "the Bot on its way is never silently gone")
+        XCTAssertEqual(failure.input, input)
+        XCTAssertTrue(failure.replays, "it may have reached the Mac: Try Again sends it again as it was")
+        XCTAssertEqual(failure.message, AidenBotCreateFlow.interrupted)
+
+        // Try Again: the same request on the same key, so the Mac makes one Bot.
+        mac.holds = false
+        var created: [String] = []
+        await relaunched.submit(failure.input, operations: try createOperations(mac, catalogRevision: "catalog_rev_9")) { created.append($0.id) }
+        XCTAssertEqual(mac.creates.count, 2)
+        XCTAssertEqual(mac.creates[1].key, mac.creates[0].key)
+        XCTAssertEqual(mac.creates[1].request, mac.creates[0].request)
+        XCTAssertEqual(created, ["bot_new_01"])
+        XCTAssertNil(relaunched.failure)
+
+        // Made: nothing waits for a later launch.
+        let after = createFlow(root)
+        await after.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertNil(after.failure)
+    }
+
+    @MainActor
+    func testAnUnsentCreateComesBackForItsOwnPairingOnlyUntilItIsLetGo() async throws {
+        let root = createRoot()
+        let mac = CreateMac()
+        let first = createFlow(root)
+        await first.submit(input, operations: try createOperations(mac, connected: false)) { _ in }
+        XCTAssertEqual(mac.creates.count, 0)
+
+        let otherPhone = createFlow(root)
+        await otherPhone.restore(instanceId: "mac_a", deviceId: "device_2")
+        XCTAssertNil(otherPhone.failure, "another pairing never sees it")
+
+        let relaunched = createFlow(root)
+        await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+        let failure = try XCTUnwrap(relaunched.failure)
+        XCTAssertEqual(failure.input, input)
+        XCTAssertFalse(failure.replays, "nothing reached the Mac: Try Again reopens New Bot as it was")
+
+        // OK lets it go: the launch after has nothing.
+        await relaunched.discard(failure)?.value
+        XCTAssertNil(relaunched.failure)
+        let later = createFlow(root)
+        await later.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertNil(later.failure)
+    }
+
+    @MainActor
+    func testAPendingCreateGoesWithAccessAndWithAnUnpair() async throws {
+        let mac = CreateMac()
+
+        // The Mac refuses this phone: nothing of the ask stays on disk.
+        let refusedRoot = createRoot()
+        mac.createErrors = [AidenRemoteClientError.unexpectedStatus(403)]
+        let refused = createFlow(refusedRoot)
+        await refused.submit(input, operations: try createOperations(mac)) { _ in }
+        XCTAssertNotNil(refused.failure)
+        let afterRefusal = createFlow(refusedRoot)
+        await afterRefusal.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertNil(afterRefusal.failure)
+
+        // Unpaired: the file goes, and a write still to come never brings it back.
+        let root = createRoot()
+        let store = AidenBotOutboxStore(root: root)
+        let flow = AidenBotCreateFlow(store: store)
+        await flow.submit(input, operations: try createOperations(mac, connected: false)) { _ in }
+        await store.purge(instanceId: "mac_a")
+        await flow.submit(input, operations: try createOperations(mac, connected: false)) { _ in }
+        let relaunched = createFlow(root)
+        await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertNil(relaunched.failure)
+    }
+
+    @MainActor
+    func testAfterADayAMadeBotIsTheMacsButAnUnmadeOneStillComesBack() async throws {
+        let start = Date()
+        let dayLater: @Sendable () -> Date = { start.addingTimeInterval(25 * 60 * 60) }
+
+        // Made, but its chat step was cut off: a day later the Bot is the Mac's.
+        let madeRoot = createRoot()
+        let mac = CreateMac()
+        mac.chatErrors = [URLError(.timedOut)]
+        await createFlow(madeRoot, now: { start }).submit(input, operations: try createOperations(mac, durable: false)) { _ in }
+        let soon = createFlow(madeRoot, now: { start })
+        await soon.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertNotNil(soon.failure, "within the day Try Again finishes it")
+        let made = createFlow(madeRoot, now: dayLater)
+        await made.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertNil(made.failure)
+
+        // Never made: it comes back however long it waited.
+        let unmadeRoot = createRoot()
+        await createFlow(unmadeRoot, now: { start }).submit(input, operations: try createOperations(mac, connected: false)) { _ in }
+        let unmade = createFlow(unmadeRoot, now: dayLater)
+        await unmade.restore(instanceId: "mac_a", deviceId: "device_1")
+        XCTAssertEqual(unmade.failure?.input, input)
+    }
+
     func testACreateThatNeverReachesTheMacSaysSoAndSendsNothing() async throws {
         let mac = CreateMac()
-        let flow = AidenBotCreateFlow()
+        let flow = createFlow()
         await flow.submit(input, operations: try createOperations(mac, connected: false)) { _ in }
         XCTAssertEqual(flow.failure?.message, AidenBotCreateFlow.unreachable)
         XCTAssertEqual(mac.creates.count, 0)
