@@ -16,6 +16,11 @@ export interface ParsedChatFirstMessage extends ParsedChatAppend {
   workspaceId: string;
   /** Create a managed worktree from the draft's workspace and save the chat there. */
   worktree?: FirstMessageWorktreeRequest;
+  /**
+   * Set only by the worktree commit path, never parsed from IPC: the workspace
+   * a skill selection was minted in when it differs from the chat's workspace.
+   */
+  skillWorkspaceId?: string;
 }
 
 /** Project the complete untrusted envelope before retaining it across awaits. */

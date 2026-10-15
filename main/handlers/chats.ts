@@ -130,14 +130,16 @@ export function registerChatHistoryHandlers(): void {
     }),
     createFromBase: (owner, sourceWorkspaceId, request) =>
       workspaceWorktreeApplicationService.createFromBase(owner, sourceWorkspaceId, request),
+    discardInterruptedWorktree: (owner, sourceWorkspaceId, attempt) =>
+      workspaceWorktreeApplicationService.discardInterruptedWorktree(owner, sourceWorkspaceId, attempt),
     getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-    listWorkspaces: () => configStore.listWorkspaces(),
     logError: (message, error) => logger.error("git", message, error),
   });
   const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
     commit: commitFirstMessage,
     ensureWorktree: (request, seed, owner, onProgress) =>
       firstMessageWorktrees.ensure(request, seed, owner, onProgress),
+    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
   const announceFirstMessage = (chat: Chat) => {
     ipcMain.broadcast("chats:metadata-updated", {

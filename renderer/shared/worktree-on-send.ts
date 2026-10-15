@@ -62,6 +62,17 @@ export type FirstMessageWorktreeResult<C> =
       reason: string;
       /** Git's message, with the workspace and home folders redacted. */
       detail?: string;
+    }
+  | {
+      ok: false;
+      /**
+       * This draft already created a worktree with a different base, origin
+       * setting or branch name. Nothing was created or saved; the existing
+       * worktree is kept for this draft.
+       */
+      code: "worktree-settings-changed";
+      reason: string;
+      worktree: { workspaceId: string; branch: string; baseRef: string };
     };
 
 export type FirstMessageWorktreePhase = "fetching" | "creating" | "ready";

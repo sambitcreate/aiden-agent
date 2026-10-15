@@ -17,7 +17,10 @@ import type {
   FirstMessageWorktreeRequest,
   FirstMessageWorktreeResult,
 } from "../../renderer/shared/worktree-on-send.js";
-import { FirstMessageWorktreeError } from "./first-message-worktree.js";
+import {
+  FirstMessageWorktreeError,
+  FirstMessageWorktreeSettingsChangedError,
+} from "./first-message-worktree.js";
 
 type Owner = Pick<RendererDocumentOwner, "documentId" | "isDestroyed" | "onInvalidated">;
 
@@ -137,7 +140,10 @@ export function createFirstMessageCommitter(deps: Dependencies) {
               workspaceId: input.workspaceId,
               userMessageId,
             }, {
-              resolveFresh: deps.resolveSkill,
+              // A first send in a new worktree carries a skill chosen (and
+              // bound) in the draft's source workspace; resolve it there.
+              resolveFresh: (workspaceId, invocationId) =>
+                deps.resolveSkill(input.skillWorkspaceId ?? workspaceId, invocationId),
               isCurrent,
               prepareLease: (prepared) => turn.prepareSkillInvocation(prepared),
               append,
@@ -173,6 +179,15 @@ const WORKTREE_FAILURE_REASONS = {
 } as const;
 
 function worktreeFailure(error: unknown): FirstMessageWorktreeResult<never> {
+  if (error instanceof FirstMessageWorktreeSettingsChangedError) {
+    const { workspaceId, branch, baseRef } = error.worktree;
+    return {
+      ok: false,
+      code: "worktree-settings-changed",
+      reason: error.message,
+      worktree: { workspaceId, branch, baseRef },
+    };
+  }
   const phase = error instanceof FirstMessageWorktreeError ? error.phase : "preparing";
   const message = error instanceof Error ? error.message.trim() : "";
   return {
@@ -192,6 +207,8 @@ interface WorktreeCommitDependencies {
     owner: Owner,
     onProgress: (progress: FirstMessageWorktreeProgress) => void,
   ): Promise<FirstMessageWorktreeInfo>;
+  /** Resolve a skill selection in the workspace it was chosen in (throws when stale). */
+  resolveSkill(workspaceId: string, invocationId: string): Promise<unknown>;
 }
 
 /**
@@ -209,13 +226,22 @@ export function createWorktreeFirstMessageCommitter(deps: WorktreeCommitDependen
     const { worktree: request, ...plain } = input;
     if (!request) throw new Error("This first message did not ask for a worktree.");
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    if (input.skillReference) {
+      // The selection is bound to the draft's (source) workspace. Check it
+      // before creating anything, so a stale skill never leaves a worktree.
+      await deps.resolveSkill(request.sourceWorkspaceId, input.skillReference.invocationId);
+    }
     let worktree: FirstMessageWorktreeInfo;
     try {
       worktree = await deps.ensureWorktree(request, input.content || input.title || "", owner, onProgress);
     } catch (error) {
       return worktreeFailure(error);
     }
-    const chat = await deps.commit({ ...plain, workspaceId: worktree.workspaceId }, owner);
+    const chat = await deps.commit({
+      ...plain,
+      workspaceId: worktree.workspaceId,
+      ...(input.skillReference ? { skillWorkspaceId: request.sourceWorkspaceId } : {}),
+    }, owner);
     return { ok: true, chat, worktree };
   };
 }

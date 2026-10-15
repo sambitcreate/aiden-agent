@@ -414,7 +414,16 @@ export interface GitCreateWorktreeOptions {
    * inside the repository's mutation queue. Defaults to `HEAD`.
    */
   startPoint?: string;
+  /**
+   * Ownership token (a v4 UUID) to write into the new registration, so a
+   * caller that recorded it first can find a worktree whose creation was
+   * interrupted. Defaults to a fresh token.
+   */
+  ownershipToken?: string;
 }
+
+/** What became of a worktree an interrupted attempt may have left behind. */
+export type GitOwnedWorktreeRecovery = "absent" | "rolled-back";
 
 type GitWorktreeRollbackIdentity = Pick<
   GitCreatedWorktree,
@@ -3918,6 +3927,63 @@ export class GitService {
     return commit;
   }
 
+  /**
+   * Roll back a managed worktree that an interrupted creation left registered
+   * but never saved as a workspace. Only a registration on `branch` carrying
+   * `ownershipToken`, still at `createdFromHead` and clean, is removed (with its
+   * unchanged branch); anything else is left alone. A partially provisioned
+   * checkout is preserved and reported as an error.
+   */
+  async rollbackOwnedWorktree(
+    cwd: string,
+    branch: string,
+    ownershipToken: string,
+    createdFromHead: string,
+  ): Promise<GitOwnedWorktreeRecovery> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    await this.validateBranchName(repo, branch);
+    const token = this.validatedWorktreeOwnershipToken(ownershipToken);
+    return this.enqueueMutation(repo.commonDir, async () => {
+      const candidates = (await this.inspectWorktrees(repo, repo.cwd)).filter(
+        (worktree) => worktree.branch === branch && !worktree.bare,
+      );
+      for (const candidate of candidates) {
+        let worktreeGitDir: string;
+        try {
+          const gitDir = await this.run(candidate.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+          worktreeGitDir = this.validatedWorktreeGitDir(repo, await fs.realpath(gitDir.stdout.trim()));
+          const marker = await fs.readFile(path.join(worktreeGitDir, WORKTREE_OWNER_MARKER), "utf8");
+          if (marker.trim() !== token) continue;
+        } catch {
+          continue;
+        }
+        const checkout = await fs.lstat(candidate.path);
+        const rollbackError = await this.rollbackCreatedWorktree(
+          repo,
+          candidate.path,
+          branch,
+          createdFromHead,
+          true,
+          {
+            worktreeGitDir,
+            ownershipToken: token,
+            worktreeDevice: checkout.dev,
+            worktreeInode: checkout.ino,
+          },
+        );
+        if (rollbackError) {
+          throw new GitServiceError(
+            "command_failed",
+            "An interrupted worktree from an earlier attempt could not be rolled back and was preserved.",
+            rollbackError,
+          );
+        }
+        return "rolled-back";
+      }
+      return "absent";
+    });
+  }
+
   /** Every local branch name, for picking a free worktree branch name. */
   async localBranchNames(cwd: string, signal?: AbortSignal): Promise<string[]> {
     const repo = this.requireRepository(await this.repository(cwd, signal));
@@ -5691,6 +5757,9 @@ export class GitService {
   ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
+    const requestedOwnershipToken = options?.ownershipToken === undefined
+      ? undefined
+      : this.validatedWorktreeOwnershipToken(options.ownershipToken);
     return this.enqueueMutation(repo.commonDir, async () => {
       const createdFromHead = options?.startPoint === undefined
         ? await this.requireHead(repo)
@@ -5746,7 +5815,7 @@ export class GitService {
           repo,
           await fs.realpath(gitDirResult.stdout.trim()),
         );
-        const ownershipToken = randomUUID();
+        const ownershipToken = requestedOwnershipToken ?? randomUUID();
         await this.persistWorktreeOwnership(worktreeGitDir, ownershipToken);
         const checkoutIdentity = await fs.lstat(created.path);
         if (!checkoutIdentity.isDirectory() || checkoutIdentity.isSymbolicLink()) {
@@ -6891,6 +6960,12 @@ export const gitFetchWorktreeBase = (
 ) => gitService.fetchWorktreeBase(folderPath, upstream, signal);
 export const gitLocalBranchNames = (folderPath: string, signal?: AbortSignal) =>
   gitService.localBranchNames(folderPath, signal);
+export const gitRollbackOwnedWorktree = (
+  folderPath: string,
+  branch: string,
+  ownershipToken: string,
+  createdFromHead: string,
+) => gitService.rollbackOwnedWorktree(folderPath, branch, ownershipToken, createdFromHead);
 export const gitRollbackWorktree = (
   folderPath: string,
   created: GitCreatedWorktree,

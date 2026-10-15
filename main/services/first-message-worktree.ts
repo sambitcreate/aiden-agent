@@ -1,18 +1,22 @@
-// Create the managed worktree a draft asked for, exactly once per draft.
+// Create the managed worktree a draft asked for, at most once per draft.
 //
 // The draft id is the idempotency key. A key's attempts run one at a time, so a
 // double send or a retry waits for the earlier attempt and then reuses its
-// worktree. The key → worktree mapping is written to disk before Git creates
-// anything (as `pending`, with the chosen branch) and again once the worktree
-// workspace is saved (`ready`), so even a restart in between cannot lead to a
-// second worktree: the pending branch is adopted if its workspace was saved.
+// worktree. Before Git creates anything, the attempt is recorded on disk as
+// `pending` with the identity its worktree will carry: the workspace id it will
+// be saved under and the ownership token written into its Git registration.
+// Once the workspace is saved the record becomes `ready`. A later attempt only
+// ever adopts a workspace with exactly that id and token, and rolls back a
+// registration with that token that was never saved (an interrupted attempt),
+// so it can neither take over a worktree it did not create nor leave a second
+// one behind.
 
 import * as fs from "node:fs/promises";
-import path from "node:path";
 import { writeJsonAtomic } from "./durable-fs.js";
 import type { Workspace } from "./types.js";
 import type { WorkspaceOperationDocumentOwner } from "./workspace-operation-registry.js";
 import type {
+  WorktreeFromBaseAttempt,
   WorktreeFromBaseRequest,
   WorktreeFromBaseResult,
 } from "./workspace-worktree-application-service.js";
@@ -27,23 +31,33 @@ import type {
 export interface FirstMessageWorktreeRecord {
   key: string;
   sourceWorkspaceId: string;
-  state: "pending" | "ready";
-  branch: string;
+  /**
+   * `pending`: Git may be creating it. `failed`: the attempt failed; kept so
+   * a registration it could not roll back is cleaned up next time. `ready`:
+   * saved as `workspaceId`.
+   */
+  state: "pending" | "failed" | "ready";
+  /** The settings the draft sent, to detect a retry with different ones. */
   baseRef: string;
+  fromOrigin: boolean;
+  requestedBranchName?: string;
+  branch: string;
+  workspaceId: string;
+  ownershipToken: string;
+  baseCommit: string;
+  startPoint: string;
+  baseSource: FirstMessageWorktreeBaseSource;
   updatedAt: number;
-  workspaceId?: string;
-  startPoint?: string;
-  baseCommit?: string;
-  baseSource?: FirstMessageWorktreeBaseSource;
 }
 
 export interface FirstMessageWorktreeLedger {
   get(key: string): Promise<FirstMessageWorktreeRecord | undefined>;
   /** Durable before it resolves. */
   put(record: FirstMessageWorktreeRecord): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
-const LEDGER_VERSION = 1;
+const LEDGER_VERSION = 2;
 const DEFAULT_MAX_RECORDS = 500;
 const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 
@@ -53,11 +67,17 @@ function isRecord(value: unknown): value is FirstMessageWorktreeRecord {
   return (
     typeof record.key === "string" &&
     typeof record.sourceWorkspaceId === "string" &&
-    (record.state === "pending" || record.state === "ready") &&
-    typeof record.branch === "string" &&
+    (record.state === "pending" || record.state === "failed" || record.state === "ready") &&
     typeof record.baseRef === "string" &&
-    typeof record.updatedAt === "number" &&
-    (record.state === "pending" || typeof record.workspaceId === "string")
+    typeof record.fromOrigin === "boolean" &&
+    (record.requestedBranchName === undefined || typeof record.requestedBranchName === "string") &&
+    typeof record.branch === "string" &&
+    typeof record.workspaceId === "string" &&
+    typeof record.ownershipToken === "string" &&
+    typeof record.baseCommit === "string" &&
+    typeof record.startPoint === "string" &&
+    (record.baseSource === "local" || record.baseSource === "fetched" || record.baseSource === "no-upstream") &&
+    typeof record.updatedAt === "number"
   );
 }
 
@@ -98,6 +118,15 @@ export function createFileFirstMessageWorktreeLedger(options: {
     return loaded;
   };
 
+  const persist = async (records: Map<string, FirstMessageWorktreeRecord>) => {
+    const snapshot = { version: LEDGER_VERSION, records: [...records.values()] };
+    const write = writes.then(async () => {
+      await writeJsonAtomic(await options.filePath(), snapshot, { mode: 0o600 });
+    });
+    writes = write.catch(() => undefined);
+    await write;
+  };
+
   return {
     async get(key) {
       return (await load()).get(key);
@@ -111,12 +140,11 @@ export function createFileFirstMessageWorktreeLedger(options: {
         if (records.size <= maxRecords && value.updatedAt >= cutoff) break;
         if (key !== record.key) records.delete(key);
       }
-      const snapshot = { version: LEDGER_VERSION, records: [...records.values()] };
-      const write = writes.then(async () => {
-        await writeJsonAtomic(await options.filePath(), snapshot, { mode: 0o600 });
-      });
-      writes = write.catch(() => undefined);
-      await write;
+      await persist(records);
+    },
+    async delete(key) {
+      const records = await load();
+      if (records.delete(key)) await persist(records);
     },
   };
 }
@@ -132,6 +160,17 @@ export class FirstMessageWorktreeError extends Error {
   }
 }
 
+/** A retry asked for different settings than the worktree this draft already created. */
+export class FirstMessageWorktreeSettingsChangedError extends Error {
+  constructor(readonly worktree: { workspaceId: string; branch: string; baseRef: string; startPoint: string }) {
+    super(
+      `This draft already created worktree ${worktree.branch} from ${worktree.startPoint}. ` +
+        "Send again with those settings, or start a new chat to use different ones.",
+    );
+    this.name = "FirstMessageWorktreeSettingsChangedError";
+  }
+}
+
 export interface FirstMessageWorktreeDependencies {
   ledger: FirstMessageWorktreeLedger;
   createFromBase(
@@ -139,33 +178,67 @@ export interface FirstMessageWorktreeDependencies {
     sourceWorkspaceId: string,
     request: WorktreeFromBaseRequest,
   ): Promise<WorktreeFromBaseResult>;
+  /** Roll back an unsaved registration left by an interrupted attempt. */
+  discardInterruptedWorktree(
+    owner: WorkspaceOperationDocumentOwner,
+    sourceWorkspaceId: string,
+    attempt: Pick<WorktreeFromBaseAttempt, "branch" | "ownershipToken" | "baseCommit">,
+  ): Promise<unknown>;
   getWorkspace(workspaceId: string): Promise<Workspace | undefined>;
-  listWorkspaces(): Promise<Workspace[]>;
   now?: () => number;
   logError?(message: string, error: unknown): void;
 }
 
-function insideRepository(repositoryPath: string, folderPath: string | undefined): boolean {
-  if (!folderPath) return false;
-  const relative = path.relative(repositoryPath, folderPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function info(record: FirstMessageWorktreeRecord, reused: boolean): FirstMessageWorktreeInfo {
   return {
-    workspaceId: record.workspaceId!,
+    workspaceId: record.workspaceId,
     branch: record.branch,
     baseRef: record.baseRef,
-    startPoint: record.startPoint ?? record.baseRef,
-    baseCommit: record.baseCommit ?? "",
-    baseSource: record.baseSource ?? "local",
+    startPoint: record.startPoint,
+    baseCommit: record.baseCommit,
+    baseSource: record.baseSource,
     reused,
   };
+}
+
+function settingsDiffer(record: FirstMessageWorktreeRecord, request: FirstMessageWorktreeRequest): boolean {
+  return (
+    record.baseRef !== request.baseRef ||
+    record.fromOrigin !== request.fromOrigin ||
+    record.requestedBranchName !== request.branchName
+  );
 }
 
 export function createFirstMessageWorktreeCoordinator(dependencies: FirstMessageWorktreeDependencies) {
   const now = dependencies.now ?? Date.now;
   const attempts = new Map<string, Promise<unknown>>();
+
+  /** The saved workspace this record's attempt created, matched by id and ownership token. */
+  const savedWorkspace = async (record: FirstMessageWorktreeRecord) => {
+    const workspace = await dependencies.getWorkspace(record.workspaceId);
+    const managed = workspace?.managedWorktree;
+    return managed && managed.branch === record.branch && managed.ownershipToken === record.ownershipToken
+      ? workspace
+      : undefined;
+  };
+
+  const reuse = (
+    record: FirstMessageWorktreeRecord,
+    request: FirstMessageWorktreeRequest,
+    onProgress: (progress: FirstMessageWorktreeProgress) => void,
+  ): FirstMessageWorktreeInfo => {
+    if (record.sourceWorkspaceId !== request.sourceWorkspaceId) {
+      throw new FirstMessageWorktreeError(
+        "This draft already created a worktree in another workspace.",
+        "preparing",
+      );
+    }
+    if (settingsDiffer(record, request)) {
+      throw new FirstMessageWorktreeSettingsChangedError(record);
+    }
+    onProgress({ draftId: record.key, phase: "ready", branch: record.branch, startPoint: record.startPoint });
+    return info(record, true);
+  };
 
   const attempt = async (
     request: FirstMessageWorktreeRequest,
@@ -175,45 +248,33 @@ export function createFirstMessageWorktreeCoordinator(dependencies: FirstMessage
   ): Promise<FirstMessageWorktreeInfo> => {
     const key = request.idempotencyKey;
     const existing = await dependencies.ledger.get(key);
-    if (existing && existing.sourceWorkspaceId !== request.sourceWorkspaceId) {
-      throw new FirstMessageWorktreeError(
-        "This draft already started a worktree in another workspace.",
-        "preparing",
-      );
-    }
-    if (existing?.state === "ready") {
-      const workspace = await dependencies.getWorkspace(existing.workspaceId!);
-      if (!workspace?.managedWorktree) {
-        throw new FirstMessageWorktreeError(
-          "The worktree this draft created has been removed.",
-          "preparing",
-        );
+    if (existing) {
+      if (await savedWorkspace(existing)) {
+        // `pending` here means the workspace was saved but the attempt
+        // stopped before recording it: this draft's worktree after all.
+        if (existing.state !== "ready") {
+          const ready = { ...existing, state: "ready" as const, updatedAt: now() };
+          await dependencies.ledger.put(ready);
+          return reuse(ready, request, onProgress);
+        }
+        return reuse(existing, request, onProgress);
       }
-      onProgress({ draftId: key, phase: "ready", branch: existing.branch, startPoint: existing.startPoint });
-      return info(existing, true);
-    }
-    if (existing?.state === "pending") {
-      // An earlier attempt chose this branch and stopped before recording the
-      // outcome. If its workspace was saved, that is this draft's worktree.
-      const source = await dependencies.getWorkspace(request.sourceWorkspaceId);
-      const adopted = (await dependencies.listWorkspaces()).find((workspace) =>
-        workspace.managedWorktree?.branch === existing.branch &&
-        insideRepository(workspace.managedWorktree.repositoryPath, source?.folderPath));
-      if (adopted) {
-        const ready: FirstMessageWorktreeRecord = {
-          ...existing,
-          state: "ready",
-          workspaceId: adopted.id,
-          baseCommit: adopted.managedWorktree?.createdFromHead,
-          updatedAt: now(),
-        };
-        await dependencies.ledger.put(ready);
-        onProgress({ draftId: key, phase: "ready", branch: ready.branch, startPoint: ready.startPoint });
-        return info(ready, true);
+      if (existing.state !== "ready") {
+        // An attempt that never saved its workspace may have left its Git
+        // registration behind. Only one carrying its token is touched.
+        try {
+          await dependencies.discardInterruptedWorktree(owner, existing.sourceWorkspaceId, existing);
+        } catch (error) {
+          dependencies.logError?.("Could not roll back an interrupted first-message worktree.", error);
+        }
       }
+      // A ready worktree whose workspace was removed, or an attempt that
+      // created nothing: start over.
+      await dependencies.ledger.delete(key);
     }
 
     let phase: FirstMessageWorktreePhase | "preparing" = "preparing";
+    let pending: FirstMessageWorktreeRecord | undefined;
     let result: WorktreeFromBaseResult;
     try {
       result = await dependencies.createFromBase(owner, request.sourceWorkspaceId, {
@@ -222,20 +283,31 @@ export function createFirstMessageWorktreeCoordinator(dependencies: FirstMessage
         ...(request.branchName === undefined
           ? { autoName: { seed } }
           : { branchName: request.branchName }),
-        onBranchResolved: (branch) => dependencies.ledger.put({
-          key,
-          sourceWorkspaceId: request.sourceWorkspaceId,
-          state: "pending",
-          branch,
-          baseRef: request.baseRef,
-          updatedAt: now(),
-        }),
+        onBranchResolved: async (resolved) => {
+          pending = {
+            key,
+            sourceWorkspaceId: request.sourceWorkspaceId,
+            state: "pending",
+            baseRef: request.baseRef,
+            fromOrigin: request.fromOrigin,
+            ...(request.branchName === undefined ? {} : { requestedBranchName: request.branchName }),
+            ...resolved,
+            updatedAt: now(),
+          };
+          await dependencies.ledger.put(pending);
+        },
         onProgress: (progress) => {
           phase = progress.phase;
           onProgress({ draftId: key, ...progress });
         },
       });
     } catch (error) {
+      if (pending) {
+        const failed: FirstMessageWorktreeRecord = { ...pending, state: "failed", updatedAt: now() };
+        await dependencies.ledger.put(failed).catch((ledgerError: unknown) => {
+          dependencies.logError?.("Could not record a failed first-message worktree.", ledgerError);
+        });
+      }
       throw new FirstMessageWorktreeError(
         error instanceof Error ? error.message : "Git could not create the worktree.",
         phase,
@@ -243,11 +315,9 @@ export function createFirstMessageWorktreeCoordinator(dependencies: FirstMessage
       );
     }
     const ready: FirstMessageWorktreeRecord = {
-      key,
-      sourceWorkspaceId: request.sourceWorkspaceId,
+      ...pending!,
       state: "ready",
       branch: result.branch,
-      baseRef: request.baseRef,
       workspaceId: result.workspace.id,
       startPoint: result.startPoint,
       baseCommit: result.baseCommit,
@@ -257,8 +327,8 @@ export function createFirstMessageWorktreeCoordinator(dependencies: FirstMessage
     try {
       await dependencies.ledger.put(ready);
     } catch (error) {
-      // The pending record already names this branch, so a retry adopts the
-      // saved workspace instead of creating another worktree.
+      // The pending record already names this workspace id and token, so a
+      // retry adopts the saved workspace instead of creating another.
       dependencies.logError?.("Could not record a created first-message worktree.", error);
     }
     onProgress({ draftId: key, phase: "ready", branch: ready.branch, startPoint: ready.startPoint });
