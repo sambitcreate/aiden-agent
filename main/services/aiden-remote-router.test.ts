@@ -36,6 +36,7 @@ import {
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 
 async function fixture(options: {
+  appControls?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["appControls"];
   peerRoutes?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["peerRoutes"];
   providers?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["providers"];
   readAloud?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"];
@@ -162,6 +163,7 @@ async function fixture(options: {
   };
   const dependencies: Parameters<typeof createAidenRemoteRequestHandler>[0] = {
     readAloud: options.readAloud,
+    appControls: options.appControls,
     peerRoutes: options.peerRoutes,
     instanceId: "instance-1",
     displayName: () => "Studio Mac",
@@ -1319,12 +1321,14 @@ test("bot chats still require bot authority on progress reads and events", async
     botChat: true,
     acceptsBotCapabilities: true,
     acceptsProgressCapabilities: true,
+    appControls: { enabled: async () => true, get: async () => { throw new Error("Bot controls must not read"); }, apply: async () => { throw new Error("Bot controls must not write"); } },
     capabilities: [
       "server:read",
       "chat:read",
       "bot:read",
       "tasks:read",
       "agents:read",
+      "app-controls:read",
     ],
     botChatAuthorization: (request) =>
       request.botId === "bot-1" && request.access === "read",
@@ -4178,6 +4182,46 @@ test("the simulator vocabulary is advertised only to paired desktops", async () 
   }
 });
 
+test("chat controls require both scoped grants and advertise owner-enabled negotiation separately", async () => {
+  let reads = 0, writes = 0;
+  const appControls = { enabled: async () => false, get: async () => { reads++; return { version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }; }, apply: async () => { writes++; throw new Error("unexpected write"); } };
+  const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.ok(server.features.includes("chat-ui-panels-v1"));
+    assert.equal(server.features.includes("chat-ui-panels-enabled-v1"), false);
+    const denied = await fetch(`${app.base}/chats/chat-1/controls/panel-1`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ control: "memory.enabled", value: false, expectedRevision: "rev", operationId: "op" }) });
+    assert.equal(denied.status, 403);
+    assert.equal(writes, 0);
+    const upgrade = await fetch(`${app.base}/device/capabilities`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["app-controls:respond"] }) });
+    assert.equal(upgrade.status, 403);
+    assert.equal(reads, 0);
+  } finally { await app.close(); }
+});
+
+test("foreground invalidation stream admits control readers without task or agent authority", async () => {
+  let enabled = true;
+  const appControls = {
+    enabled: async () => enabled,
+    get: async () => ({ version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }),
+    apply: async () => { throw new Error("unexpected write"); },
+  };
+  const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  try {
+    const stream = await fetch(`${app.base}/chats/chat-1/progress/events?after=0`, { headers });
+    assert.equal(stream.status, 200);
+    await stream.text();
+    assert.ok(app.calls.includes("progress-events:chat-1:0:app-controls:read"));
+    const tasks = await fetch(`${app.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(tasks.status, 403);
+    enabled = false;
+    const denied = await fetch(`${app.base}/chats/chat-1/progress/events?after=0`, { headers });
+    assert.equal(denied.status, 404);
+  } finally { await app.close(); }
+});
+
 const HOST_HEADERS = {
   authorization: `Bearer ${"a".repeat(43)}`,
   "aiden-protocol-version": "1",
@@ -4207,7 +4251,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 31,
+      contractRevision: 32,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });

@@ -10,6 +10,14 @@
 - `palette.onAccent` / `AidenPalette.readableOn(fill)` pick white or black by WCAG contrast,
   matching the desktop `accentForeground`. Never hard-code `Color.White` on an accent fill;
   dark-mode accents failed 4.5:1 with white.
+- Since 2026-10-15, labelled solid fills use `palette.accentFill` / `palette.dangerFill`
+  (`AidenSolidFill`: fill, content, pressed), not raw accent + onAccent. In dark these are
+  deepened for white content, matching desktop `solidFill()`. Go through the Expressive
+  helpers: `aidenFilledButtonColors(destructive)`, `aidenFilledIconButtonColors()`,
+  `aidenSwitchColors()`, `aidenCheckboxColors()`, `aidenSolidFill()`. M3 `primary` / `error`
+  deliberately stay the bright palette colors, because M3 uses `primary` as text (TextButtons,
+  caret, radios, progress). A bare M3 `Button` therefore still paints black-on-bright, so use
+  `AidenPrimaryButton` instead. See [[contrast-solid-fills]] and `AidenSolidFillTest`.
 - `aidenTypography(scale)` carries no colors. Material components supply content color, and
   `AidenTheme` provides `LocalContentColor = palette.foreground` at the root. `BasicTextField`
   styles must still pass an explicit color (an unspecified color renders black).

@@ -156,7 +156,8 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertTrue(fixture.contractRevision >= 25)
+        // Revision 32: conversation app control panels and app_controls_changed.
+        assertTrue(fixture.contractRevision >= 32)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         val runControlError = requireNotNull(fixture.runControlError).error
@@ -215,9 +216,10 @@ class AidenBotContractTest {
             AidenChatAgentState.STOPPED,
             agentInterrupt.response.agents.single { it.agentId == agentInterrupt.agentId }.state
         )
-        assertEquals(2, fixture.chatProgressEvents.size)
+        assertEquals(3, fixture.chatProgressEvents.size)
         assertEquals(AidenRemoteEventType.TASK_UPDATE, fixture.chatProgressEvents.first().type)
         assertEquals(AidenRemoteEventType.AGENTS_UPDATE, fixture.chatProgressEvents[1].type)
+        assertEquals(AidenRemoteEventType.APP_CONTROLS_CHANGED, fixture.chatProgressEvents[2].type)
         val streamInput = requireNotNull(fixture.streamInput)
         assertEquals(AidenStreamInputMode.QUEUE, streamInput.request.mode)
         assertEquals(AidenStreamInputStatus.ADMITTED, streamInput.response.status)

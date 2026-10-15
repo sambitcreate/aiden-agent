@@ -20,6 +20,7 @@ import {
   Palette,
   Plug,
   Send,
+  Settings2,
   ShieldCheck,
   Smartphone,
   SquareTerminal,
@@ -255,6 +256,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     size: "standard",
   },
   {
+    id: "chatControls",
+    group: "control",
+    title: "Settings in chat",
+    description:
+      "Ask how Aiden works or request settings in a conversation. Change theme, memory, Web Search, and skills with real controls. Enabling features needs confirmation; paired host controls start off until you allow them in Appearance.",
+    icon: Settings2,
+    size: "standard",
+  },
+  {
     id: "telegram",
     group: "control",
     title: "Aiden in Telegram",
@@ -368,7 +378,7 @@ export function OnboardingFeatureGallery({
                       aria-hidden="true"
                       className="relative flex min-h-full flex-col justify-end bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100 motion-reduce:transition-none"
                     >
-                      <Icon aria-hidden="true" className="absolute right-3 top-3 size-4 text-accent" />
+                      <Icon aria-hidden="true" className="absolute right-3 top-3 size-4 text-accent-text" />
                       <div className="mt-5">
                         <Text variant="small-strong" className="block leading-4">
                           {feature.title}

@@ -1382,6 +1382,7 @@ final class AidenChatViewModel {
         }
     }
     private(set) var isUploadingAttachment = false
+    let appControlsCache = AidenAppControlCache()
     private(set) var taskProgress: AidenRemoteChatTaskProgress?
     private(set) var agentRoster: AidenRemoteChatAgentRoster?
     private(set) var historicalAgentRosters: [AidenRemoteChatAgentRoster] = []
@@ -2410,7 +2411,7 @@ final class AidenChatViewModel {
         startForeignRunProbeIfNeeded()
         clearProgressStateForLostAccess()
         guard progressTask == nil,
-              canReadTaskProgress || canReadAgentRoster else { return }
+              canReadTaskProgress || canReadAgentRoster || canReadAppControls else { return }
         progressObservationGeneration &+= 1
         let generation = progressObservationGeneration
         progressTask = Task { [weak self] in
@@ -2444,7 +2445,7 @@ final class AidenChatViewModel {
         observationGeneration: UInt64? = nil
     ) async {
         guard isCurrentProgressObservation(observationGeneration, context: context),
-              canReadTaskProgress || canReadAgentRoster else { return }
+              canReadTaskProgress || canReadAgentRoster || canReadAppControls else { return }
         var taskFetchFailed = false
         var rosterFetchFailed = false
         do {
@@ -2502,7 +2503,7 @@ final class AidenChatViewModel {
                 return
             }
             guard isCurrentProgressObservation(generation, context: context),
-                  canReadTaskProgress || canReadAgentRoster else { return }
+                  canReadTaskProgress || canReadAgentRoster || canReadAppControls else { return }
             do {
                 _ = try await recovery.shouldProbeAfterStreamFailure(onWaiting: { _ in })
             } catch { return }
@@ -2534,9 +2535,14 @@ final class AidenChatViewModel {
                     recovery.recordHealthy()
                     applyProgress(event)
                     cursor = event.sequence
-                    cursorEpoch = event.taskProgress?.epoch ?? event.agentRoster?.epoch
+                    // An app-control invalidation carries no epoch; keep the
+                    // last one so a reconnect never resumes another epoch's cursor.
+                    cursorEpoch = event.taskProgress?.epoch ?? event.agentRoster?.epoch ?? cursorEpoch
                 }
                 if isCurrentProgressObservation(generation, context: context) {
+                    // Owner consent can close this stream without an HTTP error.
+                    // Until a fresh invalidation arrives, do not show live controls.
+                    appControlsCache.clearSnapshots()
                     isTaskProgressStale = taskProgress != nil
                     isAgentRosterStale = agentRoster != nil
                 }
@@ -2546,6 +2552,7 @@ final class AidenChatViewModel {
                 clearProgressStateIfCredentialRevoked(error)
                 if await coordinator.handleCredentialRevocation(error, context: context) { return }
                 guard isCurrentProgressObservation(generation, context: context) else { return }
+                appControlsCache.clearSnapshots()
                 if isProgressAccessDenied(error) {
                     clearProgressState()
                     return
@@ -2583,7 +2590,7 @@ final class AidenChatViewModel {
         guard let generation else { return true }
         guard generation == progressObservationGeneration && !Task.isCancelled else { return false }
         clearProgressStateForLostAccess()
-        return canReadTaskProgress || canReadAgentRoster
+        return canReadTaskProgress || canReadAgentRoster || canReadAppControls
     }
 
     private func applyProgress(_ event: AidenRemoteStreamEvent) {
@@ -2609,6 +2616,8 @@ final class AidenChatViewModel {
             if acceptAgentRoster(snapshot) || (agentRoster?.epoch == snapshot.epoch && agentRoster?.revision == snapshot.revision) {
                 isAgentRosterStale = false
             }
+        case .appControlsChanged:
+            Task { await appControlsCache.refresh(read: readAppControls) }
         case .heartbeat:
             break
         default:
@@ -3491,6 +3500,34 @@ final class AidenChatViewModel {
             presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
+    }
+
+    var canReadAppControls: Bool {
+        guard !isReadOnlyFixture, chat.botId == nil,
+              coordinator.server?.features.contains("chat-ui-panels-enabled-v1") == true,
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == instanceId else { return false }
+        return installation.hasNegotiatedAccess(to: .appControlsRead)
+    }
+    func loadAppControls(_ panel: AidenAppControlPanel) async throws -> AidenAppControlSnapshot {
+        try await appControlsCache.load(panel, read: readAppControls)
+    }
+    private func readAppControls(_ panel: AidenAppControlPanel) async throws -> AidenAppControlSnapshot {
+        guard canReadAppControls else { throw AidenRemoteClientError.invalidResponse }
+        let context = try coordinator.requestContext(for: instanceId)
+        let client = try coordinator.remoteClient(for: context)
+        let value = try await client.appControls(chatId: chat.id, panelId: panel.id)
+        guard coordinator.isCurrent(context), canReadAppControls, panel.workspaceId == chat.workspaceId else { throw CancellationError() }
+        return value
+    }
+    func applyAppControl(_ panel: AidenAppControlPanel, operation: AidenAppControlOperation) async throws -> AidenAppControlReceipt {
+        guard canReadAppControls, coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .appControlsRespond) == true, panel.workspaceId == chat.workspaceId else { throw AidenRemoteClientError.invalidResponse }
+        let context = try coordinator.requestContext(for: instanceId)
+        let client = try coordinator.remoteClient(for: context)
+        let value = try await client.applyAppControl(chatId: chat.id, panelId: panel.id, operation: operation)
+        guard coordinator.isCurrent(context), canReadAppControls else { throw CancellationError() }
+        await appControlsCache.refresh(read: readAppControls)
+        return value
     }
 
     // MARK: - Slice G composer power
@@ -4965,7 +5002,7 @@ struct AidenWorkspaceChatsView: View {
                             Button { beginRename(chat) } label: {
                                 Label("Rename", systemImage: "pencil")
                             }
-                            .tint(.accentColor)
+                            .tint(palette.fillAccent)
                         }
                         .contextMenu {
                             Button { beginRename(chat) } label: { Label("Rename", systemImage: "pencil") }
@@ -5426,6 +5463,7 @@ struct AidenChatDetailView: View {
                 readAloudCandidateID: model.readAloudCandidateID,
                 readAloudActiveID: model.readAloud.activeMessageID,
                 imageArrivalRevealIDs: model.imageArrivalRevealGenerationIDs,
+                appControlsAvailable: model.canReadAppControls,
                 onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
                     if model.askAbout(selection) { composerIsFocused = true }
                 },
@@ -5925,6 +5963,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     let readAloudActiveID: String?
     /// Generations whose settled image plays the arrival reveal.
     var imageArrivalRevealIDs: Set<String> = []
+    var appControlsAvailable = false
     /// Quotes a selection into the composer; nil while the chat is read-only.
     /// Closure identity is excluded from equality like the stable `model`.
     var onAskAbout: ((String) -> Void)? = nil
@@ -5947,7 +5986,8 @@ private struct AidenSettledMessageRows: View, Equatable {
         lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
             lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
             lhs.readAloudActiveID == rhs.readAloudActiveID &&
-            lhs.imageArrivalRevealIDs == rhs.imageArrivalRevealIDs
+            lhs.imageArrivalRevealIDs == rhs.imageArrivalRevealIDs &&
+            lhs.appControlsAvailable == rhs.appControlsAvailable
     }
 
     var body: some View {
@@ -6008,7 +6048,11 @@ private struct AidenSettledMessageRows: View, Equatable {
             imageArrivalRevealAttachmentID: revealAttachmentID,
             onImageArrivalRevealed: revealGenerationID.map { generationID in
                 { model.finishImageArrivalReveal(generationID: generationID) }
-            }
+            },
+            appControlsAvailable: appControlsAvailable,
+            appControlsCache: model.appControlsCache,
+            loadAppControls: { try await model.loadAppControls($0) },
+            applyAppControl: { try await model.applyAppControl($0, operation: $1) }
         )
         .equatable()
         .padding(.top, topPadding)
@@ -6029,6 +6073,10 @@ private struct AidenMessageView: View, Equatable {
     /// The generated image that plays the one-shot arrival reveal, if any.
     var imageArrivalRevealAttachmentID: String? = nil
     var onImageArrivalRevealed: (() -> Void)? = nil
+    var appControlsAvailable = false
+    var appControlsCache: AidenAppControlCache? = nil
+    var loadAppControls: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)? = nil
+    var applyAppControl: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -6042,7 +6090,8 @@ private struct AidenMessageView: View, Equatable {
             (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
             lhs.forkActions == rhs.forkActions &&
             (lhs.onFork == nil) == (rhs.onFork == nil) &&
-            lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID
+            lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID &&
+            lhs.appControlsAvailable == rhs.appControlsAvailable
     }
 
     private var selectableText: String {
@@ -6248,6 +6297,11 @@ private struct AidenMessageView: View, Equatable {
                     .accessibilityElement(children: .combine)
                 }
             }
+            if message.role == .assistant, let panels = message.appPanels {
+                ForEach(panels) { panel in
+                    AidenNativeAppControlPanel(panel: panel, available: appControlsAvailable, cache: appControlsCache, load: loadAppControls, apply: applyAppControl)
+                }
+            }
             if message.role == .assistant {
                 // A visual's snapshot replaces the card for the artifact it shows.
                 ForEach(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: message), id: \.id) { artifact in
@@ -6289,7 +6343,7 @@ private struct AidenMessageView: View, Equatable {
         return AidenMessageTextView(role: message.role, content: visibleText)
             .foregroundStyle(
                 usesBotBubble && message.role == .user
-                    ? Color.white
+                    ? palette.onFillAccent
                     : palette.foreground
             )
             .padding(usesWorkspaceBubble || usesBotBubble ? 12 : 0)
@@ -6298,7 +6352,7 @@ private struct AidenMessageView: View, Equatable {
                     AidenBotMessageBubbleShape()
                     .fill(
                         message.role == .user
-                            ? palette.accent
+                            ? palette.fillAccent
                             : Color(uiColor: .secondarySystemFill)
                     )
                 } else if usesWorkspaceBubble {
@@ -7789,10 +7843,10 @@ struct AidenApprovalCard: View {
                         Button { onAllow(.once) } label: {
                             Text(AidenApprovalPresentation.allowTitle(for: kind))
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.canvas)
+                                .foregroundStyle(palette.onFillAccent)
                                 .padding(.horizontal, 13)
                                 .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.accent)
+                                .aidenApprovalActionGlass(tint: palette.fillAccent)
                         }
                         .buttonStyle(.plain)
                         .padding(.vertical, 5)
@@ -8008,10 +8062,10 @@ struct AidenQuestionCard: View {
                         } label: {
                             Text(draft.activeIndex < prompt.questions.count - 1 ? "Next" : "Submit")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.canvas)
+                                .foregroundStyle(palette.onFillAccent)
                                 .padding(.horizontal, 13)
                                 .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.accent)
+                                .aidenApprovalActionGlass(tint: palette.fillAccent)
                         }
                         .buttonStyle(.plain)
                         .padding(.vertical, 5)
@@ -8758,11 +8812,8 @@ private struct AidenComposerView: View {
                         Image(systemName: "arrow.up")
                             .font(.headline.bold())
                             .frame(width: 30, height: 30)
-                            .background(sendButtonBackground, in: Circle())
-                            .foregroundStyle(sendButtonForeground)
-                            .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AidenSolidFillButtonStyle(shape: Circle(), hitSize: 44))
                     .disabled(!model.canSend)
                     .accessibilityLabel("Send message")
                 }
@@ -8822,15 +8873,6 @@ private struct AidenComposerView: View {
     private var visiblePendingAttachments: [AidenAttachmentReference] {
         guard !attachmentPicker.committingAssets.isEmpty else { return model.pendingAttachments }
         return Array(model.pendingAttachments.prefix(attachmentPicker.committingPendingPrefixCount))
-    }
-
-    private var sendButtonBackground: Color {
-        if model.canSend { return palette.accent }
-        return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
-    }
-
-    private var sendButtonForeground: Color {
-        model.canSend ? palette.canvas : palette.secondary
     }
 
     /// One pill while a run streams, matching the desktop and Android control:
@@ -8898,12 +8940,12 @@ private struct AidenComposerView: View {
     }
 
     private var runInputButtonBackground: Color {
-        if model.canSubmitRunInput { return palette.accent }
+        if model.canSubmitRunInput { return palette.fillAccent }
         return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
     }
 
     private var runInputButtonForeground: Color {
-        model.canSubmitRunInput ? palette.canvas : palette.secondary
+        model.canSubmitRunInput ? palette.onFillAccent : palette.secondary
     }
 
     private var selectedModelAccessibilityValue: String {
@@ -9881,5 +9923,76 @@ extension AidenChatViewModel {
     /// "Answered on Mac": the transient composer caption a losing phone shows.
     private func showForeignRunNotice(_ text: String) {
         showRunInputReceipt(text)
+    }
+}
+
+private struct AidenNativeAppControlPanel: View {
+    @Environment(\.aidenPalette) private var palette
+    let panel: AidenAppControlPanel
+    let available: Bool
+    var cache: AidenAppControlCache? = nil
+    let load: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)?
+    let apply: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)?
+    @State private var localSnapshot: AidenAppControlSnapshot?
+    @State private var pending = false
+    @State private var status = ""
+    @State private var confirmation: AidenAppControlOperation?
+    @State private var retryOperation: AidenAppControlOperation?
+    private var snapshot: AidenAppControlSnapshot? { if let cache { return cache.snapshots[panel.id] }; return localSnapshot }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(snapshot?.title ?? "Aiden settings").font(.headline)
+            Text("Paired host · These controls change the serving app, not this phone.").font(.caption).foregroundStyle(palette.secondary)
+            if available, let snapshot {
+                ForEach(snapshot.rows) { row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let options = row.options {
+                            Picker(row.label, selection: Binding(get: { row.value.label }, set: { propose(row, .text($0)) })) {
+                                ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
+                            }.disabled(pending || row.disabledReason != nil || snapshot.policy == "disabled")
+                        } else if case .boolean(let flag) = row.value {
+                            Toggle(row.label, isOn: Binding(get: { flag }, set: { propose(row, .boolean($0)) }))
+                                .disabled(pending || row.disabledReason != nil || snapshot.policy == "disabled")
+                        }
+                        Text(row.description).font(.caption).foregroundStyle(palette.secondary)
+                        Text(row.scope).font(.caption2).foregroundStyle(palette.secondary)
+                        if let reason = row.disabledReason { Text(reason).font(.caption).foregroundStyle(palette.secondary) }
+                    }
+                }
+            } else { Text(panel.fallback).font(.subheadline) }
+            if !status.isEmpty { Text(status).font(.caption).accessibilityAddTraits(.updatesFrequently) }
+            HStack {
+                Button("Refresh") { Task { await refresh() } }.disabled(pending || !available)
+                if retryOperation != nil { Button("Check change") { if let operation = retryOperation { Task { await commit(operation) } } }.disabled(pending || !available) }
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .task(id: available) { localSnapshot = nil; confirmation = nil; if available { await refresh() } else { cache?.remove(panel) } }
+        .onDisappear { cache?.remove(panel) }
+        .confirmationDialog("Change this preference on the paired host?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
+            Button("Apply change") { if let operation = confirmation { confirmation = nil; Task { await commit(operation) } } }
+            Button("Cancel", role: .cancel) { confirmation = nil }
+        } message: { Text(snapshot?.rows.first { $0.id == confirmation?.control }?.scope ?? "Paired host") }
+    }
+    private func propose(_ row: AidenAppControlRow, _ value: AidenAppControlValue) {
+        guard !pending, row.disabledReason == nil, value != row.value else { return }
+        confirmation = AidenAppControlOperation(control: row.id, value: value, expectedRevision: row.revision, operationId: UUID().uuidString)
+    }
+    @MainActor private func refresh() async {
+        do { guard available, let load else { return }; let value = try await load(panel); if cache == nil { localSnapshot = value } }
+        catch is CancellationError { return }
+        catch { localSnapshot = nil; status = "Current settings are unavailable. Reconnect or enable paired chat controls on the desktop." }
+    }
+    @MainActor private func commit(_ operation: AidenAppControlOperation) async {
+        guard !pending, available, let apply else { return }
+        pending = true; retryOperation = operation
+        defer { pending = false }
+        do {
+            let receipt = try await apply(panel, operation)
+            if receipt.status == "outcome_unknown" { status = "The change could not be confirmed. Refresh its current value; checking the change will not repeat it." }
+            else { retryOperation = nil; status = receipt.warning ?? (receipt.effective == "now" ? "Saved." : "Saved. Applies to subsequent agent work.") }
+            await refresh()
+        } catch { localSnapshot = nil; status = "The change could not be confirmed. Check the change after reconnecting." }
     }
 }

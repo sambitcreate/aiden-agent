@@ -717,6 +717,7 @@ data class AidenChatMessage(
     val reasoning: String? = null,
     val attachments: List<AidenMessageAttachment>? = null,
     val htmlArtifacts: List<AidenHtmlArtifact>? = null,
+    @Serializable(with = AidenAppPanelsSerializer::class) val appPanels: List<AidenAppControlPanel>? = null,
     /**
      * Inline visuals in reply order (contract revision 28). Entries this
      * version cannot use are dropped; the message itself survives.

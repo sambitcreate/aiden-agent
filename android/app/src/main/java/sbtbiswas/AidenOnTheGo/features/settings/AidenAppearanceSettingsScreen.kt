@@ -209,8 +209,8 @@ private fun AidenThemeTile(
             )
             if (selected) {
                 Surface(
-                    color = palette.accent,
-                    contentColor = palette.onAccent,
+                    color = palette.accentFill.fill,
+                    contentColor = palette.accentFill.content,
                     shape = CircleShape,
                     modifier = Modifier
                         .align(Alignment.TopEnd)

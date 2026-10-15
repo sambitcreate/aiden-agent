@@ -636,8 +636,7 @@ struct AidenBotsHomeView: View {
                     }
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
+                        .aidenSolidFillTint()
                         .disabled(!canCreateBot)
                 }
             }

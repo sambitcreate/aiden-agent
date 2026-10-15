@@ -564,7 +564,7 @@ export function OnboardingFlow({
                   className={`flex items-center gap-2 ${itemIndex <= index ? "text-primary" : "text-tertiary"}`}
                 >
                   <span
-                    className={`grid size-5 shrink-0 place-items-center rounded-full text-mini font-semibold ${itemIndex <= index ? "bg-accent text-accent-foreground" : "bg-control"}`}
+                    className={`grid size-5 shrink-0 place-items-center rounded-full text-mini font-semibold ${itemIndex <= index ? "bg-fill-accent text-fill-accent-foreground" : "bg-control"}`}
                   >
                     {itemIndex < index ? <Check className="size-3" /> : itemIndex + 1}
                   </span>
@@ -636,7 +636,7 @@ export function OnboardingFlow({
             {stateReady && step === "profile" ? (
               <div className="max-w-md">
                 <div className="flex items-start gap-3">
-                  <UserRound className="mt-0.5 size-5 shrink-0 text-accent" />
+                  <UserRound className="mt-0.5 size-5 shrink-0 text-accent-text" />
                   <div>
                     <Text
                       as="h2"
@@ -666,7 +666,7 @@ export function OnboardingFlow({
                   />
                 </label>
                 <div className="mt-4 flex items-center gap-2 text-secondary">
-                  <Lock className="size-4 text-accent" />
+                  <Lock className="size-4 text-accent-text" />
                   <Text variant="small" color="secondary">
                     Stored privately on this device.
                   </Text>
@@ -677,7 +677,7 @@ export function OnboardingFlow({
             {stateReady && step === "provider" ? (
               <div>
                 <div className="flex items-start gap-3">
-                  <Network className="mt-0.5 size-5 shrink-0 text-accent" />
+                  <Network className="mt-0.5 size-5 shrink-0 text-accent-text" />
                   <div>
                     <Text
                       as="h2"
@@ -753,7 +753,7 @@ export function OnboardingFlow({
                         </span>
                         <Check
                           aria-hidden="true"
-                          className={`mt-0.5 size-4 shrink-0 text-accent ${choice === item.id ? "opacity-100" : "opacity-0"}`}
+                          className={`mt-0.5 size-4 shrink-0 text-accent-text ${choice === item.id ? "opacity-100" : "opacity-0"}`}
                         />
                       </button>
                     ))}
@@ -858,7 +858,7 @@ export function OnboardingFlow({
                             </span>
                             <Check
                               aria-hidden="true"
-                              className={`size-4 shrink-0 text-accent ${choice === item.id ? "opacity-100" : "opacity-0"}`}
+                              className={`size-4 shrink-0 text-accent-text ${choice === item.id ? "opacity-100" : "opacity-0"}`}
                             />
                           </button>
                         ))}
@@ -930,7 +930,7 @@ export function OnboardingFlow({
                               </span>
                               <Check
                                 aria-hidden="true"
-                                className={`size-4 shrink-0 text-accent ${isSelected ? "opacity-100" : "opacity-0"}`}
+                                className={`size-4 shrink-0 text-accent-text ${isSelected ? "opacity-100" : "opacity-0"}`}
                               />
                             </button>
                           );
@@ -981,7 +981,7 @@ export function OnboardingFlow({
                   </div>
                 ) : null}
                 <div className="flex items-start gap-3">
-                  <Check className="mt-0.5 size-5 shrink-0 text-accent" />
+                  <Check className="mt-0.5 size-5 shrink-0 text-accent-text" />
                   <div>
                     <Text
                       as="h2"

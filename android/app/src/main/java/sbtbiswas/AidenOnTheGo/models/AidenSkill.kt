@@ -16,6 +16,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
  * instructions, fingerprints, or registry internals. */
 @Serializable
 enum class AidenRemoteSkillSource(val rawValue: String) {
+    @SerialName("builtin") BUILTIN("builtin"),
     @SerialName("configured") CONFIGURED("configured"),
     @SerialName("workspace") WORKSPACE("workspace"),
     @SerialName("global") GLOBAL("global");

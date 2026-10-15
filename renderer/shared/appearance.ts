@@ -789,6 +789,53 @@ function foregroundForFill(
   return colorContrastRatio(fill, preferred) >= 4.5 ? preferred : alternate;
 }
 
+interface SolidFill {
+  fill: string;
+  foreground: string;
+  hover: string;
+  active: string;
+}
+
+/** How far a fill may move toward black before the hue turns muddy. */
+const MAX_FILL_DEEPENING = 0.45;
+
+/**
+ * A solid fill that carries a label or glyph: buttons, highlighted menu rows,
+ * checked controls. White content on a deeper fill reads better than black on
+ * a pastel, so the hue moves toward black only as far as WCAG AA (4.5:1)
+ * needs, which keeps the fill as close as possible to the surface around it.
+ * Light presets already pass with white, so they keep their color. Hues that
+ * would turn muddy first (white, bright yellow) keep their own color and take
+ * whichever of black or white reads better. iOS and Android use the same rule.
+ */
+function solidFill(base: string, scheme: AppearanceScheme): SolidFill {
+  const color = mixHex(base, base, 0);
+  let fill = color;
+  let foreground = colorContrastRatio(color, "#FFFFFF") >= colorContrastRatio(color, "#000000")
+    ? "#FFFFFF"
+    : "#000000";
+  for (let step = 0; step <= MAX_FILL_DEEPENING * 100; step += 1) {
+    const candidate = mixHex(color, "#000000", step / 100);
+    if (colorContrastRatio(candidate, "#FFFFFF") >= 4.5) {
+      fill = candidate;
+      foreground = "#FFFFFF";
+      break;
+    }
+  }
+  const light = scheme === "light";
+  // Interaction states move away from the content color, unless the fill is
+  // already at that extreme (pure black or white), where they reverse.
+  const away = foreground === "#FFFFFF" ? "#000000" : "#FFFFFF";
+  const toward = mixHex(fill, away, 0.01) === fill ? foreground : away;
+  const amounts = foreground === "#FFFFFF" && !light ? [0.1, 0.18] : light ? [0.07, 0.14] : [0.14, 0.22];
+  return {
+    fill,
+    foreground,
+    hover: mixHex(fill, toward, amounts[0]),
+    active: mixHex(fill, toward, amounts[1]),
+  };
+}
+
 function selectedPalette(variant: ThemeVariantConfig, scheme: AppearanceScheme): ThemePalette {
   return variant.preset === "custom"
     ? PRESETS_BY_ID.aiden[scheme]
@@ -828,8 +875,10 @@ export function resolveThemeTokens(
   const controlAlpha = Number((0.055 + contrast * 0.065).toFixed(3));
   const inputAlpha = Number((0.035 + contrast * 0.035).toFixed(3));
   const wellAlpha = Number((0.018 + contrast * 0.024).toFixed(3));
+  const listHoverAlpha = Number((0.035 + contrast * 0.04).toFixed(3));
+  const selectionAlpha = light ? 0.12 : 0.18;
   const controlTint = mixHex(background, foreground, controlAlpha);
-  const selectionTint = mixHex(background, variant.accent, light ? 0.12 : 0.18);
+  const selectionTint = mixHex(background, variant.accent, selectionAlpha);
   const wellTint = mixHex(raised, foreground, wellAlpha);
   const textSurfaces = [
     background,
@@ -839,35 +888,47 @@ export function resolveThemeTokens(
     selectionTint,
     wellTint,
   ] as const;
-  const toolbarIcon = contrastCorrectColor(
+  // Hovered and selected rows also sit on the sidebar and on menus. Those
+  // tints need WCAG AA (4.5:1 for text, 3:1 for icons) rather than the wider
+  // margin the base surfaces keep, so the text hierarchy moves no further
+  // than accessibility requires.
+  const rowTints = [
+    mixHex(sidebar, variant.accent, selectionAlpha),
+    mixHex(raised, variant.accent, selectionAlpha),
+    mixHex(sidebar, foreground, listHoverAlpha),
+    mixHex(raised, foreground, listHoverAlpha),
+  ] as const;
+  const readable = (preferred: string, minimum: number, fallbacks: readonly string[]) =>
+    contrastCorrectColor(
+      contrastCorrectColor(preferred, textSurfaces, minimum, fallbacks),
+      rowTints,
+      Math.min(minimum, 4.5),
+      fallbacks,
+    );
+  const toolbarIcon = readable(
     mixHex(foreground, "#FFFFFF", light ? 0.3 : 0.08),
-    textSurfaces,
     3,
     [foreground, variant.accent],
   );
-  const secondaryBase = contrastCorrectColor(
+  const secondaryBase = readable(
     variant.preset === "custom"
       ? mixHex(background, foreground, light ? 0.64 : 0.7)
       : palette.secondary,
-    textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
-  const textSecondary = contrastCorrectColor(
+  const textSecondary = readable(
     mixHex(secondaryBase, foreground, 0.28),
-    textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
-  const textTertiary = contrastCorrectColor(
+  const textTertiary = readable(
     mixHex(secondaryBase, foreground, 0.14),
-    textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
-  const textQuaternary = contrastCorrectColor(
+  const textQuaternary = readable(
     secondaryBase,
-    textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
@@ -887,21 +948,25 @@ export function resolveThemeTokens(
     accentContrastTarget,
     light ? 0.14 : 0.22,
   );
-  const supportRed = contrastCorrectColor(
+  const supportRed = readable(
     palette.danger,
-    textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
-  const supportGreen = contrastCorrectColor(
+  // Accent used as text (links, inline actions, chips) keeps the chosen hue
+  // but moves just far enough to stay readable on every surface and row tint.
+  const accentText = readable(variant.accent, 4.5, [foreground]);
+  // Solid fills for labelled controls. Light schemes reuse the readable
+  // accent and support red; dark schemes deepen the raw hue for white content.
+  const accentFill = solidFill(variant.accent, scheme);
+  const dangerFill = solidFill(light ? supportRed : palette.danger, scheme);
+  const supportGreen = readable(
     palette.success,
-    textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
-  const supportWarning = contrastCorrectColor(
+  const supportWarning = readable(
     palette.warning,
-    textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
@@ -973,11 +1038,12 @@ export function resolveThemeTokens(
     "--surface-control-active": alphaHex(foreground, controlAlpha + 0.1),
     "--surface-input": alphaHex(foreground, inputAlpha),
     "--surface-well": alphaHex(foreground, wellAlpha),
-    "--surface-list-hover": alphaHex(foreground, 0.035 + contrast * 0.04),
-    "--surface-list-selection": alphaHex(variant.accent, light ? 0.12 : 0.18),
+    "--surface-list-hover": alphaHex(foreground, listHoverAlpha),
+    "--surface-list-selection": alphaHex(variant.accent, selectionAlpha),
     "--border-field": alphaHex(foreground, borderAlpha),
     "--border-separator": alphaHex(foreground, 0.055 + contrast * 0.07),
     "--accent": variant.accent,
+    "--accent-text": accentText,
     "--accent-foreground": accentForeground,
     "--model-pad-knob-foreground": foregroundForFill("#FFFFFF", scheme),
     "--accent-hover": accentHover,
@@ -988,6 +1054,14 @@ export function resolveThemeTokens(
       3,
       [foreground],
     ),
+    "--fill-accent": accentFill.fill,
+    "--fill-accent-foreground": accentFill.foreground,
+    "--fill-accent-hover": accentFill.hover,
+    "--fill-accent-active": accentFill.active,
+    "--fill-danger": dangerFill.fill,
+    "--fill-danger-foreground": dangerFill.foreground,
+    "--fill-danger-hover": dangerFill.hover,
+    "--fill-danger-active": dangerFill.active,
     "--support-red": supportRed,
     "--support-red-foreground": foregroundForFill(supportRed, scheme),
     "--support-green": supportGreen,

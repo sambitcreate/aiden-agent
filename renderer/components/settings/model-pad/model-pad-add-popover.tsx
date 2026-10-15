@@ -67,7 +67,7 @@ const AddRow = React.memo(function AddRow({
           {entry.isLocal ? " · Local" : ""}
         </span>
       </span>
-      <span aria-hidden="true" className="grid size-4 shrink-0 place-items-center text-accent">
+      <span aria-hidden="true" className="grid size-4 shrink-0 place-items-center text-accent-text">
         {onPad ? <Check className="size-3.5" /> : null}
       </span>
     </CommandItem>

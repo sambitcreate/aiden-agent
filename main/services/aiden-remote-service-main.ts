@@ -1,3 +1,5 @@
+import { remoteAppControls } from "./aiden-remote-app-controls.js";
+import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { reconcilePendingProviderCredentialRotation, saveProviderWithCredentialRotation } from "./provider-credential-rotation.js";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
@@ -435,6 +437,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         botFiles?: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
+        appControls: typeof remoteAppControls;
         providers: AidenRemoteProviderService;
         memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
@@ -674,6 +677,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const chatProgress = new AidenRemoteChatProgressService({
             instanceId,
             events: chatProgressEvents,
+            appControlsEnabled: () => remoteAppControls.enabled(),
             authorize: createChatProgressAuthorizer({
               acquireDeviceAuthorization: (deviceId) =>
                 state.acquireDeviceAuthorization(deviceId, false),
@@ -1025,7 +1029,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
           });
-          const memorySettings = new AidenRemoteMemorySettingsService(configStore);
+          const memorySettings = new AidenRemoteMemorySettingsService(configStore, publishAppControlsChanged);
           const speech = new AidenRemoteSpeechService();
           activeReadAloud?.close();
           const readAloud = new AidenRemoteTtsService(ttsService);
@@ -1040,6 +1044,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             files,
             git,
             schedules,
+            appControls: remoteAppControls,
             providers,
             memorySettings,
             usage: usageStore,

@@ -757,12 +757,12 @@ struct AidenAttachmentPickerOverlay: View {
                     Text(confirmLabel)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(
-                            picker.selectedAssetIDs.isEmpty ? .white.opacity(0.58) : palette.onAccent
+                            picker.selectedAssetIDs.isEmpty ? .white.opacity(0.58) : palette.onFillAccent
                         )
                         .padding(.horizontal, 18)
                         .frame(minHeight: 46)
                         .background(
-                            picker.selectedAssetIDs.isEmpty ? controlBackground : palette.accent,
+                            picker.selectedAssetIDs.isEmpty ? controlBackground : palette.fillAccent,
                             in: Capsule()
                         )
                         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: confirmLabel)
@@ -853,7 +853,7 @@ struct AidenAttachmentPickerOverlay: View {
                     .foregroundStyle(palette.secondary)
                 Button("Open Settings") { openSettings() }
                     .buttonStyle(.borderedProminent)
-                    .tint(palette.accent)
+                    .aidenSolidFillTint()
             }
         }
     }
@@ -871,9 +871,9 @@ struct AidenAttachmentPickerOverlay: View {
                         Text("\(order)")
                             .font(.caption.weight(.bold))
                             .monospacedDigit()
-                            .foregroundStyle(.white)
+                            .foregroundStyle(palette.onFillAccent)
                             .frame(width: 24, height: 24)
-                            .background(palette.accent, in: Circle())
+                            .background(palette.fillAccent, in: Circle())
                             .overlay { Circle().stroke(.white, lineWidth: 2) }
                             .padding(5)
                             .transition(.scale(scale: 0.45).combined(with: .opacity))

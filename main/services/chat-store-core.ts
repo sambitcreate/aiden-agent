@@ -1,3 +1,4 @@
+import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 // Chat history persistence: an index.json of metadata + one file per chat.
 //
 // Concurrency model:
@@ -841,6 +842,7 @@ export function createChatStore(
         createdAt: message.createdAt,
         model: message.model,
         attachments: safeStoredAttachments(message.attachments),
+        appPanels: assistant ? parseAppControlPanels(message.appPanels) : undefined,
         htmlArtifacts: assistant
           ? parseChatHtmlArtifacts(message.htmlArtifacts)
           : undefined,
@@ -945,7 +947,8 @@ export function createChatStore(
         (message.content.trim().length > 0 ||
           (message.attachments?.length ?? 0) > 0 ||
           (message.htmlArtifacts?.length ?? 0) > 0 ||
-          (message.uiVisuals?.length ?? 0) > 0) &&
+          (message.uiVisuals?.length ?? 0) > 0 ||
+          (message.appPanels?.length ?? 0) > 0) &&
         Number.isSafeInteger(message.createdAt) &&
         message.createdAt >= 0,
       );
@@ -1390,7 +1393,9 @@ export function createChatStore(
             throw new ChatForkError("too_large", "This chat has too many messages to copy safely.");
           }
           chargedBytes += 512;
-          charge(message.content);
+          const content = [message.content, ...(message.appPanels ?? []).map((panel) => panel.fallback)]
+            .filter(Boolean).join("\n\n");
+          charge(content);
           charge(message.model);
           charge(message.skill?.name);
           for (const attachment of message.attachments ?? []) {
@@ -1415,7 +1420,7 @@ export function createChatStore(
           copiedMessages.push({
             id: randomUUID(),
             role: message.role,
-            content: message.content,
+            content,
             createdAt: message.createdAt,
             model: message.model,
             attachments: safeStoredAttachments(message.attachments),
@@ -1802,6 +1807,7 @@ export function createChatStore(
               ? parseProviderFailureV1(message.providerFailure)
               : undefined,
           attachments: safeStoredAttachments(message.attachments),
+          appPanels: message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
           htmlArtifacts:
             message.role === "assistant"
               ? parseChatHtmlArtifacts(message.htmlArtifacts)

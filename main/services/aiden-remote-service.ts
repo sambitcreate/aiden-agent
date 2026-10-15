@@ -1,3 +1,4 @@
+import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -172,6 +173,7 @@ export interface AidenRemoteServiceOptions {
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        appControls?: typeof remoteAppControls;
         providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
@@ -209,6 +211,7 @@ export interface AidenRemoteServiceOptions {
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        appControls?: typeof remoteAppControls;
         providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };

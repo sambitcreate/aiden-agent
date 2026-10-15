@@ -14,7 +14,7 @@ export const SLASH_LIMITS = Object.freeze({
   formattedInvocationBytes: 1024 * 1024,
 });
 
-export const SKILL_SOURCES = ["configured", "workspace", "global"] as const;
+export const SKILL_SOURCES = ["builtin", "configured", "workspace", "global"] as const;
 export type SkillSource = (typeof SKILL_SOURCES)[number];
 
 export interface SkillCatalogEntry {

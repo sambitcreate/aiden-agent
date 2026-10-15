@@ -501,11 +501,11 @@ struct AidenForkSummaryCard: View {
         Button(action: action) {
             Text(title)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(prominent ? palette.canvas : palette.foreground)
+                .foregroundStyle(prominent ? palette.onFillAccent : palette.foreground)
                 .padding(.horizontal, 13)
                 .frame(minHeight: 34)
                 .background(
-                    prominent ? palette.accent : palette.canvas,
+                    prominent ? palette.fillAccent : palette.canvas,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

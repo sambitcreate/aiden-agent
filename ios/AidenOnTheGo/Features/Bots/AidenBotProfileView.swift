@@ -415,8 +415,7 @@ struct AidenBotProfileView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
+                    .aidenSolidFillTint()
                     .disabled(avatarModel?.canUseCandidate != true)
                 }
             }
@@ -797,8 +796,7 @@ struct AidenBotInstructionsEditorView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
-                .tint(palette.accent)
-                .foregroundStyle(palette.onAccent)
+                .aidenSolidFillTint()
                 .disabled(!canSave || text == initialText)
             }
         }

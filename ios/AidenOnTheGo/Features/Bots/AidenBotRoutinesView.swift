@@ -477,8 +477,8 @@ struct AidenBotRoutineEditorView: View {
                     Text(Self.weekdaySymbols[day])
                         .font(.subheadline.weight(.semibold))
                         .frame(width: 36, height: 36)
-                        .foregroundStyle(selected ? palette.onAccent : palette.foreground)
-                        .background(selected ? palette.accent : palette.raised, in: Circle())
+                        .foregroundStyle(selected ? palette.onFillAccent : palette.foreground)
+                        .background(selected ? palette.fillAccent : palette.raised, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Self.weekdayNames[day])

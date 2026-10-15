@@ -356,9 +356,9 @@ struct OnboardingArtSendButton: View {
     var body: some View {
         Image(systemName: "arrow.up")
             .font(.system(size: 8, weight: .bold))
-            .foregroundStyle(palette.onAccent)
+            .foregroundStyle(palette.onFillAccent)
             .frame(width: 18, height: 18)
-            .background(palette.accent, in: Circle())
+            .background(palette.fillAccent, in: Circle())
     }
 }
 

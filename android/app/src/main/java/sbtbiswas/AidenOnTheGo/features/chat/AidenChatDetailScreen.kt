@@ -1057,6 +1057,10 @@ fun AidenChatDetailScreen(
                             onAskAbout = onAskAboutMessage,
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
+                            appControlsAvailable = viewModel.canReadAppControls,
+                            appControlsCache = viewModel.appControlsCache,
+                            loadAppControls = viewModel::loadAppControls,
+                            applyAppControl = viewModel::applyAppControl,
                             onOpenUrl = onOpenMessageUrl,
                             forkActions = forkActions,
                             isPinnedToStreamingEdge = isPinnedToStreamingEdge,
@@ -1264,7 +1268,7 @@ private fun UserMessageRow(
                     forkActions = forkActions
                 ) {
                     Surface(
-                        color = palette.accent,
+                        color = palette.accentFill.fill,
                         shape = shape,
                         modifier = Modifier.widthIn(max = 320.dp)
                     ) {
@@ -1273,7 +1277,7 @@ private fun UserMessageRow(
                                 Text(
                                     text = message.text,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = palette.onAccent
+                                    color = palette.accentFill.content
                                 )
                             }
                             fallbackAttachments.forEach { att ->
@@ -1282,14 +1286,14 @@ private fun UserMessageRow(
                                     Icon(
                                         Icons.Default.Attachment,
                                         contentDescription = null,
-                                        tint = palette.onAccent,
+                                        tint = palette.accentFill.content,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = att.name,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = palette.onAccent,
+                                        color = palette.accentFill.content,
                                         maxLines = 1
                                     )
                                 }
@@ -1330,6 +1334,10 @@ private fun AssistantMessageRow(
     onAskAbout: ((String) -> Unit)?,
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
+    appControlsAvailable: Boolean = false,
+    appControlsCache: sbtbiswas.AidenOnTheGo.models.AidenAppControlCache? = null,
+    loadAppControls: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot,
+    applyAppControl: suspend (AidenAppControlPanel, AidenAppControlOperation) -> AidenAppControlReceipt,
     onOpenUrl: (String) -> Unit,
     forkActions: AidenMessageForkActions? = null,
     isPinnedToStreamingEdge: () -> Boolean = { false },
@@ -1504,6 +1512,9 @@ private fun AssistantMessageRow(
                     )
                 }
             }
+        }
+        message.appPanels.orEmpty().filter { it.isWireSafe }.forEach { panel ->
+            key(panel.id) { appControlsCache?.let { NativeAppControlPanel(panel, appControlsAvailable, palette, it, loadAppControls, applyAppControl) } }
         }
         // An html artifact whose visual has a snapshot is already shown; the rest stay "view on Mac".
         aidenUnsupportedHtmlArtifacts(message).forEach { artifact ->

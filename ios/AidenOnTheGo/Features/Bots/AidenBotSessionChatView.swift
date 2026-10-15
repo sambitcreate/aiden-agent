@@ -679,8 +679,8 @@ struct AidenBotSessionChatView: View {
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 14)
                 .frame(minHeight: max(44, controlSize))
-                .foregroundStyle(enabled ? palette.onAccent : palette.secondary)
-                .background(enabled ? palette.accent : palette.raised, in: Capsule())
+                .foregroundStyle(enabled ? palette.onFillAccent : palette.secondary)
+                .background(enabled ? palette.fillAccent : palette.raised, in: Capsule())
         } primaryAction: {
             submit(model, whenBusy: busyMode)
         }
@@ -740,11 +740,9 @@ struct AidenBotSessionChatView: View {
             } label: {
                 Image(systemName: "arrow.up")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(palette.onAccent)
                     .frame(width: max(44, controlSize), height: max(44, controlSize))
-                    .background(palette.accent, in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
             .disabled(!canCompose || !model.canSend || draftIsEmpty)
             .accessibilityLabel("Send")
         }
@@ -1033,8 +1031,7 @@ struct AidenBotRoutineProposalCardView: View {
                     Button(AidenBotSessionCopy.addRoutine) { onRespond(.accept) }
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
+                        .aidenSolidFillTint()
                     Button(AidenBotSessionCopy.notNow) { onRespond(.dismiss) }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.capsule)
@@ -1065,8 +1062,7 @@ struct AidenBotFailedTurnCard: View {
                 Button(AidenBotSessionCopy.retry, action: onRetry)
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
+                    .aidenSolidFillTint()
                     .disabled(isBusy)
             }
         }
@@ -1102,14 +1098,12 @@ struct AidenBotInterruptedCard: View {
                     Button(AidenBotSessionCopy.openAdvanced, action: onOpenAdvanced)
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
+                        .aidenSolidFillTint()
                 } else {
                     Button(AidenBotSessionCopy.resume, action: onResume)
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
+                        .aidenSolidFillTint()
                 }
                 Button(AidenBotSessionCopy.dismiss, action: onDismiss)
                     .buttonStyle(.bordered)
@@ -1146,8 +1140,7 @@ struct AidenBotNeedsModelCard: View {
                 Button(AidenBotSessionCopy.setUp, action: onSetUp)
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
+                    .aidenSolidFillTint()
             } else {
                 Text(AidenBotSessionCopy.needsModelHint)
                     .font(.footnote)
@@ -1215,8 +1208,7 @@ struct AidenBotConnectCardView: View {
                 Button(AidenBotSessionCopy.finishOnMac, action: onRequest)
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
+                    .aidenSolidFillTint()
             }
         case .dismissed:
             EmptyView()

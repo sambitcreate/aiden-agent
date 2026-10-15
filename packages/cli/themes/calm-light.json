@@ -3,9 +3,9 @@
 	"vars": {
 		"cyan": "#2E6976",
 		"blue": "#6A543C",
-		"green": "#236E48",
-		"red": "#A83E3E",
-		"yellow": "#7A5D18",
+		"green": "#226A45",
+		"red": "#A13C3C",
+		"yellow": "#755917",
 		"text": "#373329",
 		"gray": "#504B41",
 		"dimGray": "#555045",
@@ -14,7 +14,7 @@
 		"selectedBg": "#E7E2D9",
 		"userMsgBg": "#EAE8E5",
 		"toolPendingBg": "#EDECE9",
-		"toolSuccessBg": "#E0E7E0",
+		"toolSuccessBg": "#E0E6E0",
 		"toolErrorBg": "#EDE2DF",
 		"customMsgBg": "#EBE8E1"
 	},
@@ -79,7 +79,7 @@
 	"export": {
 		"pageBg": "#F5F4F1",
 		"cardBg": "#FBFBFA",
-		"infoBg": "#E3DDD0"
+		"infoBg": "#E2DDD0"
 	},
 	"name": "calm-light"
 }

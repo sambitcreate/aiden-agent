@@ -94,6 +94,10 @@ data class AidenServer(
     val supportsChatSkills: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_SKILLS_FEATURE)
 
+    /** The Mac renders conversation app control panels natively (revision 32). */
+    val supportsChatUiPanels: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_UI_PANELS_FEATURE)
+
     /** The Mac can stop one running delegated agent; only meaningful with chat-agents-v1. */
     val supportsChatAgentInterrupt: Boolean
         get() = supportsChatAgents && features.contains(AidenRemoteProtocol.CHAT_AGENT_INTERRUPT_FEATURE)

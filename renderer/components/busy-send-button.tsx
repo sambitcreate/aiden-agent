@@ -140,7 +140,7 @@ export function BusySendButton({
             >
               <span className="flex min-w-0 flex-col">
                 <span>{entry.label}</span>
-                <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+                <span className="text-small text-tertiary">
                   {entry.detail}
                 </span>
               </span>

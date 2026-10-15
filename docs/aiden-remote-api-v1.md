@@ -730,3 +730,13 @@ instead of the SRV target name. This hint is untrusted UI/connection discovery;
 it carries no CA, pin, alternate-route inventory or credential. Pairing still
 requires the owner-approved code/QR trust bootstrap and final TLS identity check.
 Malformed or absent hints leave manual/QR pairing available.
+
+## Conversation app controls, revision 32
+
+`chat-ui-panels-v1` advertises inert assistant `appPanels` (up to four per message). Native clients render the closed Appearance, Memory, Web Search and Skills vocabulary. A panel carries its original opaque workspace ID and readable fallback, never a view script or authority. Malformed additive panels are omitted while ordinary text remains readable. Old clients without `app-controls:read` receive text fallbacks instead of interactive descriptors.
+
+The desktop owner must explicitly allow **Paired-device chat controls** in Appearance. Only then does `/server` advertise `chat-ui-panels-enabled-v1`; capable clients may negotiate `app-controls:read` and `app-controls:respond` through the existing additive capability endpoint. Chat write access alone grants neither. Disabling owner consent blocks future reads/changes even when old grants remain on the device record.
+
+`GET /chats/{chatId}/controls/{panelId}` requires `chat:read`, `app-controls:read`, current canonical chat access and owner consent. It returns bounded, current host-owned labels, options, values, revisions and disabled reasons. `POST` on that same path additionally requires `app-controls:respond` and the exact four-field `AppControlOperation` in OpenAPI. Memory writes retain the existing `workspace:manage` requirement. Bot panels and changed workspace targets are unavailable. Preferences always affect the paired host; phone appearance remains device-local.
+
+The host persists an operation intent before entering its domain service and returns a verified receipt after persistence/effects. Repeating the same actor/target/operation ID returns its original receipt, including `outcome_unknown`; it cannot repeat an uncertain effect. A changed request under the same ID is rejected. Failed/offline clients do not queue writes. Re-read current state after a conflict or uncertain receipt. The revision represents the control's current value and policy, not an ordered event sequence. Confirmed receipts expire after 30 days; unresolved intents remain, and the ledger rejects new operations at 500 records instead of silently discarding replay protection.

@@ -63,6 +63,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonListRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenSwitchColors
 
 /** Test tag of every Settings-style page's scrolling list. */
 const val AidenSettingsListTag = "aiden_settings_list"
@@ -320,7 +321,7 @@ fun AidenSettingsSwitchRow(
             if (checked == null) {
                 AidenSkeletonBlock(width = 52.dp, height = 32.dp, shape = CircleShape)
             } else {
-                Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+                Switch(checked = checked, onCheckedChange = null, enabled = enabled, colors = aidenSwitchColors())
             }
         }
     )

@@ -1,3 +1,4 @@
+import { registerAppControlHandlers } from "./app-controls.js";
 /**
  * Handler Registration
  *
@@ -63,6 +64,7 @@ export function registerHandlers(): void {
 
   // AI chat client handlers
   registerProviderHandlers();
+  registerAppControlHandlers();
   registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
   registerChatGenerationHandlers();

@@ -189,7 +189,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
             provenance: {
               version: 1;
               name: string;
-              source: "configured" | "workspace" | "global";
+              source: import("../../renderer/shared/slash-commands.js").SkillSource;
             };
           }) =>
             appendChatMessageWithReconciliation({

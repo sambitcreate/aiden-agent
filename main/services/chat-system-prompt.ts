@@ -1,3 +1,4 @@
+import { AIDEN_APP_GUIDANCE } from "./aiden-app-knowledge.js";
 // System prompt assembly for chat generations and for ambient context
 // estimates (context meter). Kept free of llm-client so services that only
 // need the static prompt do not import the generation pipeline.
@@ -34,7 +35,7 @@ export async function buildSystemPromptWithSections(
   skillSnapshot?: SkillRegistrySnapshot,
   availableToolNames?: ReadonlySet<string>,
 ): Promise<ChatSystemPromptWithSections> {
-  const base = PI_CHAT_SYSTEM_PROMPT;
+  const base = PI_CHAT_SYSTEM_PROMPT + (availableToolNames?.has("aiden_help") ? `\n\n${AIDEN_APP_GUIDANCE}` : "");
   const skillsText =
     skillsAvailable && skillSnapshot
       ? formatAvailableSkills(skillSnapshot, availableToolNames)

@@ -706,7 +706,7 @@ class AidenChatViewModel(
         startForeignRunProbe()
         if (progressObservationJob?.isActive == true) return
         progressObservationToken += 1
-        if (coordinator.serverInfo.value != null && !canReadTaskProgress && !canReadAgentRoster) {
+        if (coordinator.serverInfo.value != null && !canReadTaskProgress && !canReadAgentRoster && !canReadAppControls) {
             _progressConnectionState.value = ProgressConnectionState.UNAVAILABLE
             return
         }
@@ -726,7 +726,7 @@ class AidenChatViewModel(
         foreignRunProbeJob = null
         _progressConnectionState.value = when {
             _taskProgress.value != null || _agentRoster.value != null -> ProgressConnectionState.LAST_KNOWN
-            canReadTaskProgress || canReadAgentRoster -> ProgressConnectionState.IDLE
+            canReadTaskProgress || canReadAgentRoster || canReadAppControls -> ProgressConnectionState.IDLE
             else -> ProgressConnectionState.UNAVAILABLE
         }
     }
@@ -737,7 +737,7 @@ class AidenChatViewModel(
         var cursorEpoch: String? = null
         while (progressForeground && progressObservationToken == observationToken && coroutineContext.isActive) {
             val client = activeClient()
-            if (client == null || (!canReadTaskProgress && !canReadAgentRoster)) {
+            if (client == null || (!canReadTaskProgress && !canReadAgentRoster && !canReadAppControls)) {
                 _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
                     ProgressConnectionState.LAST_KNOWN
                 } else {
@@ -789,7 +789,7 @@ class AidenChatViewModel(
                 // A warm cursor is scoped to the host epoch; a restart hydrates anew.
                 val canObserveTasks = canReadTaskProgress && taskCapabilityDeniedObservationToken != observationToken
                 val canObserveAgents = canReadAgentRoster && agentCapabilityDeniedObservationToken != observationToken
-                if (!canObserveTasks && !canObserveAgents) {
+                if (!canObserveTasks && !canObserveAgents && !canReadAppControls) {
                     _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
                         ProgressConnectionState.LAST_KNOWN
                     } else {
@@ -821,16 +821,27 @@ class AidenChatViewModel(
                                 accepted = true
                             }
                         }
+                        AidenRemoteEventType.APP_CONTROLS_CHANGED -> if (canReadAppControls) {
+                            appControlsCache.refresh(::readAppControls); accepted = true
+                        }
                         else -> Unit
                     }
                     if (accepted) {
                         cursor = event.sequence
-                        cursorEpoch = event.payload?.taskProgress?.epoch ?: event.payload?.agentRoster?.epoch
+                        // app_controls_changed carries only a revision, so it keeps the
+                        // epoch the same journal's snapshots already named.
+                        cursorEpoch = if (event.type == AidenRemoteEventType.APP_CONTROLS_CHANGED) {
+                            cursorEpoch
+                        } else {
+                            event.payload?.taskProgress?.epoch ?: event.payload?.agentRoster?.epoch
+                        }
                         recovery.recordHealthy()
                         _progressConnectionState.value = ProgressConnectionState.LIVE
                     }
                 }
                 if (progressForeground && progressObservationToken == observationToken) {
+                    // Owner consent can close the stream without an HTTP error.
+                    appControlsCache.clearSnapshots()
                     _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
                         ProgressConnectionState.LAST_KNOWN
                     } else {
@@ -840,6 +851,7 @@ class AidenChatViewModel(
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) return
+                if (isProgressContextCurrent(client, observationToken)) appControlsCache.clearSnapshots()
                 if (isProgressCredentialRevoked(error)) {
                     clearProgressState()
                     if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
@@ -2064,6 +2076,29 @@ class AidenChatViewModel(
                 _isSubmittingRunInput.value = false
             }
         }
+    }
+
+    val appControlsCache = sbtbiswas.AidenOnTheGo.models.AidenAppControlCache()
+    val canReadAppControls: Boolean
+        get() = !isReadOnlyPresentation && _chat.value?.botId == null &&
+            coordinator.serverInfo.value?.supportsChatUiPanels == true &&
+            installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.APP_CONTROLS_READ) == true
+
+    suspend fun loadAppControls(panel: AidenAppControlPanel): AidenAppControlSnapshot = appControlsCache.load(panel, ::readAppControls)
+    private suspend fun readAppControls(panel: AidenAppControlPanel): AidenAppControlSnapshot {
+        check(canReadAppControls && panel.workspaceId == _chat.value?.workspaceId)
+        val client = activeClient() ?: error("Host disconnected")
+        val result = client.appControls(chatId, panel.id)
+        check(activeClient() === client && canReadAppControls) { "Host changed" }
+        return result
+    }
+    suspend fun applyAppControl(panel: AidenAppControlPanel, operation: AidenAppControlOperation): AidenAppControlReceipt {
+        check(canReadAppControls && panel.workspaceId == _chat.value?.workspaceId && installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.APP_CONTROLS_RESPOND) == true)
+        val client = activeClient() ?: error("Host disconnected")
+        val result = client.applyAppControl(chatId, panel.id, operation)
+        check(activeClient() === client && canReadAppControls) { "Host changed" }
+        appControlsCache.refresh(::readAppControls)
+        return result
     }
 
     // MARK: - Slice G composer power

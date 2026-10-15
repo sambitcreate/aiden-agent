@@ -142,7 +142,7 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 31);
+  assert.equal(fixture.contractRevision, 32);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -172,13 +172,13 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
     new Set(fixture.events.map((event) => event.type)),
     new Set(
       AIDEN_REMOTE_EVENT_TYPES.filter(
-        (type) => type !== "task_update" && type !== "agents_update",
+        (type) => type !== "task_update" && type !== "agents_update" && type !== "app_controls_changed",
       ),
     ),
   );
   assert.deepEqual(
     new Set(fixture.chatProgressEvents.map((event) => event.type)),
-    new Set(["task_update", "agents_update"]),
+    new Set(["task_update", "agents_update", "app_controls_changed"]),
   );
   assert.equal(JSON.stringify(fixture).includes("/Users/"), false);
   assert.equal(JSON.stringify(fixture).includes("BEGIN PRIVATE KEY"), false);
@@ -645,6 +645,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/pairing/requests",
     "/pairing/requests/{requestId}/reveal",
     "/pairing/requests/{requestId}",
+    "/chats/{chatId}/controls/{panelId}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -1653,7 +1654,7 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
     ...progressEvents,
     {
       ...record(progressEvents[0], "progress event"),
-      sequence: 3,
+      sequence: progressEvents.length + 1,
       type: "heartbeat",
       payload: {},
     },

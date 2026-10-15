@@ -71,7 +71,7 @@ function ModelPadMenuAction({
         {detail ? (
           <span
             id={detailId}
-            className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground"
+            className="text-small text-tertiary"
           >
             {detail}
           </span>
@@ -80,7 +80,7 @@ function ModelPadMenuAction({
       {unavailableReason ? (
         <span
           id={reasonId}
-          className="max-w-60 text-small text-tertiary group-data-[highlighted]:text-accent-foreground"
+          className="max-w-60 text-small text-tertiary"
         >
           {unavailableReason}
         </span>

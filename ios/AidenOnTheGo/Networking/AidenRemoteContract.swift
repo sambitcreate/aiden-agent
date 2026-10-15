@@ -644,6 +644,8 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     static let tasksRead = Self(rawValue: "tasks:read")
     static let agentsRead = Self(rawValue: "agents:read")
     static let questionsRespond = Self(rawValue: "questions:respond")
+    static let appControlsRead = Self(rawValue: "app-controls:read")
+    static let appControlsRespond = Self(rawValue: "app-controls:respond")
     static let skillsInvoke = Self(rawValue: "skills:invoke")
 
     static let v1Known: [Self] = [
@@ -651,7 +653,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         .workspaceRead, .workspaceBrowse, .workspaceManage,
         .filesRead, .filesWrite, .gitRead, .gitWrite,
         .scheduleRead, .scheduleWrite, .botRead, .botWrite, .tasksRead, .agentsRead,
-        .questionsRespond, .skillsInvoke,
+        .questionsRespond, .skillsInvoke, .appControlsRead, .appControlsRespond,
     ]
 
     /// Contract revision 24: the pairing vocabulary plus the phone-scoped run
@@ -710,12 +712,13 @@ struct AidenRemoteEventType: RawRepresentable, Codable, Hashable, Sendable {
     static let heartbeat = Self(rawValue: "heartbeat")
     static let taskUpdate = Self(rawValue: "task_update")
     static let agentsUpdate = Self(rawValue: "agents_update")
+    static let appControlsChanged = Self(rawValue: "app_controls_changed")
     static let questionRequired = Self(rawValue: "question_required")
 
     static let v1Known: [Self] = [
         .snapshot, .status, .textDelta, .reasoningDelta,
         .toolStarted, .toolFinished, .timeline, .approvalRequired,
-        .done, .error, .cancelled, .heartbeat, .taskUpdate, .agentsUpdate,
+        .done, .error, .cancelled, .heartbeat, .taskUpdate, .agentsUpdate, .appControlsChanged,
         .questionRequired,
     ]
 
@@ -1432,6 +1435,12 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
         guard terminal == type.isTerminal else {
             throw AidenRemoteContractError.invalidTerminalClassification
         }
+        if type == .appControlsChanged {
+            let invalidation = try values.decode(AidenAppControlsInvalidation.self, forKey: .payload)
+            guard invalidation.revision >= 0 else { throw AidenRemoteContractError.invalidSequence }
+            payload = nil; taskProgress = nil; agentRoster = nil; questionPrompt = nil
+            return
+        }
         if type == .taskUpdate {
             let progress = try values.decode(AidenRemoteChatTaskProgress.self, forKey: .payload)
             guard progress.chatId == streamId else {
@@ -2050,6 +2059,7 @@ struct AidenRemoteChatAgentRoster: Decodable, Equatable, Sendable {
 /// opaque invocation lease plus safe display metadata — never skill paths,
 /// instructions, fingerprints, or registry internals.
 enum AidenRemoteSkillSource: String, Codable, Sendable {
+    case builtin
     case configured
     case workspace
     case global
@@ -2172,7 +2182,7 @@ struct AidenRemoteDeviceCapabilitiesUpdateRequest: Decodable, Equatable, Sendabl
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accepts = try values.decode([AidenRemoteCapability].self, forKey: .accepts)
         let allowed = Set([
-            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke, .appControlsRead, .appControlsRespond,
         ])
         guard !accepts.isEmpty,
               accepts.count <= allowed.count,
@@ -3622,7 +3632,7 @@ struct AidenRemoteRunEvent: Decodable, Equatable, Sendable {
         let type = try values.decode(String.self, forKey: .type)
         guard Self.runOnlyTypes.contains(type) else {
             let content = try AidenRemoteStreamEvent(from: decoder)
-            guard content.type != .taskUpdate, content.type != .agentsUpdate else {
+            guard content.type != .taskUpdate, content.type != .agentsUpdate, content.type != .appControlsChanged else {
                 throw AidenRemoteContractError.unsafePayloadField("type")
             }
             streamId = content.streamId
@@ -3718,5 +3728,18 @@ extension JSONDecoder {
 extension AidenRemoteJSONDecoder {
     static func decodeRunSSEEvent(from data: Data) throws -> AidenRemoteRunEvent {
         try JSONDecoder.aidenRemote().decodeAidenRemoteRunEvent(from: data)
+    }
+}
+
+// MARK: - Conversation app control invalidation (contract revision 32)
+
+private struct AidenAppControlsInvalidation: Decodable {
+    let revision: Int
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: ["revision"])
+        let values = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        revision = try values.decode(Int.self, forKey: AidenDynamicCodingKey(stringValue: "revision")!)
+        guard (0...AidenRemoteProtocol.maxSafeInteger).contains(revision) else { throw AidenRemoteContractError.invalidSequence }
     }
 }

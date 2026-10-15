@@ -19,7 +19,10 @@ function project(settings: AppSettings) {
 export class AidenRemoteMemorySettingsService {
   private mutationTail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly store: MemorySettingsStore) {}
+  constructor(
+    private readonly store: MemorySettingsStore,
+    private readonly onChanged: () => void = () => {},
+  ) {}
 
   private serialized<T>(operation: () => Promise<T>): Promise<T> {
     const run = this.mutationTail.then(operation, operation);
@@ -62,7 +65,9 @@ export class AidenRemoteMemorySettingsService {
           409,
         );
       }
-      return project(await this.store.setSettings({ memoryEnabled: record.enabled }));
+      const saved = await this.store.setSettings({ memoryEnabled: record.enabled });
+      this.onChanged();
+      return project(saved);
     });
   }
 }

@@ -4,8 +4,11 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merges); the multi-host rows were updated on 2026-10-04 after the whole stack merged. "On main" means merged after 0.51.0 and not yet in a release.
 
+Research addition 2026-10-03 against `main` at `3f86d41af` (0.52.0): [all-PR inventory and improvement audit](aiden-pr-improvement-audit-20261003.md), [implemented Aiden knowledge/actions MVP (PR #312)](https://github.com/sambitcreate/aiden-agent/pull/312), and [json-render research and interactive chat controls specification](aiden-chat-controls-json-render-research.md). The implemented MVP includes desktop, iOS, Android and CLI TUI controls. This adds research and the bounded implementation; older release-status rows have not been globally reconciled. The eight Pi 1.0 PRs remain open, while main still pins Pi 0.87.1.
+
 ## Active and partial
 
+- [Built-in Aiden knowledge and app actions](aiden-app-knowledge-actions-plan.md) — MVP implemented in [open PR #312](https://github.com/sambitcreate/aiden-agent/pull/312); automated acceptance is tracked on the PR, physical release acceptance remains open. Bundled offline help and owned skill, real json-render desktop cards, native iOS/Android paired-host controls and Pi CLI selectors/admin commands. Remote revision 19, explicit owner consent, domain gates, replay receipts and registered behavioral tests. Uses pinned Pi 0.87.1; Pi 1.0 integration and wider actions remain separate follow-ups. [Contract research](aiden-chat-controls-json-render-research.md).
 - [Quick View cards](../superpowers/plans/2026-10-15-quick-view-cards.md) — Implemented on `feature/env-panel-redesign-9cc415` (2026-10-15); PR pending. Quick View becomes Claude-Code-style stacked cards (Environment, Changes, Context, Subagents) at `SidebarListItem` density.
   - **Behaviour:** cards start collapsed and reorder by a right-edge grip. Each has three tiers: a summary, inline detail, and an open-in-sidebar or open-external button.
   - **Visibility:** cards and rows appear only once relevant. Changes needs work or a PR, the PR row needs a created PR, Context needs the first message, and Subagents needs a run started.

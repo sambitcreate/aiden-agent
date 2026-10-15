@@ -29,7 +29,6 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Laptop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -89,6 +88,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenFilledButtonColors
 
 /**
  * Paired desktops as one radio group of settings rows: tapping a row makes it active, the
@@ -563,7 +563,7 @@ internal fun AidenPairingModeTabs(
                         .fillMaxHeight()
                         .graphicsLayer { alpha = indicatorAlpha }
                         .clip(tabShape)
-                        .background(palette.accent)
+                        .background(palette.accentFill.fill)
                 )
             }
             Row(
@@ -574,7 +574,7 @@ internal fun AidenPairingModeTabs(
                 AidenPairingTabTitles.forEachIndexed { index, titleRes ->
                     val selected = selectedTab == index
                     val ink by animateColorAsState(
-                        targetValue = if (selected) palette.onAccent else palette.secondary,
+                        targetValue = if (selected) palette.accentFill.content else palette.secondary,
                         animationSpec = AidenMotion.nonSpatial(reduceMotion),
                         label = "pairing_tab_ink"
                     )
@@ -621,13 +621,12 @@ internal fun AidenPairingActionButton(
     modifier: Modifier = Modifier,
     busyText: String = stringResource(R.string.pairing_in_progress_short)
 ) {
-    val palette = AidenTheme.palette
     val interaction = remember { MutableInteractionSource() }
     Button(
         onClick = onClick,
         enabled = enabled && !busy,
         interactionSource = interaction,
-        colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
+        colors = aidenFilledButtonColors(),
         shape = AidenShape.Button,
         modifier = modifier
             .fillMaxWidth()

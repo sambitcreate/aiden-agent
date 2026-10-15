@@ -36,7 +36,7 @@ export function ChatRowStatus({ state, unread }: { state: ChatRowState; unread: 
           role="img"
           aria-label={CHAT_ROW_STATE_LABELS.working}
           title={CHAT_ROW_STATE_LABELS.working}
-          className="inline-flex size-5 items-center justify-center text-accent"
+          className="inline-flex size-5 items-center justify-center text-accent-text"
         >
           {/* Reduced-motion mode collapses this continuous rotation via the global motion contract. */}
           <Loader2 className="size-4 animate-[spin_1.5s_linear_infinite]" aria-hidden="true" />

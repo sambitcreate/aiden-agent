@@ -1027,6 +1027,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity,
+            .appControlsRead, .appControlsRespond,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1039,6 +1040,18 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: DeviceCapabilitiesUpdateRequest(accepts: accepts)
         )
         return response.capabilities
+    }
+
+    func appControls(chatId: String, panelId: String) async throws -> AidenAppControlSnapshot {
+        let value: AidenAppControlSnapshot = try await send(method: "GET", path: ["chats", chatId, "controls", panelId])
+        guard value.isWireSafe else { throw AidenRemoteClientError.invalidResponse }
+        return value
+    }
+    func applyAppControl(chatId: String, panelId: String, operation: AidenAppControlOperation) async throws -> AidenAppControlReceipt {
+        guard operation.isWireSafe else { throw AidenRemoteClientError.invalidResponse }
+        let value: AidenAppControlReceipt = try await send(method: "POST", path: ["chats", chatId, "controls", panelId], body: operation)
+        guard value.isWireSafe, value.operationId == operation.operationId, value.control == operation.control, value.value == operation.value else { throw AidenRemoteClientError.invalidResponse }
+        return value
     }
 
     func taskProgress(chatId: String) async throws -> AidenRemoteChatTaskProgress {
@@ -2574,13 +2587,14 @@ final class AidenRemoteClient: @unchecked Sendable {
             }
             if progressOnly,
                event.type != .taskUpdate,
-               event.type != .agentsUpdate {
+               event.type != .agentsUpdate,
+               event.type != .appControlsChanged {
                 // The progress channel uses SSE comments for keep-alive.
                 // A protocol heartbeat belongs to the transcript channel.
                 throw AidenRemoteClientError.invalidResponse
             }
             if !progressOnly,
-               event.type == .taskUpdate || event.type == .agentsUpdate {
+               event.type == .taskUpdate || event.type == .agentsUpdate || event.type == .appControlsChanged {
                 // Progress snapshots are a separate chat-scoped channel;
                 // never let one enter the parent turn cursor.
                 throw AidenRemoteClientError.invalidResponse

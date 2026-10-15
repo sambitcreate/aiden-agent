@@ -1270,7 +1270,7 @@
       ],
       "get": {
         "operationId": "chatProgressEvents",
-        "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after are scoped by optional Aiden-Progress-Epoch. A matching retained projection resumes without duplicate snapshots; epoch mismatch or missing history hydrates current snapshots. This channel has no durable replay journal across host lifetimes. A device needs chat:read and at least one of tasks:read or agents:read. These progress events are not emitted on ordinary parent turn streams.",
+        "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots and app_controls_changed read-only revision invalidations filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after are scoped by optional Aiden-Progress-Epoch. A matching retained projection resumes without duplicate snapshots; epoch mismatch or missing history hydrates current snapshots. This channel has no durable replay journal across host lifetimes. A device needs chat:read and at least one of tasks:read, agents:read or owner-enabled app-controls:read. These progress events are not emitted on ordinary parent turn streams.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "parameters": [
@@ -1316,7 +1316,10 @@
               "Aiden-Progress-Resumed": {
                 "schema": {
                   "type": "string",
-                  "enum": ["true", "false"]
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
                 },
                 "description": "True only if the supplied progress epoch and cursor match retained current projections; otherwise fresh snapshots follow."
               }
@@ -4593,7 +4596,7 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive — clients dedupe by run id).",
+            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive \u2014 clients dedupe by run id).",
             "schema": {
               "type": "integer",
               "minimum": 0
@@ -4620,7 +4623,7 @@
                     },
                     "now": {
                       "type": "integer",
-                      "description": "Server epoch-milliseconds clock — clients baseline first-poll cursors to this rather than the device clock."
+                      "description": "Server epoch-milliseconds clock \u2014 clients baseline first-poll cursors to this rather than the device clock."
                     }
                   },
                   "additionalProperties": false
@@ -4942,7 +4945,10 @@
       "get": {
         "operationId": "listSimulators",
         "x-aiden-capability": "simulators:control",
-        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "x-aiden-any-capability": [
+          "simulators:control",
+          "simulators:mobile"
+        ],
         "parameters": [
           {
             "name": "chatId",
@@ -4984,7 +4990,10 @@
       "post": {
         "operationId": "openSimulator",
         "x-aiden-capability": "simulators:control",
-        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "x-aiden-any-capability": [
+          "simulators:control",
+          "simulators:mobile"
+        ],
         "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Boots a listed simulator and starts its stream on the serving Mac. Sharing must be on. Phones also need the owner's Share with Aiden On The Go consent. Phones may open only iOS Simulators; any other platform is capability_denied.",
         "requestBody": {
           "required": true,
@@ -5022,7 +5031,10 @@
       "post": {
         "operationId": "shutdownSimulator",
         "x-aiden-capability": "simulators:control",
-        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "x-aiden-any-capability": [
+          "simulators:control",
+          "simulators:mobile"
+        ],
         "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Shuts down a listed simulator on the serving Mac. Phones also need the owner's Share with Aiden On The Go consent.",
         "requestBody": {
           "required": true,
@@ -5145,7 +5157,10 @@
       "get": {
         "operationId": "relaySimulatorHub",
         "x-aiden-capability": "simulators:control",
-        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "x-aiden-any-capability": [
+          "simulators:control",
+          "simulators:mobile"
+        ],
         "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper, serve-emu video and gesture, and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device. Phones also need the owner's Share with Aiden On The Go consent. Phones reach only vendor/serve-sim/helper/{udid}/stream.mjpeg, .../config, .../health and the helper WebSocket vendor/serve-sim/helper/ws?device={udid}; every other hub path, including every serve-emu route, is capability_denied for them.",
         "responses": {
           "200": {
@@ -6034,6 +6049,86 @@
           }
         }
       }
+    },
+    "/chats/{chatId}/controls/{panelId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "name": "panelId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAppControls",
+        "description": "Host-owned conversation settings controls. Requires desktop owner consent, live device grants, canonical chat access and the unchanged panel workspace. Display/read makes no mutation. POST additionally requires app-controls:respond; memory mutations require workspace:manage. Every operation uses its original ID and expected value/policy revision; retry returns the durable receipt and never repeats an uncertain effect. No bot, credential, shell or arbitrary settings action is supported.",
+        "x-aiden-capability": "app-controls:read",
+        "x-aiden-capabilities": [
+          "chat:read",
+          "app-controls:read"
+        ],
+        "x-aiden-archived-access": "readable",
+        "responses": {
+          "200": {
+            "description": "Current host projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppControlSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "applyAppControl",
+        "description": "Host-owned conversation settings controls. Requires desktop owner consent, live device grants, canonical chat access and the unchanged panel workspace. Display/read makes no mutation. POST additionally requires app-controls:respond; memory mutations require workspace:manage. Every operation uses its original ID and expected value/policy revision; retry returns the durable receipt and never repeats an uncertain effect. No bot, credential, shell or arbitrary settings action is supported.",
+        "x-aiden-capability": "app-controls:respond",
+        "x-aiden-capabilities": [
+          "chat:read",
+          "app-controls:read",
+          "app-controls:respond"
+        ],
+        "x-aiden-archived-access": "denied",
+        "responses": {
+          "200": {
+            "description": "Durable operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppControlReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppControlOperation"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6632,6 +6727,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "host:events",
                 "runs:observe",
                 "runs:control"
@@ -6680,13 +6777,38 @@
         "additionalProperties": false
       },
       "PeerRoute": {
-        "type": "object", "additionalProperties": false,
-        "required": ["endpoint", "serverSpkiSha256"],
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "endpoint",
+          "serverSpkiSha256"
+        ],
         "properties": {
-          "endpoint": {"type":"string", "format":"uri", "maxLength":2048, "description":"HTTPS canonical .local or .ts.net endpoint. Never an IP literal."},
-          "serverSpkiSha256": {"type":"string", "pattern":"^sha256/[A-Za-z0-9+/]{43}=$"},
-          "caCertificateDerBase64": {"type":"string", "maxLength":8192, "description":"Required private CA DER for LAN; absent for system-trusted Tailscale."},
-          "addresses": {"type":"array", "maxItems":8, "uniqueItems":true, "items":{"type":"string","format":"ipv4"}, "description":"Optional LAN-only RFC1918 lookup hints. TLS still checks the canonical hostname, CA and pin before credentials are transmitted."}
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "HTTPS canonical .local or .ts.net endpoint. Never an IP literal."
+          },
+          "serverSpkiSha256": {
+            "type": "string",
+            "pattern": "^sha256/[A-Za-z0-9+/]{43}=$"
+          },
+          "caCertificateDerBase64": {
+            "type": "string",
+            "maxLength": 8192,
+            "description": "Required private CA DER for LAN; absent for system-trusted Tailscale."
+          },
+          "addresses": {
+            "type": "array",
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "description": "Optional LAN-only RFC1918 lookup hints. TLS still checks the canonical hostname, CA and pin before credentials are transmitted."
+          }
         }
       },
       "Server": {
@@ -6703,9 +6825,12 @@
         ],
         "properties": {
           "peerRoutes": {
-            "type": "array", "maxItems": 2,
+            "type": "array",
+            "maxItems": 2,
             "description": "Contract revision 31. Emitted only for authenticated mac/linux devices with peer-routes-v1. Route-specific trust learned over the authenticated channel; never present on health, discovery or phone projections.",
-            "items": { "$ref": "#/components/schemas/PeerRoute" }
+            "items": {
+              "$ref": "#/components/schemas/PeerRoute"
+            }
           },
           "protocolVersion": {
             "const": 1
@@ -6749,6 +6874,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control",
                 "host:events",
                 "runs:observe",
@@ -6784,6 +6911,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control",
                 "host:events",
                 "runs:observe",
@@ -6922,6 +7051,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control",
                 "host:events",
                 "runs:observe",
@@ -6966,6 +7097,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control",
                 "host:events",
                 "runs:observe",
@@ -7075,10 +7208,21 @@
           "toolVersions": {
             "type": "object",
             "description": "Contract revision 26, phones only: the pinned helper versions on the serving Mac.",
-            "required": ["hub", "agent"],
+            "required": [
+              "hub",
+              "agent"
+            ],
             "properties": {
-              "hub": { "type": "string", "minLength": 1, "maxLength": 64 },
-              "agent": { "type": "string", "minLength": 1, "maxLength": 64 }
+              "hub": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
             },
             "additionalProperties": false
           }
@@ -8680,6 +8824,13 @@
             "maxItems": 20,
             "items": {
               "$ref": "#/components/schemas/MessageAttachment"
+            }
+          },
+          "appPanels": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/AppControlPanel"
             }
           },
           "outcome": {
@@ -10780,6 +10931,7 @@
           },
           "source": {
             "enum": [
+              "builtin",
               "configured",
               "workspace",
               "global"
@@ -10812,6 +10964,7 @@
           },
           "source": {
             "enum": [
+              "builtin",
               "configured",
               "workspace",
               "global"
@@ -11071,7 +11224,7 @@
       },
       "StreamEvent": {
         "type": "object",
-        "description": "An ordinary parent-turn event or, for task_update and agents_update, an event on the dedicated chat-scoped progress channel. Progress event streamId values are chat IDs; they never appear on ordinary parent turn streams.",
+        "description": "An ordinary parent-turn event or, for task_update, agents_update and app_controls_changed, an event on the dedicated chat-scoped progress channel. Progress event streamId values are chat IDs; they never appear on ordinary parent turn streams.",
         "required": [
           "protocolVersion",
           "streamId",
@@ -11597,6 +11750,39 @@
             "if": {
               "properties": {
                 "type": {
+                  "const": "app_controls_changed"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": false
+                },
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "revision"
+                  ],
+                  "properties": {
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
                   "not": {
                     "enum": [
                       "snapshot",
@@ -11609,6 +11795,7 @@
                       "approval_required",
                       "task_update",
                       "agents_update",
+                      "app_controls_changed",
                       "done",
                       "error",
                       "cancelled",
@@ -15834,6 +16021,272 @@
           }
         },
         "additionalProperties": false
+      },
+      "AppControlPanel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "id",
+          "topic",
+          "fallback"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "topic": {
+            "enum": [
+              "appearance",
+              "memory",
+              "web-search",
+              "skills"
+            ]
+          },
+          "fallback": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "workspaceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        }
+      },
+      "AppControlOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120
+          }
+        }
+      },
+      "AppControlRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "description",
+          "scope",
+          "value",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "appearance.mode",
+              "appearance.chatWidth",
+              "appearance.reduceMotion",
+              "appearance.terminalTheme",
+              "memory.enabled",
+              "memory.workspace",
+              "webSearch.enabled",
+              "skills.enabled"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "maxLength": 80
+              }
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "options": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/AppControlOption"
+            }
+          },
+          "disabledReason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "AppControlSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "title",
+          "target",
+          "policy",
+          "rows"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "policy": {
+            "enum": [
+              "disabled",
+              "ask",
+              "safe"
+            ]
+          },
+          "rows": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/AppControlRow"
+            }
+          }
+        }
+      },
+      "AppControlOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "control",
+          "value",
+          "expectedRevision",
+          "operationId"
+        ],
+        "properties": {
+          "control": {
+            "enum": [
+              "appearance.mode",
+              "appearance.chatWidth",
+              "appearance.reduceMotion",
+              "appearance.terminalTheme",
+              "memory.enabled",
+              "memory.workspace",
+              "webSearch.enabled",
+              "skills.enabled"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "maxLength": 80
+              }
+            ]
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "operationId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        }
+      },
+      "AppControlReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "operationId",
+          "control",
+          "value",
+          "scope",
+          "effective"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "applied",
+              "already_set",
+              "outcome_unknown"
+            ]
+          },
+          "operationId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "control": {
+            "enum": [
+              "appearance.mode",
+              "appearance.chatWidth",
+              "appearance.reduceMotion",
+              "appearance.terminalTheme",
+              "memory.enabled",
+              "memory.workspace",
+              "webSearch.enabled",
+              "skills.enabled"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "maxLength": 80
+              }
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "effective": {
+            "enum": [
+              "now",
+              "next_turn",
+              "next_session",
+              "after_preview"
+            ]
+          },
+          "warning": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
       }
     }
   }

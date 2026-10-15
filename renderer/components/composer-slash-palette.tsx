@@ -288,7 +288,7 @@ export function ComposerSlashPalette({
               >
                 <AidenIcon aria-hidden="true" className="size-4" />
                 Skills could not be loaded
-                <span className="ml-auto text-mini text-accent">Retry</span>
+                <span className="ml-auto text-mini text-accent-text">Retry</span>
               </div>
             ) : skills.length > 0 ? (
               skills.map((result) => {

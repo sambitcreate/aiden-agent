@@ -378,11 +378,11 @@ export function ProvidersSettings() {
                 <ProviderIcon
                   providerId="custom:lmstudio"
                   providerLabel="LM Studio"
-                  className="size-4 text-tertiary group-data-[highlighted]:text-accent-foreground"
+                  className="size-4 text-tertiary"
                 />
                 <span className="flex min-w-0 flex-col">
                   <span>LM Studio</span>
-                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+                  <span className="text-small text-tertiary">
                     OpenAI-compatible local server
                   </span>
                 </span>
@@ -395,11 +395,11 @@ export function ProvidersSettings() {
                 <ProviderIcon
                   providerId="custom:ollama"
                   providerLabel="Ollama"
-                  className="size-4 text-tertiary group-data-[highlighted]:text-accent-foreground"
+                  className="size-4 text-tertiary"
                 />
                 <span className="flex min-w-0 flex-col">
                   <span>Ollama</span>
-                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+                  <span className="text-small text-tertiary">
                     Local server with Ollama-aware model discovery
                   </span>
                 </span>
@@ -409,7 +409,7 @@ export function ProvidersSettings() {
               <DropdownMenuItem className="group" onSelect={() => addCustom("tailnet")}>
                 <span className="flex min-w-0 flex-col">
                   <span>Model server over Tailscale</span>
-                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+                  <span className="text-small text-tertiary">
                     OpenAI-compatible, no authentication by default
                   </span>
                 </span>
@@ -417,7 +417,7 @@ export function ProvidersSettings() {
               <DropdownMenuItem className="group" onSelect={() => addCustom("custom")}>
                 <span className="flex min-w-0 flex-col">
                   <span>Other custom endpoint</span>
-                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+                  <span className="text-small text-tertiary">
                     Choose protocol and authentication
                   </span>
                 </span>

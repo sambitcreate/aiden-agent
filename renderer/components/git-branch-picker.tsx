@@ -496,7 +496,7 @@ export function GitBranchPicker({
                         </span>
                       ) : null}
                     </div>
-                    {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
+                    {isActive ? <Check className="size-4 shrink-0 text-accent-text" /> : null}
                   </CommandItem>
                 );
               })}

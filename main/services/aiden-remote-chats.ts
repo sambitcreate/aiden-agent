@@ -1,3 +1,4 @@
+import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
   createHmac,
@@ -132,6 +133,7 @@ export interface AidenRemoteMessageProjection {
   reasoning?: string;
   createdAt: string;
   attachments?: AidenRemoteMessageAttachmentProjection[];
+  appPanels?: import("../../renderer/shared/app-controls.js").AppControlPanel[];
   htmlArtifacts?: AidenRemoteHtmlArtifactProjection[];
   /** Additive (contract revision 28): inline visuals, in reply order. */
   visuals?: AidenRemoteVisualProjection[];
@@ -584,6 +586,7 @@ function projectMessage(
 ): AidenRemoteMessageProjection {
   const attachments = projectMessageAttachments(message.attachments);
   const visuals = projectMessageVisuals(message, attachments);
+  const appPanels = parseAppControlPanels(message.appPanels);
   const outcome = projectMessageOutcome(message);
   const text = boundedUnicodeScalarPrefix(message.content, 200_000);
   const reasoning = !chat.botId && message.role === "assistant" && message.reasoning &&
@@ -609,6 +612,7 @@ function projectMessage(
     ...(reasoning ? { reasoning } : {}),
     createdAt: new Date(message.createdAt).toISOString(),
     ...(attachments.length > 0 ? { attachments } : {}),
+    ...(appPanels ? { appPanels } : {}),
     ...(message.htmlArtifacts && message.htmlArtifacts.length > 0
       ? {
           htmlArtifacts: message.htmlArtifacts.map((artifact) => ({
@@ -1940,6 +1944,7 @@ export class AidenRemoteChatService {
   async chatSkillCatalog(
     deviceId: string,
     chatId: string,
+    acceptsBuiltin = false,
   ): Promise<{ skills: SkillCatalogEntry[] }> {
     if (!this.options.skillCatalog) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -1959,7 +1964,7 @@ export class AidenRemoteChatService {
     }
     // The registry projection is already renderer-safe; revalidating through
     // the remote parser pins the exact wire contract at the boundary.
-    return parseAidenRemoteSkillCatalog({ skills });
+    return parseAidenRemoteSkillCatalog({ skills: acceptsBuiltin ? skills : skills.filter((skill) => skill.source !== "builtin") });
   }
 
   async startTurn(

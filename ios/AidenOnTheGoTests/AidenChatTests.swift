@@ -335,6 +335,84 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(Set(timeline.steps.map(\.id)).count, 2)
     }
 
+    @MainActor func testObsoleteControlLoadsCannotEraseOrOverwriteReappearedCards() async throws {
+        let panel = AidenAppControlPanel(version: 1, id: "same-card", topic: "memory", fallback: "Memory", workspaceId: "work")
+        let oldValue = AidenAppControlSnapshot(version: 1, title: "Memory", target: "Host", policy: "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Facts remain", scope: "Host", value: .boolean(true), revision: "old", options: nil, disabledReason: nil)])
+        let freshValue = AidenAppControlSnapshot(version: 1, title: "Memory", target: "Host", policy: "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Facts remain", scope: "Host", value: .boolean(false), revision: "fresh", options: nil, disabledReason: nil)])
+        for (cancelOld, failOld) in [(true, false), (false, true), (false, false)] {
+            let cache = AidenAppControlCache()
+            let started = expectation(description: "Old card load held")
+            var held: CheckedContinuation<AidenAppControlSnapshot, Error>?
+            let old = Task { try await cache.load(panel, read: { _ in
+                try await withCheckedThrowingContinuation { continuation in
+                    held = continuation
+                    started.fulfill()
+                }
+            }) }
+            await fulfillment(of: [started], timeout: 2)
+            if cancelOld { old.cancel() }
+            cache.remove(panel)
+            _ = try await cache.load(panel, read: { _ in freshValue })
+            if failOld { held?.resume(throwing: AidenRemoteClientError.invalidResponse) }
+            else { held?.resume(returning: oldValue) }
+            _ = await old.result
+            XCTAssertEqual(cache.snapshots[panel.id]?.rows.first?.value, .boolean(false))
+            XCTAssertEqual(cache.snapshots[panel.id]?.rows.first?.revision, "fresh")
+        }
+    }
+
+    @MainActor func testVisibleControlCardsShareOwnAndExternalHostInvalidations() async throws {
+        let cache = AidenAppControlCache()
+        let first = AidenAppControlPanel(version: 1, id: "first", topic: "memory", fallback: "Memory", workspaceId: "work")
+        let second = AidenAppControlPanel(version: 1, id: "second", topic: "memory", fallback: "Memory", workspaceId: "work")
+        var enabled = true, denied = false
+        var reads: [String] = []
+        let read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot = { panel in
+            reads.append(panel.id)
+            return AidenAppControlSnapshot(version: 1, title: "Memory", target: "Paired host", policy: denied ? "disabled" : "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Saved facts remain", scope: "Paired host", value: .boolean(enabled), revision: enabled ? "on" : "off", options: nil, disabledReason: denied ? "Access disabled" : nil)])
+        }
+        _ = try await cache.load(first, read: read)
+        _ = try await cache.load(second, read: read)
+        enabled = false // confirmed change from either foreground card
+        await cache.refresh(read: read)
+        XCTAssertEqual(cache.snapshots[first.id]?.rows.first?.value, .boolean(false))
+        XCTAssertEqual(cache.snapshots[second.id]?.rows.first?.value, .boolean(false))
+        enabled = true; denied = true // external desktop/another client invalidation
+        await cache.refresh(read: read)
+        XCTAssertEqual(cache.snapshots[first.id]?.policy, "disabled")
+        XCTAssertEqual(cache.snapshots[second.id]?.rows.first?.value, .boolean(true))
+        XCTAssertEqual(cache.snapshots[second.id]?.rows.first?.disabledReason, "Access disabled")
+        cache.remove(first); reads.removeAll()
+        await cache.refresh(read: read)
+        XCTAssertEqual(reads, [second.id])
+        cache.clearSnapshots() // disconnected/revoked subscriptions cannot present live controls
+        XCTAssertTrue(cache.snapshots.isEmpty)
+        await cache.refresh(read: { _ in throw AidenRemoteClientError.invalidResponse })
+        XCTAssertTrue(cache.snapshots.isEmpty)
+        await cache.refresh(read: read) // foreground reconnect hydrates existing registrations
+        XCTAssertEqual(cache.snapshots[second.id]?.policy, "disabled")
+    }
+
+    func testChatControlsSharedFixtureAndMalformedAdditiveFallback() throws {
+        struct Controls: Decodable { let panel: AidenAppControlPanel; let snapshot: AidenAppControlSnapshot; let operation: AidenAppControlOperation; let receipt: AidenAppControlReceipt }
+        struct Fixture: Decodable { let appControls: Controls }
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url)).appControls
+        XCTAssertEqual(fixture.panel.topic, "memory")
+        XCTAssertTrue(fixture.panel.isWireSafe)
+        XCTAssertTrue(fixture.snapshot.isWireSafe)
+        XCTAssertEqual(fixture.snapshot.rows.first?.value, .boolean(true))
+        XCTAssertTrue(fixture.operation.isWireSafe)
+        XCTAssertEqual(fixture.receipt.value, .boolean(false))
+        XCTAssertTrue(fixture.receipt.isWireSafe)
+        let message = #"{"id":"m","role":"assistant","text":"Readable answer","createdAt":"2026-10-03T00:00:00Z","appPanels":[{"version":999,"id":"bad","topic":"arbitrary","fallback":"ignored"}]}"#
+        let decoded = try JSONDecoder.aidenRemote().decode(AidenChatMessage.self, from: Data(message.utf8))
+        XCTAssertEqual(decoded.text, "Readable answer")
+        XCTAssertNil(decoded.appPanels)
+        let forged = #"{"control":"shell","value":true,"expectedRevision":"rev","operationId":"op"}"#
+        XCTAssertFalse(try JSONDecoder().decode(AidenAppControlOperation.self, from: Data(forged.utf8)).isWireSafe)
+    }
+
     func testReadAloudEligibilityRejectsProjectedFailuresAndCancellation() {
         for status in [AidenMessageOutcomeStatus.failed, .cancelled] {
             let message = AidenChatMessage(id: "a", role: .assistant, text: "partial answer",
@@ -9881,6 +9959,105 @@ final class AidenAppearanceTests: XCTestCase {
             XCTAssertEqual(entry.light, Palette(AidenThemeCatalog.palette(preset: preset, scheme: .light)))
             XCTAssertEqual(entry.dark, Palette(AidenThemeCatalog.palette(preset: preset, scheme: .dark)))
         }
+    }
+
+    func testSolidFillsCarryReadableContentInEveryStateForEveryPreset() {
+        for preset in AidenThemePresetID.allCases {
+            for scheme in [ColorScheme.light, .dark] {
+                let palette = AidenThemeCatalog.palette(preset: preset, scheme: scheme)
+                for (tone, fill) in [("accent", palette.accentSolidFill), ("danger", palette.dangerSolidFill)] {
+                    let context = "\(preset) \(scheme) \(tone)"
+                    XCTAssertTrue(["#FFFFFF", "#000000"].contains(fill.contentHex), context)
+                    XCTAssertGreaterThanOrEqual(Self.contrast(fill.fillHex, fill.contentHex), 4.5, context)
+                    XCTAssertGreaterThanOrEqual(Self.contrast(fill.pressedHex, fill.contentHex), 4.5, context)
+                    XCTAssertNotEqual(fill.pressedHex, fill.fillHex, "\(context): pressed state must be visible")
+                }
+            }
+        }
+    }
+
+    func testDarkChromaticFillsDeepenForWhiteContentAndKeepTheirHue() {
+        for preset in AidenThemePresetID.allCases {
+            let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
+            var fills = [("danger", palette.dangerHex, palette.dangerSolidFill)]
+            if preset != .monochrome {
+                fills.append(("accent", palette.accentHex, palette.accentSolidFill))
+            }
+            for (tone, rawHex, fill) in fills {
+                let context = "\(preset) dark \(tone)"
+                XCTAssertEqual(fill.contentHex, "#FFFFFF", context)
+                // The bright dark-theme hue cannot carry white on its own, so the fill must be deeper.
+                XCTAssertLessThan(Self.contrast(rawHex, "#FFFFFF"), 4.5, context)
+                XCTAssertLessThan(Self.luminance(fill.fillHex), Self.luminance(rawHex), context)
+                XCTAssertLessThan(Self.hueDistance(fill.fillHex, rawHex), 3, context)
+                XCTAssertLessThan(Self.luminance(fill.pressedHex), Self.luminance(fill.fillHex), context)
+            }
+        }
+    }
+
+    func testDarkFillsMatchTheDesktopResolver() {
+        // Values produced by the desktop `solidFill()` in renderer/shared/appearance.ts.
+        let expected: [(AidenThemePresetID, accent: String, danger: String)] = [
+            (.aiden, "#3177C2", "#CC4B46"),
+            (.berry, "#BE5082", "#B9575E"),
+            (.paper, "#897354", "#BC5656"),
+        ]
+        for (preset, accent, danger) in expected {
+            let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
+            XCTAssertEqual(palette.accentSolidFill.fillHex, accent, "\(preset)")
+            XCTAssertEqual(palette.dangerSolidFill.fillHex, danger, "\(preset)")
+        }
+        XCTAssertEqual(AidenThemeCatalog.palette(preset: .monochrome, scheme: .dark).dangerSolidFill.fillHex, "#D4404E")
+    }
+
+    func testMonochromeDarkAccentStaysWhiteWithBlackContent() {
+        let fill = AidenThemeCatalog.palette(preset: .monochrome, scheme: .dark).accentSolidFill
+        XCTAssertEqual(fill.fillHex, "#FFFFFF")
+        XCTAssertEqual(fill.contentHex, "#000000")
+    }
+
+    func testLightPresetsKeepTheirAccentWithWhiteContent() {
+        for preset in AidenThemePresetID.allCases {
+            let palette = AidenThemeCatalog.palette(preset: preset, scheme: .light)
+            XCTAssertEqual(palette.accentSolidFill.fillHex, palette.accentHex, "\(preset)")
+            XCTAssertEqual(palette.accentSolidFill.contentHex, "#FFFFFF", "\(preset)")
+            XCTAssertEqual(palette.dangerSolidFill.contentHex, "#FFFFFF", "\(preset)")
+            XCTAssertLessThan(Self.hueDistance(palette.dangerSolidFill.fillHex, palette.dangerHex), 3, "\(preset)")
+        }
+    }
+
+    private static func channels(_ hex: String) -> [Double] {
+        let value = Int(hex.dropFirst(), radix: 16) ?? 0
+        return [(value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF].map { Double($0) / 255 }
+    }
+
+    private static func luminance(_ hex: String) -> Double {
+        let linear = channels(hex).map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+
+    private static func contrast(_ first: String, _ second: String) -> Double {
+        let a = luminance(first)
+        let b = luminance(second)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    private static func hue(_ hex: String) -> Double {
+        let rgb = channels(hex)
+        let high = rgb.max()!
+        let delta = high - rgb.min()!
+        guard delta > 0 else { return 0 }
+        let sector: Double = switch high {
+        case rgb[0]: (rgb[1] - rgb[2]) / delta
+        case rgb[1]: (rgb[2] - rgb[0]) / delta + 2
+        default: (rgb[0] - rgb[1]) / delta + 4
+        }
+        return (sector * 60 + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private static func hueDistance(_ first: String, _ second: String) -> Double {
+        let distance = abs(hue(first) - hue(second))
+        return min(distance, 360 - distance)
     }
 
     @MainActor

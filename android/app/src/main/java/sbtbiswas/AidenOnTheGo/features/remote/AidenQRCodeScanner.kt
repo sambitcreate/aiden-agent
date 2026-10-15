@@ -65,6 +65,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenFilledButtonColors
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -194,7 +195,7 @@ internal fun AidenCameraPermissionPrompt(
             Button(
                 onClick = onEnableCamera,
                 interactionSource = interaction,
-                colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
+                colors = aidenFilledButtonColors(),
                 shape = AidenShape.Button,
                 modifier = Modifier
                     .fillMaxWidth()

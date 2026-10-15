@@ -300,13 +300,13 @@ function ModelListRow({
       <span id={descriptionId} className="sr-only">
         {describeModel(entry)}
       </span>
-      {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
+      {isActive ? <Check className="size-4 shrink-0 text-accent-text" /> : null}
       <ModelRowAction
         label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
         active={isPinned}
         onToggle={() => onTogglePin(entry.value)}
       >
-        <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
+        <Pin className={cn("size-3.5", isPinned && "fill-current text-accent-text")} />
       </ModelRowAction>
       <ModelRowAction
         label={isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`}
@@ -314,7 +314,7 @@ function ModelListRow({
         onToggle={() => onTogglePad(entry.value)}
       >
         {isOnPad ? (
-          <Grid2x2Check className="size-3.5 text-accent" />
+          <Grid2x2Check className="size-3.5 text-accent-text" />
         ) : (
           <Grid2x2Plus className="size-3.5" />
         )}

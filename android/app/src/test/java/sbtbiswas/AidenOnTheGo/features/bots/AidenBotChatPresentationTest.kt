@@ -34,8 +34,8 @@ class AidenBotChatPresentationTest {
         AidenThemeCatalog.palettes.forEach { (preset, palettes) ->
             palettes.forEachIndexed { index, palette ->
                 val scheme = aidenColorScheme(palette, isDark = index == 1)
-                val waiting = aidenBotUserBubbleColors(scheme, faded = true)
-                val sent = aidenBotUserBubbleColors(scheme, faded = false)
+                val waiting = aidenBotUserBubbleColors(scheme, palette.accentFill, faded = true)
+                val sent = aidenBotUserBubbleColors(scheme, palette.accentFill, faded = false)
                 val name = "$preset ${if (index == 1) "dark" else "light"}"
                 assertNotEquals("$name: a waiting bubble must not look sent", sent.container, waiting.container)
                 // Opaque, so the contrast holds whatever the bubble sits on.
