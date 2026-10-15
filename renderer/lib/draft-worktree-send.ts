@@ -243,7 +243,19 @@ export function startWorktreeFirstSend<Input, C>(options: {
   };
 }
 
-type WorktreeSendContinuation = (turnId: string, workspaceId: string | undefined) => void;
+/**
+ * A saved turn handed to another view of its chat, with the per-turn
+ * generation options the sending view held only locally.
+ */
+export interface ContinuedWorktreeTurn {
+  turnId: string;
+  /** Where the chat was saved (the new worktree, or this checkout). */
+  workspaceId: string | undefined;
+  /** The turn was sent with `/visualize`. */
+  visualize: boolean;
+}
+
+type WorktreeSendContinuation = (turn: ContinuedWorktreeTurn) => void;
 const continuations = new Map<string, WorktreeSendContinuation>();
 
 /**
@@ -262,13 +274,9 @@ export function registerWorktreeSendContinuation(
 }
 
 /** Start the reply in the view showing `chatId`; false when none is. */
-export function continueWorktreeSendInView(
-  chatId: string,
-  turnId: string,
-  workspaceId: string | undefined,
-): boolean {
+export function continueWorktreeSendInView(chatId: string, turn: ContinuedWorktreeTurn): boolean {
   const start = continuations.get(chatId);
   if (!start) return false;
-  start(turnId, workspaceId);
+  start({ ...turn });
   return true;
 }

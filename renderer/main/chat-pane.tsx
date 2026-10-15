@@ -1869,7 +1869,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ) {
           // The user came back to this draft and chose to continue its
           // worktree send there: the view showing the chat starts the reply.
-          if (continuedByUser && continueWorktreeSendInView(chatId, messageTurnId, updated.workspaceId)) {
+          if (
+            continuedByUser &&
+            continueWorktreeSendInView(chatId, {
+              turnId: messageTurnId,
+              workspaceId: updated.workspaceId,
+              visualize: options?.visualize === true,
+            })
+          ) {
             return;
           }
           try {
@@ -1925,10 +1932,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // after leaving the pane that sent it (that pane's send no longer owns it).
   React.useEffect(
     () =>
-      registerWorktreeSendContinuation(chatId, (turnId, workspaceId) => {
+      registerWorktreeSendContinuation(chatId, (turn) => {
         ++generationIntentRef.current;
-        if (workspaceId) effectiveWorkspaceIdRef.current = workspaceId;
-        void runGeneration(turnId).then((started) => {
+        if (turn.workspaceId) effectiveWorkspaceIdRef.current = turn.workspaceId;
+        // Per-turn options the sending view kept locally (runGeneration reads
+        // the rest from the saved chat and app settings).
+        visualizeTurnRef.current = turn.visualize;
+        void runGeneration(turn.turnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
           }

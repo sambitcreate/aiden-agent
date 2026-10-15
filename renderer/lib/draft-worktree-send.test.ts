@@ -10,6 +10,7 @@ import {
   registerWorktreeSendContinuation,
   startWorktreeFirstSend,
   subscribeActiveWorktreeSends,
+  type ContinuedWorktreeTurn,
   type WorktreeSendView,
 } from "./draft-worktree-send";
 import type { Chat } from "./types";
@@ -323,19 +324,40 @@ test("a save after the user answered a failure says so; one that needed no answe
 });
 
 test("a continued send's reply starts in the view now showing the chat, once, and only there", () => {
-  const started: Array<[string, string, string | undefined]> = [];
-  const leave = registerWorktreeSendContinuation(DRAFT_ID, (turnId, workspaceId) => {
-    started.push(["first view", turnId, workspaceId]);
+  const started: Array<[string, ContinuedWorktreeTurn]> = [];
+  const leave = registerWorktreeSendContinuation(DRAFT_ID, (turn) => {
+    started.push(["first view", turn]);
   });
   // The pane that took over replaces the one that left.
-  const unregisterReturned = registerWorktreeSendContinuation(DRAFT_ID, (turnId, workspaceId) => {
-    started.push(["returned view", turnId, workspaceId]);
+  const unregisterReturned = registerWorktreeSendContinuation(DRAFT_ID, (turn) => {
+    started.push(["returned view", turn]);
   });
   leave();
-  assert.equal(continueWorktreeSendInView(DRAFT_ID, "turn-1", "ws-worktree"), true);
-  assert.deepEqual(started, [["returned view", "turn-1", "ws-worktree"]]);
-  assert.equal(continueWorktreeSendInView(OTHER_DRAFT, "turn-2", undefined), false, "no view shows that chat");
+  const turn = { turnId: "turn-1", workspaceId: "ws-worktree", visualize: false };
+  assert.equal(continueWorktreeSendInView(DRAFT_ID, turn), true);
+  assert.deepEqual(started, [["returned view", turn]]);
+  assert.equal(
+    continueWorktreeSendInView(OTHER_DRAFT, { ...turn, turnId: "turn-2" }),
+    false,
+    "no view shows that chat",
+  );
   unregisterReturned();
-  assert.equal(continueWorktreeSendInView(DRAFT_ID, "turn-3", undefined), false, "nobody is looking: abandon");
+  assert.equal(
+    continueWorktreeSendInView(DRAFT_ID, { ...turn, turnId: "turn-3" }),
+    false,
+    "nobody is looking: abandon",
+  );
   assert.equal(started.length, 1);
+});
+
+test("a /visualize turn continued from another view still asks for a visual", () => {
+  const received: ContinuedWorktreeTurn[] = [];
+  const unregister = registerWorktreeSendContinuation(DRAFT_ID, (turn) => received.push(turn));
+  continueWorktreeSendInView(DRAFT_ID, { turnId: "turn-v", workspaceId: "ws-repo", visualize: true });
+  continueWorktreeSendInView(DRAFT_ID, { turnId: "turn-plain", workspaceId: "ws-repo", visualize: false });
+  unregister();
+  assert.deepEqual(
+    received.map((turn) => [turn.turnId, turn.visualize]),
+    [["turn-v", true], ["turn-plain", false]],
+  );
 });
