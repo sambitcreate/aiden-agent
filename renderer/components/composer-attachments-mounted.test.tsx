@@ -47,7 +47,7 @@ async function loadComposer() {
     "./composer-context-bar":
       "export const ComposerContextBar=()=>null; export const useAutoHideComposerContext=()=>true;",
     "./use-composer-context-chips":
-      "export const useComposerContextChips=()=>({workspace:true,machine:false,branch:false,changesBadge:0,pullRequest:false,barMode:'full'});",
+      "export const useComposerContextChips=()=>({chips:{workspace:true,machine:false,branch:false,changesBadge:0,pullRequest:false,barMode:'full'},pullRequestAnnouncement:''});",
     "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
   };

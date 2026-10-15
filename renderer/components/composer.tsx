@@ -1779,7 +1779,7 @@ export function Composer({
     : workspace?.name;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
-  const contextChips = useComposerContextChips({
+  const { chips: contextChips, pullRequestAnnouncement } = useComposerContextChips({
     chatId,
     started: hasUserMessages,
     workspace,
@@ -1787,14 +1787,6 @@ export function Composer({
     gitStatus,
     machinePicker: Boolean(machinePicker),
   });
-  const contextChipsKey = [
-    contextChips.workspace && "workspace",
-    contextChips.machine && "machine",
-    contextChips.branch && "branch",
-    contextChips.pullRequest && "pull-request",
-  ]
-    .filter(Boolean)
-    .join(" ");
   const autoHideContext = useAutoHideComposerContext();
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
@@ -1878,7 +1870,7 @@ export function Composer({
           {queuedMessages}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           {surfaces.localContext ? (
-          <ComposerContextBar mode={contextChips.barMode} chipsKey={contextChipsKey} inputRef={inputRef}>
+          <ComposerContextBar mode={contextChips.barMode} inputRef={inputRef}>
           <div
             className={cn(
               "relative z-0 mx-3 flex min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 backdrop-blur-md transition-[padding,min-height] duration-200 ease-out",
@@ -1960,7 +1952,7 @@ export function Composer({
             ) : null}
             {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
             <span role="status" className="sr-only">
-              {contextChips.pullRequest && hasUserMessages ? "Pull request available" : ""}
+              {pullRequestAnnouncement}
             </span>
           </div>
           </ComposerContextBar>

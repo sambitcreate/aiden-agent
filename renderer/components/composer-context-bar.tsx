@@ -16,6 +16,38 @@ export function useAutoHideComposerContext(): boolean {
   return React.useSyncExternalStore(subscribe, autoHideEnabled, () => true);
 }
 
+interface StripFocusKeeperProps {
+  stripRef: React.RefObject<HTMLDivElement | null>;
+  hidden: boolean;
+  inputRef?: React.RefObject<HTMLTextAreaElement | null>;
+  children?: React.ReactNode;
+}
+
+/**
+ * Returns focus to the composer input when the chip holding it leaves the
+ * strip or the strip hides. The snapshot is read before React mutates the
+ * DOM, so only focus that was inside the strip at that moment moves; focus
+ * the user already put elsewhere (or dropped on <body>) is left alone.
+ */
+class StripFocusKeeper extends React.Component<StripFocusKeeperProps> {
+  getSnapshotBeforeUpdate(): Element | null {
+    const active = document.activeElement;
+    return active && this.props.stripRef.current?.contains(active) ? active : null;
+  }
+
+  componentDidUpdate(_previous: StripFocusKeeperProps, _state: unknown, focusedBefore: Element | null) {
+    if (!focusedBefore) return;
+    const active = document.activeElement;
+    const removed = !focusedBefore.isConnected && (!active || active === document.body);
+    const hiddenWithFocus = this.props.hidden && active === focusedBefore;
+    if (removed || hiddenWithFocus) this.props.inputRef?.current?.focus({ preventScroll: true });
+  }
+
+  render() {
+    return this.props.children;
+  }
+}
+
 /**
  * The strip above the composer. `full` is a draft's setup bar, `summary` a
  * shorter strip after the first message, `hidden` collapses it. Children stay
@@ -23,39 +55,14 @@ export function useAutoHideComposerContext(): boolean {
  */
 export function ComposerContextBar({
   mode,
-  chipsKey = "",
   inputRef,
   children,
 }: React.PropsWithChildren<{
   mode: ComposerContextBarMode;
-  /** Changes whenever a chip enters or leaves, so focus inside a removed chip returns to the input. */
-  chipsKey?: string;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }>) {
   const hidden = mode === "hidden";
   const stripRef = React.useRef<HTMLDivElement>(null);
-  // Whether keyboard focus was last inside the strip. A chip that unmounts
-  // while focused drops focus to <body> without a focusin anywhere else.
-  const focusInsideRef = React.useRef(false);
-  React.useEffect(() => {
-    const track = (event: FocusEvent) => {
-      focusInsideRef.current = Boolean(
-        event.target instanceof Node && stripRef.current?.contains(event.target),
-      );
-    };
-    document.addEventListener("focusin", track);
-    return () => document.removeEventListener("focusin", track);
-  }, []);
-  React.useLayoutEffect(() => {
-    const active = document.activeElement;
-    const insideHidden = hidden && Boolean(active && stripRef.current?.contains(active));
-    const dropped =
-      focusInsideRef.current && (!active || active === document.body || !active.isConnected);
-    if (insideHidden || dropped) {
-      focusInsideRef.current = false;
-      inputRef?.current?.focus({ preventScroll: true });
-    }
-  }, [hidden, chipsKey, inputRef]);
   return (
     <div
       ref={stripRef}
@@ -67,7 +74,11 @@ export function ComposerContextBar({
       aria-hidden={hidden || undefined}
       inert={hidden || undefined}
     >
-      <div className="composer-context-content">{children}</div>
+      <div className="composer-context-content">
+        <StripFocusKeeper stripRef={stripRef} hidden={hidden} inputRef={inputRef}>
+          {children}
+        </StripFocusKeeper>
+      </div>
     </div>
   );
 }

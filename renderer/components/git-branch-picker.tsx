@@ -71,7 +71,7 @@ export function GitBranchPicker({
   unborn: unbornProp = false,
   openWorktreeOnMount = false,
   programmaticReturnFocusRef,
-  uncommitted: uncommittedProp = 0,
+  uncommitted: uncommittedProp,
 }: GitBranchPickerProps) {
   const qc = useQueryClient();
   const searchRef = React.useRef<HTMLInputElement>(null);
@@ -93,7 +93,12 @@ export function GitBranchPicker({
   const unborn = branches.data?.unborn ?? unbornProp;
   const currentRef = branches.data?.current ?? branch;
   const current = detached ? "Detached HEAD" : currentRef;
-  const uncommitted = branches.data?.uncommitted ?? uncommittedProp;
+  // The branches read is disabled (and not refreshed) while the menu is closed,
+  // so a closed trigger follows the caller's live Git status when it has one.
+  const uncommitted =
+    open || uncommittedProp === undefined
+      ? (branches.data?.uncommitted ?? uncommittedProp ?? 0)
+      : uncommittedProp;
   const ahead = branches.data?.ahead ?? 0;
   const behind = branches.data?.behind ?? 0;
   const upstream = branches.data?.upstream;

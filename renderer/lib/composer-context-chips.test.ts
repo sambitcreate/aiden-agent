@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   branchCanOpenPullRequest,
-  isWellKnownGitHubRepository,
+  remoteCanHostPullRequests,
   composerContextChips,
   type ComposerContextChips,
   type ComposerContextChipsInput,
@@ -18,14 +18,14 @@ const plainFolder: ComposerContextChipsInput = {
   gitRepo: false,
   uncommitted: 0,
   machinePicker: false,
-  githubRemote: false,
+  pullRequestRemote: false,
   pullRequest: noPullRequest,
 };
 
 const gitHubRepo: ComposerContextChipsInput = {
   ...plainFolder,
   gitRepo: true,
-  githubRemote: true,
+  pullRequestRemote: true,
 };
 
 type Row = [name: string, input: ComposerContextChipsInput, expected: ComposerContextChips];
@@ -78,11 +78,11 @@ const rows: Row[] = [
     { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: false, barMode: "summary" },
   ],
   [
-    "started git chat without a GitHub remote: branch only",
+    "started git chat whose remote is a non-GitHub forge (or no remote): branch only",
     {
       ...gitHubRepo,
       stage: "started",
-      githubRemote: false,
+      pullRequestRemote: false,
       pullRequest: { linked: 1, pending: 1, current: true, branchCanOpen: true },
     },
     { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: false, barMode: "summary" },
@@ -120,31 +120,43 @@ for (const [name, input, expected] of rows) {
   });
 }
 
-test("a branch can open a pull request only off the default branch with pushed or unpushed work", () => {
+test("a branch can open a pull request when it is a named branch other than the default", () => {
   const cases: Array<[Parameters<typeof branchCanOpenPullRequest>[0], boolean]> = [
     [undefined, false],
-    [{ branch: "main", defaultBranch: "main", upstream: "origin/main", ahead: 2 }, false],
-    [{ branch: "trunk", defaultBranch: "trunk", upstream: "origin/trunk" }, false],
-    [{ branch: "fix/login", defaultBranch: "main", upstream: "origin/fix/login", ahead: 0 }, true],
-    [{ branch: "fix/login", defaultBranch: "main" }, false],
-    [{ branch: "fix/login", defaultBranch: "main", ahead: 1 }, true],
+    [{ branch: "main", defaultBranch: "main" }, false],
+    [{ branch: "trunk", defaultBranch: "trunk" }, false],
+    [{ branch: "fix/login", defaultBranch: "main" }, true],
+    // Never pushed: no upstream, still a PR candidate.
+    [{ branch: "fix/login" }, true],
     // No remote HEAD recorded: main and master count as the default branch.
-    [{ branch: "master", upstream: "origin/master", ahead: 1 }, false],
-    [{ branch: "main", upstream: "origin/main" }, false],
-    [{ branch: "feature", upstream: "origin/feature" }, true],
-    [{ branch: "feature", detached: true, upstream: "origin/feature" }, false],
-    [{ branch: "feature", unborn: true, ahead: 1 }, false],
+    [{ branch: "master" }, false],
+    [{ branch: "main" }, false],
+    [{ branch: "main", defaultBranch: "trunk" }, true],
+    [{ branch: "feature", detached: true }, false],
+    [{ branch: "feature", unborn: true }, false],
   ];
   for (const [git, expected] of cases) {
     assert.equal(branchCanOpenPullRequest(git), expected, JSON.stringify(git));
   }
 });
 
-test("only github.com and GHE.com repository keys count as GitHub without PR evidence", () => {
-  assert.equal(isWellKnownGitHubRepository("github.com/acme/app"), true);
-  assert.equal(isWellKnownGitHubRepository("acme.ghe.com/team/app"), true);
-  assert.equal(isWellKnownGitHubRepository("gitlab.com/acme/app"), false);
-  assert.equal(isWellKnownGitHubRepository("git.example.com/acme/app"), false);
-  assert.equal(isWellKnownGitHubRepository("notghe.com/acme/app"), false);
-  assert.equal(isWellKnownGitHubRepository(undefined), false);
+test("any remote host may host pull requests except known non-GitHub forges", () => {
+  const cases: Array<[string | null | undefined, boolean]> = [
+    ["github.com/acme/app", true],
+    ["acme.ghe.com/team/app", true],
+    ["git.example.com/acme/app", true],
+    [null, true],
+    [undefined, true],
+    ["gitlab.com/acme/app", false],
+    ["bitbucket.org/acme/app", false],
+    ["codeberg.org/acme/app", false],
+    ["dev.azure.com/acme/app", false],
+    ["ssh.dev.azure.com/acme/app", false],
+    ["acme.visualstudio.com/team/app", false],
+    ["git.sr.ht/acme/app", false],
+    ["notgitlab.com/acme/app", true],
+  ];
+  for (const [key, expected] of cases) {
+    assert.equal(remoteCanHostPullRequests(key), expected, String(key));
+  }
 });

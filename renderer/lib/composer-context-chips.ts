@@ -22,8 +22,11 @@ export interface ComposerContextChipsInput {
   uncommitted: number;
   /** A paired Mac can run this chat (the machine picker was offered). */
   machinePicker: boolean;
-  /** The repository's remote is on github.com. */
-  githubRemote: boolean;
+  /**
+   * The repository has a remote whose host may serve GitHub pull requests: any
+   * host except a known non-GitHub forge (see `remoteCanHostPullRequests`).
+   */
+  pullRequestRemote: boolean;
   pullRequest: {
     linked: number;
     pending: number;
@@ -50,7 +53,7 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
   const pullRequest =
     input.stage === "started" &&
     branch &&
-    input.githubRemote &&
+    input.pullRequestRemote &&
     (linked > 0 || pending > 0 || current || branchCanOpen);
   const barMode: ComposerContextBarMode =
     input.stage === "draft" || !input.autoHide ? "full" : branch ? "summary" : "hidden";
@@ -66,28 +69,42 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
 }
 
 /**
- * A cheap, local "is there something to open as a PR" signal from the Git
- * status read: a named branch other than the default one that is pushed or
- * has unpushed commits. Without a known remote default branch, `main` and
+ * A cheap, local "could this branch open a PR" signal from the Git status
+ * read: a named branch with commits that is not the default branch. There is
+ * no cheap ahead-of-base count, so a non-default branch counts whether or not
+ * it has been pushed. Without a known remote default branch, `main` and
  * `master` are treated as the default.
  */
 export function branchCanOpenPullRequest(
-  git: Pick<GitInfo, "branch" | "detached" | "unborn" | "defaultBranch" | "upstream" | "ahead"> | undefined,
+  git: Pick<GitInfo, "branch" | "detached" | "unborn" | "defaultBranch"> | undefined,
 ): boolean {
   if (!git?.branch || git.detached || git.unborn) return false;
-  const isDefault = git.defaultBranch
-    ? git.branch === git.defaultBranch
-    : git.branch === "main" || git.branch === "master";
-  if (isDefault) return false;
-  return Boolean(git.upstream) || (git.ahead ?? 0) > 0;
+  return git.defaultBranch
+    ? git.branch !== git.defaultBranch
+    : git.branch !== "main" && git.branch !== "master";
 }
 
+/** Hosts that never serve GitHub pull requests; their subdomains are excluded too. */
+const NON_GITHUB_FORGES = [
+  "gitlab.com",
+  "bitbucket.org",
+  "codeberg.org",
+  "dev.azure.com",
+  "visualstudio.com",
+  "sr.ht",
+  "gitea.com",
+  "gitee.com",
+  "sourceforge.net",
+];
+
 /**
- * Whether a repository's canonical key (`host/owner/name`) is on a host that
- * always serves GitHub (github.com or GHE.com). GitHub Enterprise Server hosts
- * can only be recognised by the chat's own PR state.
+ * Whether a repository's canonical key (`host/owner/name`) may host GitHub
+ * pull requests. github.com, GHE.com and unknown or self-hosted hosts (which
+ * may be GitHub Enterprise Server) qualify; known non-GitHub forges do not.
+ * A missing key (identity not recorded) is unknown, so it qualifies.
  */
-export function isWellKnownGitHubRepository(canonicalKey: string | undefined): boolean {
+export function remoteCanHostPullRequests(canonicalKey: string | null | undefined): boolean {
   const host = canonicalKey?.split("/", 1)[0]?.toLowerCase();
-  return host === "github.com" || Boolean(host?.endsWith(".ghe.com"));
+  if (!host) return true;
+  return !NON_GITHUB_FORGES.some((forge) => host === forge || host.endsWith(`.${forge}`));
 }
