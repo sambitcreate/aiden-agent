@@ -258,6 +258,39 @@ export function canSteerQueuedMessage(message: QueuedChatMessage): boolean {
   );
 }
 
+/** Pauses between admission attempts while a run is still starting (about 8.5 s in all). */
+export const RUN_INPUT_START_RETRY_MS: readonly number[] = [
+  50, 100, 200, 400, 750, 1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 1_000,
+];
+
+/**
+ * Admits run input, waiting out the start of a run this window owns. Stop and
+ * the Steer pill are live as soon as a send begins, but Pi takes input only
+ * once its first turn has started; until then main answers `run_not_active`.
+ * While the run is still this window's live run that answer means "not yet",
+ * so admission is tried again. A run that ended, was stopped, or never starts
+ * within the bound gets the rejection as before. Nothing is written to the
+ * transcript by a rejected attempt, so retrying cannot duplicate guidance.
+ */
+export async function admitRunInputOnceStarted(input: {
+  admit: () => Promise<ChatRunInputAdmissionResult>;
+  /** The run is still this window's own, unsettled and not being stopped. */
+  live: () => boolean;
+  delay?: (ms: number) => Promise<void>;
+  retryMs?: readonly number[];
+}): Promise<ChatRunInputAdmissionResult> {
+  const delay = input.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const retryMs = input.retryMs ?? RUN_INPUT_START_RETRY_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    const receipt = await input.admit();
+    const notStartedYet =
+      !receipt.admitted && !receipt.committed && receipt.reason === "run_not_active";
+    if (!notStartedYet || attempt >= retryMs.length || !input.live()) return receipt;
+    await delay(retryMs[attempt]!);
+    if (!input.live()) return receipt;
+  }
+}
+
 /** User-facing copy for a steer that main did not write to the transcript. */
 export function steerRejectionMessage(reason: ChatRunInputRejectionReason | undefined): string {
   switch (reason) {

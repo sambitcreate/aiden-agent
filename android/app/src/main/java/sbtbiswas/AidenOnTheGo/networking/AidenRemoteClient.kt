@@ -1378,15 +1378,24 @@ class AidenRemoteClient(
         decodeBotWire(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
     }
 
+    /**
+     * `PATCH /bots/{id}`. The patch's `chatActivity` goes out only when [supportsBotActivity]:
+     * an older Mac refuses the key, so a patch that changes nothing else is refused here with
+     * [AidenBotContractException.InvalidCombination] before anything is sent.
+     */
     suspend fun updateBotIdentity(
         id: String,
         revision: String,
-        patch: AidenBotIdentityPatch
+        patch: AidenBotIdentityPatch,
+        supportsBotActivity: Boolean = false
     ): AidenBotDetail = executeRequest(
         "/bots/$id",
         method = "PATCH",
         ifMatchRevision = revision,
-        bodyJson = botJson.encodeToString(AidenBotIdentityPatch.serializer(), patch),
+        bodyJson = botJson.encodeToString(
+            AidenBotIdentityPatch.serializer(),
+            patch.forHost(supportsBotActivity) ?: throw AidenBotContractException.InvalidCombination("chat activity unsupported")
+        ),
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->
         val detail = decodeBotWire(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
@@ -1431,10 +1440,21 @@ class AidenRemoteClient(
         }
     }
 
-    /** Sends one turn. Control writes never auto-retry; a manual retry reuses [idempotencyKey]. */
-    suspend fun sendBotMessage(botId: String, text: String, idempotencyKey: UUID): AidenBotSessionSendResponse {
+    /**
+     * `POST /bots/{id}/messages`: sends one turn. Control writes never auto-retry; a manual retry
+     * reuses [idempotencyKey]. [whenBusy] goes out only when [supportsBotActivity] (the Mac
+     * announces `bot-activity-v1` and this phone holds `bot:activity`): an older Mac refuses the key.
+     */
+    suspend fun sendBotMessage(
+        botId: String,
+        text: String,
+        idempotencyKey: UUID,
+        whenBusy: AidenStreamInputMode? = null,
+        supportsBotActivity: Boolean = false
+    ): AidenBotSessionSendResponse {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-        val body = botJson.encodeToString(AidenBotSessionSendRequest.serializer(), AidenBotSessionSendRequest(text))
+        val request = AidenBotSessionSendRequest(text, whenBusy.takeIf { supportsBotActivity })
+        val body = botJson.encodeToString(AidenBotSessionSendRequest.serializer(), request)
         return executeRequest(
             "/bots/$botId/messages",
             method = "POST",

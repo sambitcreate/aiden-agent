@@ -15,10 +15,16 @@ import {
 import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
 import { createModels } from "@earendil-works/pi-ai";
-import { appendPiMessages, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
+import {
+  appendPiMessages,
+  beginPiVisibleTurnLease,
+  syncChatMessagesToPiSession,
+  type PiVisibleTurnLease,
+} from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
 import { buildAgentRuntimeOptions } from "./generation-runtime.js";
 import {
+  isPiManagedCancellationError,
   PiAgentRuntimeExtensionRegistry,
   PiAgentRuntimeHarness,
   PiAgentRuntimeHostError,
@@ -37,7 +43,7 @@ import { createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
 import { createChatRunInputAdmission } from "./chat-run-input-admission.js";
-import type { Chat } from "./types.js";
+import type { Chat, ChatMessage } from "./types.js";
 
 function testHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
@@ -89,6 +95,7 @@ async function managedTestHarness(
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
     onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
+    onJournalError?: PiRuntimeSessionBinding["onJournalError"];
   } = {},
 ) {
   const core = createFauxCore({
@@ -171,6 +178,7 @@ async function managedTestHarness(
       },
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.effects ? { effects: options.effects } : {}),
+      ...(options.onJournalError ? { onJournalError: options.onJournalError } : {}),
     },
   });
   return { core, harness, session };
@@ -1033,6 +1041,7 @@ test("managed run fails closed when a tool plan cannot become durable", async ()
       return { content: [{ type: "text", text: "unsafe" }], details: null };
     },
   };
+  const journalErrors: unknown[] = [];
   const { harness } = await managedTestHarness(
     [
       fauxAssistantMessage([fauxToolCall(tool.name, {})], {
@@ -1047,6 +1056,7 @@ test("managed run fails closed when a tool plan cannot become durable", async ()
         }
         await appendPiMessages(session, messages);
       },
+      onJournalError: (error) => journalErrors.push(error),
     },
   );
 
@@ -1063,6 +1073,9 @@ test("managed run fails closed when a tool plan cannot become durable", async ()
   assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "session");
   assert.equal(toolCalls, 0);
   assert.doesNotMatch(JSON.stringify(outcome), /PRIVATE_JOURNAL_CANARY/u);
+  // A real write failure must stay distinguishable from a Stop.
+  assert.ok(journalErrors.length > 0);
+  assert.equal(journalErrors.some(isPiManagedCancellationError), false);
 });
 
 test("managed before-tool policy faults stop before another provider request", async () => {
@@ -1414,6 +1427,97 @@ test("managed cancellation settles while input journaling is still pending", asy
   assert.equal(settled?.kind, "app_cancelled");
   assert.equal(outcome.kind, "app_cancelled");
   assert.equal(core.state.callCount, 0);
+});
+
+test("Stop mid-stream reports only a cancellation to the journal and the visible turn recovers intact", async () => {
+  const journalErrors: unknown[] = [];
+  let streaming!: () => void;
+  const atStream = new Promise<void>((resolve) => {
+    streaming = resolve;
+  });
+  const { core, harness, session } = await managedTestHarness([], {
+    onJournalError: (error) => journalErrors.push(error),
+    streamFn: (model, _context, options) => {
+      const stream = createAssistantMessageEventStream();
+      const partial = {
+        ...fauxAssistantMessage("partial answer"),
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial });
+        options?.signal?.addEventListener(
+          "abort",
+          () => stream.push({ type: "error", reason: "aborted", error: { ...partial, stopReason: "aborted" } }),
+          { once: true },
+        );
+        streaming();
+      });
+      return stream;
+    },
+  });
+  const model = core.getModel();
+  const visible = (id: string, role: "user" | "assistant", content: string, createdAt: number): ChatMessage => ({
+    id,
+    role,
+    content,
+    createdAt,
+  });
+  const journalText = async () =>
+    (await session.buildContext()).messages.map((message) => {
+      if (message.role !== "user" && message.role !== "assistant") return [message.role, ""];
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+      return [message.role, text];
+    });
+  await syncChatMessagesToPiSession(
+    session,
+    [visible("u1", "user", "earlier question", 1), visible("a1", "assistant", "earlier answer", 2)],
+    model,
+    false,
+  );
+  const before = await journalText();
+
+  let lease: PiVisibleTurnLease | undefined;
+  const running = harness.runManaged(
+    { kind: "append-and-run", message: { role: "user", content: "new question", timestamp: 3 } },
+    {
+      beforeDurableTurn: async () => {
+        lease = await beginPiVisibleTurnLease(session);
+      },
+    },
+  );
+  await atStream;
+  const settled = await harness.cancelAndSettle();
+  assert.equal(settled?.kind, "app_cancelled");
+  assert.equal((await running).kind, "app_cancelled");
+
+  // Stop interrupts the journal writes the aborted reply would make. Those are
+  // reported as a cancellation, never as a write failure.
+  assert.ok(journalErrors.length > 0);
+  assert.ok(journalErrors.every(isPiManagedCancellationError));
+
+  // The host's recovery: wait for detached writes, roll the turn back, then
+  // re-journal what the visible chat kept.
+  await harness.pendingDurabilitySettlement();
+  assert.ok(lease?.started);
+  await lease.rollback();
+  assert.deepEqual(await journalText(), before);
+  await syncChatMessagesToPiSession(
+    session,
+    [visible("u2", "user", "new question", 3), visible("a2", "assistant", "partial answer", 4)],
+    model,
+    false,
+  );
+  assert.deepEqual(await journalText(), [
+    ["user", "earlier question"],
+    ["assistant", "earlier answer"],
+    ["user", "new question"],
+    ["assistant", "partial answer"],
+  ]);
 });
 
 test("managed startup keeps a prior failed assistant durable", async () => {

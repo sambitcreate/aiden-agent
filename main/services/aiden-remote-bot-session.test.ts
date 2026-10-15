@@ -9,24 +9,34 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { BOT_ACTIVITY_PHASES } from "../../renderer/shared/bot-activity.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
   projectAidenRemoteBotMemory,
+  projectBotSessionActivity,
   projectBotSessionEntries,
   projectBotSessionState,
   redactRemoteError,
+  tailWithinJsonBytes,
   type AidenRemoteBotSessionRuntime,
 } from "./aiden-remote-bot-session.js";
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
 import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
+import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
+import { createBotLiveProjection, createBotRunStarts } from "./bot-runtime/live-projection.js";
 import {
+  AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
+  AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
+  parseAidenRemoteBotApproval,
+  parseAidenRemoteBotQuestion,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
+  parseAidenSseFrames,
 } from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -124,6 +134,13 @@ function fakeRuntime(initial: BotSessionState) {
     async conversation() {
       return conversation as never;
     },
+    async quietInputs(_botId, ids) {
+      // Every queued input is the person's own unless a test says otherwise.
+      return new Map(ids.map((id) => [id, false]));
+    },
+    async placedSubmissions() {
+      return new Map();
+    },
   };
   return {
     runtime,
@@ -208,6 +225,43 @@ test("Stop ends a running turn but leaves an interrupted one for Dismiss", async
   const view = await sessionService(paused.runtime).stop(DEVICE_ID, BOT_ID, "stop-request-0002", {});
   assert.equal(paused.calls.abort, 0, "a paused turn is not aborted by Stop");
   assert.equal(view.state, "interrupted");
+});
+
+test("a phone's Stop reads Stopping wherever the Bot is open, a Stop that fails takes it back, and Resume is the runtime's to announce", async () => {
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  let refuse = false;
+  const intents = createBotTurnIntents();
+  const heard: string[] = [];
+  intents.onIntent((botId, intent) => void heard.push(`${intent} ${botId}`));
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({
+      ...fake.runtime,
+      async stop(botId: string) {
+        if (refuse) throw new Error("The Bot is held by another Aiden.");
+        return fake.runtime.stop(botId);
+      },
+    }),
+    turnIntents: intents,
+  });
+  try {
+    assert.equal((await service.stop(DEVICE_ID, BOT_ID, "stop-request-0101", {})).state, "idle");
+    assert.deepEqual(heard, [`stopping ${BOT_ID}`]);
+    await service.stop(DEVICE_ID, BOT_ID, "stop-request-0101", {});
+    assert.deepEqual(heard, [`stopping ${BOT_ID}`], "a replayed request is not a second press");
+
+    fake.setState({ kind: "running", submissionId: "sub_2" });
+    refuse = true;
+    await assert.rejects(service.stop(DEVICE_ID, BOT_ID, "stop-request-0102", {}));
+    assert.deepEqual(heard.slice(1), [`stopping ${BOT_ID}`, `stopCancelled ${BOT_ID}`]);
+
+    // The session announces a Resume it carried out (`onResumed`); the route never guesses ahead of it.
+    fake.setState({ kind: "interrupted", submissionId: "sub_2" });
+    assert.equal((await service.resume(DEVICE_ID, BOT_ID, RESUME_KEY, {})).state, "running");
+    assert.equal(heard.length, 3);
+  } finally {
+    await service.close();
+  }
 });
 
 test("a session reopened on the host gets a new epoch, so clients refetch instead of folding", async () => {
@@ -467,14 +521,14 @@ test("routine errors reach phones without local paths or key-shaped secrets", ()
 });
 
 /** A conversation whose watch the test drives frame by frame. */
-function drivenConversation(initial: RawEntry[]) {
+function drivenConversation(initial: RawEntry[], initialDocs: Record<string, unknown> = {}) {
   let listener: ((view: unknown) => Promise<void>) | undefined;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
   const conversation = {
     async watch() {
       return {
-        value: { entries: initial, docs: {} },
+        value: { entries: initial, docs: initialDocs },
         start(next: (view: unknown) => Promise<void>) { listener = next; },
         stop: async () => {},
         closed,
@@ -487,6 +541,10 @@ function drivenConversation(initial: RawEntry[]) {
       const docs = partial === undefined
         ? {}
         : { "pi.live": { generation: { message: { content: [{ type: "text", text: partial }] } } } };
+      await listener!({ entries, docs });
+    },
+    /** One watch frame with exactly these docs (`pi.live`, `pi.inbox`). */
+    async emitView(entries: RawEntry[], docs: Record<string, unknown>) {
       await listener!({ entries, docs });
     },
     /** What a harness close (idle close, delete, quit) does to every watch. */
@@ -1191,4 +1249,1147 @@ test("answering a proposal from a phone is idempotent and an unknown proposal is
   assert.deepEqual(await service.routineSuggestions(BOT_ID), fixture.botRoutineSuggestions);
   routines.push({ id: "routine_1" } as BotRoutine);
   assert.deepEqual(await service.routineSuggestions(BOT_ID), { suggestions: [] });
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 30: activity and queued frames (`bot:activity`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The Bot service of a host that announces `bot-activity-v1`: it also has the
+ * Chat activity gate (`supportsChatActivity`), which the session service needs
+ * alongside `turnIntents`.
+ */
+function activityBots() {
+  const bots = botService();
+  return {
+    bot: (botId: string) => bots.bot(botId),
+    summaryOf: (botId: string) => bots.summaryOf(botId),
+    executeIdempotent: bots.executeIdempotent.bind(bots),
+    supportsChatActivity: true,
+  };
+}
+
+/** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
+async function openAudienceStream(
+  service: AidenRemoteBotSessionService,
+  audience: { cards?: boolean; activity?: boolean },
+  botId = BOT_ID,
+) {
+  const server = createServer((_request, response) => {
+    void service.openEvents("device_1", botId, response, () => {}, audience).catch(() => response.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const response = await fetch(`http://127.0.0.1:${port}/`);
+  const frames: Frame[] = [];
+  const raw: string[] = [];
+  /** The SSE blocks as sent on the wire (id, event and data lines, without the blank separator). */
+  const blocks: string[] = [];
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const reading = (async () => {
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let index: number;
+      while ((index = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        const data = block.split("\n").find((line) => line.startsWith("data: "));
+        if (!data) continue;
+        blocks.push(block);
+        raw.push(data.slice(6));
+        frames.push(parseAidenRemoteBotSessionEvent(JSON.parse(data.slice(6))) as unknown as Frame);
+      }
+    }
+  })();
+  return {
+    frames,
+    raw,
+    blocks,
+    async until(predicate: () => boolean, what: string) {
+      const deadline = Date.now() + 10_000;
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    },
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await reading.catch(() => undefined);
+    },
+  };
+}
+
+/** The activity a device holds after each frame that carries one; null is "no turn running". */
+function activitiesOf(frames: Frame[]): Array<{ phase: string; app?: string; startedAt: number } | null> {
+  const activities: Array<{ phase: string; app?: string; startedAt: number } | null> = [];
+  for (const frame of frames) {
+    const activity = frame.type === "activity"
+      ? frame.payload.activity
+      : frame.type === "snapshot" ? frame.payload.session.activity : undefined;
+    if (activity !== undefined) activities.push(activity);
+  }
+  return activities;
+}
+
+/** The phases a device saw, in order, with repeats folded. */
+function phasesOf(frames: Frame[]): Array<string | null> {
+  const phases: Array<string | null> = [];
+  for (const activity of activitiesOf(frames)) {
+    const phase = activity === null ? null : activity.phase;
+    if (phases.length === 0 || phases[phases.length - 1] !== phase) phases.push(phase);
+  }
+  return phases;
+}
+
+function runningOn(
+  driven: ReturnType<typeof drivenConversation>,
+  fake: ReturnType<typeof fakeRuntime>,
+  options: Partial<ConstructorParameters<typeof AidenRemoteBotSessionService>[0]> = {},
+) {
+  return new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    turnIntents: createBotTurnIntents(),
+    ...options,
+  });
+}
+
+const last = <Item>(items: readonly Item[]): Item | undefined => items[items.length - 1];
+
+const gapless = (frames: Frame[]) => frames.map((frame) => frame.seq).every((seq, index, seqs) => seq === seqs[0]! + index);
+
+test("a phone holding bot:activity follows a real turn's phases and never sees what the tool was given", async () => {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-activity-"));
+  durableRoots.push(profileDir);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const command = countingTool("run_command", async () => {
+    await held;
+    return "done";
+  });
+  const planted = "cat /Users/dana/Documents/plan.md && echo sk-live-0123456789abcdef";
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: planted })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Tidied."),
+  ]);
+  const runtime = await createBotSessionService({
+    profileDir,
+    models: fauxModels.models,
+    extension: recordingDeps({ tools: [{ tool: command, replay: "unsafe" }] }),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([BOT_ID]),
+  });
+  const service = new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => runtime,
+    turnIntents: createBotTurnIntents(),
+  });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    assert.equal(stream.frames[0]!.payload.session.activity, null, "an idle Bot is doing nothing");
+    assert.deepEqual(stream.frames[0]!.payload.session.queued, []);
+
+    await service.send(DEVICE_ID, BOT_ID, "send-request-activity-0001", { text: "Tidy my notes" });
+    await stream.until(() => phasesOf(stream.frames).includes("command"), "Running a command");
+    release();
+    await stream.until(
+      () => last(phasesOf(stream.frames)) === null && phasesOf(stream.frames).length > 2,
+      "the turn to end",
+    );
+
+    for (const phase of phasesOf(stream.frames)) {
+      assert.ok(phase === null || (BOT_ACTIVITY_PHASES as readonly string[]).includes(phase), String(phase));
+    }
+    for (const activity of activitiesOf(stream.frames)) {
+      if (activity) assert.deepEqual(Object.keys(activity).filter((key) => !["phase", "app", "startedAt"].includes(key)), []);
+    }
+    const wire = stream.raw.join("\n");
+    for (const secret of ["/Users/dana", "plan.md", "sk-live", "echo "]) {
+      assert.equal(wire.includes(secret), false, `${secret} reached the phone`);
+    }
+    assert.ok(gapless(stream.frames), "gapless");
+  } finally {
+    release();
+    await stream.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+test("a device without bot:activity gets the state it already has at each activity seq, and no activity keys", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const activity = await openAudienceStream(service, { activity: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await activity.until(() => activity.frames.length >= 1, "the activity snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    assert.equal(activity.frames[0]!.payload.session.activity.phase, "preparing", "running with nothing from the model yet");
+    assert.equal("activity" in legacy.frames[0]!.payload.session, false);
+    assert.equal("queued" in legacy.frames[0]!.payload.session, false);
+
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { run: {}, tools: [{ callId: "call_1", name: "web_search", status: "running" }] },
+      "pi.inbox": { items: [{ id: 18, mode: "followUp", content: [{ type: "text", text: "Also lunches." }] }] },
+    });
+    await activity.until(() => activity.frames.length >= 3, "the searching and queued frames");
+    await legacy.until(() => legacy.frames.length >= 3, "the no-op frames");
+
+    assert.equal(activity.frames[1]!.type, "activity");
+    assert.deepEqual(Object.keys(activity.frames[1]!.payload.activity).sort(), ["phase", "startedAt"]);
+    assert.equal(activity.frames[1]!.payload.activity.phase, "searching");
+    assert.equal(activity.frames[2]!.type, "queued");
+    for (const frame of legacy.frames.slice(1)) {
+      assert.equal(frame.type, "state");
+      assert.deepEqual(frame.payload, { state: "running", interrupted: false });
+    }
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), activity.frames.map((frame) => frame.seq), "every device stays on one seq");
+    assert.ok(gapless(legacy.frames));
+    assert.equal(legacy.raw.some((data) => /web_search|searching|Also lunches|"activity"|"queued"/u.test(data)), false);
+    const fetched = await service.session(BOT_ID);
+    assert.equal("activity" in fetched || "queued" in fetched, false, "a fetch without bot:activity has no new keys");
+  } finally {
+    await activity.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("a phone that reconnects mid-run gets the phase and the waiting messages in its first snapshot", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const first = await openAudienceStream(service, { activity: true });
+  try {
+    await first.until(() => first.frames.length >= 1, "the first snapshot");
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] },
+      "pi.inbox": { items: [{ id: 18, mode: "steer", content: [{ type: "text", text: "Keep it vegetarian." }] }] },
+    });
+    await first.until(() => first.frames.some((frame) => frame.type === "queued"), "the queued frame");
+  } finally {
+    await first.close(); // Wi-Fi drops
+  }
+  const again = await openAudienceStream(service, { activity: true });
+  try {
+    await again.until(() => again.frames.length >= 1, "the reconnect snapshot");
+    const session = again.frames[0]!.payload.session;
+    assert.equal(again.frames[0]!.type, "snapshot");
+    assert.equal(session.activity.phase, "searching");
+    assert.deepEqual(session.queued, [{ submissionId: "18", mode: "steer", text: "Keep it vegetarian." }]);
+  } finally {
+    await again.close();
+    await service.close();
+  }
+});
+
+test("an app step shows the app's name cut to 40 code points; other phases never carry one", () => {
+  const emoji = "😀".repeat(41);
+  assert.deepEqual(
+    projectBotSessionActivity({ phase: "app", app: emoji, startedAt: 1_760_450_000_000.7 }),
+    { phase: "app", app: "😀".repeat(40), startedAt: 1_760_450_000_000 },
+  );
+  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "Notion", startedAt: 5 }), { phase: "app", app: "Notion", startedAt: 5 });
+  // No name to show: the phone reads its generic app word.
+  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "   ", startedAt: 5 }), { phase: "app", startedAt: 5 });
+  assert.deepEqual(projectBotSessionActivity({ phase: "reading", app: "Notion", startedAt: 5 }), { phase: "reading", startedAt: 5 });
+  assert.deepEqual(projectBotSessionActivity({ phase: "thinking", startedAt: -3 }), { phase: "thinking", startedAt: 0 });
+  // Every cut is one the strict parser accepts.
+  const cut = projectBotSessionActivity({ phase: "app", app: `${"x".repeat(39)}😀😀`, startedAt: 5 });
+  assert.equal([...cut.app!].length, 40);
+  assert.deepEqual(parseAidenRemoteBotSessionEvent({
+    protocolVersion: 1, botId: BOT_ID, epoch: "epoch_1", seq: 1, type: "activity", payload: { activity: cut },
+  }).payload, { activity: cut });
+});
+
+test("a frame that leaves the phase as it was sends no activity frame", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    const searching = { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] };
+    await driven.emitView([user(1, "Plan dinners")], { "pi.live": searching });
+    // The tool's output grows; the line still reads Searching the web.
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { ...searching, tools: [{ ...searching.tools[0], output: "3 results" }] },
+    });
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, "Found three.")], { "pi.live": searching });
+    await stream.until(() => stream.frames.some((frame) => frame.type === "entry"), "the reply entry");
+    assert.deepEqual(stream.frames.slice(1).map((frame) => frame.type), ["activity", "entry"]);
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a Stop pressed anywhere reads Stopping on phones until the run ends, and a Stop with nothing running changes nothing", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const intents = createBotTurnIntents();
+  const service = runningOn(driven, fake, { turnIntents: intents });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    // The run is live in `pi.live` (slice B reads Stop only while a run exists).
+    await driven.emitView([user(1, "Plan dinners")], { "pi.live": { run: { inputs: [1] } } });
+    intents.announce(BOT_ID, "stopping"); // the Mac's Stop
+    await stream.until(() => last(phasesOf(stream.frames)) === "stopping", "Stopping");
+    intents.announce(BOT_ID, "stopCancelled"); // that Stop failed: the reply goes on
+    await stream.until(() => last(phasesOf(stream.frames)) === "preparing", "back to the work");
+    intents.announce(BOT_ID, "stopping");
+    await stream.until(() => last(phasesOf(stream.frames)) === "stopping", "Stopping again");
+
+    fake.setState({ kind: "idle" });
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, "Here is a start.")], {});
+    await stream.until(() => last(phasesOf(stream.frames)) === null, "the run to end");
+
+    const settled = stream.frames.length;
+    const settledSeq = last(stream.frames)!.seq;
+    intents.announce(BOT_ID, "stopping"); // a double-tap after the reply landed
+    const fetched = await service.session(BOT_ID, { activity: true }); // runs after the intent on the projector's lane
+    assert.equal(fetched.seq, settledSeq, "nothing was running, so the intent published nothing");
+    assert.equal(fetched.activity, null);
+
+    fake.setState({ kind: "running", submissionId: "sub_2" });
+    await driven.emitView(
+      [user(1, "Plan dinners"), assistant(2, "Here is a start."), user(3, "And lunches")],
+      { "pi.live": { run: { inputs: [3] } } },
+    );
+    await stream.until(() => last(phasesOf(stream.frames)) !== null, "the next run");
+    // The lane is serial: anything the intent had published would have come before the next run's frames.
+    assert.equal(stream.frames[settled]!.seq, settledSeq + 1);
+    assert.deepEqual(phasesOf(stream.frames.slice(settled)), ["preparing"], "the next turn starts at Getting ready");
+    assert.ok(gapless(stream.frames));
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a follow-up that replaces the run while the Bot stays running gets its own start time and drops Stopping", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const intents = createBotTurnIntents();
+  let clock = 1_000;
+  const service = runningOn(driven, fake, { turnIntents: intents, now: () => clock });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { run: { inputs: [1] }, generation: { message: { content: [{ type: "text", text: "Mon" }] } } },
+    });
+    intents.announce(BOT_ID, "stopping");
+    await stream.until(() => last(phasesOf(stream.frames)) === "stopping", "Stopping");
+
+    clock = 5_000;
+    // The queued follow-up's run replaces the stopped one; the session never left `running`.
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, "Mon"), user(3, "And lunches")], {
+      "pi.live": { run: { inputs: [3] } },
+    });
+    await stream.until(() => last(activitiesOf(stream.frames))?.startedAt === 5_000, "the follow-up's run");
+    assert.deepEqual(last(activitiesOf(stream.frames)), { phase: "preparing", startedAt: 5_000 });
+    assert.equal(activitiesOf(stream.frames)[0]!.startedAt, 1_000);
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a phone or desktop chat that opens mid-run, or after the projector's idle close, sees when the run really started", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": { run: { inputs: [1] } } });
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  let clock = 1_000;
+  const runStarts = createBotRunStarts();
+  const service = runningOn(driven, fake, { now: () => clock, runStarts, projectorIdleMs: 20 });
+  const desktop = createBotLiveProjection({
+    conversation: async () => driven.conversation as never,
+    state: () => fake.runtime.state(BOT_ID),
+    quietInputs: async () => new Map(),
+    now: () => clock,
+    runStarts,
+  });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    const first = stream.frames[0]!.payload.session;
+    assert.deepEqual(first.activity, { phase: "preparing", startedAt: 1_000 });
+
+    clock = 31_000; // the Mac's chat opens half a minute in
+    const { snapshot, unsubscribe } = await desktop.subscribe(BOT_ID, { send() {} });
+    assert.equal(snapshot.activity?.startedAt, 1_000, "the desktop line counts from the run's start");
+    unsubscribe();
+
+    await stream.close();
+    clock = 91_000; // the phone comes back after the projector closed for being idle
+    const deadline = Date.now() + 10_000;
+    let reopened = await service.session(BOT_ID, { activity: true });
+    while (reopened.epoch === first.epoch) {
+      if (Date.now() > deadline) throw new Error("Timed out waiting for the idle close");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      reopened = await service.session(BOT_ID, { activity: true });
+    }
+    assert.deepEqual(reopened.activity, { phase: "preparing", startedAt: 1_000 }, "a new projector, the same run");
+
+    // The run ends; the next one, even for the same input, is timed from its own start.
+    fake.setState({ kind: "idle" });
+    assert.equal((await service.session(BOT_ID, { activity: true })).activity, null);
+    fake.setState({ kind: "running", submissionId: "sub_1" });
+    clock = 120_000;
+    assert.deepEqual((await service.session(BOT_ID, { activity: true })).activity, { phase: "preparing", startedAt: 120_000 });
+  } finally {
+    await stream.close();
+    await desktop.close();
+    await service.close();
+  }
+});
+
+test("a Resume after a crash mid-reply reads Picking up where it left off on phones until the resumed run moves", async () => {
+  const stale = { run: { taskId: 3, inputs: [1] }, generation: { attempt: 1, message: { content: [{ type: "text", text: "Monday: soup" }] } } };
+  const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": stale });
+  const fake = fakeRuntime({ kind: "interrupted", submissionId: "sub_1" });
+  const intents = createBotTurnIntents();
+  const service = runningOn(driven, fake, { turnIntents: intents });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    assert.equal(stream.frames[0]!.payload.session.activity, null, "a paused Bot is not working");
+    assert.equal(stream.frames[0]!.payload.session.partial, "Monday: soup");
+
+    // The session resumed and announced it (`onResumed`), before any event from the resumed run.
+    fake.setState({ kind: "running", submissionId: "sub_1" });
+    intents.announce(BOT_ID, "resuming");
+    await stream.until(() => last(phasesOf(stream.frames)) === "resuming", "Picking up where it left off");
+
+    await driven.emitView([user(1, "Plan dinners")], { "pi.live": { run: { taskId: 4, inputs: [1] }, generation: { attempt: 1 } } });
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { run: { taskId: 4, inputs: [1] }, generation: { attempt: 1, message: { content: [{ type: "text", text: "Monday" }] } } },
+    });
+    await stream.until(() => last(phasesOf(stream.frames)) === "writing", "the resumed reply");
+    assert.deepEqual(phasesOf(stream.frames), [null, "resuming", "writing"]);
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("Steer and Queue reach the runtime as steer and followUp, and only the person's waiting messages are listed", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const sends: Array<{ text: string; whenBusy?: string }> = [];
+  const service = new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+      async send(_botId: string, input: { text: string; requestId: string; whenBusy?: "steer" | "followUp" }) {
+        sends.push({ text: input.text, ...(input.whenBusy ? { whenBusy: input.whenBusy } : {}) });
+        return { submissionId: String(17 + sends.length), deduped: false };
+      },
+      // 20 is a routine's input: the session knows it from its durable request id.
+      async quietInputs(_botId: string, ids: readonly string[]) {
+        return new Map(ids.map((id) => [id, id === "20"]));
+      },
+    }),
+    turnIntents: createBotTurnIntents(),
+  });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await service.send(DEVICE_ID, BOT_ID, "send-request-steer-0001", { text: "Keep it vegetarian.", whenBusy: "steer" });
+    await service.send(DEVICE_ID, BOT_ID, "send-request-queue-0001", { text: "Also a shopping list.", whenBusy: "queue" });
+    await service.send(DEVICE_ID, BOT_ID, "send-request-plain-0001", { text: "Thanks!" });
+    assert.deepEqual(sends, [
+      { text: "Keep it vegetarian.", whenBusy: "steer" },
+      { text: "Also a shopping list.", whenBusy: "followUp" },
+      { text: "Thanks!" },
+    ]);
+
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { run: { inputs: [1] } },
+      "pi.inbox": {
+        items: [
+          { id: 18, mode: "steer", content: [{ type: "text", text: "Keep it vegetarian." }] },
+          { id: 19, mode: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "routine" } } },
+          { id: 20, mode: "followUp", content: [{ type: "text", text: "Weekly reset: plan the week." }] },
+          { id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] },
+          // A photo with no words has nothing to show in a text bubble.
+          { id: 22, mode: "followUp", content: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }] },
+        ],
+      },
+    });
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    const expected = [
+      { submissionId: "18", mode: "steer", text: "Keep it vegetarian." },
+      { submissionId: "21", mode: "queue", text: "Also a shopping list." },
+    ];
+    assert.deepEqual(stream.frames.find((frame) => frame.type === "queued")!.payload.queued, expected);
+    assert.deepEqual((await service.session(BOT_ID, { activity: true })).queued, expected, "the snapshot agrees");
+    assert.equal(stream.raw.some((data) => data.includes("Weekly reset")), false, "a routine's input is not the person's message");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+/** A message of `codePoints` CJK code points (three UTF-8 bytes each), led by a label that tells it apart. */
+function cjkMessage(label: string, codePoints = 32_000): string {
+  return `${label} ${"一".repeat(codePoints - [...label].length - 1)}`;
+}
+
+/** The person's waiting follow-ups as the Mac's `pi.inbox` holds them; each id is its submission id. */
+function waitingInbox(texts: readonly string[]): Record<string, unknown> {
+  return {
+    "pi.inbox": {
+      items: texts.map((text, index) => ({ id: 30 + index, mode: "followUp", content: [{ type: "text", text }] })),
+    },
+  };
+}
+
+/** Every SSE block a device was sent parses through the native frame reader and stays inside the transport limit. */
+function assertEveryFrameFits(blocks: readonly string[]) {
+  assert.ok(blocks.length > 0, "the device was sent frames");
+  for (const block of blocks) {
+    assert.ok(Buffer.byteLength(block, "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "a frame exceeds the transport limit");
+    assert.equal(parseAidenSseFrames(block).length, 1);
+  }
+}
+
+test("twenty maximum-length CJK queued messages keep every frame and snapshot inside the transport's frame limit", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    await driven.emitView(
+      [user(1, "Plan dinners")],
+      waitingInbox(Array.from({ length: 20 }, (_, index) => cjkMessage(`m${index}`))),
+    );
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    assertEveryFrameFits(stream.blocks);
+
+    const session = await service.session(BOT_ID, { activity: true });
+    assert.ok(Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot fits");
+    const queuedFrames = stream.frames.filter((frame) => frame.type === "queued");
+    const shown = queuedFrames[queuedFrames.length - 1]!.payload.queued;
+    assert.ok(shown.length >= 1 && shown.length < 20, "some of the twenty fit, and the rest are left out");
+    assert.deepEqual(session.queued, shown, "the snapshot agrees with the queued frame");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("the queued frame keeps the oldest messages that fit, in the order sent, and each kept text is whole", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const texts = [...Array.from({ length: 19 }, (_, index) => cjkMessage(`m${index}`)), "Last, a short one."];
+    await driven.emitView([user(1, "Plan dinners")], waitingInbox(texts));
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+
+    const queuedFrames = stream.frames.filter((frame) => frame.type === "queued");
+    const queued = queuedFrames[queuedFrames.length - 1]!.payload.queued as Array<{ submissionId: string; text: string }>;
+    assert.ok(queued.length >= 1 && queued.length < texts.length, "some of the messages fit, and the rest are left out");
+    const sentIds = texts.map((_, index) => String(30 + index));
+    assert.deepEqual(queued.map((item) => item.submissionId), sentIds.slice(0, queued.length), "the oldest that fit, in order");
+    assert.deepEqual(queued.map((item) => item.text), texts.slice(0, queued.length), "no kept text is cut");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a transcript near its own budget with a long partial and a full queue still fits the frame limit, and the transcript gives way", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    // Four replies of 64,000 code points (about 768 KB) fill the transcript's own cap on their own.
+    const transcript = [
+      user(1, "Plan dinners"),
+      assistant(2, cjkMessage("a", 64_000)),
+      assistant(3, cjkMessage("b", 64_000)),
+      assistant(4, cjkMessage("c", 64_000)),
+      assistant(5, cjkMessage("d", 64_000)),
+    ];
+    await driven.emitView(transcript, {
+      "pi.live": { generation: { message: { content: [{ type: "text", text: cjkMessage("p", 32_000) }] } } },
+      ...waitingInbox(Array.from({ length: 20 }, (_, index) => cjkMessage(`m${index}`))),
+    });
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    assertEveryFrameFits(stream.blocks);
+
+    const session = await service.session(BOT_ID, { activity: true });
+    assert.ok(Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot fits");
+    assert.ok(session.partial, "the partial is in the snapshot");
+    assert.ok((session.queued?.length ?? 0) >= 1, "the queued list is in the snapshot");
+    assert.equal(session.hasOlder, true, "the transcript gave way to the partial and the queue");
+    assert.equal(session.entries[session.entries.length - 1]!.id, "entry_5", "the newest replies stay");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+/** U+0001: a control character, so each code point is written as a six-byte \u escape (the JSON worst case). */
+const ESCAPED = "\u0001";
+
+/** A message of `codePoints` escaped code points, led by a label that tells it apart. */
+function escapedMessage(label: string, codePoints: number): string {
+  return `${label} ${ESCAPED.repeat(codePoints - [...label].length - 1)}`;
+}
+
+/** Four questions at the protocol maxima, every character a six-byte escape. */
+function maximalQuestions(): AskUserQuestionV1[] {
+  return Array.from({ length: 4 }, (_, question) => ({
+    question: `${question} ${ESCAPED.repeat(998)}`, // 1,000 code points
+    header: `h${question}${ESCAPED.repeat(14)}`, // 16
+    multiSelect: false,
+    options: Array.from({ length: 5 }, (_, option) => ({
+      label: `o${option} ${ESCAPED.repeat(57)}`, // 60
+      description: `d${option} ${ESCAPED.repeat(1_997)}`, // 2,000
+    })),
+  }));
+}
+
+test("the parts that ship whole at the protocol maxima take well under half the frame limit", () => {
+  // Worst case in JSON bytes, six per code point: four questions of
+  // (1,000 + 16 + 5 x (60 + 2,000)) = 44,304 code points, 265,824 bytes; an
+  // approval of (2,000 + 120 + 128) = 2,248 code points, 13,488 bytes. State
+  // and activity add a few hundred bytes, so the group is under 300 KB, under
+  // the 512 KiB half of the 1 MiB frame limit. The partial (600,000 bytes) and
+  // the queued list (at most 256 KiB) share what is left of the snapshot budget.
+  const question = parseAidenRemoteBotQuestion({ waitId: WAIT_ID, toolCallId: ESCAPED.repeat(128), questions: maximalQuestions() });
+  const approval = parseAidenRemoteBotApproval({
+    waitId: WAIT_ID,
+    toolCallId: ESCAPED.repeat(128),
+    toolName: ESCAPED.repeat(120),
+    summary: ESCAPED.repeat(2_000),
+    canAllow: true,
+  });
+  const bytes = Buffer.byteLength(JSON.stringify({ question, approval }), "utf8");
+  assert.ok(bytes < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES / 2, `the question and approval take ${bytes} bytes`);
+});
+
+test("a partial over its share is cut from the front on a code-point boundary, keeping the newest words", () => {
+  // From the end, JSON content bytes: a 4-byte emoji, three bytes per CJK
+  // character, six per escape. 4 + 3 x 5 + 6 = 25 keeps one escape before the CJK run.
+  const text = `head${ESCAPED.repeat(10)}一一一一一😀`;
+  const tail = tailWithinJsonBytes(text, 25);
+  assert.equal(tail, `${ESCAPED}一一一一一😀`);
+  const contentBytes = (value: string) => Buffer.byteLength(JSON.stringify(value), "utf8") - 2;
+  assert.ok(contentBytes(tail) <= 25, "the tail fits its share");
+  assert.ok(contentBytes(`${ESCAPED}${tail}`) > 25, "one more code point would not fit: the cut is as long as it can be");
+  assert.equal(tailWithinJsonBytes("short", 100), "short", "text that fits is kept whole");
+  assert.equal(tailWithinJsonBytes("a😀", 3), "", "an emoji is never split, even to its lone half");
+});
+
+test("the probe at the protocol maxima keeps every frame and the snapshot inside the frame limit", async () => {
+  // A 100,000-code-point escaped partial, four maximal questions and three
+  // 14,000-code-point escaped queued messages (84,000 JSON bytes each), plus an
+  // escaped 100,000-code-point reply. Written out, the old snapshot was about 1.12 MB.
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const questions = createBotQuestions();
+  const service = runningOn(driven, fake, { questions, notifyBotsChanged: () => {} });
+  const stream = await openAudienceStream(service, { activity: true });
+  const asking = new AbortController();
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    await driven.emitView(
+      [user(1, "Plan dinners"), assistant(2, ESCAPED.repeat(100_000))],
+      {
+        "pi.live": { generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } } },
+        ...waitingInbox(Array.from({ length: 3 }, (_, index) => escapedMessage(`m${index}`, 14_000))),
+      },
+    );
+    const asked = questions.request({
+      botId: BOT_ID,
+      waitId: WAIT_ID,
+      toolCallId: "call_1",
+      questions: maximalQuestions(),
+      signal: asking.signal,
+    });
+    asked.catch(() => undefined);
+    const kinds = ["entry", "partial", "question", "queued"];
+    await stream.until(
+      () => kinds.every((kind) => stream.frames.some((frame) => frame.type === kind)),
+      "the entry, partial, question and queued frames",
+    );
+    // Each frame on its own is inside the limit, and each parses through the native reader.
+    assertEveryFrameFits(stream.blocks);
+
+    const session = await service.session(BOT_ID, { activity: true });
+    const wire = JSON.stringify(session);
+    assert.ok(Buffer.byteLength(wire, "utf8") < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot is inside the frame limit");
+    assert.deepEqual(parseAidenRemoteBotSession(JSON.parse(wire)), session, "the snapshot parses back to itself");
+    // Priority order: the question (about 268 KB) and the whole partial (600,000 bytes) ship.
+    // What is left, about 115 KB of 983,040, takes one 84,000-byte queued message: the second
+    // would bring the list to 168,000 bytes. The transcript gets nothing and says so.
+    assert.deepEqual(session.question?.questions, maximalQuestions(), "the question ships whole");
+    assert.equal(session.partial, ESCAPED.repeat(100_000), "the partial ships whole");
+    assert.deepEqual(session.queued?.map((item) => [item.submissionId, item.text]), [
+      ["30", escapedMessage("m0", 14_000)],
+    ]);
+    assert.deepEqual(session.entries, [], "the reply that no longer fits is left out");
+    assert.equal(session.hasOlder, true);
+  } finally {
+    asking.abort();
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a waiting input that can't be classified stays off phones and is retried, not asked again on every frame", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const asked: string[][] = [];
+  let failing = true;
+  const service = new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+      async quietInputs(_botId: string, ids: readonly string[]) {
+        asked.push([...ids]);
+        if (failing) throw new Error("The session could not be inspected.");
+        return new Map(ids.map((id) => [id, id === "20"]));
+      },
+    }),
+    turnIntents: createBotTurnIntents(),
+    classifyRetryMs: 300,
+  });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    const docs = {
+      "pi.live": { run: { inputs: [1] } },
+      "pi.inbox": {
+        items: [
+          { id: 20, mode: "followUp", content: [{ type: "text", text: "Weekly reset: plan the week." }] },
+          { id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] },
+        ],
+      },
+    };
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    assert.deepEqual((await service.session(BOT_ID, { activity: true })).queued, [], "withheld while it can't be classified");
+    assert.equal(asked.length, 1, "a failing classification is throttled, not retried on every frame");
+
+    failing = false;
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the retried classification");
+    const queued = stream.frames.filter((frame) => frame.type === "queued").map((frame) => frame.payload.queued);
+    assert.deepEqual(queued, [[{ submissionId: "21", mode: "queue", text: "Also a shopping list." }]]);
+    assert.equal(asked.length, 2);
+    assert.equal(stream.raw.some((data) => data.includes("Weekly reset")), false);
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("the classification pause runs on the host's clock: once it has passed, the next frame asks again", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const asked: string[][] = [];
+  let failing = true;
+  let clock = 1_000;
+  const service = runningOn(driven, fake, {
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+      async quietInputs(_botId: string, ids: readonly string[]) {
+        asked.push([...ids]);
+        if (failing) throw new Error("The session could not be inspected.");
+        return new Map(ids.map((id) => [id, false]));
+      },
+    }),
+    now: () => clock,
+    // Longer than the test: only a frame after the pause can ask again.
+    classifyRetryMs: 60_000,
+  });
+  try {
+    await service.session(BOT_ID, { activity: true });
+    const docs = {
+      "pi.live": { run: { inputs: [1] } },
+      "pi.inbox": { items: [{ id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] }] },
+    };
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    assert.equal(asked.length, 1, "within the pause");
+
+    failing = false;
+    clock += 60_000;
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    assert.equal(asked.length, 2, "the pause is over on the host's clock");
+    assert.deepEqual((await service.session(BOT_ID, { activity: true })).queued, [
+      { submissionId: "21", mode: "queue", text: "Also a shopping list." },
+    ]);
+  } finally {
+    await service.close();
+  }
+});
+
+test("a host without bot-activity-v1 refuses whenBusy instead of guessing", async () => {
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = sessionService(fake.runtime);
+  assert.equal(service.supportsActivity, false);
+  await assert.rejects(
+    service.send(DEVICE_ID, BOT_ID, "send-request-steer-0002", { text: "Hi", whenBusy: "steer" }),
+    isError("invalid_request", 400),
+  );
+  // Turn intents alone are not the token: the Bot service's Chat activity gate is needed too.
+  const ungated = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fake.runtime, turnIntents: createBotTurnIntents() });
+  assert.equal(ungated.supportsActivity, false);
+  await assert.rejects(
+    ungated.send(DEVICE_ID, BOT_ID, "send-request-queue-0002", { text: "Hi", whenBusy: "queue" }),
+    isError("invalid_request", 400),
+  );
+  await service.close();
+  await ungated.close();
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 30: the person's messages carry their submissionId
+// ---------------------------------------------------------------------------
+
+/** Every `submissionId` key anywhere in a frame or snapshot. */
+function submissionIdKeys(value: unknown): number {
+  return JSON.stringify(value).match(/"submissionId"/gu)?.length ?? 0;
+}
+
+/** The user bubbles a device holds, as `[text, submissionId]`. */
+function userBubbles(entries: readonly { type: string; role?: string; text?: string; submissionId?: string }[]) {
+  return entries.filter((entry) => entry.type === "message" && entry.role === "user").map((entry) => [entry.text, entry.submissionId ?? null]);
+}
+
+test("a person's send carries its submissionId on its bubble in frames and on a reconnect snapshot, and a routine's input never does", async () => {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-submission-"));
+  durableRoots.push(profileDir);
+  const releases: Array<() => void> = [];
+  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "tidy" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Tidied."),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "brief" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Inbox is quiet."),
+  ]);
+  const runtime = await createBotSessionService({
+    profileDir,
+    models: fauxModels.models,
+    extension: recordingDeps({ tools: [{ tool: command, replay: "unsafe" }] }),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([BOT_ID]),
+  });
+  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const holder = await openAudienceStream(service, { activity: true });
+  const legacy = await openAudienceStream(service, {});
+  const idle = async () => {
+    await waitFor(async () => (await runtime.state(BOT_ID)).kind === "idle", { what: "the turn to end" });
+  };
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the first snapshot");
+    const receipt = await service.send(DEVICE_ID, BOT_ID, "send-request-submission-0001", { text: "Tidy my notes" });
+    await waitFor(() => command.executions.length === 1, { what: "the person's turn to work" });
+    // While the turn works, the session lists the person's placed input under its entry.
+    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], [receipt.submissionId]);
+    releases.shift()!();
+    await idle();
+
+    // A routine's input, worked on while the projector watches.
+    await runtime.send(BOT_ID, { text: "Check my inbox.", requestId: "routine:task_1:1", label: "Morning brief" });
+    await waitFor(() => command.executions.length === 2, { what: "the routine's turn to work" });
+    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], [], "a routine's input is not the person's message");
+    releases.shift()!();
+    await idle();
+    await holder.until(
+      () => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Inbox is quiet."),
+      "the routine's reply",
+    );
+
+    const sentFrame = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.text === "Tidy my notes")!;
+    assert.equal(sentFrame.payload.entry.submissionId, receipt.submissionId, "the bubble's frame names the send it settles");
+    const routineFrame = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.text === "Check my inbox.")!;
+    assert.equal("submissionId" in routineFrame.payload.entry, false);
+
+    // Both turns are done, so the session no longer lists them; the projector remembers.
+    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], []);
+    const reconnect = await openAudienceStream(service, { activity: true });
+    try {
+      await reconnect.until(() => reconnect.frames.length >= 1, "the reconnect snapshot");
+      const expected = [["Tidy my notes", receipt.submissionId], ["Check my inbox.", null]];
+      assert.deepEqual(userBubbles(reconnect.frames[0]!.payload.session.entries), expected);
+      assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), expected, "a fetch agrees");
+    } finally {
+      await reconnect.close();
+    }
+
+    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false, "a device without bot:activity never sees the key");
+    assert.equal(submissionIdKeys(await service.session(BOT_ID)), 0);
+    assert.ok(gapless(holder.frames) && gapless(legacy.frames));
+  } finally {
+    for (const release of releases) release();
+    await holder.close();
+    await legacy.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+test("only the person's own message is tagged: a routine's input and a question answer never carry a submissionId", () => {
+  const entries = projectBotSessionEntries(
+    [
+      user(1, "Plan dinners"),
+      notice(2, { notice: "routine", label: "Morning brief", requestId: "routine:t:1" }),
+      user(3, "Check my inbox."),
+      {
+        id: 4,
+        kind: "pi.tool-result",
+        model: [{ role: "toolResult", toolName: "ask_user_question", isError: false, content: [{ type: "text", text: "Answer: Blue" }], details: { answerText: "Blue" } }],
+      },
+      assistant(5, "Done."),
+      user(6, "Thanks"),
+    ] as never,
+    // A runtime that wrongly listed every entry: only the person's own messages take an id.
+    new Map([["1", "17"], ["3", "18"], ["4", "19"], ["5", "20"], ["6", "bad id"]]),
+  );
+  assert.deepEqual(
+    entries.map((entry) => (entry.type === "message" ? [entry.role, entry.text, entry.submissionId ?? null] : [entry.type])),
+    [
+      ["user", "Plan dinners", "17"],
+      ["user", "Check my inbox.", null],
+      ["user", "Blue", null],
+      ["assistant", "Done.", null],
+      ["user", "Thanks", null],
+    ],
+  );
+});
+
+test("a device without bot:activity gets each tagged bubble without its id, at the same seq", async () => {
+  const driven = drivenConversation([]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "17" });
+  let placed = new Map<string, string>();
+  const service = runningOn(driven, { ...fake, runtime: { ...fake.runtime, placedSubmissions: async () => placed } });
+  const holder = await openAudienceStream(service, { activity: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    placed = new Map([["1", "17"]]);
+    await driven.emit([user(1, "Plan dinners")]);
+    // The turn ended: the session forgets the submission, the projector does not.
+    placed = new Map();
+    fake.setState({ kind: "idle" });
+    await driven.emit([user(1, "Plan dinners"), assistant(2, "Monday: soup.")]);
+    await holder.until(() => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.role === "assistant"), "the reply");
+    await legacy.until(() => legacy.frames.length === holder.frames.length, "the same frames");
+
+    const bubbles = (frames: Frame[]) => frames.filter((frame) => frame.type === "entry" && frame.payload.entry.role === "user");
+    assert.deepEqual(bubbles(holder.frames).map((frame) => frame.payload.entry.submissionId), ["17"], "one entry frame, never updated");
+    const { submissionId: _submissionId, ...untagged } = bubbles(holder.frames)[0]!.payload.entry;
+    assert.deepEqual(bubbles(legacy.frames).map((frame) => frame.payload.entry), [untagged], "the same bubble, without its id");
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq), "every device stays on one seq");
+    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false);
+
+    assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), [["Plan dinners", "17"]]);
+    assert.equal(submissionIdKeys(await service.session(BOT_ID)), 0, "a fetch without bot:activity has no submissionId");
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("tags stay on every bubble in view, past the window, and no old bubble is ever sent again", async () => {
+  const driven = drivenConversation([]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "1" });
+  let asked = 0;
+  let current: RawEntry[] = [];
+  const service = runningOn(driven, {
+    ...fake,
+    runtime: {
+      ...fake.runtime,
+      async placedSubmissions() {
+        asked += 1;
+        // Only the message just sent is still placed; every earlier turn is done.
+        const newest = current[current.length - 1];
+        return new Map(newest ? [[String(newest.id), `sub_${newest.id}`]] : []);
+      },
+    },
+  });
+  const total = AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES + 10;
+  const holder = await openAudienceStream(service, { activity: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    for (let id = 1; id <= total; id += 1) {
+      current = [...current, user(id, `Message ${id}`)];
+      await driven.emit(current);
+      if (id % 50 === 0) await driven.emit(current, "Working"); // streaming frames ask nothing
+    }
+    const entryFrames = (frames: Frame[]) => frames.filter((frame) => frame.type === "entry");
+    await holder.until(() => entryFrames(holder.frames).length >= total, "every message");
+    await legacy.until(() => legacy.frames.length === holder.frames.length, "the same frames");
+
+    for (const stream of [holder, legacy]) {
+      // Each bubble is sent exactly once, when it is new: never again when an older one leaves view.
+      assert.deepEqual(
+        entryFrames(stream.frames).map((frame) => frame.payload.entry.id),
+        Array.from({ length: total }, (_, index) => `entry_${index + 1}`),
+      );
+      assert.ok(gapless(stream.frames));
+    }
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    assert.deepEqual(
+      entryFrames(holder.frames).map((frame) => frame.payload.entry.submissionId),
+      Array.from({ length: total }, (_, index) => `sub_${index + 1}`),
+    );
+    assert.equal(asked, total, "one lookup per new message");
+
+    // Long after their turns ended, every bubble in view still names its send.
+    const bubbles = userBubbles((await service.session(BOT_ID, { activity: true })).entries);
+    assert.equal(bubbles.length, AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
+    assert.deepEqual(bubbles.map(([, id]) => id), bubbles.map(([text]) => `sub_${String(text).slice("Message ".length)}`));
+    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false);
+    // The memo forgot the bubbles that left view: it holds no more tags than the window shows.
+    assert.equal(await service.submissionTagsHeld(BOT_ID), AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("a failed placement lookup is reported, and that bubble falls back to its text", async () => {
+  const driven = drivenConversation([]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "1" });
+  const reports: unknown[] = [];
+  let failing = true;
+  const service = runningOn(
+    driven,
+    {
+      ...fake,
+      runtime: {
+        ...fake.runtime,
+        async placedSubmissions() {
+          if (failing) throw new Error("The session could not be inspected.");
+          return new Map([["3", "sub_3"]]);
+        },
+      },
+    },
+    { onReport: (_botId, error) => reports.push(error) },
+  );
+  try {
+    await service.session(BOT_ID, { activity: true });
+    await driven.emit([user(1, "Plan dinners")]);
+    await driven.emit([user(1, "Plan dinners"), user(2, "And snacks")]);
+    assert.equal(reports.length, 1, "a failing streak is reported once");
+    failing = false;
+    await driven.emit([user(1, "Plan dinners"), user(2, "And snacks"), user(3, "And lunches")]);
+    assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), [
+      ["Plan dinners", null],
+      ["And snacks", null],
+      ["And lunches", "sub_3"],
+    ]);
+    failing = true;
+    await driven.emit([user(1, "Plan dinners"), user(2, "And snacks"), user(3, "And lunches"), user(4, "And breakfasts")]);
+    assert.deepEqual(reports.map((error) => (error as Error).message), [
+      "The session could not be inspected.",
+      "The session could not be inspected.",
+    ], "a new streak after a success is reported again");
+  } finally {
+    await service.close();
+  }
+});
+
+/** Publish order: frames one publish emits never go back in this order. */
+const PUBLISH_ORDER = ["entry", "partial", "state", "question", "approval", "activity", "queued"];
+
+test("a steer and a follow-up placed mid-turn take their queued ids, two at one boundary each their own, in the publish that drops them from Queued", async () => {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-placed-"));
+  durableRoots.push(profileDir);
+  const releases: Array<() => void> = [];
+  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "plan" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Vegetarian, no mushrooms."),
+    fauxAssistantMessage("Here is the shopping list."),
+  ]);
+  const runtime = await createBotSessionService({
+    profileDir,
+    models: fauxModels.models,
+    extension: recordingDeps({ tools: [{ tool: command, replay: "unsafe" }] }),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([BOT_ID]),
+  });
+  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const first = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0001", { text: "Plan dinners" });
+    await waitFor(() => command.executions.length === 1, { what: "the turn to work" });
+    const followUp = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0002", { text: "Also a shopping list.", whenBusy: "queue" });
+    const steer = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0003", { text: "Keep it vegetarian.", whenBusy: "steer" });
+    const second = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0004", { text: "No mushrooms.", whenBusy: "steer" });
+    const ids = [followUp, steer, second].map((receipt) => receipt.submissionId);
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "queued" && frame.payload.queued.length === 3),
+      "all three waiting",
+    );
+    releases.shift()!();
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Here is the shopping list."),
+      "the follow-up's reply",
+    );
+
+    const bubbleFrame = (text: string) =>
+      stream.frames.findIndex((frame) => frame.type === "entry" && frame.payload.entry.role === "user" && frame.payload.entry.text === text);
+    const placedIds = ["Plan dinners", "Also a shopping list.", "Keep it vegetarian.", "No mushrooms."].map(
+      (text) => stream.frames[bubbleFrame(text)]!.payload.entry.submissionId,
+    );
+    assert.deepEqual(placedIds, [first.submissionId, ...ids], "each bubble names its own send");
+    assert.equal(new Set(placedIds).size, 4);
+
+    for (const [text, id] of [["Also a shopping list.", ids[0]], ["Keep it vegetarian.", ids[1]], ["No mushrooms.", ids[2]]] as const) {
+      const at = bubbleFrame(text);
+      const listing = stream.frames.map((frame) =>
+        frame.type === "queued" && frame.payload.queued.some((item: { submissionId: string }) => item.submissionId === id));
+      const lastListed = listing.lastIndexOf(true);
+      const dropped = stream.frames.findIndex((frame, index) => index > lastListed && frame.type === "queued");
+      assert.ok(lastListed < at && at < dropped, `${text}: listed, then placed, then dropped`);
+      // From the bubble to the Queued change, the frames follow one publish's order.
+      const order = stream.frames.slice(at, dropped + 1).map((frame) => PUBLISH_ORDER.indexOf(frame.type));
+      assert.deepEqual(order, [...order].sort((left, right) => left - right), `${text}: dropped in the publish that placed it`);
+    }
+    // Pi places waiting inputs at a boundary: at least two of them landed in one publish
+    // (consecutive bubble frames), and each still named its own send.
+    const together = stream.frames.findIndex((frame, index) => {
+      const next = stream.frames[index + 1];
+      return frame.type === "entry" && frame.payload.entry.role === "user"
+        && next?.type === "entry" && next.payload.entry.role === "user";
+    });
+    assert.ok(together > 0, "two inputs placed at one boundary");
+    const pair = [stream.frames[together]!, stream.frames[together + 1]!].map((frame) => frame.payload.entry.submissionId);
+    assert.ok(pair.every((id) => ids.includes(id)) && pair[0] !== pair[1], JSON.stringify(pair));
+    assert.ok(gapless(stream.frames));
+  } finally {
+    for (const release of releases) release();
+    await stream.close();
+    await service.close();
+    await runtime.shutdown();
+  }
 });

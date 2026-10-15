@@ -93,6 +93,7 @@ function fixture(
     >;
     updateBotAccessError?: unknown;
     createBotError?: unknown;
+    chatActivity?: boolean;
     capabilityCatalog?: (
       audienceId: string,
       botId?: string,
@@ -145,6 +146,8 @@ function fixture(
       const updated = bot(existing.id, {
         ...input,
         description: input.description,
+        // Like the real store, an absent choice keeps the saved one.
+        chatActivity: input.chatActivity ?? existing.chatActivity,
         revision: `${existing.revision}_next`,
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt + 1,
@@ -799,4 +802,43 @@ test("Remote targeted catalogs validate Bot ownership before forwarding the audi
       (error as { status?: number }).status === 404,
   );
   assert.deepEqual(calls, [["device_authorized", "bot_owned"]]);
+});
+
+test("a phone saves Chat activity with PATCH only where bot-activity-v1 is wired", async () => {
+  const wired = fixture([bot("bot_1")], { chatActivity: true });
+  const before = await wired.service.get("bot_1");
+  assert.deepEqual(before.chatActivity, { level: "quiet", wording: "follows" }, "a Bot that never chose reads as the default");
+
+  const saved = await wired.service.updateIdentity("bot_1", before.revision, {
+    chatActivity: { level: "summary", wording: "thinking" },
+  });
+  assert.deepEqual(saved.chatActivity, { level: "summary", wording: "thinking" });
+  assert.notEqual(saved.revision, before.revision);
+  assert.equal(saved.name, before.name, "only the choice changed");
+  assert.deepEqual((await wired.service.get("bot_1")).chatActivity, { level: "summary", wording: "thinking" });
+
+  const renamed = await wired.service.updateIdentity("bot_1", saved.revision, { name: "Renamed" });
+  assert.deepEqual(renamed.chatActivity, { level: "summary", wording: "thinking" }, "an absent value keeps the stored choice");
+
+  for (const invalid of [
+    { level: "verbose", wording: "follows" },
+    { level: "quiet" },
+    { level: "quiet", wording: "follows", extra: true },
+  ]) {
+    await assert.rejects(
+      wired.service.updateIdentity("bot_1", renamed.revision, { chatActivity: invalid }),
+      (error: unknown) => (error as { code?: string }).code === "invalid_request",
+      JSON.stringify(invalid),
+    );
+  }
+});
+
+test("a Mac without bot-activity-v1 neither shows nor accepts chatActivity", async () => {
+  const older = fixture([bot("bot_1", { chatActivity: { level: "detailed", wording: "follows" } })]);
+  const detail = await older.service.get("bot_1");
+  assert.equal("chatActivity" in detail, false);
+  await assert.rejects(
+    older.service.updateIdentity("bot_1", detail.revision, { chatActivity: { level: "summary", wording: "follows" } }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
 });

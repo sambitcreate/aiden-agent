@@ -161,6 +161,7 @@ import {
   parseChatReadResponse,
   rememberChatReadReconciliation,
   rememberDetachedLifecycleStream,
+  rememberOwnGenerationStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
@@ -1620,6 +1621,7 @@ export function startGeneration(
   messageTurnId: string,
 ): GenerationHandle {
   const streamId = messageTurnId;
+  rememberOwnGenerationStream(streamId);
   const stream = subscribeGenerationStream(
     streamId,
     { chatId: params.chatId, workspaceId: params.workspaceId },

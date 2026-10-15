@@ -659,14 +659,21 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 26 adds the phone simulator viewer grant.
     /// Contract revision 27 adds `bot:cards`, which only opts the device into
     /// the memory and routine proposal session entries.
+    /// Contract revision 30 adds `bot:activity`, which only opts the device into
+    /// the activity and queued session frames and Bot detail `chatActivity`.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
+        Self(rawValue: "bot:activity"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
     /// Bot session entries. It grants no authority.
     static let botCards = Self(rawValue: "bot:cards")
+
+    /// Revision 30: the device receives activity and queued frames and Bot
+    /// detail `chatActivity`. It grants no authority.
+    static let botActivity = Self(rawValue: "bot:activity")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
