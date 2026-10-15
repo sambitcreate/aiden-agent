@@ -5,7 +5,7 @@ import { createModelPaceMeasurement } from "./model-pace-core.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
-import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
+import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
@@ -113,7 +113,7 @@ import {
   protectAdmittedBotTool,
   isComputerUseCapabilityTool,
 } from "./bot-tool-authority.js";
-import { mcpAgentToolName } from "./mcp-tool-identity.js";
+import { mcpAgentToolIdentity, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
 import { type SkillRegistrySnapshot } from "./skill-registry.js";
 import { buildSystemPrompt } from "./chat-system-prompt.js";
@@ -945,7 +945,6 @@ async function prepareGeneration(
       tools: [] as AgentTool[],
       generationExtensions,
       modelImageReferences,
-      mcpServerInstructions: createMcpInstructionCollector().snapshot(),
       lateMcpDiscovery: NO_LATE_MCP_DISCOVERY as McpLateDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
@@ -1537,7 +1536,6 @@ async function prepareGeneration(
   // loses it on the next command once agent access is revoked.
   const deviceShimDir =
     deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
-  const mcpInstructionCollector = createMcpInstructionCollector();
   // In the codemode lane a slow MCP server joins the turn late instead of
   // holding its start; elsewhere tools are declared and discovery blocks.
   let lateMcpDiscovery: McpLateDiscovery = NO_LATE_MCP_DISCOVERY;
@@ -1553,7 +1551,6 @@ async function prepareGeneration(
     : undefined;
   let tools = (
     await buildAgentTools({
-      onMcpServerInstructions: mcpInstructionCollector.capture,
       mcpDeferral,
       mcpProviderScope: {
         signal,
@@ -1675,17 +1672,10 @@ async function prepareGeneration(
       if (!shell) throw new Error("The Bot shell tool is unavailable.");
       tools.push(shell);
     }
-    const configuredServers = await configStore.listMcpServers();
     if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
-    const mcpToolNames = exactBotMcpToolNames(
-      authority,
-      botRuntimeCatalog.resources.connections,
-      (connectionSourceId, toolName) => {
-        const server = configuredServers.find(({ id }) => id === connectionSourceId);
-        if (!server) throw new Error("A selected Bot connection is no longer configured.");
-        return mcpAgentToolName(server, toolName);
-      },
-    );
+    // Joined to the built tools by MCP identity, so their real names (from the
+    // full live inventory) are the ones granted.
+    const mcpToolNames = exactBotMcpToolNames(authority, botRuntimeCatalog.resources.connections, tools);
     for (const [modelToolName, grant] of mcpToolNames) {
       if (grant.effect === "mutating") botMutatingToolNames.add(modelToolName);
     }
@@ -2003,7 +1993,6 @@ async function prepareGeneration(
     tools,
     generationExtensions,
     modelImageReferences,
-    mcpServerInstructions: mcpInstructionCollector.snapshot(),
     lateMcpDiscovery,
     displayedImages,
     displayedHtmlArtifacts,
@@ -2367,7 +2356,6 @@ export const llmClient = {
       tools,
       generationExtensions,
       modelImageReferences,
-      mcpServerInstructions,
       lateMcpDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
@@ -2393,6 +2381,11 @@ export const llmClient = {
       botApprovedRoots,
       botMutatingToolNames,
     } = setup;
+    // Claim checks tell connector failures by the tools' real MCP identity.
+    const claimCheckOptions = {
+      isConnectorTool: (name: string) => [...tools, ...lateMcpDiscovery.tools()]
+        .some((tool) => tool.name === name && mcpAgentToolIdentity(tool) !== undefined),
+    };
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
     const { model } = runtime;
@@ -2961,6 +2954,7 @@ export const llmClient = {
                 : SETTINGS_SECTIONS.filter((section) => section !== "simulator"),
               settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
+              mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
               mcpServerTotal: assistantMcpInventory.totalEnabledServers,
               mcpInventoryTruncated: assistantMcpInventory.truncated,
@@ -3005,11 +2999,8 @@ export const llmClient = {
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
       );
-      const modelContributions = withMcpServerInstructions(
-        applyCustomModelToolPolicy(
-          resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
-        ),
-        mcpServerInstructions,
+      const modelContributions = applyCustomModelToolPolicy(
+        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
       );
       // Freeze only the already-admitted MCP inventory. The provider sees the
       // discovery/script tools; nested calls still use the ordinary host gates.
@@ -3019,6 +3010,16 @@ export const llmClient = {
         tools: declared,
       };
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      // The MCP servers this turn may use, as a bounded section patched into the
+      // transcript (never the base prompt), from the final admitted inventory,
+      // including servers that finish discovery after the turn started.
+      const declaredToolNames = new Set(runtimeTools.map(({ name }) => name));
+      const mcpServersSection = createMcpServersSectionRefresher(() => renderMcpServersSection(
+        candidate?.getCallableTools() ?? modelContributions.tools,
+        { declared: declaredToolNames },
+      ));
+      // Activity shows MCP tools by their `server/tool` label, not the generated name.
+      timeline.setToolLabels((toolName) => mcpToolActivityLabel(candidate?.getCallableTools() ?? modelContributions.tools, toolName));
       const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
       const compactionInputReserveTokens = configuredCompactionReserveTokens(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
@@ -3181,6 +3182,13 @@ export const llmClient = {
         }, initialization.controller.signal);
         initialMessages = prepared.messages;
         updateGenerationContextOptions(generationContextOptions, prepared);
+      }
+      {
+        const prepared = mcpServersSection.apply({ messages: initialMessages, tools: [...runtimeTools] });
+        if (prepared.messages !== initialMessages) {
+          initialMessages = prepared.messages;
+          updateGenerationContextOptions(generationContextOptions, prepared);
+        }
       }
       // Register once the transcript carries AGENTS.md, so the profile's
       // instruction baseline matches the prompt it captured.
@@ -3360,6 +3368,7 @@ export const llmClient = {
             runtime.provider.modelMetadata?.[model.id]?.overrides,
           );
           if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
+          nextContext = mcpServersSection.apply(nextContext);
           let changed = nextContext !== context;
           if (changed) {
             updateGenerationContextOptions(generationContextOptions, nextContext);
@@ -4476,7 +4485,7 @@ export const llmClient = {
               ? "The local agent runtime could not complete this response safely."
               : null);
         if (finalError) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(
             full,
             reasoning,
@@ -4504,7 +4513,7 @@ export const llmClient = {
           ) &&
           !wasCancelled
         ) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
@@ -4524,6 +4533,7 @@ export const llmClient = {
               wasCancelled ? activeGeneration.cancellationOrigin : undefined,
             ),
             full,
+            claimCheckOptions,
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
@@ -4558,7 +4568,7 @@ export const llmClient = {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
-        const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+        const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
         await finalizePiTurnPersistence(persisted);
         sendGeneration(streamId, "chat:error", withUndeliveredGuidance({

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { crc32 } from "node:zlib";
-import { assertUniqueMcpAgentToolNames, mcpAgentToolName } from "./mcp-tool-identity.js";
-import { executeMcpAgentTool, mcpAgentToolResult, MAX_MCP_RESULT_TEXT_CHARS, MAX_MCP_IMAGES, MAX_MCP_IMAGE_BYTES } from "./mcp-tool-result.js";
+import { executeMcpAgentTool, mcpAgentToolPresentation, mcpAgentToolResult, mcpScriptResult, MAX_MCP_RESULT_TEXT_CHARS, MAX_MCP_IMAGES, MAX_MCP_IMAGE_BYTES, MAX_MCP_SCRIPT_CONTENT_BYTES, MAX_MCP_TOOL_DESCRIPTION_CHARS } from "./mcp-tool-result.js";
 import { projectMessagesForModel } from "./generation-context.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -48,22 +47,6 @@ test("MCP images are validated, bounded and projected out for text-only models",
   const many = mcpAgentToolResult({ content: Array.from({ length: 10 }, () => ({ ...block })) });
   assert.equal(many.content.filter((part) => part.type === "image").length, MAX_MCP_IMAGES);
   assert.throws(() => mcpAgentToolResult({ content: [block], isError: true }), /image attached/u);
-});
-
-test("MCP agent tool names bind to stable server and raw tool identities", () => {
-  const first = mcpAgentToolName({ id: "github-work", name: "GitHub" }, "create_issue");
-  const second = mcpAgentToolName({ id: "github-personal", name: "GitHub" }, "create_issue");
-  const punctuationA = mcpAgentToolName({ id: "server", name: "Same" }, "foo!");
-  const punctuationB = mcpAgentToolName({ id: "server", name: "Same" }, "foo?");
-  assert.notEqual(first, second);
-  assert.notEqual(punctuationA, punctuationB);
-  assert.ok(first.length <= 64);
-  assert.ok(mcpAgentToolName({ id: "long", name: "x".repeat(200) }, "y".repeat(200)).length <= 64);
-  assert.doesNotThrow(() => assertUniqueMcpAgentToolNames([{ name: first }, { name: second }]));
-  assert.throws(
-    () => assertUniqueMcpAgentToolNames([{ name: first }, { name: first }]),
-    /identity collision/iu,
-  );
 });
 
 test("maps a successful MCP result into Pi tool content", () => {
@@ -190,4 +173,56 @@ test("embedded MCP text and raster resources survive without dereferencing resou
   })) });
   assert.equal(result.content.filter((part) => part.type === "image").length, MAX_MCP_IMAGES);
   assert.ok(text({ content: [{ type: "resource", resource: { text: "x".repeat(100_000) } }] }).length <= MAX_MCP_RESULT_TEXT_CHARS);
+});
+
+test("structured content already serialized in a text block reaches the model once", () => {
+  const structuredContent = { city: "Paris", temperature: 21, tags: ["sunny"] };
+  const echoed = text({ content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }], structuredContent });
+  assert.doesNotMatch(echoed, /Structured content/u);
+  assert.equal(echoed.match(/Paris/gu)?.length, 1);
+  // A text block that differs (prose, or different JSON) keeps the structured evidence.
+  for (const other of ["It is 21 degrees in Paris.", JSON.stringify({ ...structuredContent, temperature: 22 })]) {
+    assert.match(text({ content: [{ type: "text", text: other }], structuredContent }), /Structured content:[\s\S]*"temperature":21/u);
+  }
+});
+
+test("model-facing MCP text keeps the end of oversized output, where errors usually are", async () => {
+  const result = await executeMcpAgentTool(async () => ({ content: [{ type: "text", text: `start ${"x".repeat(100_000)} Error: final failure` }] }));
+  const preview = (result.content[0] as { text: string }).text;
+  assert.ok(preview.length <= MAX_MCP_RESULT_TEXT_CHARS);
+  assert.match(preview, /^start /u);
+  assert.match(preview, /Error: final failure$/u);
+  assert.match(preview, /characters omitted from the middle/u);
+});
+
+test("script-facing results keep protocol blocks far beyond the model bound and say what they dropped", () => {
+  const long = `begin${"a".repeat(MAX_MCP_SCRIPT_CONTENT_BYTES)}finish`;
+  const result = mcpScriptResult({ content: [{ type: "text", text: "small" }, { type: "text", text: long }, { type: "resource_link", uri: "memo://x", name: "x" }], structuredContent: { ok: true }, isError: true });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.structuredContent, { ok: true });
+  assert.deepEqual(result.content[0], { type: "text", text: "small" });
+  const kept = (result.content[1] as { text: string }).text;
+  assert.ok(kept.length > 500_000);
+  assert.match(kept, /^begin/u);
+  assert.match(kept, /finish$/u);
+  assert.match(kept, /characters omitted from the middle/u);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.content)) <= MAX_MCP_SCRIPT_CONTENT_BYTES + 1_024);
+  assert.match(JSON.stringify(result.content[2]), /resource_link|omitted/u);
+  const invalid = mcpScriptResult({ content: [null], structuredContent: { get secret() { throw new Error("accessor must not run"); } } });
+  assert.match(JSON.stringify(invalid.content), /omitted: too large or invalid/u);
+  assert.match(JSON.stringify(invalid.content), /structuredContent omitted: too large/u);
+});
+
+test("MCP tool presentation bounds descriptions, falls back to titles, and labels tools by server", () => {
+  const long = mcpAgentToolPresentation("Docs", { name: "search", description: "d".repeat(50_000) });
+  assert.ok(long.description.length <= MAX_MCP_TOOL_DESCRIPTION_CHARS);
+  assert.equal(long.label, "Docs/search");
+  const titled = mcpAgentToolPresentation("GitHub", { name: "list_issues", title: "List issues", outputSchema: { type: "object" } });
+  assert.equal(titled.description, "List issues");
+  assert.equal(titled.label, "GitHub/List issues");
+  assert.deepEqual(titled.outputSchema, { type: "object" });
+  const annotated = mcpAgentToolPresentation("  ", { name: "x", annotations: { title: "Annotated" }, outputSchema: "invalid" });
+  assert.equal(annotated.description, "Annotated");
+  assert.equal(annotated.label, "MCP/Annotated");
+  assert.equal(annotated.outputSchema, undefined);
 });

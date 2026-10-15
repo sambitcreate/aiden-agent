@@ -20,7 +20,6 @@ async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
     strict: ctx.mcpServerIds !== undefined,
     allowProviderAuth: ctx.allowMcpProviderAuth === true,
     providerScope: ctx.mcpProviderScope,
-    onServerInstructions: ctx.onMcpServerInstructions,
     deferral: ctx.mcpDeferral,
   });
 }

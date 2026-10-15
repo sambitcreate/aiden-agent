@@ -2,9 +2,10 @@ import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import * as React from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { installBotTestIpc } from "../../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import { PLUGIN_CATALOG, isConnectablePlugin } from "../../shared/plugin-catalog";
 import type { McpPresetState, McpServer } from "../../lib/types";
@@ -59,6 +60,8 @@ function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
   const calls = installBotTestIpc({
     "mcp:list": () => [localServer],
     "mcp:presets": () => catalogPresetStates(),
+    "mcp:liveStatus": () => [],
+    "mcp:dependents": () => ({ schedules: [], bots: [] }),
     "providers:list": () => [],
     ...handlers,
   });
@@ -302,4 +305,263 @@ test("provider credential consent identifies the exact endpoint and separates sa
   const approved = renderToStaticMarkup(<McpProviderAuthFields {...props} approved />);
   assert.match(approved, /Stop sharing credential/u);
   assert.match(approved, /Approved on this device/u);
+});
+
+const remoteServer: McpServer = {
+  id: "mcp-remote",
+  name: "Remote",
+  transport: "http",
+  url: "https://tools.test/mcp",
+  oauth: true,
+  enabled: true,
+};
+
+function linearState(patch: Partial<McpPresetState> = {}): McpPresetState {
+  return catalogPresetStates({ linear: patch }).find((state) => state.preset.id === "linear")!;
+}
+
+function renderPreset(state: McpPresetState, server: McpServer | undefined, handlers: Record<string, (...args: unknown[]) => unknown>) {
+  const calls = installBotTestIpc({
+    "mcp:list": () => (server ? [server] : []),
+    "mcp:presets": () => [state],
+    ...handlers,
+  });
+  const openChanges: boolean[] = [];
+  function Harness() {
+    const [open, setOpen] = React.useState(true);
+    return (
+      <PresetSetupDialog
+        state={state}
+        server={server}
+        open={open}
+        onOpenChange={(next) => {
+          openChanges.push(next);
+          setOpen(next);
+        }}
+      />
+    );
+  }
+  render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <Harness />
+      <Toaster />
+    </QueryClientProvider>,
+  );
+  return { calls, openChanges };
+}
+
+const channelCalls = (calls: { channel: string; args: unknown[] }[], channel: string) =>
+  calls.filter((call) => call.channel === channel);
+
+test("configured rows show live status pushed from main, with tool and resource badges", async () => {
+  mount({
+    "mcp:liveStatus": () => [{ serverId: "mcp-files", state: "connected", toolCount: 5, resources: true }],
+  });
+  const status = await screen.findByLabelText("Files status");
+  await waitFor(() => assert.match(status.textContent ?? "", /Connected/u));
+  assert.match(status.textContent ?? "", /Tools 5/u);
+  assert.match(status.textContent ?? "", /Resources/u);
+
+  act(() => emitBotTestNotification("mcp:statusChanged", { serverId: "mcp-files", state: "failed", error: "spawn npx ENOENT" }));
+  await waitFor(() => assert.match(status.textContent ?? "", /Couldn’t connect/u));
+  assert.ok(screen.getByText("spawn npx ENOENT"));
+
+  act(() => emitBotTestNotification("mcp:statusChanged", { serverId: "mcp-files", state: "closed", needsSignIn: true }));
+  await waitFor(() => assert.match(status.textContent ?? "", /Needs sign-in/u));
+});
+
+test("removing a server names the schedules and Bots that rely on it", async () => {
+  mount({
+    "mcp:dependents": () => ({ schedules: [{ id: "t1", name: "Morning digest" }], bots: [{ id: "b1", name: "Planner" }] }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Remove Files" }));
+  const dialog = await screen.findByRole("alertdialog");
+  await waitFor(() => assert.match(within(dialog).getByRole("note").textContent ?? "", /“Morning digest”.*“Planner”.*use this server/su));
+});
+
+test("disabling a server with dependents asks first and only then saves it disabled", async () => {
+  const calls = mount({
+    "mcp:save": (server: unknown) => server,
+    "mcp:dependents": () => ({ schedules: [{ id: "t1", name: "Morning digest" }], bots: [] }),
+  });
+  fireEvent.click(await screen.findByRole("switch", { name: "Enable Files" }));
+  const dialog = await screen.findByRole("alertdialog");
+  assert.match(within(dialog).getByRole("note").textContent ?? "", /Scheduled task “Morning digest” uses this server/u);
+  assert.equal(savedServers(calls).length, 0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Disable" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(savedServers(calls)[0]?.enabled, false);
+});
+
+test("testing an edited server connects to the draft without saving it", async () => {
+  const calls = mount({
+    "mcp:testDraft": () => ({ connected: true, toolCount: 2, tools: ["a", "b"], serverCapabilities: {} }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Files" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Arguments" }), { target: { value: "--draft" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Test connection" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:testDraft").length, 1));
+  assert.deepEqual((channelCalls(calls, "mcp:testDraft")[0]!.args[0] as McpServer).args, ["--draft"]);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+  assert.equal(savedServers(calls).length, 0);
+});
+
+test("editing an existing server's connection warns that dependents need approval again", async () => {
+  mount({ "mcp:dependents": () => ({ schedules: [], bots: [{ id: "b1", name: "Planner" }] }) });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Files" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "MCP server description" }), { target: { value: "notes" } });
+  assert.equal(within(dialog).queryByText(/asks for their approval again/u), null);
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Arguments" }), { target: { value: "--other" } });
+  assert.ok(await within(dialog).findByText(/Bot “Planner” uses this server. Changing how Aiden connects/u));
+});
+
+test("signing in to an existing server never saves its other unsaved edits", async () => {
+  const calls = mount({
+    "mcp:list": () => [remoteServer],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:authorize": () => ({ authorized: true }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getAllByRole("textbox")[0]!, { target: { value: "Renamed but not saved" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:authorize").length, 1));
+  assert.equal((channelCalls(calls, "mcp:authorize")[0]!.args[0] as McpServer).name, "Remote");
+  assert.equal(savedServers(calls).length, 0);
+  assert.ok(await within(dialog).findByRole("button", { name: "Sign out" }));
+});
+
+test("a waiting sign-in can be cancelled, and cancelling a new preset's setup removes it again", async () => {
+  let rejectAuthorize: (error: Error) => void = () => undefined;
+  const { calls, openChanges } = renderPreset(linearState(), undefined, {
+    "mcp:save": (server: unknown) => server,
+    "mcp:authorize": () => new Promise((_, reject) => { rejectAuthorize = reject; }),
+    "mcp:cancelAuthorize": () => {
+      rejectAuthorize(new Error("Sign-in was cancelled."));
+      return { cancelled: true };
+    },
+    "mcp:remove": () => undefined,
+  });
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  const cancel = await within(dialog).findByRole("button", { name: "Cancel sign-in" });
+  assert.equal(savedServers(calls).length, 1);
+  fireEvent.click(cancel);
+  assert.ok(await within(dialog).findByRole("button", { name: "Authorize" }));
+  assert.deepEqual(channelCalls(calls, "mcp:cancelAuthorize").map((call) => call.args[0]), ["preset-linear"]);
+  assert.equal(screen.queryByText(/Sign-in was cancelled/u), null);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:remove").map((call) => call.args[0]), ["preset-linear"]));
+  assert.deepEqual(openChanges, [false]);
+});
+
+test("a preset whose sign-in stopped working offers Sign in again and Sign out", async () => {
+  const state = linearState({ configured: true, ready: false, needsSignIn: true });
+  const server: McpServer = { id: state.serverId, name: "Linear", transport: "http", url: state.preset.url, oauth: true, presetId: "linear", enabled: true };
+  const { calls } = renderPreset(state, server, { "mcp:signOut": () => ({ authorized: false }) });
+  const dialog = await screen.findByRole("dialog");
+  assert.ok(within(dialog).getByRole("button", { name: "Sign in again" }));
+  assert.ok(within(dialog).getByText("Needs sign-in"));
+  assert.equal(within(dialog).queryByText("Authorized"), null);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
+  await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:signOut").map((call) => call.args[0]), [state.serverId]));
+  assert.ok(await within(dialog).findByRole("button", { name: "Authorize" }));
+  assert.equal(savedServers(calls).length, 0);
+});
+
+test("closing a new preset's setup while its sign-in save is pending never authorizes and removes the record", async () => {
+  let resolveSave: () => void = () => undefined;
+  const { calls, openChanges } = renderPreset(linearState(), undefined, {
+    "mcp:save": (server: unknown) => new Promise((resolve) => { resolveSave = () => resolve(server); }),
+    "mcp:authorize": () => ({ authorized: true }),
+    "mcp:cancelAuthorize": () => ({ cancelled: true }),
+    "mcp:remove": () => undefined,
+  });
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  assert.deepEqual(openChanges, [false]);
+
+  await act(async () => resolveSave());
+  await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:remove").map((call) => call.args[0]), ["preset-linear"]));
+  assert.equal(channelCalls(calls, "mcp:authorize").length, 0);
+});
+
+test("closing a new custom server while its sign-in save is pending never authorizes and removes it", async () => {
+  let resolveSave: () => void = () => undefined;
+  const calls = mount({
+    "mcp:save": (server: unknown) => new Promise((resolve) => { resolveSave = () => resolve(server); }),
+    "mcp:authorize": () => ({ authorized: true }),
+    "mcp:cancelAuthorize": () => ({ cancelled: true }),
+    "mcp:remove": () => undefined,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /Add custom MCP/u }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("combobox"));
+  fireEvent.click(await screen.findByRole("option", { name: "Remote URL (Streamable HTTP)" }));
+  fireEvent.change(await within(dialog).findByRole("textbox", { name: "Server URL" }), { target: { value: "https://tools.test/mcp" } });
+  fireEvent.click(within(within(dialog).getByRole("group", { name: "OAuth sign-in" })).getByRole("switch"));
+  fireEvent.click(await within(dialog).findByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  const id = savedServers(calls)[0]!.id;
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+
+  await act(async () => resolveSave());
+  await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:remove").map((call) => call.args[0]), [id]));
+  assert.equal(channelCalls(calls, "mcp:authorize").length, 0);
+});
+
+test("a header-only edit is saved before sign-in and warns dependents", async () => {
+  const saved: McpServer = { ...remoteServer, headers: { "X-Tenant": "old" } };
+  const calls = mount({
+    "mcp:list": () => [saved],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => server,
+    "mcp:authorize": () => ({ authorized: true }),
+    "mcp:dependents": () => ({ schedules: [], bots: [{ id: "b1", name: "Planner" }] }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByDisplayValue("X-Tenant=old"), { target: { value: "X-Tenant=new" } });
+  assert.ok(await within(dialog).findByText(/Bot “Planner” uses this server. Changing how Aiden connects/u));
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:authorize").length, 1));
+  assert.deepEqual(savedServers(calls).map((server) => server.headers), [{ "X-Tenant": "new" }]);
+  const order = calls.map((call) => call.channel).filter((channel) => channel === "mcp:save" || channel === "mcp:authorize");
+  assert.deepEqual(order, ["mcp:save", "mcp:authorize"]);
+});
+
+test("returning to Plugins shows status that changed while it was closed", async () => {
+  let snapshot: unknown[] = [{ serverId: "mcp-files", state: "connected", toolCount: 5 }];
+  const calls = installBotTestIpc({
+    "mcp:list": () => [localServer],
+    "mcp:presets": () => catalogPresetStates(),
+    "mcp:liveStatus": () => snapshot,
+    "mcp:dependents": () => ({ schedules: [], bots: [] }),
+    "providers:list": () => [],
+  });
+  const client = createBotTestQueryClient();
+  const view = () => (
+    <QueryClientProvider client={client}>
+      <McpSettings />
+    </QueryClientProvider>
+  );
+  const first = render(view());
+  await waitFor(() => assert.match(screen.getByLabelText("Files status").textContent ?? "", /Connected/u));
+  first.unmount();
+
+  // Main's status changes while Plugins is closed; its push reaches no one.
+  snapshot = [{ serverId: "mcp-files", state: "failed", error: "token revoked" }];
+  act(() => emitBotTestNotification("mcp:statusChanged", snapshot[0]));
+
+  render(view());
+  await waitFor(() => assert.match(screen.getByLabelText("Files status").textContent ?? "", /Couldn’t connect/u));
+  assert.equal(channelCalls(calls, "mcp:liveStatus").length, 2);
 });

@@ -99,14 +99,26 @@ function isBotActivityPhase(value: unknown): value is BotActivityPhase {
 /** The longest connection label a status line shows; the Remote wire uses the same bound (§11). */
 export const BOT_APP_LABEL_CHARS = 40;
 
-// `mcpAgentToolName` (main/services/mcp-tool-identity.ts) mints connection
-// tools as `<server name>__<tool>_<12 hex>`, with other characters as `_`.
-const MCP_AGENT_TOOL = /^(.+?)__.+_[0-9a-f]{12}$/u;
+// `mcpAgentToolNames` (main/services/mcp-tool-identity.ts) mints connection
+// tools as `<server prefix>__<tool>`: the prefix is the lowercased server name
+// with other characters as `_` (never `__`, never a trailing `_`), `mcp_`-led
+// when it would start with a digit, and `_<6 hex>`-suffixed when two servers
+// share it. The first `__` always ends the server part.
+const MCP_AGENT_TOOL = /^([a-z0-9]+(?:_[a-z0-9]+)*)__[A-Za-z0-9_]+$/u;
+const MCP_PREFIX_COLLISION = /_[0-9a-f]{6}$/u;
+const MCP_PREFIX_DIGIT_LEAD = /^mcp_(?=[0-9])/u;
 
 /** The connection label of an MCP or Composio tool, or undefined for Aiden's own tools. */
 export function botToolApp(toolName: string): string | undefined {
-  const match = MCP_AGENT_TOOL.exec(toolName);
-  const label = match?.[1]?.replace(/_+/gu, " ").trim();
+  const prefix = MCP_AGENT_TOOL.exec(toolName)?.[1];
+  if (!prefix) return undefined;
+  const base = prefix.replace(MCP_PREFIX_COLLISION, "") || prefix;
+  const label = base
+    .replace(MCP_PREFIX_DIGIT_LEAD, "")
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
   if (!label) return undefined;
   const points = [...label];
   return points.length > BOT_APP_LABEL_CHARS ? points.slice(0, BOT_APP_LABEL_CHARS).join("").trimEnd() : label;

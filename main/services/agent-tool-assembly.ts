@@ -6,7 +6,6 @@
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
-import type { McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 import type { McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { buildCodingTools } from "./coding-tools.js";
 import type { Attachment, ScheduledMcpServerBinding, WorkspacePermission } from "./types.js";
@@ -30,8 +29,6 @@ import { createShareImageTool } from "./share-image-tool.js";
 
 /** Context describing where and how much the agent may act. */
 export interface ToolContext {
-  /** Main-only generation sink, populated only by admitted MCP discovery. */
-  onMcpServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void;
   /** Workspace identity used as the default target for agent-created schedules. */
   workspaceId?: string;
   /** Absolute path to the workspace folder, if one is bound. */
