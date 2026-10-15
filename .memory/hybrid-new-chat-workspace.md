@@ -1,6 +1,6 @@
 # Hybrid new chat and composer context — 2026-10-15
 
-Phases 1, 2, 3a (main + draft model) and 4 implemented. Plan: `docs/plans/hybrid-new-chat-workspace-plan.md`. Prototype: `docs/plans/assets/hybrid-new-chat-prototype.html`.
+Phases 2, 3a (main + draft model) and 4 implemented. Plan: `docs/plans/hybrid-new-chat-workspace-plan.md`. Prototype: `docs/plans/assets/hybrid-new-chat-prototype.html`.
 
 ## Decisions (owner-approved direction)
 - The owner chose the "Hybrid" option over a Codex-style chip bar and a T3-style "ask first" picker. ⌘N stays an instant draft in the workspace being viewed. Choosing or adding a workspace happens inside the draft: from the headline name, the composer chip, or ⌘⇧N "New chat in…".
