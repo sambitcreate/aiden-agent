@@ -1,0 +1,9 @@
+# Parent edit_file symlink-swap fix — 2026-10-15
+
+Issue #423: the parent tool previously checked a canonical path, then used path-based `fs.writeFile` after a test seam. A target or ancestor symlink swap could redirect the final write outside the pinned workspace.
+
+The parent tool now reads an opened regular file, records its exact device/inode and SHA-256, and passes the canonical root-relative path to the existing packaged cross-platform file-mutator helper. Its new `edit-file` operation opens the pinned root and every relative directory component with no-follow descriptors, checks the opened file's identity and content, then truncates and writes only through that descriptor. The ordinary in-root symlink policy remains: TypeScript resolves a stable link to its in-root target before the native traversal. Multiply linked files fail closed so an outside hard link cannot be changed. The helper accepts up to 256 MiB, beyond the existing subagent protocol's 200 KB cap.
+
+The high-level tool test swaps the target or an ancestor between validation and commit and checks that the outside file is unchanged. Native tests exercise the same no-follow rule on macOS and Linux, and a separate test covers a stable in-root link and a file above 200 KB. The root test lane now builds the helper before coding-tools tests; the checked-in helper binaries and manifests were refreshed for macOS universal, Linux x64, and Linux arm64. No shared server protocol, native client, UI, onboarding, or plan status changed.
+
+Local verification: native mutator suite, CI test registry, native prebuilt manifest suite, scoped ESLint, and TypeScript type-check pass. The full coding-tools suite had one independent glob/native-glob comparison failure on `**/*`; the new edit tests passed. Hosted exact-head checks and review remain PR delivery gates.

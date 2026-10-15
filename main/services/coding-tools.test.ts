@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import {
   buildCodingTools,
+  buildPinnedCodingTools,
   buildSubagentCodingTools,
   DISCLOSURE_APPROVAL_TOOL_NAMES,
   runCommandEnv,
@@ -1327,6 +1328,77 @@ test("filesystem tools do not follow workspace symlinks outside the root", async
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("pinned edit_file cannot overwrite an outside file after a target or ancestor swap", async () => {
+  for (const swappedPart of ["target", "ancestor"] as const) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-root-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-outside-"));
+    try {
+      const directory = path.join(root, "nested");
+      await fs.mkdir(directory);
+      const target = path.join(directory, "edit.txt");
+      const outsideFile = path.join(outside, "edit.txt");
+      await fs.writeFile(target, "before\n");
+      await fs.writeFile(outsideFile, "outside\n");
+      const edit = buildPinnedCodingTools(root, {
+        beforeWriteCommit: async () => {
+          if (swappedPart === "target") {
+            await fs.rename(target, path.join(directory, "original.txt"));
+            await fs.symlink(outsideFile, target);
+          } else {
+            await fs.rename(directory, path.join(root, "original-directory"));
+            await fs.symlink(outside, directory);
+          }
+        },
+      }).find((tool) => tool.name === "edit_file");
+      assert.ok(edit);
+      await assert.rejects(
+        edit.execute("swap", { path: "nested/edit.txt", old_string: "before", new_string: "after" }),
+        /changed before the edit could be committed/u,
+      );
+      assert.equal(await fs.readFile(outsideFile, "utf8"), "outside\n");
+      const original = swappedPart === "target"
+        ? path.join(directory, "original.txt")
+        : path.join(root, "original-directory", "edit.txt");
+      assert.equal(await fs.readFile(original, "utf8"), "before\n");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  }
+});
+
+test("pinned edit_file follows a stable in-root file symlink", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-in-root-"));
+  try {
+    const target = path.join(root, "actual.txt");
+    const alias = path.join(root, "alias.txt");
+    await fs.writeFile(target, "before\n");
+    await fs.symlink(target, alias);
+    const edit = buildPinnedCodingTools(root).find((tool) => tool.name === "edit_file");
+    assert.ok(edit);
+    await edit.execute("alias", { path: "alias.txt", old_string: "before", new_string: "after" });
+    assert.equal(await fs.readFile(target, "utf8"), "after\n");
+    assert.equal((await fs.lstat(alias)).isSymbolicLink(), true);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pinned edit_file keeps ordinary files above the subagent content cap editable", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-large-"));
+  try {
+    const target = path.join(root, "large.txt");
+    const original = `${"x".repeat(220_000)}before\n`;
+    await fs.writeFile(target, original);
+    const edit = buildPinnedCodingTools(root).find((tool) => tool.name === "edit_file");
+    assert.ok(edit);
+    await edit.execute("large", { path: "large.txt", old_string: "before", new_string: "after" });
+    assert.equal(await fs.readFile(target, "utf8"), original.replace("before", "after"));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
