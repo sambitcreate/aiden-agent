@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -77,6 +78,9 @@ async function setup(t: test.TestContext) {
   const service = createWorkspaceIntakeService({
     home: root,
     stat: (target) => fs.stat(target),
+    lstat: (target) => fs.lstat(target),
+    rename: (from, to) => fs.rename(from, to),
+    randomId: () => randomUUID(),
     realpath: (target) => fs.realpath(target),
     readdir: (target) => fs.readdir(target),
     mkdir: async (target) => {

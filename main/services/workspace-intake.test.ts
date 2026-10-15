@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -74,6 +75,9 @@ async function fixture(
   const service = createWorkspaceIntakeService({
     home,
     stat: (target) => fs.stat(target),
+    lstat: (target) => fs.lstat(target),
+    rename: (from, to) => fs.rename(from, to),
+    randomId: () => randomUUID(),
     realpath: (target) => fs.realpath(target),
     readdir: (target) => fs.readdir(target),
     mkdir: async (target) => {
@@ -436,6 +440,87 @@ test("a destination that appears after inspection is never deleted", async (t) =
   });
   await late.service.clone({ url: "acme/widget" }, cloneOptions());
   assert.equal(await fs.readFile(path.join(late.home, "widget", "theirs.txt"), "utf8"), "keep");
+});
+
+test("failed-clone cleanup only deletes the directory it claimed, never through links", async (t) => {
+  /** A directory outside the clone whose contents must survive every case. */
+  const outsider = async (root: string) => {
+    const dir = path.join(root, "unrelated");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "keep.txt"), "keep");
+    return dir;
+  };
+  const earlyEof = { ok: false as const, reason: "exit" as const, stderrTail: "fatal: early EOF" };
+
+  // Reported repro: the claimed folder is swapped for a symlink while Git runs.
+  const swapped = await fixture(t, {
+    runClone: async (request) => {
+      const target = await outsider(path.dirname(path.dirname(request.destination)));
+      await fs.rmdir(request.destination);
+      await fs.symlink(target, request.destination);
+      return earlyEof;
+    },
+  });
+  const swappedResult = await swapped.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(!swappedResult.ok && swappedResult.code, "failed");
+  assert.equal(await fs.readFile(path.join(swapped.root, "unrelated", "keep.txt"), "utf8"), "keep");
+  assert.equal((await fs.lstat(path.join(swapped.home, "widget"))).isSymbolicLink(), true, "the replacement is put back");
+
+  // The same swap of an adopted (pre-existing, empty) folder.
+  const adoptedSwap = await fixture(t, {
+    beforeMkdir: (target) => fs.mkdir(target),
+    runClone: async (request) => {
+      const target = await outsider(path.dirname(path.dirname(request.destination)));
+      await fs.rmdir(request.destination);
+      await fs.symlink(target, request.destination);
+      return earlyEof;
+    },
+  });
+  await adoptedSwap.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(await fs.readFile(path.join(adoptedSwap.root, "unrelated", "keep.txt"), "utf8"), "keep");
+
+  // Replaced by a different real directory: not the one claimed, so untouched.
+  const replaced = await fixture(t, {
+    runClone: async (request) => {
+      await fs.rmdir(request.destination);
+      await fs.mkdir(request.destination);
+      await fs.writeFile(path.join(request.destination, "keep.txt"), "keep");
+      return earlyEof;
+    },
+  });
+  await replaced.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(await fs.readFile(path.join(replaced.home, "widget", "keep.txt"), "utf8"), "keep");
+
+  // A link the clone wrote inside its own folder is removed, not followed.
+  const inner = await fixture(t, {
+    runClone: async (request) => {
+      const target = await outsider(path.dirname(path.dirname(request.destination)));
+      await fs.mkdir(path.join(request.destination, ".git"));
+      await fs.symlink(target, path.join(request.destination, ".git", "escape"));
+      await fs.symlink(target, path.join(request.destination, "escape"));
+      return earlyEof;
+    },
+  });
+  await inner.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(await fs.readFile(path.join(inner.root, "unrelated", "keep.txt"), "utf8"), "keep");
+  assert.equal(await exists(path.join(inner.home, "widget")), false, "the claimed folder itself is removed");
+  assert.deepEqual(
+    (await fs.readdir(inner.home)).filter((name) => name.startsWith(".aiden-clone-cleanup-")),
+    [],
+    "no quarantine is left behind",
+  );
+});
+
+test("clone refuses a destination that is a symlink, even to an empty folder", async (t) => {
+  const { root, service, cloneRequests } = await fixture(t);
+  const empty = path.join(root, "empty");
+  await fs.mkdir(empty);
+  const link = path.join(root, "widget-link");
+  await fs.symlink(empty, link);
+  const result = await service.clone({ url: "acme/widget", destination: link }, cloneOptions());
+  assert.equal(!result.ok && result.code, "invalid-destination");
+  assert.equal(cloneRequests.length, 0);
+  assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
 });
 
 test("clones into aliases of one folder cannot run at the same time", async (t) => {

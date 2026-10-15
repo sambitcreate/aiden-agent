@@ -64,15 +64,42 @@ interface StatLike {
   isDirectory(): boolean;
 }
 
+interface LinkStatLike extends StatLike {
+  isSymbolicLink(): boolean;
+  dev: number | bigint;
+  ino: number | bigint;
+}
+
+/** The directory a clone claimed: whether Aiden made it, and its identity. */
+interface ClaimedDirectory {
+  created: boolean;
+  dev: string;
+  ino: string;
+}
+
+function isClaimedDirectory(stats: LinkStatLike, claim: ClaimedDirectory): boolean {
+  return (
+    !stats.isSymbolicLink() &&
+    stats.isDirectory() &&
+    String(stats.dev) === claim.dev &&
+    String(stats.ino) === claim.ino
+  );
+}
+
 export interface WorkspaceIntakeDependencies {
   home: string;
   stat(target: string): Promise<StatLike>;
+  /** Stat without following a final-component symlink. */
+  lstat(target: string): Promise<LinkStatLike>;
+  rename(from: string, to: string): Promise<void>;
+  /** An unguessable token for the cleanup quarantine name. */
+  randomId(): string;
   realpath(target: string): Promise<string>;
   readdir(target: string): Promise<string[]>;
   /** Make exactly one directory; the parent must already exist. */
   mkdir(target: string): Promise<void>;
   rmdir(target: string): Promise<void>;
-  /** Remove one entry a failed clone wrote inside the destination it claimed. */
+  /** Remove a tree without following symlinks inside it (`fs.rm` recursive). */
   removeTree(target: string): Promise<void>;
   listWorkspaces(): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | null | undefined>;
@@ -347,21 +374,51 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
   });
 
   /**
-   * Undo a failed clone inside a destination Aiden claimed. Only the folder's
-   * contents are removed, and the folder itself only when Aiden made it; the
-   * destination is never removed recursively.
+   * Undo a failed clone, with deletion authority over exactly the directory
+   * Aiden claimed. The destination is first renamed to an unguessable sibling,
+   * so a later replacement of the pathname cannot redirect the cleanup; the
+   * renamed entry is then checked against the claimed identity without
+   * following symlinks. Anything else is put back untouched. Removal never
+   * follows symlinks inside the tree.
    */
-  const cleanUpFailedClone = async (destination: string, created: boolean, stderrTail: string): Promise<void> => {
+  const cleanUpFailedClone = async (
+    destination: string,
+    claim: ClaimedDirectory,
+    stderrTail: string,
+  ): Promise<void> => {
     // Something else filled the folder after Aiden claimed it: leave it alone.
     if (/already exists and is not an empty directory/iu.test(stderrTail)) return;
+    const quarantine = path.join(path.dirname(destination), `.aiden-clone-cleanup-${deps.randomId()}`);
     try {
-      for (const entry of await deps.readdir(destination)) {
-        await deps.removeTree(path.join(destination, entry));
+      await deps.rename(destination, quarantine);
+    } catch {
+      return;
+    }
+    const stillClaimed = async (): Promise<boolean> => {
+      try {
+        return isClaimedDirectory(await deps.lstat(quarantine), claim);
+      } catch {
+        return false;
+      }
+    };
+    if (!(await stillClaimed())) {
+      await deps.rename(quarantine, destination).catch(() => undefined);
+      return;
+    }
+    if (claim.created) {
+      await deps.removeTree(quarantine).catch(() => undefined);
+      return;
+    }
+    // An adopted empty folder: empty it again and put it back where it was.
+    try {
+      for (const entry of await deps.readdir(quarantine)) {
+        if (!(await stillClaimed())) break;
+        await deps.removeTree(path.join(quarantine, entry));
       }
     } catch {
-      // Best effort; Git removes its own partial clone on most failures.
+      // Best effort; the folder is restored below either way.
     }
-    if (created) await deps.rmdir(destination).catch(() => undefined);
+    await deps.rename(quarantine, destination).catch(() => undefined);
   };
 
   /** One key per folder however it is spelled: canonical parent plus folded name. */
@@ -371,29 +428,37 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     return path.join(parent, caseInsensitivePaths ? name.toLowerCase() : name);
   };
 
-  /** Make the destination, or adopt it only if it is an empty folder. */
+  /**
+   * Make the destination, or adopt it only if it is a real, empty folder.
+   * Records the directory's identity so cleanup can only touch this folder.
+   */
   const claimDestination = async (
     destination: string,
-  ): Promise<{ ok: true; created: boolean } | { ok: false; failure: CloneFailure }> => {
+  ): Promise<{ ok: true; claim: ClaimedDirectory } | { ok: false; failure: CloneFailure }> => {
+    let created = true;
     try {
       await deps.mkdir(destination);
-      return { ok: true, created: true };
     } catch (error) {
       if (errnoCode(error) !== "EEXIST") {
         return { ok: false, failure: fail("invalid-destination", "Aiden couldn't create the destination folder.") };
       }
+      created = false;
     }
     try {
-      if (!(await deps.stat(destination)).isDirectory() || (await deps.readdir(destination)).length > 0) {
+      const stats = await deps.lstat(destination);
+      if (stats.isSymbolicLink()) {
+        return { ok: false, failure: fail("invalid-destination", "The destination is a link. Choose a real folder.") };
+      }
+      if (!stats.isDirectory() || (!created && (await deps.readdir(destination)).length > 0)) {
         return {
           ok: false,
           failure: fail("destination-exists", "The destination folder already exists and isn't empty."),
         };
       }
+      return { ok: true, claim: { created, dev: String(stats.dev), ino: String(stats.ino) } };
     } catch {
       return { ok: false, failure: fail("invalid-destination", "Aiden can't read the destination folder.") };
     }
-    return { ok: true, created: false };
   };
 
   const clone = async (
@@ -448,7 +513,7 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
       const claim = await claimDestination(destination);
       if (!claim.ok) return claim.failure;
       if (options.signal.aborted) {
-        await cleanUpFailedClone(destination, claim.created, "");
+        await cleanUpFailedClone(destination, claim.claim, "");
         return fail("cancelled", "Clone cancelled.");
       }
       const outcome = await deps.runClone({
@@ -459,7 +524,7 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
         onProgress: (progress) => options.onProgress({ cloneId: options.cloneId, ...progress }),
       });
       if (!outcome.ok) {
-        await cleanUpFailedClone(destination, claim.created, outcome.stderrTail);
+        await cleanUpFailedClone(destination, claim.claim, outcome.stderrTail);
         if (outcome.reason === "cancelled") return fail("cancelled", "Clone cancelled.");
         if (outcome.reason === "timeout") return fail("timeout", "The clone took too long and was stopped.");
         const detail = cloneFailureDetail(outcome.stderrTail, deps.home);
