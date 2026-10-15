@@ -17,6 +17,7 @@ interface LinkOpener {
   canOpen: (href: string) => boolean;
   preference: BrowserLinkOpening;
   registerSurface: () => () => void;
+  registerBlocker: () => () => void;
 }
 
 const NO_MODIFIERS = { metaKey: false, ctrlKey: false };
@@ -38,11 +39,12 @@ const FALLBACK: LinkOpener = {
   canOpen: (href) => resolveLinkOpen({ href, modifiers: NO_MODIFIERS, preference: "external", browserAvailable: false }) !== null,
   preference: "external",
   registerSurface: () => () => undefined,
+  registerBlocker: () => () => undefined,
 };
 
 const LinkOpenerContext = React.createContext<LinkOpener>(FALLBACK);
 
-export function useLinkOpener(): Omit<LinkOpener, "registerSurface"> {
+export function useLinkOpener(): Omit<LinkOpener, "registerSurface" | "registerBlocker"> {
   return React.useContext(LinkOpenerContext);
 }
 
@@ -52,20 +54,57 @@ export function useBrowserSurface(active: boolean): void {
   React.useEffect(() => (active ? registerSurface() : undefined), [active, registerSurface]);
 }
 
+/**
+ * Mount while something is drawn over the whole app (the onboarding overlay),
+ * so links behind it route as if no browser surface were registered: no
+ * prompt, and straight to the system browser.
+ */
+export function useBrowserSurfaceBlocker(active: boolean): void {
+  const { registerBlocker } = React.useContext(LinkOpenerContext);
+  React.useEffect(() => (active ? registerBlocker() : undefined), [active, registerBlocker]);
+}
+
 type Pending = { url: string; workspaceId: string | null; remember: boolean; inApp: boolean };
 type Menu = { url: string; x: number; y: number; web: boolean; workspaceId: string | null };
 
 export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChildren<{ workspaceId: string | null }>) {
   const [preference, setPreference] = React.useState<BrowserLinkOpening>("ask");
   const [surfaces, setSurfaces] = React.useState(0);
+  const [blockers, setBlockers] = React.useState(0);
   const [pending, setPending] = React.useState<Pending | null>(null);
   const [menu, setMenu] = React.useState<Menu | null>(null);
-  const state = React.useRef({ preference, surfaces, workspaceId });
-  state.current = { preference, surfaces, workspaceId };
+  const state = React.useRef({ preference, surfaces, blockers, workspaceId });
+  // Keep the latest render's values available to stable callbacks without
+  // writing a ref during render (a discarded concurrent render would corrupt
+  // it); the layout effect runs only for a render that actually committed.
+  React.useLayoutEffect(() => {
+    state.current = { preference, surfaces, blockers, workspaceId };
+  }, [preference, surfaces, blockers, workspaceId]);
+
+  // True once the saved preference has loaded (or failed to). A click that
+  // arrives first must not show the ask dialog based on the "ask" default
+  // when the saved choice is actually "browser" or "external"; it is queued
+  // and replayed once the real preference is known.
+  const preferenceReady = React.useRef(false);
+  const queuedLinks = React.useRef<Array<() => void>>([]);
 
   React.useEffect(() => {
     let live = true;
-    void browserApi.linkPreference().then((value) => live && setPreference(value)).catch(() => undefined);
+    const settle = (value: BrowserLinkOpening) => {
+      if (!live) return;
+      setPreference(value);
+      preferenceReady.current = true;
+      const queued = queuedLinks.current;
+      queuedLinks.current = [];
+      queued.forEach((run) => run());
+    };
+    void browserApi
+      .linkPreference()
+      .then(settle)
+      .catch((error: unknown) => {
+        console.warn("Couldn't load the link-opening preference; treating it as \"ask\".", error);
+        settle("ask");
+      });
     const off = browserApi.onEvent((event) => {
       if (event.type === "state" && event.state.defaults) setPreference(event.state.defaults.linkOpening);
     });
@@ -77,8 +116,11 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
 
   const openInBrowser = React.useCallback((target: string, url: string) => {
     void browserApi.command(target, { action: "open_link", url }).catch((error: unknown) => {
-      toast.message(`${message(error, "The Aiden browser couldn't open this link.")} Opened it in your system browser.`);
-      openExternal(url);
+      const reason = message(error, "The Aiden browser couldn't open this link.");
+      void browserApi.openExternal(url).then(
+        () => toast.message(`${reason} Opened it in your system browser.`),
+        (fallbackError: unknown) => toast.error(message(fallbackError, reason)),
+      );
     });
   }, []);
 
@@ -97,13 +139,13 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
   );
 
   const route = React.useCallback((href: string, options: OpenLinkOptions = {}) => {
-    const { preference: current, surfaces: count, workspaceId: active } = state.current;
+    const { preference: current, surfaces: count, blockers: blocked, workspaceId: active } = state.current;
     const target = options.workspaceId === undefined ? active : options.workspaceId;
     const resolved = resolveLinkOpen({
       href,
       modifiers: options.modifiers ?? NO_MODIFIERS,
       preference: current,
-      browserAvailable: Boolean(target) && count > 0,
+      browserAvailable: Boolean(target) && count > 0 && blocked === 0,
       forcePrompt: options.forcePrompt,
       forceExternal: options.forceExternal,
     });
@@ -114,6 +156,13 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
     (href: string, options?: OpenLinkOptions) => {
       const { resolved, target } = route(href, options);
       if (!resolved) return false;
+      // The "ask" branch is only reachable while the preference is still the
+      // unresolved "ask" default; defer it until the real value is in, then
+      // let it resolve against that value instead.
+      if (resolved.kind === "ask" && !preferenceReady.current) {
+        queuedLinks.current.push(() => openLink(href, options));
+        return true;
+      }
       perform(resolved, target);
       return true;
     },
@@ -135,15 +184,30 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
       });
       if (handled) event.preventDefault();
     };
+    const insideEditableOrSelected = (anchor: HTMLAnchorElement) => {
+      if (anchor.closest('[contenteditable]:not([contenteditable="false"])')) return true;
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) return false;
+      const { anchorNode, focusNode } = selection;
+      return Boolean((anchorNode && anchor.contains(anchorNode)) || (focusNode && anchor.contains(focusNode)));
+    };
     const onContextMenu = (event: MouseEvent) => {
       if (event.defaultPrevented) return;
       const anchor = anchorOf(event);
-      if (!anchor) return;
+      if (!anchor || insideEditableOrSelected(anchor)) return;
       const href = anchor.getAttribute("href") ?? "";
-      const { resolved, target } = route(href, { forceExternal: anchor.dataset.linkTarget === "external" });
+      const forceExternal = anchor.dataset.linkTarget === "external";
+      const { resolved, target } = route(href, { forceExternal });
       if (!resolved || resolved.kind === "file") return;
       event.preventDefault();
-      setMenu({ url: resolved.url, x: event.clientX, y: event.clientY, web: !resolved.url.startsWith("mailto:"), workspaceId: target && state.current.surfaces > 0 ? target : null });
+      lastAnchor.current = anchor;
+      setMenu({
+        url: resolved.url,
+        x: event.clientX,
+        y: event.clientY,
+        web: !forceExternal && !resolved.url.startsWith("mailto:"),
+        workspaceId: target && state.current.surfaces > 0 && state.current.blockers === 0 ? target : null,
+      });
     };
     document.addEventListener("click", onClick);
     document.addEventListener("contextmenu", onContextMenu);
@@ -153,9 +217,16 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
     };
   }, [openLink, route]);
 
+  const lastAnchor = React.useRef<HTMLAnchorElement | null>(null);
+
   const registerSurface = React.useCallback(() => {
     setSurfaces((count) => count + 1);
     return () => setSurfaces((count) => count - 1);
+  }, []);
+
+  const registerBlocker = React.useCallback(() => {
+    setBlockers((count) => count + 1);
+    return () => setBlockers((count) => count - 1);
   }, []);
 
   const choose = React.useCallback(
@@ -164,15 +235,17 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
       setPending(null);
       if (!current) return;
       if (choice.remember) {
+        const previous = preference;
         setPreference(choice.target);
-        void browserApi.setLinkPreference(choice.target).catch((error: unknown) =>
-          toast.error(message(error, "Couldn't save your link preference.")),
-        );
+        void browserApi.setLinkPreference(choice.target).catch((error: unknown) => {
+          setPreference(previous);
+          toast.error(message(error, "Couldn't save your link preference."));
+        });
       }
       if (choice.target === "browser" && current.workspaceId) openInBrowser(current.workspaceId, current.url);
       else openExternal(current.url);
     },
-    [openInBrowser, pending],
+    [openInBrowser, pending, preference],
   );
 
   const value = React.useMemo<LinkOpener>(
@@ -181,9 +254,17 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
       canOpen: (href) => route(href).resolved !== null,
       preference,
       registerSurface,
+      registerBlocker,
     }),
-    [openLink, preference, registerSurface, route],
+    [openLink, preference, registerBlocker, registerSurface, route],
   );
+
+  const closeMenu = (open: boolean) => {
+    if (open) return;
+    setMenu(null);
+    lastAnchor.current?.focus({ preventScroll: true });
+    lastAnchor.current = null;
+  };
 
   return (
     <LinkOpenerContext.Provider value={value}>
@@ -195,7 +276,7 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
         onChoose={choose}
         onCancel={() => setPending(null)}
       />
-      <DropdownMenu open={menu !== null} onOpenChange={(open) => !open && setMenu(null)}>
+      <DropdownMenu open={menu !== null} onOpenChange={closeMenu}>
         <DropdownMenuTrigger asChild>
           <span aria-hidden="true" style={{ position: "fixed", left: menu?.x ?? 0, top: menu?.y ?? 0, width: 0, height: 0 }} />
         </DropdownMenuTrigger>

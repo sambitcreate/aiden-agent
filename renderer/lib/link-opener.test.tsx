@@ -3,23 +3,30 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
-import { LinkOpenerProvider, useBrowserSurface } from "./link-opener";
+import { LinkOpenerProvider, useBrowserSurface, useBrowserSurfaceBlocker, useLinkOpener } from "./link-opener";
 
 afterEach(cleanup);
 const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
-function Surface() {
-  useBrowserSurface(true);
+function Surface({ active = true }: { active?: boolean }) {
+  useBrowserSurface(active);
   return null;
 }
 
-function app({ surface = true, href = "https://example.com/" } = {}) {
+function Blocker({ active = true }: { active?: boolean }) {
+  useBrowserSurfaceBlocker(active);
+  return null;
+}
+
+function app({ surface = true, href = "https://example.com/", blocked = false } = {}) {
   return (
     <LinkOpenerProvider workspaceId="ws-1">
       {surface ? <Surface /> : null}
+      {blocked ? <Blocker /> : null}
       <a href={href}>link</a>
       <a href="https://accounts.example.com/" data-link-target="external">sign in</a>
       <a href="/settings">route</a>
+      <a href="mailto:a@example.com">mail</a>
     </LinkOpenerProvider>
   );
 }
@@ -36,6 +43,11 @@ function ipc(preference: string, overrides: Record<string, (...args: unknown[]) 
 const sent = (calls: { channel: string; args: unknown[] }[]) =>
   calls.filter((call) => call.channel !== "browser:link-preference");
 
+function Outside({ href, onResult }: { href: string; onResult: (handled: boolean) => void }) {
+  const { openLink } = useLinkOpener();
+  return <button onClick={() => onResult(openLink(href))}>run</button>;
+}
+
 test("first click asks; remembered Aiden choice is saved and opens in the panel", async () => {
   const calls = ipc("ask");
   render(app());
@@ -47,10 +59,15 @@ test("first click asks; remembered Aiden choice is saved and opens in the panel"
     { channel: "browser:set-link-preference", args: ["browser"] },
     { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
   ]);
-  // The saved choice applies to the next click with no prompt.
+  // The saved choice applies to the next click with no prompt, and actually opens.
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:set-link-preference", args: ["browser"] },
+    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+  ]);
 });
 
 test("without a browser surface (Settings, Bots) links go out with no prompt and no tab", async () => {
@@ -109,4 +126,143 @@ test("right-click offers both destinations and copy", async () => {
   fireEvent.click(item);
   await flush();
   assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+});
+
+test("a link with a registered surface still goes external with no prompt while a blocker (onboarding) is active", async () => {
+  const calls = ipc("ask");
+  render(app({ blocked: true }));
+  await flush();
+  fireEvent.click(screen.getByText("link"));
+  await flush();
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+});
+
+test("deactivating the browser surface sends later links out with no prompt", async () => {
+  const calls = ipc("browser");
+  const { rerender } = render(app());
+  await flush();
+  fireEvent.click(screen.getByText("link"));
+  await flush();
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+  ]);
+
+  rerender(
+    <LinkOpenerProvider workspaceId="ws-1">
+      <Surface active={false} />
+      <a href="https://example.com/">link</a>
+    </LinkOpenerProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByText("link"));
+  await flush();
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    { channel: "browser:open-external", args: ["https://example.com/"] },
+  ]);
+});
+
+test("unmounting the only registered surface sends later links out with no prompt", async () => {
+  const calls = ipc("browser");
+  const { rerender } = render(app());
+  await flush();
+  fireEvent.click(screen.getByText("link"));
+  await flush();
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+  ]);
+
+  rerender(
+    <LinkOpenerProvider workspaceId="ws-1">
+      <a href="https://example.com/">link</a>
+    </LinkOpenerProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByText("link"));
+  await flush();
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    { channel: "browser:open-external", args: ["https://example.com/"] },
+  ]);
+});
+
+test("with two registered surfaces, one unmounting leaves the panel available", async () => {
+  const calls = ipc("browser");
+  const { rerender } = render(
+    <LinkOpenerProvider workspaceId="ws-1">
+      <Surface />
+      <Surface />
+      <a href="https://example.com/">link</a>
+    </LinkOpenerProvider>,
+  );
+  await flush();
+
+  rerender(
+    <LinkOpenerProvider workspaceId="ws-1">
+      <Surface />
+      <a href="https://example.com/">link</a>
+    </LinkOpenerProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByText("link"));
+  await flush();
+  // Still one surface registered, so the panel is still used, not the system browser.
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+  ]);
+});
+
+test("useLinkOpener outside the provider sends http(s) and mailto out, and leaves other hrefs alone", async () => {
+  async function run(href: string) {
+    const calls = ipc("ask");
+    let handled: boolean | null = null;
+    render(<Outside href={href} onResult={(value) => (handled = value)} />);
+    fireEvent.click(screen.getByText("run"));
+    await flush();
+    const result = { handled, calls: sent(calls) };
+    cleanup();
+    return result;
+  }
+
+  const http = await run("https://example.com/");
+  assert.equal(http.handled, true);
+  assert.deepEqual(http.calls, [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+
+  const mail = await run("mailto:a@example.com");
+  assert.equal(mail.handled, true);
+  assert.deepEqual(mail.calls, [{ channel: "browser:open-external", args: ["mailto:a@example.com"] }]);
+
+  const route = await run("/settings");
+  assert.equal(route.handled, false);
+  assert.deepEqual(route.calls, []);
+});
+
+test("Cancel on the dialog opens nothing", async () => {
+  const calls = ipc("ask");
+  render(app());
+  await flush();
+  fireEvent.click(screen.getByText("link"));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+  await flush();
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(sent(calls), []);
+  void dialog;
+});
+
+test("right-click: the Aiden item is disabled with no surface, and absent for mailto", async () => {
+  const calls = ipc("ask");
+  render(app({ surface: false }));
+  await flush();
+  fireEvent.contextMenu(screen.getByText("link"));
+  const aidenItem = await screen.findByRole("menuitem", { name: "Open in Aiden browser" });
+  assert.equal(aidenItem.getAttribute("aria-disabled"), "true");
+  fireEvent.keyDown(aidenItem.ownerDocument.body, { key: "Escape" });
+  await flush();
+
+  fireEvent.contextMenu(screen.getByText("mail"));
+  await screen.findByRole("menuitem", { name: "Open in system browser" });
+  assert.equal(screen.queryByRole("menuitem", { name: "Open in Aiden browser" }), null);
+  assert.deepEqual(sent(calls), []);
 });
