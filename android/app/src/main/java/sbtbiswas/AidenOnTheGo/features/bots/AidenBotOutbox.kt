@@ -1,6 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.core.util.AtomicFile
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -296,15 +298,34 @@ class AidenBotSessionStore(
             }
         }
 
-    /** Keeps the pairing's New Bot on its way, before anything of it goes out; never for a pairing an unpair purged. */
-    fun savePendingCreate(instanceId: String, deviceId: String, create: AidenBotPendingCreate) {
+    /**
+     * Keeps the pairing's New Bot on its way; never for a pairing an unpair purged. The write is
+     * queued at once, in order with the store's other disk work, and the answer completes once it
+     * has finished on [io]: true when the record is synced and in place, so a process death from
+     * then on brings it back, false when it couldn't be kept. Nothing of the create may go out
+     * before that answer is true ([AidenBotCreateFlow.send]).
+     */
+    fun savePendingCreate(instanceId: String, deviceId: String, create: AidenBotPendingCreate): Deferred<Boolean> {
+        val kept = CompletableDeferred<Boolean>()
         val pairing = instanceId to deviceId
         synchronized(this) {
             createPairings += pairing
-            if (pairing in revokedCreates) return
+            if (pairing in revokedCreates) return kept.apply { complete(false) }
         }
         val record = CreateRecord.of(instanceId, deviceId, create)
-        io.execute { writeCreate(instanceId, deviceId, record) }
+        try {
+            io.execute {
+                var written = false
+                try {
+                    written = writeCreate(instanceId, deviceId, record)
+                } finally {
+                    kept.complete(written)
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            kept.complete(false)
+        }
+        return kept
     }
 
     /** The New Bot was made, let go of, or this phone lost access: nothing of it is kept. */
@@ -374,20 +395,30 @@ class AidenBotSessionStore(
         return create
     }
 
-    private fun writeCreate(instanceId: String, deviceId: String, record: CreateRecord) {
-        val file = createFileFor(instanceId, deviceId) ?: return
-        if (synchronized(this) { (instanceId to deviceId) in revokedCreates }) return
+    /**
+     * True once [record] is synced and in place (or there is no disk: a memory-only store), false
+     * when it couldn't be written or the pairing was unpaired. [AtomicFile.finishWrite] reports
+     * neither a failed sync nor a failed rename, so both are checked here.
+     */
+    private fun writeCreate(instanceId: String, deviceId: String, record: CreateRecord): Boolean {
+        val file = createFileFor(instanceId, deviceId) ?: return true
+        if (synchronized(this) { (instanceId to deviceId) in revokedCreates }) return false
         val atomic = AtomicFile(file)
         var stream: java.io.FileOutputStream? = null
-        try {
+        return try {
             val data = json.encodeToString(CreateRecord.serializer(), record).toByteArray(Charsets.UTF_8)
             file.parentFile?.mkdirs()
             stream = atomic.startWrite()
             stream.write(data)
+            stream.fd.sync()
             atomic.finishWrite(stream)
+            stream = null
+            if (!file.isFile || File(file.path + ".new").exists()) throw java.io.IOException("not in place")
+            true
         } catch (_: Exception) {
             stream?.let { atomic.failWrite(it) }
             report("event=bot_create_write outcome=failed")
+            false
         }
     }
 

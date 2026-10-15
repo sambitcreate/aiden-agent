@@ -22,6 +22,7 @@ import androidx.annotation.StringRes
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -162,7 +163,8 @@ class AidenBotCreateAttempts(
 /** Where one pairing's New Bot on its way is kept across launches (beside its chats' outboxes). */
 class AidenBotCreateStore(
     val load: suspend () -> AidenBotPendingCreate?,
-    val save: (AidenBotPendingCreate) -> Unit,
+    /** Queues the write at once; the answer is true once it is on disk, false when it couldn't be kept. */
+    val save: (AidenBotPendingCreate) -> Deferred<Boolean>,
     val remove: () -> Unit
 )
 
@@ -174,10 +176,11 @@ class AidenBotCreateStore(
  * replay the frozen attempt, request and Idempotency-Key alike, even after the Mac's catalog
  * moved on, so a retry never makes two Bots. One Bot is made at a time.
  *
- * The ask is in [store] before anything goes out and until the Bot is made, the person lets it
- * go, or access ends, so a process death mid-create comes back ([restore]) as not made. Its Try
- * again sends the same request on the same key while the Mac still keeps that key (a day);
- * after that, or when nothing could have reached the Mac, it reopens New Bot as it was.
+ * The ask, request and key alike, is on disk in [store] before anything goes out (a Create the
+ * phone couldn't keep is never sent) and stays until the Bot is made, the person lets it go, or
+ * access ends, so a process death mid-create comes back ([restore]) as not made. Its Try again
+ * sends the same request on the same key while the Mac still keeps that key (a day); after
+ * that, or when nothing could have reached the Mac, it reopens New Bot as it was.
  */
 class AidenBotCreateFlow(
     private val waitForConnection: (suspend () -> Boolean)?,
@@ -219,6 +222,8 @@ class AidenBotCreateFlow(
 
     private var prefill: AidenBotCreateDraft? = null
     private var restored = false
+    /** The write [start] queued for its attempt; [send] waits for it before anything goes out. */
+    private var keeping: Pair<AidenBotCreateAttempt, Deferred<Boolean>>? = null
 
     /** True when [draft] would replay a try that may have reached the Mac. */
     fun replays(draft: AidenBotCreateDraft): Boolean = attempts.replays(draft)
@@ -226,21 +231,49 @@ class AidenBotCreateFlow(
     /**
      * Shows [draft]'s Bot as on its way and returns the attempt for [send], or null when another
      * Create is still on its way or no request can be built. [catalog] is the form's; it only
-     * shapes a new request, never a replayed one. The ask is kept before anything goes out.
+     * shapes a new request, never a replayed one. The ask's write is queued here, so it is kept
+     * even if [send] never runs; [send] waits for it.
      */
     fun start(draft: AidenBotCreateDraft, catalog: AidenBotCapabilityCatalog?): AidenBotCreateAttempt? {
         if (_pending.value != null) return null
         val attempt = attempts.begin(draft, catalog) ?: return null
-        store?.save(AidenBotPendingCreate(draft, attempt.request, attempt.key, attempt.createdAtMs))
+        keeping = store?.let { attempt to it.save(attempt.kept()) }
         prefill = null
         _failure.value = null
         _pending.value = Pending(attempt.request.name)
         return attempt
     }
 
-    /** Makes [attempt]'s Bot. Run it where it outlives the form; it settles [pending] either way. */
+    private fun AidenBotCreateAttempt.kept() = AidenBotPendingCreate(draft, request, key, createdAtMs)
+
+    /**
+     * True once [attempt]'s request and key are on disk, so a process death after the Mac took
+     * it still brings back the same identity. Waits for the write [start] queued (or queues one).
+     */
+    private suspend fun isKept(attempt: AidenBotCreateAttempt): Boolean {
+        val store = store ?: return true
+        val queued = keeping?.takeIf { it.first === attempt }?.second ?: store.save(attempt.kept())
+        return queued.await()
+    }
+
+    /**
+     * Makes [attempt]'s Bot once its ask is on disk; nothing goes out before. Run it where it
+     * outlives the form; it settles [pending] either way.
+     */
     suspend fun send(attempt: AidenBotCreateAttempt) {
         try {
+            if (!isKept(attempt)) {
+                // Nothing went out: a Create this phone couldn't keep can't be recovered after a
+                // process death. Try again reopens New Bot with the answers.
+                val earlier = attempts.replays(attempt.draft)
+                _failure.value = Failure(
+                    R.string.bot_create_not_kept,
+                    attempt.draft,
+                    request = attempt.request.takeIf { earlier },
+                    sentAtMs = attempt.createdAtMs.takeIf { earlier }
+                )
+                return
+            }
             val made = aidenBotHeldRequest(waitForConnection, holdMillis, limitMillis) { create(attempt.request, attempt.key) }
             attempts.succeeded(attempt)
             store?.remove()

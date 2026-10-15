@@ -549,9 +549,14 @@ class AidenBotOptimisticSavesTest {
 
     private fun body(request: AidenBotCreateRequest) = json.encodeToString(AidenBotCreateRequest.serializer(), request)
 
-    /** One launch of the app: a flow whose ask waits in a session store over [root]. */
-    private fun TestScope.launchWith(root: java.io.File, mac: CreatingMac, clock: () -> Long = { currentTime }): AidenBotCreateFlow {
-        val sessions = AidenBotSessionStore(root, io = { it.run() }, nowMs = clock)
+    /** One launch of the app: a flow whose ask waits in a session store over [root], its disk work run on [io]. */
+    private fun TestScope.launchWith(
+        root: java.io.File,
+        mac: CreatingMac,
+        io: java.util.concurrent.Executor = java.util.concurrent.Executor { it.run() },
+        clock: () -> Long = { currentTime }
+    ): AidenBotCreateFlow {
+        val sessions = AidenBotSessionStore(root, io = io, nowMs = clock)
         return AidenBotCreateFlow(
             waitForConnection = { true },
             create = mac::create,
@@ -597,6 +602,81 @@ class AidenBotOptimisticSavesTest {
         val later = launchWith(root, mac)
         later.restore()
         assertNull(later.failure.value)
+    }
+
+    /** The store's disk queue, run by hand: a write waits until the test lets it through. */
+    private class HeldIo : java.util.concurrent.Executor {
+        private val queued = ArrayDeque<Runnable>()
+        override fun execute(command: Runnable) {
+            queued += command
+        }
+
+        fun release() {
+            while (queued.isNotEmpty()) queued.removeFirst().run()
+        }
+    }
+
+    /** The ask as the disk holds it now, read by a store of its own (a relaunch would read this). */
+    private suspend fun onDisk(root: java.io.File): AidenBotPendingCreate? =
+        AidenBotSessionStore(root, io = { it.run() }).pendingCreate(pairing.instanceId, pairing.deviceId)
+
+    @Test
+    fun aCreateGoesOutOnlyOnceItsRequestAndKeyAreOnDiskAndADeathAfterTheMacTookItReplaysThem() = runTest {
+        val root = tempFolder.newFolder("outbox")
+        val io = HeldIo()
+        val mac = CreatingMac().apply { losesAnswer = true }
+        val draft = AidenBotCreateDraft(name = "Chef", help = "Plans meals")
+        val before = launchWith(root, mac, io = io)
+        val first = before.start(draft, catalog)!!
+        assertEquals("the row shows at once", "Chef", before.pending.value?.name)
+        val sending = launch { before.send(first) }
+        runCurrent()
+        assertTrue("nothing goes out while the write waits", mac.requests.isEmpty())
+        assertNull(onDisk(root))
+
+        io.release()
+        runCurrent()
+        assertEquals("out once it's written", listOf(first.key), mac.requests.map { it.second })
+        val kept = onDisk(root)!!
+        assertEquals(first.key, kept.key)
+        assertEquals(body(first.request), body(kept.request!!))
+
+        // The Mac made the Bot; the process dies before its answer comes.
+        sending.cancel()
+        val io2 = HeldIo()
+        val after = launchWith(root, mac, io = io2)
+        val restoring = launch { after.restore() }
+        runCurrent()
+        io2.release()
+        restoring.join()
+        val again = after.retry()!!
+        assertEquals("the same Idempotency-Key", first.key, again.key)
+        assertEquals("the same body", body(first.request), body(again.request))
+        // Try again waits for the disk too.
+        val resending = launch { after.send(again) }
+        runCurrent()
+        assertEquals(1, mac.requests.size)
+        io2.release()
+        resending.join()
+        assertEquals(listOf(first.key, first.key), mac.requests.map { it.second })
+        assertEquals("one Bot, however many launches", 1, mac.made.size)
+    }
+
+    @Test
+    fun aCreateThePhoneCouldntKeepIsNeverSentAndTryAgainReopensNewBot() = runTest {
+        // A file where the store's folder should be: every write fails.
+        val root = tempFolder.newFile("outbox")
+        val mac = CreatingMac()
+        val draft = AidenBotCreateDraft(name = "Chef")
+        val flow = launchWith(root, mac)
+        flow.send(flow.start(draft, catalog)!!)
+        assertTrue("nothing went out", mac.requests.isEmpty())
+        assertNull(flow.pending.value)
+        val failure = flow.failure.value!!
+        assertEquals(sbtbiswas.AidenOnTheGo.R.string.bot_create_not_kept, failure.message)
+        assertEquals(draft, failure.draft)
+        assertNull(flow.retry())
+        assertEquals("New Bot opens as it was", draft, flow.reopening())
     }
 
     @Test
