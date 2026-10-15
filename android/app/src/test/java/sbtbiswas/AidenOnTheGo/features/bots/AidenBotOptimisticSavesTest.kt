@@ -322,14 +322,22 @@ class AidenBotOptimisticSavesTest {
 
     // Bot create stays idempotent when its request times out (R15 bounds it).
     @Test
-    fun aCreateThatTimedOutReplaysItsKey() {
+    fun aCreateThatTimedOutReplaysItsKeyWhileTheMacKeepsIt() {
         val keys = ArrayDeque(List(2) { UUID.randomUUID() })
-        val attempts = AidenBotCreateAttempts(makeKey = { keys.removeFirst() })
+        var now = 0L
+        val attempts = AidenBotCreateAttempts(nowMs = { now }, makeKey = { keys.removeFirst() })
         val draft = AidenBotCreateDraft(name = "Chef", help = "Plans meals")
         val first = attempts.begin(draft, catalog)!!
         attempts.failed(first, AidenBotChatActivityTimeout())
+        now = AidenBotSessionStore.CREATE_REPLAY_MS - 1
         assertTrue(attempts.replays(draft))
         assertEquals("the Mac may have made it", first.key, attempts.begin(draft, catalog)!!.key)
+
+        // The form left open past the window: the Mac may have let the key go, so it isn't replayed.
+        now = AidenBotSessionStore.CREATE_REPLAY_MS
+        assertFalse(attempts.replays(draft))
+        assertNull(attempts.replay(draft))
+        assertFalse("the person's own Create is a new request", attempts.begin(draft, catalog)!!.key == first.key)
     }
 
     // --- What a relaunch reads: only what the Mac confirmed reaches the disk (as on iOS) ---
@@ -625,8 +633,8 @@ class AidenBotOptimisticSavesTest {
     }
 
     /** The ask as the disk holds it now, read by a store of its own (a relaunch would read this). */
-    private suspend fun onDisk(root: java.io.File): AidenBotPendingCreate? =
-        AidenBotSessionStore(root, io = { it.run() }).pendingCreate(paired)
+    private suspend fun TestScope.onDisk(root: java.io.File): AidenBotPendingCreate? =
+        AidenBotSessionStore(root, io = { it.run() }, nowMs = { currentTime }).pendingCreate(paired)
 
     @Test
     fun aCreateGoesOutOnlyOnceItsRequestAndKeyAreOnDiskAndADeathAfterTheMacTookItReplaysThem() = runTest {
@@ -688,7 +696,48 @@ class AidenBotOptimisticSavesTest {
     }
 
     @Test
-    fun aCutOffCreateWhoseKeyTheMacNoLongerKeepsReopensNewBotInstead() = runTest {
+    fun aCutOffCreateReplaysOnlyWellInsideTheMacsDayAndThenTheStoreForgetsItsKey() = runTest {
+        val root = tempFolder.newFolder("outbox")
+        // The Mac made the Bot, but the process died before its answer came.
+        val mac = CreatingMac().apply { losesAnswer = true }
+        val draft = AidenBotCreateDraft(name = "Chef")
+        var now = 0L
+        val before = launchWith(root, mac) { now }
+        val first = before.start(draft, catalog)!!
+        launch { before.send(first) }.also { runCurrent() }.cancel()
+
+        // An hour short of the Mac's day: Try again replays it.
+        now = AidenBotSessionStore.CREATE_REPLAY_MS - 1
+        val inside = launchWith(root, mac) { now }
+        inside.restore()
+        assertTrue(inside.failure.value!!.replays)
+
+        // From there on a Mac clock running ahead may have let the key go, and the same key would
+        // make a second Bot.
+        now = AidenBotSessionStore.CREATE_REPLAY_MS
+        val after = launchWith(root, mac) { now }
+        after.restore()
+        val failure = after.failure.value!!
+        assertFalse(failure.replays)
+        assertEquals("it may already be on the Mac", sbtbiswas.AidenOnTheGo.R.string.bot_create_may_exist, failure.message)
+        assertNull("Try again sends nothing", after.retry())
+        assertEquals("New Bot opens as it was", draft, after.reopening())
+        assertEquals(1, mac.requests.size)
+
+        // The store forgot the key: a later launch, even with the clock turned back, never replays it.
+        now = 0
+        val later = launchWith(root, mac) { now }
+        later.restore()
+        assertFalse(later.failure.value!!.replays)
+        assertEquals("the answers stay", draft, later.failure.value!!.draft)
+        assertNull(later.retry())
+        assertEquals(1, mac.requests.size)
+        // Only the person's own Create there sends, as a new request.
+        assertFalse(later.start(draft, catalog)!!.key == first.key)
+    }
+
+    @Test
+    fun aRestoredPromptLeftOpenPastTheReplayWindowReopensNewBotRatherThanReplaying() = runTest {
         val root = tempFolder.newFolder("outbox")
         val mac = CreatingMac().apply { losesAnswer = true }
         val draft = AidenBotCreateDraft(name = "Chef")
@@ -697,13 +746,17 @@ class AidenBotOptimisticSavesTest {
         val first = before.start(draft, catalog)!!
         launch { before.send(first) }.also { runCurrent() }.cancel()
 
-        now = AidenBotSessionStore.LIFETIME_MS + 1
+        now = AidenBotSessionStore.CREATE_REPLAY_MS - 1
         val after = launchWith(root, mac) { now }
         after.restore()
-        assertFalse("a day on, the same key could make a second Bot", after.failure.value!!.replays)
-        assertNull(after.retry())
+        assertTrue(after.failure.value!!.replays)
+        // The prompt stays open past the window before Try again.
+        now = AidenBotSessionStore.CREATE_REPLAY_MS
+        assertNull("nothing goes out", after.retry())
+        assertNull(after.pending.value)
         assertEquals("New Bot opens as it was", draft, after.reopening())
-        assertFalse(after.start(draft, catalog)!!.key == first.key)
+        assertFalse(after.replays(draft))
+        assertEquals(1, mac.requests.size)
     }
 
     @Test

@@ -109,7 +109,9 @@ class AidenBotCreateAttempt internal constructor(
  * person's draft is unchanged, even if the Mac's catalog has since moved or dropped the
  * model. A changed draft, or any attempt after a definite refusal, builds a new request
  * with a new key: the Mac keeps a refused key, replays its refusal for the same body and
- * answers a different body with `idempotency_conflict`.
+ * answers a different body with `idempotency_conflict`. An uncertain attempt replays only
+ * while the Mac still keeps its key ([aidenBotCreateReplayable]); after that the same answers
+ * are a new request, sent only by the person's own Create.
  */
 class AidenBotCreateAttempts(
     private val nowMs: () -> Long = System::currentTimeMillis,
@@ -120,15 +122,23 @@ class AidenBotCreateAttempts(
     /** True while an attempt that may have reached the Mac waits to be replayed. */
     val holdsUncertain: Boolean get() = uncertain != null
 
-    /** True when the last Create failed uncertainly and [draft] is unchanged, so Create replays it. */
-    fun replays(draft: AidenBotCreateDraft): Boolean = uncertain?.draft == draft
+    /** True when the last Create failed uncertainly, [draft] is unchanged and the Mac still keeps its key, so Create replays it. */
+    fun replays(draft: AidenBotCreateDraft): Boolean = replay(draft) != null
+
+    /** The uncertain attempt for [draft] while the Mac still keeps its key, or null; never a new one. */
+    fun replay(draft: AidenBotCreateDraft): AidenBotCreateAttempt? =
+        uncertain?.takeIf { it.draft == draft && aidenBotCreateReplayable(it.createdAtMs, nowMs()) }
+
+    /** True when [attempt] is the one that may have reached the Mac, however long ago. */
+    fun mayHaveArrived(attempt: AidenBotCreateAttempt): Boolean = uncertain === attempt
 
     /**
      * The attempt to send for [draft], or null when no request can be built from it. An
-     * uncertain attempt for the same draft comes back unchanged; [catalog] only shapes a new one.
+     * uncertain attempt for the same draft comes back unchanged while the Mac keeps its key;
+     * [catalog] only shapes a new one.
      */
     fun begin(draft: AidenBotCreateDraft, catalog: AidenBotCapabilityCatalog?): AidenBotCreateAttempt? {
-        uncertain?.takeIf { it.draft == draft }?.let { return it }
+        replay(draft)?.let { return it }
         uncertain = null
         val request = draft.request(catalog) ?: return null
         return AidenBotCreateAttempt(draft, request, makeKey(), nowMs())
@@ -179,8 +189,9 @@ class AidenBotCreateStore(
  * The ask, request and key alike, is on disk in [store] before anything goes out (a Create the
  * phone couldn't keep is never sent) and stays until the Bot is made, the person lets it go, or
  * access ends, so a process death mid-create comes back ([restore]) as not made. Its Try again
- * sends the same request on the same key while the Mac still keeps that key (a day); after
- * that, or when nothing could have reached the Mac, it reopens New Bot as it was.
+ * sends the same request on the same key while the Mac still keeps that key (a day, less a
+ * margin: [aidenBotCreateReplayable]); after that, or when nothing could have reached the Mac,
+ * it reopens New Bot as it was, and only the person's own Create sends a new request.
  *
  * Each flow belongs to one pairing ([holdsPairing]): while another pairing is in use it starts
  * nothing, restores nothing and retries nothing, so one Mac's answers never reach another's.
@@ -241,7 +252,10 @@ class AidenBotCreateFlow(
      */
     fun start(draft: AidenBotCreateDraft, catalog: AidenBotCapabilityCatalog?): AidenBotCreateAttempt? {
         if (_pending.value != null || !holdsPairing()) return null
-        val attempt = attempts.begin(draft, catalog) ?: return null
+        return go(attempts.begin(draft, catalog) ?: return null)
+    }
+
+    private fun go(attempt: AidenBotCreateAttempt): AidenBotCreateAttempt {
         keeping = store?.let { attempt to it.save(attempt.kept()) }
         prefill = null
         _failure.value = null
@@ -270,7 +284,7 @@ class AidenBotCreateFlow(
             if (!isKept(attempt)) {
                 // Nothing went out: a Create this phone couldn't keep can't be recovered after a
                 // process death. Try again reopens New Bot with the answers.
-                val earlier = attempts.replays(attempt.draft)
+                val earlier = attempts.mayHaveArrived(attempt)
                 _failure.value = Failure(
                     R.string.bot_create_not_kept,
                     attempt.draft,
@@ -299,7 +313,7 @@ class AidenBotCreateFlow(
                 return
             }
             attempts.failed(attempt, error)
-            val mayHaveArrived = attempts.replays(attempt.draft)
+            val mayHaveArrived = attempts.mayHaveArrived(attempt)
             // Refused outright: a retry is a new request. The answers stay kept.
             if (!mayHaveArrived && error !is AidenBotChatActivityUnreachable) {
                 store?.save(AidenBotPendingCreate(attempt.draft, createdAtMs = nowMs()))
@@ -343,10 +357,11 @@ class AidenBotCreateFlow(
         val request = saved.request
         val key = saved.key
         // The Mac keeps a key for a day; past that the same key could make a second Bot.
-        val replays = request != null && key != null && nowMs() - saved.createdAtMs < AidenBotSessionStore.LIFETIME_MS
+        val replays = request != null && key != null && aidenBotCreateReplayable(saved.createdAtMs, nowMs())
         if (replays) attempts.adopt(AidenBotCreateAttempt(saved.draft, request!!, key!!, saved.createdAtMs))
         _failure.value = Failure(
-            R.string.bot_create_interrupted,
+            // It may have reached the Mac, which no longer keeps its key: say so before another Create.
+            if (request != null && !replays) R.string.bot_create_may_exist else R.string.bot_create_interrupted,
             saved.draft,
             replays = replays,
             request = request,
@@ -358,14 +373,15 @@ class AidenBotCreateFlow(
 
     /**
      * Try again. An earlier launch's create that may have reached the Mac goes out again as it
-     * was: the attempt to [send] comes back. Otherwise New Bot opens with the answers
-     * ([reopening]) and this returns null.
+     * was, while the Mac still keeps its key: the attempt to [send] comes back. Otherwise
+     * (including a prompt left open past that) New Bot opens with the answers ([reopening]) and
+     * this returns null; only the person's own Create there sends a new request.
      */
     fun retry(): AidenBotCreateAttempt? {
         val failed = _failure.value ?: return null
         // Another pairing is in use: nothing of this one goes out, or opens, there.
-        if (!holdsPairing()) return null
-        if (failed.replays) return start(failed.draft, null)
+        if (!holdsPairing() || _pending.value != null) return null
+        if (failed.replays) attempts.replay(failed.draft)?.let { return go(it) }
         prefill = failed.draft
         _failure.value = null
         return null

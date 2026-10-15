@@ -715,6 +715,7 @@
     <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
     <string name="bot_create_failed_title">Couldn’t Create Bot</string>
     <string name="bot_create_interrupted">Aiden closed before the Bot was ready. Try again to finish making it.</string>
+    <string name="bot_create_may_exist">Aiden closed before your Mac answered, so this Bot may already be there. Check your Bots before you create it again.</string>
     <string name="bot_create_not_kept">Aiden couldn’t save this Bot on your phone, so it wasn’t sent. Try again.</string>
     <string name="bot_editor_create_unreachable">Aiden couldn’t reach your Mac to create this Bot. Try again.</string>
     <string name="bot_editor_help_label">What should it help with?</string>

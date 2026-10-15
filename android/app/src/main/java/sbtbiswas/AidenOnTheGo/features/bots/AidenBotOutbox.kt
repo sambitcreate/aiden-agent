@@ -121,15 +121,32 @@ data class AidenBotOutboxRestore(val messages: List<AidenBotOutgoingMessage>, va
 
 /**
  * A New Bot on its way for one pairing (R15), kept on disk so a process death mid-create
- * brings it back: the person's [draft], the [request] exactly as it went out and its
- * idempotency [key] (null when nothing that could reach the Mac was sent), and when it began.
+ * brings it back: the person's [draft], the [request] exactly as it went out (null when nothing
+ * that could reach the Mac was sent) and its idempotency [key] (null too once the Mac no longer
+ * keeps it, [aidenBotCreateReplayable]), and when it began.
  */
 data class AidenBotPendingCreate(
     val draft: AidenBotCreateDraft,
     val request: AidenBotCreateRequest? = null,
     val key: UUID? = null,
     val createdAtMs: Long
-)
+) {
+    init {
+        require(key == null || request != null)
+    }
+}
+
+/**
+ * Whether a Create that began at [createdAtMs] may still go out again on its key. The Mac keeps
+ * a settled key for a day from when it settled, which is after the phone began it; the phone
+ * replays only for [AidenBotSessionStore.CREATE_REPLAY_MS] of its own clock, so a Mac clock
+ * that runs ahead or a clock change of up to [AidenBotSessionStore.CREATE_REPLAY_MARGIN_MS]
+ * either way never sends a key the Mac has let go (which would make a second Bot).
+ */
+fun aidenBotCreateReplayable(createdAtMs: Long, nowMs: Long): Boolean {
+    val age = nowMs - createdAtMs
+    return age > -AidenBotSessionStore.CREATE_REPLAY_MARGIN_MS && age < AidenBotSessionStore.CREATE_REPLAY_MS
+}
 
 /** How the chat draws an outgoing message (R14). */
 sealed class AidenBotOutgoingLook {
@@ -359,7 +376,6 @@ class AidenBotSessionStore(
             }
             val request = body?.let { AidenBotWireJson.json.decodeFromString(AidenBotCreateRequest.serializer(), it) }
             val idempotencyKey = key?.let(UUID::fromString)
-            require((request == null) == (idempotencyKey == null))
             return AidenBotPendingCreate(AidenBotCreateDraft(name, help, route), request, idempotencyKey, createdAt)
         }
 
@@ -406,6 +422,15 @@ class AidenBotSessionStore(
             report("event=bot_create_unreadable outcome=set_aside")
             val aside = File(file.parentFile, "create.${UUID.randomUUID()}.unreadable")
             if (!file.renameTo(aside)) report("event=bot_create_set_aside outcome=failed")
+            return null
+        }
+        if (create.key != null && !aidenBotCreateReplayable(create.createdAtMs, nowMs())) {
+            // The Mac no longer keeps its key: the key goes from the disk too, so no later read
+            // (even with the clock turned back) replays it. The answers and request stay.
+            report("event=bot_create_key_expired outcome=forgotten")
+            val aged = create.copy(key = null)
+            writeCreate(pairing, CreateRecord.of(pairing, aged))
+            return aged
         }
         return create
     }
@@ -628,6 +653,10 @@ class AidenBotSessionStore(
 
     companion object {
         const val LIFETIME_MS = 24L * 60 * 60 * 1_000
+        /** Room for the Mac's and the phone's clocks under the Mac's day-long Create key ([aidenBotCreateReplayable]). */
+        const val CREATE_REPLAY_MARGIN_MS = 60L * 60 * 1_000
+        /** How long after it began a New Bot may still be replayed on its key. */
+        const val CREATE_REPLAY_MS = LIFETIME_MS - CREATE_REPLAY_MARGIN_MS
         /** The most messages one chat may hold waiting; another is refused, visibly. */
         const val MAX_MESSAGES = 20
         const val CAPACITY = 16
