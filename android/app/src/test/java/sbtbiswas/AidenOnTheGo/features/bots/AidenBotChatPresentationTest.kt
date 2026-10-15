@@ -48,18 +48,33 @@ class AidenBotChatPresentationTest {
     }
 
     @Test
-    fun captionsAndTryAgainReadOnTheChatInEveryTheme() {
+    fun captionsLinksAndErrorTextReadOnEverySurfaceTheyUseInEveryTheme() {
+        val failures = mutableListOf<String>()
         AidenThemeCatalog.palettes.forEach { (preset, palettes) ->
             palettes.forEachIndexed { index, palette ->
                 val scheme = aidenColorScheme(palette, isDark = index == 1)
                 val text = aidenBotChatTextColors(scheme)
                 val name = "$preset ${if (index == 1) "dark" else "light"}"
-                val caption = AidenPalette.contrastRatio(text.caption, scheme.background)
-                val link = AidenPalette.contrastRatio(text.link, scheme.background)
-                assertTrue("$name: caption contrast $caption is below 4.5:1", caption >= 4.5f)
-                assertTrue("$name: Try again contrast $link is below 4.5:1", link >= 4.5f)
+                // Where each is drawn: the chat and screens (the page), sheets, dialogs and menus
+                // (raised), and, for an error, its own tint.
+                val surfaces = mapOf("page" to scheme.background, "sheet" to palette.raised)
+                val inks = mapOf("caption" to text.caption, "Try again" to text.link, "error" to text.error)
+                for ((surface, color) in surfaces) {
+                    for ((role, ink) in inks) {
+                        val ratio = AidenPalette.contrastRatio(ink, color)
+                        if (ratio < 4.5f) failures += "$name: $role on $surface is $ratio"
+                    }
+                }
+                for ((surface, color) in mapOf("card" to scheme.surfaceContainer, "error tint" to scheme.errorContainer)) {
+                    val ratio = AidenPalette.contrastRatio(text.error, color)
+                    if (ratio < 4.5f) failures += "$name: error on $surface is $ratio"
+                }
+                // Still an error's colour, not the plain text one.
+                assertNotEquals("$name: error text keeps its colour", scheme.onSurface, text.error)
+                assertEquals(1f, text.error.alpha)
             }
         }
+        assertTrue("below 4.5:1:\n" + failures.joinToString("\n"), failures.isEmpty())
     }
 
     @Test

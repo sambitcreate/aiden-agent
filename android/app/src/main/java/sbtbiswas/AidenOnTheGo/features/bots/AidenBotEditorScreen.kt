@@ -397,7 +397,7 @@ private fun AidenBotCreateScreen(
                         Text(
                             text = stringResource(R.string.bot_editor_model_gone),
                             style = MaterialTheme.typography.bodySmall,
-                            color = palette.danger,
+                            color = aidenBotErrorTextColor(),
                             modifier = Modifier.padding(horizontal = 4.dp)
                         )
                     }
@@ -489,7 +489,7 @@ private fun AidenBotInstructionsEditorScreen(
             minLines = 8,
             modifier = Modifier.fillMaxWidth()
         )
-        error?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+        error?.let { Text(it, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall) }
     }
 }
 

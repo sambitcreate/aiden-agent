@@ -473,7 +473,7 @@ private fun AidenBotSessionContent(
                 // A notice about unsent messages (copy shared with iOS), else the last action's error.
                 (ui.notice?.let { resources.getString(it.text) } ?: ui.actionError)?.let { message ->
                     item(key = "error") {
-                        Text(message, color = palette.danger, style = MaterialTheme.typography.bodySmall)
+                        Text(message, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -668,7 +668,7 @@ fun AidenBotConnectCard(
                         onClick = onRequest
                     )
                     if (phase == AidenBotConnectRequestPhase.FAILED) {
-                        Text(stringResource(R.string.bot_session_unreachable), style = MaterialTheme.typography.bodySmall, color = palette.danger)
+                        Text(stringResource(R.string.bot_session_unreachable), style = MaterialTheme.typography.bodySmall, color = aidenBotErrorTextColor())
                     }
                 }
             }
@@ -781,7 +781,7 @@ fun AidenBotRoutineProposalCard(
                         )
                     }
                     if (phase == AidenBotProposalPhase.FAILED) {
-                        Text(stringResource(R.string.bot_proposal_failed), style = MaterialTheme.typography.bodySmall, color = palette.danger)
+                        Text(stringResource(R.string.bot_proposal_failed), style = MaterialTheme.typography.bodySmall, color = aidenBotErrorTextColor())
                     }
                 }
             }

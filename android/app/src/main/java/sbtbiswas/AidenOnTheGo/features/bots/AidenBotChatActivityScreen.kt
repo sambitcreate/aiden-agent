@@ -227,7 +227,7 @@ fun AidenBotChatActivityDialog(
                                 AidenBotChatActivityFailure.GENERIC -> R.string.bot_chat_activity_save_failed
                             }
                         ),
-                        color = palette.danger,
+                        color = aidenBotErrorTextColor(),
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                     )

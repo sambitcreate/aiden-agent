@@ -294,7 +294,7 @@ fun AidenBotProfileScreen(
                             )
                             if (canDelete) {
                                 DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.bot_delete_confirm), color = palette.danger) },
+                                    text = { Text(stringResource(R.string.bot_delete_confirm), color = aidenBotErrorTextColor()) },
                                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                                     onClick = {
                                         showMenu = false
@@ -403,7 +403,7 @@ fun AidenBotProfileScreen(
                         }
                     }
                 }
-                photoError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+                photoError?.let { Text(it, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall) }
 
                 Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
                     Column {
@@ -491,7 +491,7 @@ fun AidenBotProfileScreen(
                 }
 
                 (editState?.failure?.let { stringResource(aidenBotSaveFailureText(it)) } ?: actionError)?.let {
-                    Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall)
+                    Text(it, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

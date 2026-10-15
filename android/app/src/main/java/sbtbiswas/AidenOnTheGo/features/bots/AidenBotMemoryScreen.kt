@@ -130,14 +130,14 @@ fun AidenBotMemoryScreen(
                 ui.actionError?.let { error ->
                     Text(
                         aidenBotMemoryActionErrorText(error),
-                        color = palette.danger,
+                        color = aidenBotErrorTextColor(),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
                 if (ui.eraseFailed) {
                     Text(
                         stringResource(R.string.bot_memory_erase_failed),
-                        color = palette.danger,
+                        color = aidenBotErrorTextColor(),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -182,7 +182,7 @@ fun AidenBotMemoryScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     editing.error?.let { error ->
-                        Surface(color = palette.danger.copy(alpha = 0.12f), shape = MaterialTheme.shapes.medium) {
+                        Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium) {
                             Text(
                                 when (error) {
                                     AidenBotMemoryError.BLOCKED -> stringResource(R.string.bot_memory_error_blocked)
@@ -190,7 +190,7 @@ fun AidenBotMemoryScreen(
                                     AidenBotMemoryError.NOT_FOUND -> stringResource(R.string.bot_memory_error_not_found)
                                     AidenBotMemoryError.FAILED -> stringResource(R.string.bot_memory_error_failed)
                                 },
-                                color = palette.danger,
+                                color = aidenBotErrorTextColor(),
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(12.dp)
                             )
@@ -330,7 +330,7 @@ private fun AidenBotMemoryRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
+                        text = { Text(stringResource(R.string.action_delete), color = aidenBotErrorTextColor()) },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                         onClick = {
                             showMenu = false

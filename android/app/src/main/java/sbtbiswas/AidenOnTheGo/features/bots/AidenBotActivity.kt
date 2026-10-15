@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import kotlinx.coroutines.delay
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkProperty
@@ -208,14 +209,43 @@ fun aidenBotOutgoingBubble(look: AidenBotOutgoingLook): AidenBotPendingBubble = 
 data class AidenBotBubbleColors(val container: Color, val content: Color)
 
 /**
- * The chat's quiet text on its background: [caption] for "Sending…", "Queued" and the
- * connection hint, [link] for Try again. Both are scheme tokens that read at 4.5:1 or better in
- * every theme (the accent alone doesn't in some light themes).
+ * The Bot screens' quiet text: [caption] for "Sending…", "Queued" and the connection hint,
+ * [link] for Try again, [error] for an inline error ("Couldn't save", a destructive menu label).
+ * All come from the scheme and read at 4.5:1 or better in every theme where they are drawn: the
+ * accent alone doesn't in some light themes, and neither does the danger colour (about 3:1).
  */
-data class AidenBotChatTextColors(val caption: Color, val link: Color)
+data class AidenBotChatTextColors(val caption: Color, val link: Color, val error: Color)
 
-fun aidenBotChatTextColors(scheme: ColorScheme): AidenBotChatTextColors =
-    AidenBotChatTextColors(caption = scheme.onSurfaceVariant, link = scheme.secondary)
+fun aidenBotChatTextColors(scheme: ColorScheme): AidenBotChatTextColors = AidenBotChatTextColors(
+    caption = scheme.onSurfaceVariant,
+    link = scheme.secondary,
+    // The page, its cards and sheets, and an error's own tint.
+    error = aidenReadableInk(
+        scheme.error,
+        toward = scheme.onSurface,
+        on = listOf(scheme.background, scheme.surface, scheme.surfaceContainer, scheme.surfaceBright, scheme.errorContainer)
+    )
+)
+
+/**
+ * [ink] moved toward [toward] just far enough to read at [ratio] on every colour in [on], so it
+ * keeps as much of its own colour as it can. [toward] itself if nothing short of it does.
+ */
+fun aidenReadableInk(ink: Color, toward: Color, on: List<Color>, ratio: Float = 4.5f): Color {
+    val steps = 40
+    for (step in 0..steps) {
+        val candidate = androidx.compose.ui.graphics.lerp(ink, toward, step / steps.toFloat())
+        if (on.all { AidenPalette.contrastRatio(candidate, it) >= ratio }) return candidate
+    }
+    return toward
+}
+
+/** [AidenBotChatTextColors.error] for the theme in use: inline error text on the Bot screens. */
+@Composable
+fun aidenBotErrorTextColor(): Color {
+    val scheme = MaterialTheme.colorScheme
+    return remember(scheme) { aidenBotChatTextColors(scheme).error }
+}
 
 /**
  * Whether new rows should scroll the chat to its end: only when the person is already at (or

@@ -434,7 +434,7 @@ fun AidenBotAdvancedSheet(
                     }
                 }
 
-                saveError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+                saveError?.let { Text(it, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall) }
             }
         }
     }
