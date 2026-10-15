@@ -217,6 +217,90 @@ test.describe("folder workspaces", () => {
     await expect(page.getByText("Generation failed")).toHaveCount(0);
   });
 
+  test("a failed worktree send waits for Retry, Cancel or Run in this checkout, even after leaving", async ({ aiden }) => {
+    const { page } = aiden;
+    execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
+    execFileSync("git", [
+      "-C", aiden.workspaceDir,
+      "-c", "user.email=e2e@example.com",
+      "-c", "user.name=Aiden E2E",
+      "commit", "--allow-empty", "-m", "init",
+    ]);
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await finishLmStudioOnboarding(page);
+    const composer = page.locator("textarea");
+
+    // `main` is a valid name, but that branch is checked out here, so Git refuses it.
+    await contextBar(page).getByRole("button", { name: "main", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Work in" }).getByRole("radio", { name: /^New worktree/u }).click();
+    await page.locator("[data-branch-name-row]").click();
+    await page.getByRole("textbox", { name: /Branch name/u }).fill("main");
+    await page.keyboard.press("Enter");
+    await expect(page.locator("[data-branch-name-row]")).toContainText("main");
+    await page.keyboard.press("Escape");
+
+    // Record each state the send view passes through.
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { __worktreeStates: string[] }).__worktreeStates = seen;
+      new MutationObserver(() => {
+        const state = document.querySelector("[data-draft-worktree-send]")?.getAttribute("data-draft-worktree-send") ?? "none";
+        if (seen[seen.length - 1] !== state) seen.push(state);
+      }).observe(document.body, { subtree: true, childList: true, attributes: true });
+    });
+    const states = () => page.evaluate(() => (window as unknown as { __worktreeStates: string[] }).__worktreeStates);
+
+    await composer.fill("Fix the login bug");
+    await composer.press("Enter");
+    const failure = page.locator("[data-worktree-send-failure]");
+    await expect(failure).toBeVisible({ timeout: 20_000 });
+    await expect(failure).toContainText(/couldn.t (prepare|create) the new worktree/u);
+    await expect(page.locator("[data-draft-worktree-send]")).toContainText("Fix the login bug");
+    await expect(page.getByText("Choose how to continue above.")).toBeVisible();
+
+    // Leaving and coming back keeps the failure; nothing is cancelled behind the user's back.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Back to app", exact: true }).click();
+    await expect(failure).toBeVisible();
+
+    // Retry sends again with the same draft and fails the same way.
+    await page.evaluate(() => {
+      (window as unknown as { __worktreeStates: string[] }).__worktreeStates.length = 0;
+    });
+    await failure.getByRole("button", { name: "Retry" }).click();
+    await expect.poll(states).toEqual(expect.arrayContaining(["running", "failed"]));
+    await expect(failure).toBeVisible();
+
+    // Cancel returns the message to the composer.
+    await failure.getByRole("button", { name: "Cancel" }).click();
+    await expect(failure).toHaveCount(0);
+    await expect(composer).toHaveValue("Fix the login bug");
+    await expect(page.locator("[data-new-chat-headline]")).toBeVisible();
+
+    // Run in this checkout instead sends it in the repository itself.
+    await composer.press("Enter");
+    await expect(failure).toBeVisible({ timeout: 20_000 });
+    await failure.getByRole("button", { name: "Run in this checkout instead" }).click();
+    await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
+    await expect(contextBar(page)).toHaveAttribute("data-mode", "summary");
+    await expect(contextBar(page).getByRole("button", { name: "main", exact: true })).toBeVisible();
+    const chats = JSON.parse(await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8")) as {
+      workspaceId?: string;
+      botId?: string;
+    }[];
+    const saved = chats.filter((entry) => !entry.botId && entry.workspaceId && entry.workspaceId !== "assistant");
+    expect(saved).toHaveLength(1);
+    const workspace = await page.evaluate(async (workspaceId) => {
+      const bridge = (window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }).aidenAPI.ipc;
+      return bridge.invoke<{ folderPath?: string; managedWorktree?: unknown } | null>("workspaces:get", workspaceId);
+    }, saved[0].workspaceId);
+    expect(workspace?.managedWorktree).toBeUndefined();
+    expect(execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" }).trim().split("\n"))
+      .toHaveLength(1);
+  });
+
   test("⌥↵ in New chat in… opens the draft with New worktree selected", async ({ aiden }) => {
     const { page } = aiden;
     execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
