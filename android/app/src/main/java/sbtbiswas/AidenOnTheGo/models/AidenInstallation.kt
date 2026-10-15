@@ -22,20 +22,12 @@ enum class AidenDeviceType {
     @SerialName("android_phone") ANDROID_PHONE,
     @SerialName("android_tablet") ANDROID_TABLET;
 
-    /**
-     * Wire value transmitted during /pairing/exchange.
-     * Note: The current Mac desktop server (aiden-remote-pairing.ts / aiden-remote-state.ts / openapi.json)
-     * strictly validates `deviceType: "iphone" | "ipad"`.
-     * To maintain 100% wire compatibility with the existing Mac server without requiring immediate Mac-side changes,
-     * ANDROID_PHONE maps to "iphone" and ANDROID_TABLET maps to "ipad" on the wire.
-     *
-     * TODO(future): When the Mac backend expands `AidenRemoteDeviceType` to include "android_phone" / "android_tablet",
-     * update this mapping to return `name.lowercase()`.
-     */
+    /** Android identity requires a desktop that supports Android pairing. */
     val wireValue: String
         get() = when (this) {
-            IPHONE, ANDROID_PHONE -> "iphone"
-            IPAD, ANDROID_TABLET -> "ipad"
+            IPHONE -> "iphone"
+            IPAD -> "ipad"
+            ANDROID_PHONE, ANDROID_TABLET -> "android"
         }
 }
 

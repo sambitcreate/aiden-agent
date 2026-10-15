@@ -46,8 +46,12 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  *
  * Contract revision 30 (provisional; re-claim the next revision after `main`'s
  * at merge): Bot chat activity on phones (`bot-activity-v1`, `bot:activity`).
+ *
+ * Contract revision 31: connection reliability. Desktop-only `peer-routes-v1`
+ * route advertisements with route-specific trust, and the `android` pairing
+ * device type.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 30 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 31 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -143,8 +147,8 @@ export type AidenRemoteSimulatorCapability =
 
 /**
  * Phone-only opt-in (contract revision 25): watching and touching the serving
- * Mac's shared iOS Simulators from Aiden On The Go. Only `iphone` and `ipad`
- * device records may hold it, it is negotiated post-pairing while the server
+ * Mac's shared iOS Simulators from Aiden On The Go. Only `iphone`, `ipad` and
+ * (since contract revision 31) `android` device records may hold it, it is negotiated post-pairing while the server
  * advertises `mobile-simulators-v1`, and the serving owner's "Share with Aiden
  * On The Go" consent must also be on. It reaches a narrower route set than
  * `simulators:control`: list, open, shut down, the MJPEG stream and the input
@@ -6541,6 +6545,17 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (value.botActivity !== undefined) {
     if (contractRevision < 30) throw new Error("Bot activity fixtures require contract revision 30.");
     botActivity = parseBotActivityFixture(value.botActivity);
+  }
+  if (value.peerRouteAdvertisement !== undefined) {
+    if (contractRevision < 31 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 31.");
+    const advertisement = value.peerRouteAdvertisement;
+    if (advertisement.feature !== "peer-routes-v1" || !Array.isArray(advertisement.routes) || advertisement.routes.length > 2) throw new Error("Invalid peer route advertisement.");
+    for (const route of advertisement.routes) {
+      if (!isRecord(route)) throw new Error("Invalid peer route.");
+      const endpoint = requiredString(route, "endpoint");
+      assertAidenRemoteEndpoint(endpoint);
+      if (!new URL(endpoint).hostname.endsWith(".ts.net") || !/^sha256\/[A-Za-z0-9+/]{43}=$/u.test(requiredString(route, "serverSpkiSha256"))) throw new Error("Invalid synthetic peer route trust.");
+    }
   }
   assertNoForbiddenWireKeys(value);
   return {

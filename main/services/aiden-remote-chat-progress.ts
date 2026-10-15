@@ -404,6 +404,7 @@ export class AidenRemoteChatProgressService {
     grants: ReadonlySet<AidenRemoteCapability>,
     after: number,
     response: ServerResponse,
+    epoch?: string,
   ): Promise<void> {
     if (!grants.has("tasks:read") && !grants.has("agents:read")) {
       throw new AidenRemoteServiceError(
@@ -430,9 +431,10 @@ export class AidenRemoteChatProgressService {
     let unsubscribe = () => {};
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let scheduled: ReturnType<typeof setTimeout> | undefined;
-    const resumed = after > 0 ? this.cursors.get(after) : undefined;
+    const resumed = after > 0 && (epoch === undefined || epoch === this.epoch) ? this.cursors.get(after) : undefined;
+    const isResumed = resumed?.deviceId === deviceId && resumed.chatId === chatId;
     const sent = new Map<string, number>(
-      resumed?.deviceId === deviceId && resumed.chatId === chatId
+      isResumed
         ? resumed.sent
         : [],
     );
@@ -509,6 +511,7 @@ export class AidenRemoteChatProgressService {
       "Cache-Control": "no-cache, no-store",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      "Aiden-Progress-Resumed": String(isResumed),
     });
     response.flushHeaders();
     await refresh();

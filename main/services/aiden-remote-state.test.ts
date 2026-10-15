@@ -926,11 +926,26 @@ test("phones negotiate only the phone run subset; the host feed stays desktop-on
   assert.equal(restoredDesktop?.capabilities.has("host:events"), true);
 });
 
+test("Android device identity survives restart without gaining desktop authority", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  const issued = await state.registry.issueDevice({ name: "Pixel", type: "android", clientVersion: "1" });
+  const restored = fixture(state.stored());
+  await restored.registry.initialize();
+  const authenticated = await restored.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.type, "android");
+  assert.equal(authenticated?.capabilities.has("chat:write"), true);
+  assert.equal(authenticated?.capabilities.has("host:events"), false);
+  assert.equal(authenticated?.capabilities.has("simulators:control"), false);
+  assert.equal((await restored.registry.listDevices())[0]?.type, "android");
+});
+
 test("the phone simulator viewer grant is negotiated only by phones and never issued at pairing", async () => {
   const state = fixture();
   const mac = await state.registry.issueDevice({ name: "Studio", type: "mac", clientVersion: "1" });
   const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
   const tablet = await state.registry.issueDevice({ name: "iPad", type: "ipad", clientVersion: "1" });
+  const android = await state.registry.issueDevice({ name: "Pixel", type: "android", clientVersion: "1" });
   const writesAfterPairing = state.writes.length;
 
   await assert.rejects(
@@ -948,7 +963,7 @@ test("the phone simulator viewer grant is negotiated only by phones and never is
   );
   assert.equal(state.writes.length, writesAfterPairing);
 
-  for (const device of [phone, tablet]) {
+  for (const device of [phone, tablet, android]) {
     const upgraded = await state.registry.upgradeDeviceCapabilities(device.device.id, ["simulators:mobile"]);
     assert.equal(upgraded?.capabilities.includes("simulators:mobile"), true);
     const authenticated = await state.registry.authenticate(device.credential);

@@ -1,3 +1,4 @@
+import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
@@ -272,6 +273,11 @@ export const localRunsApi = {
 };
 
 export const peerHostsApi = {
+  removeRoute: (hostId: string, routeId: string) => invoke<void>("remote:peerRouteRemove", hostId, routeId),
+  restoreRoutes: (hostId: string) => invoke<void>("remote:peerRoutesRestore", hostId),
+  pendingIntents: (hostId: string, chatId: string) => invoke<SavedChatIntent[]>("remote:peerIntentsList", hostId, chatId),
+  saveIntent: (intent: SavedChatIntent) => invoke<void>("remote:peerIntentsPut", intent),
+  removeIntent: (hostId: string, chatId: string, key: string) => invoke<void>("remote:peerIntentsRemove", hostId, chatId, key),
   list: () => invoke<PeerHostView[]>("remote:peersList"),
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
@@ -286,8 +292,8 @@ export const peerHostsApi = {
     invoke<unknown>("remote:peerOperation", hostId, operation),
   onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
   /** Like `operation`, but failures come back as typed outcomes instead of throwing. */
-  call: (hostId: string, operation: PeerOperation) =>
-    invoke<PeerOperationOutcome>("remote:peerCall", hostId, operation),
+  call: (hostId: string, operation: PeerOperation, admission?: { savedIntent: boolean }) =>
+    invoke<PeerOperationOutcome>("remote:peerCall", hostId, operation, admission),
   statuses: () => invoke<PeerHostStatus[]>("remote:peerHostStatuses"),
   /** Last-known rows; null when the host is disabled or unknown. */
   feed: (hostId: string) => invoke<PeerHostFeedSnapshot | null>("remote:peerHostFeed", hostId),

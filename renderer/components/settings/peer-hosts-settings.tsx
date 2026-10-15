@@ -110,6 +110,8 @@ export interface PeerHostRowProps {
   onRename(): void;
   onRepair(): void;
   onForget(): void;
+  onRemoveRoute?(routeId: string): void;
+  onRestoreRoutes?(): void;
 }
 
 /** One paired host: name, live status, Reconnect, the enable switch and a "···" menu. */
@@ -123,6 +125,8 @@ export function PeerHostRow({
   onRename,
   onRepair,
   onForget,
+  onRemoveRoute,
+  onRestoreRoutes,
 }: PeerHostRowProps) {
   const presentation = peerHostPresentation(host, status, now);
   return (
@@ -133,6 +137,13 @@ export function PeerHostRow({
       <Laptop className="size-4 shrink-0 text-secondary" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <Text variant="small-strong" truncate className="block">{host.name}</Text>
+        {host.activeRouteKind ? (
+          <Text variant="small" color="secondary" className="block">
+            {status?.state.kind === "connected" ? "Connected via" : "Last route:"} {host.activeRouteKind === "lan" ? "Local network" : "Tailscale"}
+            {host.routes?.length ? ` · ${host.routes.length} ${host.routes.length === 1 ? "route" : "routes"}` : ""}
+          </Text>
+        ) : null}
+        {status?.lastSyncedAt ? <Text variant="small" color="secondary" className="block">Last synced {new Date(status.lastSyncedAt).toLocaleString()}</Text> : null}
         {presentation.detail ? (
           <Text variant="small" color="secondary" className="block break-words">{presentation.detail}</Text>
         ) : null}
@@ -163,6 +174,12 @@ export function PeerHostRow({
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={onRename}>Rename locally…</DropdownMenuItem>
           <DropdownMenuItem onSelect={onRepair}>Re-pair…</DropdownMenuItem>
+          {host.routes?.filter(route => route.origin === "learned").map(route => (
+            <DropdownMenuItem key={route.id} disabled={busy} onSelect={() => onRemoveRoute?.(route.id)}>
+              Remove learned {route.kind === "lan" ? "local network" : "Tailscale"} route{route.active ? " (active)" : ""}…
+            </DropdownMenuItem>
+          ))}
+          {host.hasSuppressedRoutes ? <DropdownMenuItem disabled={busy} onSelect={onRestoreRoutes}>Restore learned routes</DropdownMenuItem> : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onForget}>Forget…</DropdownMenuItem>
         </DropdownMenuContent>
@@ -244,14 +261,17 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
   const [busy, setBusy] = React.useState<string | null>(null);
   const [sheet, setSheet] = React.useState<{ replaceHost?: { id: string; name: string } } | null>(null);
   const [renaming, setRenaming] = React.useState<PeerHostView | null>(null);
+  const [routeRemoval, setRouteRemoval] = React.useState<{ host: PeerHostView; routeId: string } | null>(null);
   const [forgetting, setForgetting] = React.useState<PeerHostView | null>(null);
 
   const act = async (hostId: string, work: () => Promise<unknown>, fallback: string) => {
     setBusy(hostId);
     try {
       await work();
+      return true;
     } catch (error) {
       toast.error(errorMessage(error, fallback));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -273,6 +293,11 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
         {list.isLoading ? (
           <div className="flex items-center gap-2 p-4 text-small text-secondary" role="status">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" /> Loading paired computers…
+          </div>
+        ) : list.isError ? (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 p-4">
+            <Text variant="small">Couldn't load paired computers. Your saved connections have not been removed.</Text>
+            <Button size="small" disabled={list.isFetching} onClick={() => void list.refetch()}>Try again</Button>
           </div>
         ) : hosts.length === 0 ? (
           <EmptyState
@@ -297,6 +322,8 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
               onRename={() => setRenaming(host)}
               onRepair={() => setSheet({ replaceHost: { id: host.id, name: host.name } })}
               onForget={() => setForgetting(host)}
+              onRemoveRoute={routeId => setRouteRemoval({ host, routeId })}
+              onRestoreRoutes={() => void act(host.id, () => peerHostsApi.restoreRoutes(host.id), "Couldn't restore routes.")}
             />
           ))
         )}
@@ -311,6 +338,19 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
         onOpenChange={(open) => !open && setSheet(null)}
         replaceHost={sheet?.replaceHost}
       />
+      <AlertDialog
+        open={routeRemoval !== null}
+        onOpenChange={open => !open && setRouteRemoval(null)}
+        title="Remove learned route?"
+        description="Aiden will stop using this route and won't learn it again until you choose Restore learned routes. Removing the active route may briefly interrupt this connection."
+        confirmLabel="Remove route"
+        keepOpenOnConfirm
+        busy={routeRemoval !== null && busy === routeRemoval.host.id}
+        onConfirm={async () => {
+          if (!routeRemoval) return;
+          if (await act(routeRemoval.host.id, () => peerHostsApi.removeRoute(routeRemoval.host.id, routeRemoval.routeId), "Couldn't remove this route.")) setRouteRemoval(null);
+        }}
+      />
       <RenameDialog host={renaming} onClose={() => setRenaming(null)} />
       <AlertDialog
         open={forgetting !== null}
@@ -318,13 +358,13 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
         title={forgetting ? `Forget ${forgetting.name}?` : "Forget computer?"}
         description={`This ${hostLabel} deletes its saved access and stops showing that computer's chats. To use it again, pair again. The other computer lists this ${hostLabel} until you remove it there.`}
         confirmLabel="Forget"
+        keepOpenOnConfirm
         confirmVariant="destructive"
         busy={forgetting !== null && busy === forgetting.id}
         onConfirm={async () => {
           const host = forgetting;
           if (!host) return;
-          await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget this computer.");
-          setForgetting(null);
+          if (await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget this computer.")) setForgetting(null);
         }}
       />
     </>

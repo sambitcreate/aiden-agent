@@ -232,3 +232,44 @@ function assertHealth(result: { status: number; body: unknown }): void {
   expect(result.status).toBe(200);
   expect(result.body).toEqual({ ok: true, protocolVersion: 1 });
 }
+
+test("paired-computer load and removal failures preserve context and offer recovery", async ({ aiden }, testInfo) => {
+  const { page, app } = aiden;
+  await finishLmStudioOnboarding(page);
+  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+    ipcMain.removeHandler("remote:peersList");
+    ipcMain.handle("remote:peersList", () => { throw new Error("Saved connections are temporarily unavailable."); });
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("remote:peers-changed", {});
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Connections", exact: true }).click();
+  await page.getByRole("tab", { name: "Control other devices", exact: true }).click();
+  await expect(page.getByText("Couldn't load paired computers. Your saved connections have not been removed.")).toBeVisible();
+  await expect(page.getByText("No computers yet", { exact: true })).toBeHidden();
+  await app.evaluate(({ ipcMain }) => {
+    let hosts = [{ id: "recovery_host", name: "Recovery computer", enabled: false, state: "disabled", features: [], capabilities: [] }];
+    let removals = 0;
+    ipcMain.removeHandler("remote:peersList");
+    ipcMain.handle("remote:peersList", () => hosts);
+    ipcMain.removeHandler("remote:peersRemove");
+    ipcMain.handle("remote:peersRemove", event => {
+      if (++removals === 1) throw new Error("The saved connection could not be removed.");
+      hosts = [];
+      event.sender.send("remote:peers-changed", {});
+    });
+  });
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(page.getByText("Recovery computer", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "More for Recovery computer" }).click();
+  await page.getByRole("menuitem", { name: "Forget…", exact: true }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Forget Recovery computer?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Forget", exact: true }).click();
+  await expect(page.getByText(/The saved connection could not be removed/)).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Forget", exact: true })).toBeEnabled();
+  await dialog.screenshot({ path: testInfo.outputPath("connection-removal-recovery.png") });
+  await dialog.getByRole("button", { name: "Forget", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("No computers yet", { exact: true })).toBeVisible();
+});

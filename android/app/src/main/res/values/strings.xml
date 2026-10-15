@@ -188,6 +188,10 @@
     <string name="pairing_tab_code">Setup code</string>
     <string name="pairing_setup_code">20-character setup code</string>
     <string name="pairing_desktop_address">Desktop address</string>
+    <string name="pairing_nearby_title">Nearby desktops</string>
+    <string name="pairing_nearby_searching">Searching your local network. Keep Aiden open and enable device connections on your desktop. You can also enter its address below.</string>
+    <string name="pairing_nearby_choose">Choose your desktop, then enter the setup code shown there.</string>
+    <string name="pairing_search_again">Search again</string>
     <string name="pairing_connect">Connect &amp; pair</string>
     <string name="pairing_paste_details">Advanced: paste connection details</string>
     <string name="pairing_back_to_scanning">Back to scanning</string>

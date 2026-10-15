@@ -25,6 +25,28 @@ struct ContentView: View {
                 )
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(issue.title).font(.subheadline.weight(.semibold))
+                    if let installation = coordinator.installationStore.activeInstallation {
+                        Text(installation.name).font(.caption.weight(.medium))
+                        if let last = installation.lastConnectedAt {
+                            Text("Last connected \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(issue.message).font(.caption).foregroundStyle(.secondary)
+                    if issue.canRetry {
+                        Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.regularMaterial)
+                .accessibilityElement(children: .contain)
+            }
+        }
         .task { await coordinator.start() }
         .onOpenURL { url in
             guard let request = AidenDeepLink.request(from: url) else {

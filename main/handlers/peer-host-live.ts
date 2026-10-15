@@ -1,3 +1,5 @@
+import type { PeerOperation } from "../../renderer/shared/peer-operation.js";
+import type { PeerIntentStore } from "../services/peer-intent-store.js";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import type { PeerHostManager } from "../services/peer-host-manager.js";
 
@@ -30,6 +32,7 @@ export interface PeerHostLiveHandlerDependencies<Event> {
   owner(event: Event): PeerHostLiveOwner;
   /** Resolved per call so supervision starts on first use. */
   manager(): PeerHostLiveManager;
+  intents?(): PeerIntentStore;
 }
 
 const INACTIVE = "The application document changed.";
@@ -82,9 +85,26 @@ export function registerPeerHostLiveHandlers<Event>(
     return manager.feedSnapshot(hostId);
   });
 
-  handle("remote:peerCall", (event, hostId, operation) => {
+  handle("remote:peerCall", (event, hostId, operation, admission) => {
     const owner = active(event);
-    return bound(owner, (signal) => dependencies.manager().call(hostId, operation, signal));
+    return bound(owner, async signal => {
+      let credentialIdentity: string | undefined;
+      if (admission && typeof admission === "object" && "savedIntent" in admission && admission.savedIntent === true) {
+        try {
+          if (!dependencies.intents || !operation || typeof operation !== "object" || !("idempotencyKey" in operation)) throw new Error("Missing saved request.");
+          credentialIdentity = await dependencies.intents().admissionIdentity(hostIdentifier(hostId), operation as PeerOperation);
+        } catch {
+          return { ok: false, error: { code: "outcome_unknown", message: "The saved request or its pairing changed. Check delivery on the host before dismissing it." } };
+        }
+      }
+      if (owner.isDestroyed()) throw new Error(INACTIVE);
+      const outcome = await dependencies.manager().call(hostId, operation, signal, credentialIdentity ? { credentialIdentity } : undefined);
+      // A local admission failure cannot settle the earlier request's delivery.
+      if (credentialIdentity && !outcome.ok && !outcome.error.remoteCode) {
+        return { ...outcome, error: { ...outcome.error, code: "outcome_unknown" } };
+      }
+      return outcome;
+    });
   });
 
   // The original throwing surface, now through the supervisor so blocked hosts

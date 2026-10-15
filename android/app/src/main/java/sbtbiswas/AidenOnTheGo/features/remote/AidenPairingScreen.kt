@@ -359,9 +359,11 @@ private fun AidenPairingMethods(
     val palette = AidenTheme.palette
     var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0: Scan QR, 1: Setup code, 2: Paste
     var manualCode by rememberSaveable { mutableStateOf("") }
-    var endpointUrl by rememberSaveable { mutableStateOf(DEFAULT_PAIRING_ENDPOINT) }
+    var endpointUrl by rememberSaveable { mutableStateOf("") }
     var qrJsonInput by rememberSaveable { mutableStateOf("") }
     var scanAttempt by remember { mutableIntStateOf(0) }
+    var discoveryRefresh by remember { mutableIntStateOf(0) }
+    val (nearbyDesktops, discoveryError) = rememberNearbyDesktops(selectedTab == 1, discoveryRefresh)
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         AidenPairingModeTabs(selectedTab = selectedTab, onSelectTab = { selectedTab = it })
@@ -387,6 +389,34 @@ private fun AidenPairingMethods(
                 }
             }
             1 -> {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        stringResource(R.string.pairing_nearby_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = palette.foreground
+                    )
+                    Text(
+                        discoveryError ?: stringResource(
+                            if (nearbyDesktops.isEmpty()) R.string.pairing_nearby_searching else R.string.pairing_nearby_choose
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                    )
+                    nearbyDesktops.forEach { desktop ->
+                        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
+                            onClick = { endpointUrl = desktop.endpoint },
+                            enabled = !isPairing,
+                            shape = AidenShape.Button,
+                            modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
+                        ) { Text(desktop.name) }
+                    }
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
+                        onClick = { discoveryRefresh++ },
+                        shape = AidenShape.Button,
+                        modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
+                    ) { Text(stringResource(R.string.pairing_search_again)) }
+                }
                 TextField(
                     colors = aidenTextFieldColors(),
                     value = manualCode,
@@ -405,6 +435,7 @@ private fun AidenPairingMethods(
                     value = endpointUrl,
                     onValueChange = { endpointUrl = it },
                     label = { Text(stringResource(R.string.pairing_desktop_address)) },
+                    placeholder = { Text("https://your-desktop.local:8765/api/aiden/v1") },
                     singleLine = true,
                     enabled = !isPairing,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
@@ -414,8 +445,8 @@ private fun AidenPairingMethods(
                 AidenPairingActionButton(
                     text = stringResource(R.string.pairing_connect),
                     busy = isPairing,
-                    enabled = manualCode.replace("-", "").length == 20,
-                    onClick = { onManualCode(manualCode, endpointUrl) }
+                    enabled = manualCode.replace("-", "").length == 20 && endpointUrl.isNotBlank(),
+                    onClick = { onManualCode(manualCode, endpointUrl.trim()) }
                 )
             }
             2 -> {
@@ -471,7 +502,6 @@ private fun AidenPairingError(message: String) {
     }
 }
 
-internal const val DEFAULT_PAIRING_ENDPOINT = "https://127.0.0.1:8765/api/aiden/v1"
 
 /** Normalizes a typed setup code to Crockford base32 in dash-separated groups of four. */
 internal fun formatCrockfordCode(input: String): String =

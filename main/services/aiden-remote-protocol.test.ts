@@ -142,7 +142,7 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 30);
+  assert.equal(fixture.contractRevision, 31);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -428,6 +428,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   // parses without the section and is refused with it.
   const revision19 = structuredClone(raw);
   delete revision19.phoneRunEvents;
+  delete revision19.peerRouteAdvertisement;
   delete revision19.mobileSimulators;
   revision19.contractRevision = 19;
   record(revision19.hostHealth, "hostHealth").contractRevision = 19;
@@ -659,7 +660,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
     "PairingExchangeRequest properties",
   );
-  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "mac", "linux"]);
+  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "android", "mac", "linux"]);
   assert.deepEqual(record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"), {
     type: "boolean",
     description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",

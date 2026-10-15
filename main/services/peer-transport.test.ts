@@ -136,6 +136,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     log: () => undefined,
   });
   let redirected = 0;
+  let receivedRequests = 0;
   let liveResponse: ServerResponse | undefined;
   let slowResponse: ServerResponse | undefined;
   let slowArrived!: () => void;
@@ -145,6 +146,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
   const server = https.createServer(
     { key: identity.privateKey, cert: identity.certificateChain },
     (request, response) => {
+      receivedRequests++;
       if (
         request.url?.endsWith("/pairing/exchange") ||
         request.url?.endsWith("/server")
@@ -271,14 +273,16 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     }
     registry.close();
     // A pin mismatch is an identity change, never mere unavailability.
+    const beforeRejectedPin = receivedRequests;
     await assert.rejects(
       new PeerTransport({
         ...trust,
         serverSpkiSha256: `sha256/${Buffer.alloc(32).toString("base64")}`,
-      }).json({ path: "/server" }),
+      }).json({ path: "/server", credential: "a".repeat(43) }),
       (error: unknown) =>
         error instanceof PeerTransportError && error.code === "identity_changed",
     );
+    assert.equal(receivedRequests, beforeRejectedPin, "a wrong pin must fail before sending any HTTP request or credential");
     // Envelope codes separate an answered per-operation refusal from a revoked credential.
     await assert.rejects(
       client.json({ path: "/denied", credential: "a".repeat(43) }),

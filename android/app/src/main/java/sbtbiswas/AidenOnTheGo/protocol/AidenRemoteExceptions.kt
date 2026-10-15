@@ -37,6 +37,7 @@ sealed class AidenManualPairingException(message: String) : Exception(message) {
 }
 
 sealed class AidenPairingBootstrapException(message: String) : Exception(message) {
+    object AndroidPairingUnsupported : AidenPairingBootstrapException("This desktop could not accept Android pairing. Update Aiden Agent on your desktop and create a new pairing code.")
     object UnsupportedProtocol : AidenPairingBootstrapException("Unsupported protocol")
     object InvalidInstance : AidenPairingBootstrapException("Invalid instance")
     object InvalidEndpoint : AidenPairingBootstrapException("Invalid endpoint")

@@ -33,6 +33,23 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.util.UUID
 
+data class AidenConnectionIssue(val title: String, val message: String, val canRetry: Boolean) {
+    companion object {
+        fun classify(error: Throwable): AidenConnectionIssue = when (error) {
+            is javax.net.ssl.SSLException, AidenRemoteClientException.MissingTrustConfiguration ->
+                AidenConnectionIssue("Verify this computer", "The computer's secure identity could not be verified. Check it on the desktop and pair again if its identity changed.", false)
+            AidenRemoteClientException.MissingCredential ->
+                AidenConnectionIssue("Pairing required", "Open Connections on the computer and pair this device again.", false)
+            is sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException ->
+                AidenConnectionIssue("Update required", "The computer returned data this app cannot use. Update Aiden on both devices, then retry.", true)
+            is java.net.SocketTimeoutException ->
+                AidenConnectionIssue("Computer did not answer", "Check that Aiden is running on the computer and try again.", true)
+            is java.net.UnknownHostException, is java.net.NoRouteToHostException ->
+                AidenConnectionIssue("Check the network", "Check Wi-Fi or cellular data and Tailscale if you use it. Saved conversations remain available.", true)
+            else -> AidenConnectionIssue("Computer unavailable", "Check that Aiden is running and both devices can reach the same network or Tailscale, then retry.", true)
+        }
+    }
+}
 /**
  * The opt-in grants this phone asks a Mac for, each only from a Mac that announces its
  * feature, in this order. Older Macs never announce the newer features, so they never see the
@@ -119,6 +136,8 @@ class AidenRemoteCoordinator(
         }
     )
     val connectionState: StateFlow<AidenConnectionState> = _connectionState.asStateFlow()
+    private val _connectionIssue = MutableStateFlow<AidenConnectionIssue?>(null)
+    val connectionIssue: StateFlow<AidenConnectionIssue?> = _connectionIssue.asStateFlow()
 
     private val _serverInfo = MutableStateFlow<AidenServer?>(null)
     val serverInfo: StateFlow<AidenServer?> = _serverInfo.asStateFlow()
@@ -307,6 +326,7 @@ class AidenRemoteCoordinator(
         // The last Workspace list renders at once while the desktop is reached.
         _workspaces.value = cachedWorkspaces(installation.instanceId)
         _hasCompletedWorkspaceRefresh.value = false
+        _connectionIssue.value = null
         _connectionState.value = AidenConnectionState.CONNECTING
 
         scope.launch {
@@ -349,10 +369,13 @@ class AidenRemoteCoordinator(
                     removeInstallation(installation.id)
                     _connectionState.value = AidenConnectionState.NEEDS_PAIRING
                 } else {
+                    _connectionIssue.value = AidenConnectionIssue.classify(e)
                     _connectionState.value = AidenConnectionState.OFFLINE
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
+                _connectionIssue.value = AidenConnectionIssue.classify(e)
                 _connectionState.value = AidenConnectionState.OFFLINE
             }
         }
