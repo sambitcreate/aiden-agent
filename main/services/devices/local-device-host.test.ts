@@ -623,6 +623,49 @@ test("streaming revocation keeps needs-consent when an initial local-host start 
   });
 });
 
+test("sharing-only revocation keeps a held local-host start running", async () => {
+  for (const kind of ["peerSharing", "mobileSharing"] as const) {
+    await withHost(async (harness) => {
+      await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true, [kind]: true }));
+      const readyGate = deferred();
+      const originalFetch = harness.deps.fetch;
+      harness.deps.fetch = async (url, init) => {
+        if (url.endsWith("/readyz")) await readyGate.promise;
+        return originalFetch(url, init);
+      };
+      const host = createLocalDeviceHost(harness.deps);
+      const payload = Buffer.from(JSON.stringify({ simulators: [], emulators: [], errors: [] }));
+      const service = createDeviceService({
+        baseDir: harness.baseDir,
+        host,
+        startProxy: async () => { throw new Error("no stream was opened"); },
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/json" },
+          arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+        }),
+      });
+      try {
+        const refresh = service.refresh();
+        await waitFor(() => harness.children.length === 1);
+        assert.equal(service.state().hostStatus, "starting");
+        const revoked = await service.revokeConsent(kind);
+        assert.equal(revoked.consent.streaming, true);
+        assert.equal(revoked.consent[kind], false);
+        readyGate.resolve();
+        const settled = await refresh;
+        assert.equal(settled.hostStatus, "ready", `${kind} must not cancel local streaming`);
+        assert.ok(host.current());
+        assert.deepEqual(harness.children[0]!.killed, []);
+      } finally {
+        readyGate.resolve();
+        await service.stop();
+      }
+    });
+  }
+});
+
 test("agent-device starts in HTTP mode only when agent access is requested", async () => {
   await withHost(async (harness) => {
     const host = createLocalDeviceHost(harness.deps);

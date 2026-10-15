@@ -630,8 +630,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     const running = host.current();
     if (running) return Promise.resolve(running);
     starting ??= (async () => {
-      const epoch = consentEpoch;
-      const currentConsent = () => epoch === consentEpoch && consent.streaming;
+      // Sharing and agent-access changes do not cancel the local streaming hub.
+      const epoch = streamingEpoch;
+      const currentConsent = () => epoch === streamingEpoch && consent.streaming;
       try {
         if (!currentConsent()) return null;
         if (!allowInstall && !(await host.hubInstalled())) {
@@ -640,7 +641,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           if (currentConsent()) setHost(idle);
           return null;
         }
-        // A revoke during the install check wins before npm is contacted.
+        // A streaming revoke during the install check wins before npm is contacted.
         if (!currentConsent()) return null;
         const ready = await host.ensureReady(
           (phase, detail) => {
