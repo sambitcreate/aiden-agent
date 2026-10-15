@@ -16,6 +16,10 @@ import type {
 import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js";
 import type { BotRuntimeResolvedSkill } from "./bot-skill-inventory.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
+import {
+  normalizeSubagentMcpInventoryV2,
+  type SubagentMcpRemoteTool,
+} from "./subagents/subagent-mcp-read.js";
 import { createHash } from "node:crypto";
 import { mcpAgentToolIdentity } from "./mcp-tool-identity.js";
 
@@ -318,6 +322,87 @@ export function exactBotMcpToolNames(
   return result;
 }
 
+type BotMcpScopeTool = SubagentMcpScopeV2["tools"][number];
+
+/** The exact grant facts one verified MCP tool's own schema and effect produce. */
+function scopeToolGrantFacts(tool: BotMcpScopeTool): BotRuntimeMcpToolAuthority {
+  const outputSchemaFingerprint = plainDigest({ outputSchema: "not_declared" });
+  const effectFingerprint =
+    tool.effect === "read" ? plainDigest({ effect: "read" }) : tool.effectProfile.fingerprint;
+  const exactFingerprint = botCapabilityFactsFingerprint({
+    name: tool.toolName,
+    inputSchemaFingerprint: tool.schemaHash,
+    outputSchemaFingerprint,
+    effect: tool.effect,
+    effectFingerprint,
+  });
+  return {
+    toolId: exactFingerprint,
+    name: tool.toolName,
+    effect: tool.effect,
+    inputSchemaFingerprint: tool.schemaHash,
+    outputSchemaFingerprint,
+    effectFingerprint,
+    exactFingerprint,
+  };
+}
+
+function sameGrantFacts(grant: BotRuntimeMcpToolAuthority, facts: BotRuntimeMcpToolAuthority): boolean {
+  return (
+    grant.toolId === facts.toolId &&
+    grant.name === facts.name &&
+    grant.inputSchemaFingerprint === facts.inputSchemaFingerprint &&
+    grant.outputSchemaFingerprint === facts.outputSchemaFingerprint &&
+    grant.effect === facts.effect &&
+    grant.effectFingerprint === facts.effectFingerprint &&
+    grant.exactFingerprint === facts.exactFingerprint
+  );
+}
+
+/**
+ * The grant facts one live tools/list entry carries, or `undefined` when the
+ * entry is unusable for a Bot (invalid name or schema, unsupported execution).
+ */
+export function botMcpLiveToolGrantFacts(
+  live: SubagentMcpRemoteTool,
+): BotRuntimeMcpToolAuthority | undefined {
+  let normalized: ReturnType<typeof normalizeSubagentMcpInventoryV2>;
+  try {
+    normalized = normalizeSubagentMcpInventoryV2([live]);
+  } catch {
+    return undefined;
+  }
+  const tool = normalized[0];
+  if (!tool || normalized.length !== 1) return undefined;
+  return scopeToolGrantFacts(
+    tool.effect === "read"
+      ? { toolName: tool.toolName, schemaHash: tool.schemaHash, effect: "read" }
+      : {
+          toolName: tool.toolName,
+          schemaHash: tool.schemaHash,
+          effect: tool.effect,
+          effectProfile: tool.effectProfile,
+        },
+  );
+}
+
+/**
+ * Whether the executable MCP tool (its own live tools/list entry) carries
+ * exactly the schema and effect facts the Bot was granted. A name match is
+ * never enough: the catalog a grant is joined against may be a cached or
+ * grace-window scope, so the live tool must prove it is still the granted
+ * tool before it is offered or dispatched, and so before any approval
+ * decision derives from the grant's effect. A missing, unusable or changed
+ * tool never matches.
+ */
+export function botMcpLiveToolMatchesGrant(
+  grant: BotRuntimeMcpToolAuthority,
+  live: SubagentMcpRemoteTool | undefined,
+): boolean {
+  const facts = live ? botMcpLiveToolGrantFacts(live) : undefined;
+  return facts !== undefined && sameGrantFacts(grant, facts);
+}
+
 /**
  * Narrow the child MCP lane through a fresh durable Bot identity and every
  * exact tool fact. The returned scope intentionally retains its process-owned
@@ -329,7 +414,6 @@ export function filterExactBotSubagentMcpInventory(
   inventory: readonly SubagentMcpScopeV2[],
   identities: readonly BotMcpConnectionIdentity[],
 ): SubagentMcpScopeV2[] {
-  const outputSchemaFingerprint = plainDigest({ outputSchema: "not_declared" });
   return inventory.flatMap((scope) => {
     const identity = identities.find((candidate) => candidate.serverId === scope.serverId);
     if (!identity) return [];
@@ -340,25 +424,8 @@ export function filterExactBotSubagentMcpInventory(
     );
     if (!connection) return [];
     const tools = scope.tools.filter((tool) => {
-      const effectFingerprint =
-        tool.effect === "read" ? plainDigest({ effect: "read" }) : tool.effectProfile.fingerprint;
-      const exactFingerprint = botCapabilityFactsFingerprint({
-        name: tool.toolName,
-        inputSchemaFingerprint: tool.schemaHash,
-        outputSchemaFingerprint,
-        effect: tool.effect,
-        effectFingerprint,
-      });
-      return connection.tools.some(
-        (grant) =>
-          grant.toolId === exactFingerprint &&
-          grant.name === tool.toolName &&
-          grant.inputSchemaFingerprint === tool.schemaHash &&
-          grant.outputSchemaFingerprint === outputSchemaFingerprint &&
-          grant.effect === tool.effect &&
-          grant.effectFingerprint === effectFingerprint &&
-          grant.exactFingerprint === exactFingerprint,
-      );
+      const facts = scopeToolGrantFacts(tool);
+      return connection.tools.some((grant) => sameGrantFacts(grant, facts));
     });
     return tools.length > 0 ? [{ ...scope, tools }] : [];
   });

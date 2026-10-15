@@ -65,7 +65,8 @@ function selectedTextWithin(container: Element): string {
 }
 
 interface MessageForkContextMenuProps {
-  action: MessageForkAction;
+  /** Absent while the message cannot fork yet; the wrapper stays so the row keeps its elements. */
+  action?: MessageForkAction;
   kind: "fork" | "edit";
   children: React.ReactElement;
 }
@@ -73,6 +74,16 @@ interface MessageForkContextMenuProps {
 /** Wraps one settled message so a right-click offers its fork actions. */
 export function MessageForkContextMenu({ action, kind, children }: MessageForkContextMenuProps) {
   const [selectedText, setSelectedText] = React.useState("");
+  if (!action) {
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild disabled>
+          {children}
+        </ContextMenuTrigger>
+        {null}
+      </ContextMenu>
+    );
+  }
   const disabled = Boolean(action.disabledReason);
   return (
     <ContextMenu>

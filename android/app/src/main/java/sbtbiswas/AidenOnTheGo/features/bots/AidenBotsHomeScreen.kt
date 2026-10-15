@@ -18,9 +18,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SdStorage
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,15 +40,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
@@ -212,9 +217,11 @@ fun AidenBotsHomeScreen(
     onNavigateToCreateBot: () -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToBotChat: (String) -> Unit = {},
-    botDeleter: AidenBotDeleter? = null
+    botDeleter: AidenBotDeleter? = null,
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
@@ -231,6 +238,43 @@ fun AidenBotsHomeScreen(
     var isDeleting by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
+    val canOpenMemory = serverInfo?.supportsBotMemory == true
+    // A row's Advanced opens the same sheet as the chat's ••• → Advanced.
+    var advancedBot by remember { mutableStateOf<AidenBotDetail?>(null) }
+    // The client the sheet was opened with; it keeps saving to the Mac the Bot came from.
+    var advancedClient by remember { mutableStateOf<AidenRemoteClient?>(null) }
+    var openingAdvanced by remember { mutableStateOf(false) }
+    fun openAdvanced(botId: String) {
+        val cl = client ?: return
+        if (openingAdvanced) return
+        openingAdvanced = true
+        scope.launch {
+            // The pairing this read belongs to; a removed or switched pairing never gets it back.
+            val requestInstance = coordinator.activeInstanceId
+            try {
+                val detail = cl.bot(botId)
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
+                coordinator.botCache.putBotDetail(detail)
+                advancedClient = cl
+                advancedBot = detail
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                if (coordinator.holdsReadAuthority(cl, requestInstance)) {
+                    coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+                }
+            } finally {
+                openingAdvanced = false
+            }
+        }
+    }
+    // The sheet belongs to the pairing it was opened in; a switched or revoked client closes it.
+    LaunchedEffect(client) {
+        if (advancedClient != null && advancedClient !== client) {
+            advancedBot = null
+            advancedClient = null
+        }
+    }
 
     // Revision 27: finished Bot routine runs become local notifications on each refresh.
     val context = LocalContext.current
@@ -374,10 +418,29 @@ fun AidenBotsHomeScreen(
                     canDelete = canDelete,
                     onOpen = { openChat(row.bot) },
                     onOpenProfile = { onNavigateToBotProfile(row.bot.id) },
+                    onOpenMemory = if (canOpenMemory) ({ onNavigateToBotMemory(row.bot.id) }) else null,
+                    onOpenAdvanced = { openAdvanced(row.bot.id) },
                     onDelete = { pendingDelete = row.bot }
                 )
             }
         }
+    }
+
+    advancedBot?.let { bot ->
+        AidenBotAdvancedSheet(
+            bot = bot,
+            client = advancedClient,
+            onDismiss = {
+                advancedBot = null
+                advancedClient = null
+            },
+            onSaved = { saved ->
+                coordinator.botCache.putBotDetail(saved)
+                advancedBot = null
+                advancedClient = null
+                scope.launch { viewModel.loadBots(force = true) }
+            }
+        )
     }
 
     pendingDelete?.let { bot ->
@@ -448,6 +511,8 @@ private fun AidenBotHomeRowView(
     canDelete: Boolean,
     onOpen: () -> Unit,
     onOpenProfile: () -> Unit,
+    onOpenMemory: (() -> Unit)?,
+    onOpenAdvanced: () -> Unit,
     onDelete: () -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -552,7 +617,26 @@ private fun AidenBotHomeRowView(
                     onOpenProfile()
                 }
             )
+            if (onOpenMemory != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.bot_menu_memory)) },
+                    leadingIcon = { Icon(Icons.Default.SdStorage, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenMemory()
+                    }
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.bot_menu_advanced)) },
+                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                onClick = {
+                    menuOpen = false
+                    onOpenAdvanced()
+                }
+            )
             if (canDelete) {
+                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },

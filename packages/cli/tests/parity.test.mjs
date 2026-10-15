@@ -6,6 +6,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { request as httpsRequest } from "node:https";
 import * as api from "../dist/parity-test-api.js";
 
@@ -706,7 +707,7 @@ test("MCP reuses a live inventory until tools/list_changed, fails closed on drif
 });
 
 test("MCP connections survive token refreshes, rebuild on sign-out, and connect once under concurrency", async (t) => {
-  const dir = temporary(t); let initializes = 0;
+  const dir = temporary(t); let initializes = 0; const callAuthorizations = [];
   const http = createServer(async (request, response) => {
     if (request.method !== "POST") return response.writeHead(405).end();
     let body = ""; for await (const chunk of request) body += chunk;
@@ -715,6 +716,7 @@ test("MCP connections survive token refreshes, rebuild on sign-out, and connect 
     let result = {};
     if (message.method === "initialize") { initializes++; result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "http", version: "1" } }; }
     else if (message.method === "tools/list") result = { tools: [{ name: "ping", inputSchema: { type: "object" } }] };
+    else if (message.method === "tools/call") { callAuthorizations.push(request.headers.authorization); result = { content: [{ type: "text", text: "pong" }] }; }
     response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
   });
   await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
@@ -726,9 +728,13 @@ test("MCP connections survive token refreshes, rebuild on sign-out, and connect 
   await store("first");
   const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
   const client = await pool.connection(server);
+  const [ping] = await pool.agentTools(server);
+  await ping.execute("before", {});
   await store("refreshed");
   assert.equal(await pool.connection(server), client, "a token refresh keeps the live transport");
+  await ping.execute("after", {});
   assert.equal(initializes, 1);
+  assert.deepEqual(callAuthorizations, ["Bearer first", "Bearer refreshed"], "the retained transport sends the current persisted token");
   await api.mcpCommand(dir, ["logout", "remote"]);
   const [first, second] = await Promise.all([pool.connection(server), pool.connection(server)]);
   assert.equal(first, second);
@@ -752,6 +758,63 @@ test("MCP Bot credential signatures ignore token refreshes and display fields bu
   const signedOut = await api.mcpCredentialSignature(dir, server);
   assert.notEqual(signedOut, signed);
   assert.notEqual(await api.mcpCredentialSignature(dir, { ...server, headers: { authorization: "Bearer x" } }), signedOut, "header values stay part of the connection");
+});
+
+test("MCP shutdown during credential resolution starts no connection and sends nothing", async (t) => {
+  const dir = temporary(t); let requests = 0;
+  const http = createServer((request, response) => { requests++; request.resume(); response.writeHead(500).end(); });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  await api.insightCredentials(dir).write(api.mcpCredentialId(server), JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: "secret", token_type: "Bearer" } }));
+  // Pause the second credential-file open: the provider read after incarnation resolution.
+  const fsPromises = createRequire(import.meta.url)("node:fs/promises"), open = fsPromises.open;
+  let opens = 0, reached, release;
+  const paused = new Promise((resolve) => { reached = resolve; }), gate = new Promise((resolve) => { release = resolve; });
+  fsPromises.open = async function (path, ...rest) {
+    if (String(path).endsWith("insights.json") && ++opens === 2) { reached(); await gate; }
+    return open.call(this, path, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.open = open; syncBuiltinESMExports(); });
+  const pool = api.createCliMcpPool(dir);
+  const connecting = pool.connection(server); connecting.catch(() => {});
+  await paused;
+  let closeReturned = false;
+  const closing = pool.close().then(() => { closeReturned = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(requests, 0);
+  release();
+  await closing;
+  assert.ok(closeReturned);
+  await assert.rejects(connecting, /closed/);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(requests, 0, "no request may follow shutdown");
+});
+
+test("MCP rejects an inventory whose pages are each in budget but whose total retained schemas are not", async (t) => {
+  const dir = temporary(t);
+  const http = createServer(async (request, response) => {
+    if (request.method !== "POST") return response.writeHead(405).end();
+    let body = ""; for await (const chunk of request) body += chunk;
+    const message = JSON.parse(body);
+    if (message.id === undefined) return response.writeHead(202).end();
+    let result = {};
+    if (message.method === "initialize") result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "http", version: "1" } };
+    else if (message.method === "tools/list") {
+      const page = Number(message.params?.cursor ?? 0);
+      result = { tools: [{ name: `tool${page}`, description: "x".repeat(450_000), inputSchema: { type: "object" } }], ...(page < 2 ? { nextCursor: String(page + 1) } : {}) };
+    }
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+  });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const large = { id: "large", name: "Large", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [large]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  await assert.rejects(pool.inspectTools(large), /byte budget/);
+  await assert.rejects(pool.agentTools(large), /byte budget/);
 });
 
 test("MCP startup connects servers concurrently within one budget and reports each failure's cause", async (t) => {

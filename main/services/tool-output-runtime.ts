@@ -3,7 +3,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
 import { toolOutputScope, toolOutputStore, toolOutputCredentialFingerprint } from "./tool-output-store.js";
-import { withDurableToolOutputs } from "./tool-output-context.js";
+import { createDurableToolOutputs, type DurableToolOutputs } from "./tool-output-context.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { app } from "../platform.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
@@ -13,7 +13,7 @@ import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 export async function attachWorkspaceToolOutputs(
   tools: AgentTool[], chatId: string, workspaceId: string, isCurrent: () => boolean,
   expected: { folderPath?: string; permission: string },
-): Promise<AgentTool[]> {
+): Promise<DurableToolOutputs> {
   try {
     const credentialRevision = botRuntimeInventoryLeases.revision();
     const leases = (await configStore.listMcpServers()).map((server) => mcpConfigurationLeases.acquire(server.id));
@@ -48,7 +48,7 @@ export async function attachWorkspaceToolOutputs(
       });
     };
     const scope = await scopeNow();
-    return withDurableToolOutputs({ tools, chatId, scope, store: toolOutputStore, isCurrent: stillCurrent,
+    return createDurableToolOutputs({ tools, chatId, scope, store: toolOutputStore, isCurrent: stillCurrent,
       assertCurrent: async () => {
         if (await scopeNow() !== scope || !stillCurrent()) throw new Error("Tool output access changed.");
       },
@@ -57,6 +57,6 @@ export async function attachWorkspaceToolOutputs(
     if (!isCurrent()) throw error;
     // Optional retention must not disable otherwise available workspace tools.
     // No sink or recovery tool is exposed when its authority cannot be established.
-    return tools;
+    return { tools, adopt: (late) => [...late] };
   }
 }

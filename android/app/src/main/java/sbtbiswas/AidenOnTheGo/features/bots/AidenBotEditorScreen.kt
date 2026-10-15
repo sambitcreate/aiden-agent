@@ -19,7 +19,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.scheduled.aidenScheduledRunFailureIsAmbiguous
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
@@ -37,28 +40,84 @@ fun aidenBotSubtitle(help: String): String {
     return firstLine.substring(0, firstLine.offsetByCodePoints(0, AidenBotWire.MAX_PURPOSE_LENGTH)).trimEnd()
 }
 
-/** The two answers the create flow asks for. */
+/** The answers the create flow asks for. */
 data class AidenBotCreateDraft(
     val name: String = "",
-    val help: String = ""
+    val help: String = "",
+    /** Null keeps the Mac's recommended model (access omitted, Full). */
+    val model: AidenModelRoute? = null
 ) {
     val canCreate: Boolean
         get() = name.isNotBlank()
 
+    /** True when a model was chosen and the Mac's [catalog] no longer offers it as runnable. */
+    fun modelIsGone(catalog: AidenBotCapabilityCatalog?): Boolean {
+        val route = model ?: return false
+        return catalog != null && !catalog.containsAvailable(route.providerId, route.modelId)
+    }
+
     /**
      * The create request for this draft. The answer becomes the subtitle and seeds the
-     * instructions; the character is picked from the name. Access is omitted, which the
-     * Mac treats as Full; a Bot made before any AI model is ready reports `needs_model`.
+     * instructions; the character is picked from the name. With no [model] chosen, access
+     * is omitted and the Mac uses Full access with its recommended model; a Bot made before
+     * any AI model is ready reports `needs_model`. A chosen model is sent as Full access and
+     * needs the [catalog] it came from; one the Mac can't run gives null.
      */
-    fun request(): AidenBotCreateRequest? {
+    fun request(catalog: AidenBotCapabilityCatalog? = null): AidenBotCreateRequest? {
         if (!canCreate) return null
+        val access = model?.let { route ->
+            val cat = catalog ?: return null
+            if (!cat.containsAvailable(route.providerId, route.modelId)) return null
+            AidenBotAccessUpdate.full(cat.revision, AidenBotModelSelection(providerId = route.providerId, modelId = route.modelId))
+        }
         val trimmedName = name.trim().take(AidenBotWire.MAX_NAME_LENGTH)
         return AidenBotCreateRequest(
             name = trimmedName,
             purpose = aidenBotSubtitle(help),
             instructions = help.trim().take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH).ifEmpty { AIDEN_BOT_DEFAULT_INSTRUCTIONS },
-            avatar = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(trimmedName))
+            avatar = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(trimmedName)),
+            access = access
         )
+    }
+}
+
+/**
+ * One Create as sent: the [request], its idempotency [key], and the [draft] it was built from.
+ */
+class AidenBotCreateAttempt internal constructor(
+    val draft: AidenBotCreateDraft,
+    val request: AidenBotCreateRequest,
+    val key: UUID
+)
+
+/**
+ * New Bot's idempotency keys. After an uncertain failure the Mac may already have made the
+ * Bot, so the next Create replays that exact attempt (same request, same key) while the
+ * person's draft is unchanged, even if the Mac's catalog has since moved or dropped the
+ * model. A changed draft, or any attempt after a definite refusal, builds a new request
+ * with a new key: the Mac keeps a refused key, replays its refusal for the same body and
+ * answers a different body with `idempotency_conflict`.
+ */
+class AidenBotCreateAttempts(private val makeKey: () -> UUID = UUID::randomUUID) {
+    private var uncertain: AidenBotCreateAttempt? = null
+
+    /** True when the last Create failed uncertainly and [draft] is unchanged, so Create replays it. */
+    fun replays(draft: AidenBotCreateDraft): Boolean = uncertain?.draft == draft
+
+    /**
+     * The attempt to send for [draft], or null when no request can be built from it. An
+     * uncertain attempt for the same draft comes back unchanged; [catalog] only shapes a new one.
+     */
+    fun begin(draft: AidenBotCreateDraft, catalog: AidenBotCapabilityCatalog?): AidenBotCreateAttempt? {
+        uncertain?.takeIf { it.draft == draft }?.let { return it }
+        uncertain = null
+        val request = draft.request(catalog) ?: return null
+        return AidenBotCreateAttempt(draft, request, makeKey())
+    }
+
+    /** Records how [attempt] ended: only an uncertain failure stays replayable. */
+    fun failed(attempt: AidenBotCreateAttempt, error: Throwable) {
+        uncertain = if (aidenScheduledRunFailureIsAmbiguous(error)) attempt else null
     }
 }
 
@@ -140,28 +199,49 @@ private fun AidenBotCreateScreen(
     var draft by remember { mutableStateOf(AidenBotCreateDraft()) }
     var isSaving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    // One key per attempt, so a retried Create never makes two Bots.
-    val botKey = remember { UUID.randomUUID() }
+    // The Mac's models; if they don't load the field is absent and Create sends no access.
+    var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
+    LaunchedEffect(client) {
+        val cl = client ?: return@LaunchedEffect
+        // A failed refetch keeps the catalog already loaded.
+        try {
+            catalog = cl.botCapabilityCatalog()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+    }
+    // A retried Create never makes two Bots, and a changed one never reuses a refused key.
+    val attempts = remember { AidenBotCreateAttempts() }
 
     AidenBotEditorScaffold(
         title = stringResource(R.string.bot_editor_new_title),
         actionLabel = if (isSaving) stringResource(R.string.bot_editor_creating) else stringResource(R.string.action_create),
-        actionEnabled = !isSaving && client != null && draft.request() != null,
+        actionEnabled = !isSaving && client != null && (attempts.replays(draft) || draft.request(catalog) != null),
         onNavigateBack = onNavigateBack,
         onAction = {
             val cl = client ?: return@AidenBotEditorScaffold
-            val request = draft.request() ?: return@AidenBotEditorScaffold
+            val attempt = attempts.begin(draft, catalog) ?: return@AidenBotEditorScaffold
             scope.launch {
                 isSaving = true
                 error = null
                 try {
-                    val created = cl.createBot(request, botKey)
+                    val created = cl.createBot(attempt.request, attempt.key)
                     coordinator.botCache.putBotDetail(created)
                     onBotSaved(created.id)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
-                    error = resources.getString(R.string.bot_editor_create_failed)
+                } catch (e: Exception) {
+                    attempts.failed(attempt, e)
+                    // The Mac may have refused the model (its service was signed out); a fresh
+                    // catalog lets the field say so instead of only the generic message.
+                    try {
+                        catalog = cl.botCapabilityCatalog()
+                    } catch (c: CancellationException) {
+                        throw c
+                    } catch (_: Exception) {
+                    }
+                    error = if (draft.modelIsGone(catalog)) null else resources.getString(R.string.bot_editor_create_failed)
                 } finally {
                     isSaving = false
                 }
@@ -188,6 +268,34 @@ private fun AidenBotCreateScreen(
             placeholder = stringResource(R.string.bot_editor_help_placeholder),
             singleLine = false
         )
+        catalog?.let { cat ->
+            val providers = remember(cat) { aidenBotModelPickerProviders(cat) }
+            val modelGone = draft.modelIsGone(cat)
+            if (modelGone || providers.any { provider -> provider.models.any { it.available } }) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.bot_advanced_model),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = palette.secondary,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                    AidenModelPickerField(
+                        title = stringResource(R.string.bot_advanced_model),
+                        providers = providers,
+                        selection = draft.model ?: aidenBotRecommendedModel(cat),
+                        onSelect = { entry -> draft = draft.copy(model = entry.route) }
+                    )
+                    if (modelGone) {
+                        Text(
+                            text = stringResource(R.string.bot_editor_model_gone),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.danger,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
         Text(
             text = stringResource(R.string.bot_editor_later_hint),
             style = MaterialTheme.typography.bodySmall,

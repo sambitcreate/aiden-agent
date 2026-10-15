@@ -4,6 +4,7 @@ import {
   type BotAvatar as BotAvatarValue,
   type BotAvatarShape,
 } from "../shared/bots";
+import { AidenActivityMark, observeOffscreen } from "./aiden-activity-mark";
 import { useBotCanonicalPhoto } from "../lib/bot-canonical-photo-cache";
 
 interface AvatarBody {
@@ -55,21 +56,17 @@ const avatarBodies: Record<BotAvatarShape, AvatarBody> = {
   },
 };
 
-/** The one fixed eye mark every Bot shares; only colour and shape vary. */
+/** The one fixed eye mark every Bot shares; only colour and shape vary. Eyes glance while working. */
 function EyeMark({ y, spread }: { y: number; spread: number }) {
-  const left = 20 - spread;
-  const right = 20 + spread;
   return (
-    <>
-      <g fill="var(--bot-avatar-face)">
-        <ellipse cx={left} cy={y} rx="2.05" ry="2.85" />
-        <ellipse cx={right} cy={y} rx="2.05" ry="2.85" />
-      </g>
-      <g fill="var(--bot-avatar-eye-highlight)" opacity="0.94">
-        <circle cx={left - 0.7} cy={y - 1} r="0.58" />
-        <circle cx={right - 0.7} cy={y - 1} r="0.58" />
-      </g>
-    </>
+    <g className="bot-avatar-eyes">
+      {[20 - spread, 20 + spread].map((x) => (
+        <g key={x} className="bot-avatar-eye">
+          <ellipse cx={x} cy={y} rx="2.05" ry="2.85" fill="var(--bot-avatar-face)" />
+          <circle cx={x - 0.7} cy={y - 1} r="0.58" fill="var(--bot-avatar-eye-highlight)" opacity="0.94" />
+        </g>
+      ))}
+    </g>
   );
 }
 
@@ -114,12 +111,15 @@ export function BotAvatar({
   name,
   photoLoading = "none",
   size = "medium",
+  working = false,
 }: {
   avatar: BotAvatarValue;
   botId?: string;
   name: string;
   photoLoading?: "none" | "visible" | "immediate";
   size?: "small" | "medium" | "large" | "preview";
+  /** The Bot is in a running turn: its face glances (a photo shows a small activity badge instead). */
+  working?: boolean;
 }) {
   const avatarRef = React.useRef<HTMLSpanElement>(null);
   const [nearViewport, setNearViewport] = React.useState(photoLoading === "immediate");
@@ -151,12 +151,18 @@ export function BotAvatar({
   );
   const [failedRevision, setFailedRevision] = React.useState<string>();
   const showPhoto = photo && failedRevision !== photo.assetRevision;
+  React.useEffect(() => {
+    const node = avatarRef.current;
+    if (!working || !node) return;
+    return observeOffscreen(node);
+  }, [working]);
   return (
     <span
       ref={avatarRef}
       aria-hidden="true"
       title={name}
-      className={`relative grid shrink-0 place-items-center overflow-hidden bg-control shadow-control ${
+      data-working={working ? "" : undefined}
+      className={`bot-avatar relative grid shrink-0 place-items-center overflow-hidden bg-control shadow-control ${
         size === "small"
           ? "size-7 rounded-card p-1"
           : size === "large"
@@ -175,6 +181,11 @@ export function BotAvatar({
           src={photo.dataUrl}
           onError={() => setFailedRevision(photo.assetRevision)}
         />
+      ) : null}
+      {showPhoto && working ? (
+        <span className="absolute bottom-0 right-0 grid place-items-center rounded-full bg-background p-px text-primary">
+          <AidenActivityMark mark="glance" size={size === "large" || size === "preview" ? 14 : 10} />
+        </span>
       ) : null}
     </span>
   );

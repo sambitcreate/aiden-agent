@@ -37,6 +37,7 @@ async function fixture() {
     state: {
       snapshot: async () => ({ approvedRoots }) as never,
     },
+    approvalStore: temporary,
     now: () => now,
   });
   return {
@@ -108,6 +109,25 @@ test("browser handles are device-bound, expire, and fail closed after root-polic
     await assert.rejects(
       app.service.listChildren("device-1", expiring),
       (error: unknown) => (error as { code?: string }).code === "handle_expired",
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("approved-root browsing keeps working after a remount renumbers the volume", async () => {
+  const app = await fixture();
+  try {
+    app.setRoots([{ ...app.root, device: (BigInt(app.root.device) + 3n).toString() }]);
+    const location = (await app.service.listRoots("device-1")).roots[0]!.location;
+    const selection = await app.service.createSelection("device-1", location);
+    const claims = await app.service.consumeSelection("device-1", selection.selection);
+    assert.equal(claims.rootId, app.root.id);
+
+    app.setRoots([{ ...app.root, inode: (BigInt(app.root.inode) + 1n).toString() }]);
+    await assert.rejects(
+      app.service.listRoots("device-1"),
+      (error: unknown) => (error as { code?: string }).code === "filesystem_identity_changed",
     );
   } finally {
     await app.cleanup();

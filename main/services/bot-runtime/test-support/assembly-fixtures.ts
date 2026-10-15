@@ -14,6 +14,9 @@ import type {
 import type { BotOrdinaryCapabilityKind } from "../../bot-capability-catalog-core.js";
 import type { BotRuntimeResolvedSkill } from "../../bot-skill-inventory.js";
 import { markMcpAgentTool, mcpAgentToolName } from "../../mcp-tool-identity.js";
+import { tagMcpAgentTool } from "../../mcp-agent-tool-descriptor.js";
+import { botMcpLiveToolGrantFacts } from "../../bot-tool-authority.js";
+import type { SubagentMcpRemoteTool } from "../../subagents/subagent-mcp-read.js";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "../../skill-registry.js";
 import { skillToolKey } from "../../skill-registry-core.js";
 import type {
@@ -31,32 +34,41 @@ export const MAIL_SERVER = { id: "conn-mail", name: "Mail" } as const;
 const MAIL_INVENTORY = { configured: [MAIL_SERVER], inventory: ["send_email", "read_inbox"] };
 export const SEND_EMAIL_TOOL = mcpAgentToolName(MAIL_SERVER, "send_email", MAIL_INVENTORY);
 export const READ_INBOX_TOOL = mcpAgentToolName(MAIL_SERVER, "read_inbox", MAIL_INVENTORY);
-/** The Mail tools as the MCP manager builds them: generated names carrying their MCP identity. */
-const MAIL_BUILT_TOOLS = [
-  markMcpAgentTool({ name: SEND_EMAIL_TOOL }, { serverId: MAIL_SERVER.id, toolName: "send_email" }),
-  markMcpAgentTool({ name: READ_INBOX_TOOL }, { serverId: MAIL_SERVER.id, toolName: "read_inbox" }),
-];
+/**
+ * The Mail tools as the MCP manager builds them: generated names carrying
+ * their MCP identity and the tools/list entry they were built from.
+ */
+const MAIL_BUILT_TOOLS = mailRemoteTools().map((remote) =>
+  tagMcpAgentTool(
+    markMcpAgentTool(
+      { name: mcpAgentToolName(MAIL_SERVER, remote.name, MAIL_INVENTORY) },
+      { serverId: MAIL_SERVER.id, toolName: remote.name },
+    ),
+    remote,
+  ),
+);
 
-const MAIL_TOOLS: BotRuntimeMcpToolAuthority[] = [
-  {
-    toolId: "tool-send",
-    name: "send_email",
-    effect: "mutating",
-    inputSchemaFingerprint: "in-send",
-    outputSchemaFingerprint: "out-send",
-    effectFingerprint: "effect-send",
-    exactFingerprint: "tool-send",
-  },
-  {
-    toolId: "tool-read",
-    name: "read_inbox",
-    effect: "read",
-    inputSchemaFingerprint: "in-read",
-    outputSchemaFingerprint: "out-read",
-    effectFingerprint: "effect-read",
-    exactFingerprint: "tool-read",
-  },
-];
+/** The tools/list entries the Mail server advertised when the Bot was granted them. */
+export function mailRemoteTools(): SubagentMcpRemoteTool[] {
+  return [
+    {
+      name: "send_email",
+      inputSchema: { type: "object", properties: { text: { type: "string" } } },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    {
+      name: "read_inbox",
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true },
+    },
+  ];
+}
+
+const MAIL_TOOLS: BotRuntimeMcpToolAuthority[] = mailRemoteTools().map((tool) => {
+  const facts = botMcpLiveToolGrantFacts(tool);
+  if (!facts) throw new Error("Mail fixture tool is unusable.");
+  return facts;
+});
 
 const MAIL_CONNECTION = {
   sourceId: MAIL_SERVER.id,
@@ -193,6 +205,11 @@ export interface AssemblyState {
   /** Admission fails (the Bot's access changed underneath). */
   revoked?: boolean;
   catalog: { connections: BotCatalogConnectionResource[]; skills: BotCatalogSkillResource[] };
+  /**
+   * The Mail server's live tools/list entries. Changing one models a server
+   * that changed a tool while the catalog (a cached scope) stayed the same.
+   */
+  liveMailTools: SubagentMcpRemoteTool[];
   skillSnapshot: SkillRegistrySnapshot;
 }
 
@@ -201,6 +218,7 @@ export function assemblyState(authority: BotRuntimeEffectiveAuthority, supportsI
     authority,
     supportsImages,
     catalog: { connections: [catalogConnection()], skills: [catalogSkill()] },
+    liveMailTools: mailRemoteTools(),
     skillSnapshot: notesSkillSnapshot(),
   };
 }
@@ -247,6 +265,8 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
           fileLocations: admission.authority.files.botHome ? 1 : 0,
           catalog: async () => state.catalog,
           mcpTools: async () => MAIL_BUILT_TOOLS,
+          liveMcpTools: async () =>
+            new Map(state.liveMailTools.map((tool) => [mcpAgentToolName(MAIL_SERVER, tool.name, MAIL_INVENTORY), tool] as const)),
           skills: async () => ({ snapshot: state.skillSnapshot, resolved: [resolvedNotesSkill(state.skillSnapshot)] }),
         }),
       candidates: async (_botId, admission) => ({
