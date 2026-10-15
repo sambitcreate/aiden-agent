@@ -30,7 +30,7 @@ import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { logger } from "../../platform.js";
-import { mcpCredentialConnectionSnapshot } from "../mcp-credential-cleanup-core.js";
+import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
 import { hasOAuthTokens } from "../mcp-oauth.js";
 import { presetSecretId } from "../mcp-presets.js";
 import { mcpAgentToolIdentity } from "../mcp-tool-identity.js";
@@ -106,7 +106,7 @@ export function isConnected(pluginId: string): Promise<boolean> {
       Boolean(
         await secrets.getOrBindLegacyProviderKey(
           presetSecretId(server.id),
-          JSON.stringify(mcpCredentialConnectionSnapshot(server)),
+          mcpPresetKeyBinding(server),
         ),
       ),
     hasOAuthTokens: (server, preset) =>

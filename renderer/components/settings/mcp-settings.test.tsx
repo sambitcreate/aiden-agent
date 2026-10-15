@@ -62,6 +62,7 @@ function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
     "mcp:presets": () => catalogPresetStates(),
     "mcp:liveStatus": () => [],
     "mcp:dependents": () => ({ schedules: [], bots: [] }),
+    "mcp:launchApprovals": () => [],
     "providers:list": () => [],
     ...handlers,
   });
@@ -434,6 +435,43 @@ test("signing in to an existing server never saves its other unsaved edits", asy
   assert.ok(await within(dialog).findByRole("button", { name: "Sign out" }));
 });
 
+test("signing in after adding a header saves the header first, so sign-in uses the stored record", async () => {
+  const calls = mount({
+    "mcp:list": () => [remoteServer],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => ({ ...(server as McpServer), headers: { "X-Team": savedMarker } }),
+    "mcp:authorize": () => ({ authorized: true }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add header" }));
+  const names = within(dialog).getAllByRole("textbox", { name: "Header name" });
+  fireEvent.change(names[names.length - 1]!, { target: { value: "X-Team" } });
+  fireEvent.change(within(dialog).getByLabelText("Value of X-Team"), { target: { value: "blue" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:authorize").length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.headers, { "X-Team": "blue" });
+  assert.deepEqual((channelCalls(calls, "mcp:authorize")[0]!.args[0] as McpServer).headers, { "X-Team": savedMarker });
+});
+
+test("signing in after changing the address of a server with a stored header saves it as an editor change", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, headers: { Authorization: savedMarker } }],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => server,
+    "mcp:authorize": () => ({ authorized: true }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Server URL" }), { target: { value: "https://moved.example.com/mcp" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:authorize").length, 1));
+  const save = channelCalls(calls, "mcp:save")[0]!;
+  assert.equal((save.args[0] as McpServer).url, "https://moved.example.com/mcp");
+  assert.deepEqual((save.args[0] as McpServer).headers, { Authorization: savedMarker }, "the kept value travels as its marker");
+  assert.deepEqual(save.args[1], { fromEditor: true }, "kept values may follow an address changed in the editor");
+});
+
 test("a waiting sign-in can be cancelled, and cancelling a new preset's setup removes it again", async () => {
   let rejectAuthorize: (error: Error) => void = () => undefined;
   const { calls, openChanges } = renderPreset(linearState(), undefined, {
@@ -552,6 +590,86 @@ test("before any discovery the Tools list can load tools with a connection test 
   assert.equal(savedServers(calls).length, 0);
 });
 
+const savedMarker = `aiden-secret:v1:${"c".repeat(32)}`;
+
+test("saved header values stay masked; Save sends back their marker and only replaced values as text", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, oauth: undefined, headers: { Authorization: savedMarker } }],
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  assert.equal(within(dialog).queryByDisplayValue(savedMarker), null);
+  assert.doesNotMatch(dialog.textContent ?? "", /aiden-secret/u);
+  assert.ok(within(dialog).getByText("Saved value of Authorization"));
+  // Unchanged: the marker goes back, so the stored value is kept.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.headers, { Authorization: savedMarker });
+  assert.deepEqual(channelCalls(calls, "mcp:save")[0]!.args[1], { approveLaunch: true });
+});
+
+test("replacing a saved value and adding a header send the typed values once", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, oauth: undefined, headers: { Authorization: savedMarker } }],
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Replace value of Authorization" }));
+  fireEvent.change(within(dialog).getByLabelText("Value of Authorization"), { target: { value: "Bearer rotated" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add header" }));
+  const names = within(dialog).getAllByRole("textbox", { name: "Header name" });
+  fireEvent.change(names[names.length - 1]!, { target: { value: "X-Team" } });
+  fireEvent.change(within(dialog).getByLabelText("Value of X-Team"), { target: { value: "blue" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.headers, { Authorization: "Bearer rotated", "X-Team": "blue" });
+});
+
+test("a local server added outside Aiden shows exactly what it runs and is approved only from Settings", async () => {
+  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS", value: "--require /tmp/p.js" }, { name: "TOKEN" }, { name: "EXTRA", unavailable: true as const }] };
+  let approvals = [pending];
+  const calls = mount({
+    "mcp:launchApprovals": () => approvals,
+    "mcp:approveLaunch": () => { approvals = []; return { approved: true }; },
+    "mcp:save": (server: unknown) => server,
+  });
+  const group = await screen.findByRole("group", { name: "Files needs approval" });
+  assert.match(group.textContent ?? "", /Added outside Aiden — Approve to run/u);
+  assert.match(group.textContent ?? "", /npx\s*-y\s*@modelcontextprotocol\/server-filesystem\s*\/Users\/me\/My Docs/u);
+  // The environment is shown with its values: they change what the command does.
+  const env = within(group).getByLabelText("Files environment");
+  assert.match(env.textContent ?? "", /NODE_OPTIONS=--require \/tmp\/p\.js/u);
+  assert.match(env.textContent ?? "", /TOKEN=\(saved value, not shown\)/u);
+  // A stored value moved under another name outside Aiden is not presented as saved.
+  assert.match(env.textContent ?? "", /EXTRA=\(not available — enter it again in Edit\)/u);
+  // No tool list or model-access control while it may not run.
+  assert.equal(screen.queryByRole("radiogroup", { name: "Model access for Files" }), null);
+  // Switching it on is not an approval.
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Files" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(channelCalls(calls, "mcp:save")[0]!.args[1], undefined);
+
+  fireEvent.click(within(group).getByRole("button", { name: "Approve Files to run" }));
+  await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:approveLaunch").map((call) => call.args), [["mcp-files", "d".repeat(64)]]));
+  assert.ok(await screen.findByRole("radiogroup", { name: "Model access for Files" }));
+});
+
+test("the editor shows env values still written in config.json, so saving it is an informed approval", async () => {
+  mount({
+    "mcp:list": () => [{ ...localServer, env: { NODE_OPTIONS: "--require /tmp/p.js", TOKEN: savedMarker } }],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Files" }));
+  const dialog = await screen.findByRole("dialog");
+  const visible = within(dialog).getByLabelText("Value of NODE_OPTIONS") as HTMLInputElement;
+  assert.equal(visible.value, "--require /tmp/p.js");
+  assert.equal(visible.type, "text");
+  // A keychain value stays masked.
+  assert.ok(within(dialog).getByText("Saved value of TOKEN"));
+  assert.equal(within(dialog).queryByDisplayValue(savedMarker), null);
+});
+
 test("closing a new preset's setup while its sign-in save is pending never authorizes and removes the record", async () => {
   let resolveSave: () => void = () => undefined;
   const { calls, openChanges } = renderPreset(linearState(), undefined, {
@@ -607,7 +725,7 @@ test("a header-only edit is saved before sign-in and warns dependents", async ()
   });
   fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
   const dialog = await screen.findByRole("dialog");
-  fireEvent.change(within(dialog).getByDisplayValue("X-Tenant=old"), { target: { value: "X-Tenant=new" } });
+  fireEvent.change(within(dialog).getByLabelText("Value of X-Tenant"), { target: { value: "new" } });
   assert.ok(await within(dialog).findByText(/Bot “Planner” uses this server. Changing how Aiden connects/u));
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));

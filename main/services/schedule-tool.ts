@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import {
   ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
   assertSafeScheduledPrompt,
@@ -890,6 +891,7 @@ export async function resolveAssistantScheduleMcpServers(
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
     const name = bounded(
       required(server.name, "MCP server name"),
       "MCP server name",
@@ -1039,6 +1041,7 @@ async function standardScope(
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
     const name = bounded(
       required(server.name, "MCP server name"),
       "MCP server name",
@@ -1188,7 +1191,7 @@ async function resolveStandardScheduleApproval(
       ) {
         legacyGlobalMcp = true;
         mcpServerIds = (await dependencies.listMcpServers())
-          .filter((server) => server.enabled)
+          .filter((server) => server.enabled && mcpServerOffersTools(server))
           .map((server) => server.id);
       }
     }
@@ -1251,7 +1254,7 @@ async function resolveStandardScheduleApproval(
         );
       }
       input.mcpServerIds = (await dependencies.listMcpServers())
-        .filter((server) => server.enabled)
+        .filter((server) => server.enabled && mcpServerOffersTools(server))
         .map((server) => server.id);
     }
   }

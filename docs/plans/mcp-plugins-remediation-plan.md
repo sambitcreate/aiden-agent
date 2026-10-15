@@ -101,14 +101,14 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 
 ### 10. Cleanup and catalog — [#469](https://github.com/sambitcreate/aiden-agent/pull/469)
 
-- [ ] Delete dead code (`mcpAgentToolResult`, `createNoRedirectFetch`, stale client version). `McpToolListCache` went in slice 5.
-- [ ] Replace source-grep MCP tests with behavioural tests.
-- [ ] Dev-only `npm run plugins:refresh` and catalog invariant tests.
+- [x] Delete dead code (`mcpAgentToolResult`, `createNoRedirectFetch`, stale client version). `McpToolListCache` went in slice 5.
+- [x] Replace source-grep MCP tests with behavioural tests.
+- [x] Dev-only `npm run plugins:refresh` and catalog invariant tests.
 
 ### 11. Credential hygiene for custom servers (config store, `mcp.ts` transport, Settings) — [#470](https://github.com/sambitcreate/aiden-agent/pull/470)
 
-- [ ] Env and header values of custom servers move to the keychain (config.json keeps names + markers) and are masked in Settings; externally added stdio servers need first-run approval.
-- [ ] Servers switched off for the model are excluded from schedule pickers and `schedule_task`; an approved schedule bound to one fails with a clear reason.
+- [x] Env and header values of custom servers move to the keychain (config.json keeps names + markers) and are masked in Settings; externally added stdio servers need first-run approval.
+- [x] Servers switched off for the model are excluded from schedule pickers and `schedule_task`; an approved schedule bound to one fails with a clear reason.
 
 ### 12. Pi 1.2.0 lockstep upgrade — [#471](https://github.com/sambitcreate/aiden-agent/pull/471)
 

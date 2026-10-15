@@ -191,11 +191,6 @@ export const mcpOAuthStore = {
     });
   },
 
-  async has(serverId: string): Promise<boolean> {
-    const session = await this.get(serverId);
-    return Boolean(session.tokens);
-  },
-
   async clear(serverId: string, isCurrent: MutationGuard = () => true): Promise<void> {
     await mutate(async () => {
       assertMutationCurrent(isCurrent);

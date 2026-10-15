@@ -3,7 +3,7 @@ import {
   createBotProviderCredentialSignatureCore,
   type BotProviderCredentialSignatureDependencies,
 } from "./bot-capability-credential-signatures-core.js";
-import { mcpCredentialConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import { mcpPresetKeyBinding } from "./mcp-credential-cleanup-core.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import { assertMcpPresetServer, presetSecretId } from "./mcp-presets.js";
 import { piCredentialStore } from "./pi-credential-store.js";
@@ -32,13 +32,15 @@ export function createBotProviderCredentialSignature(
 export const botProviderCredentialSignature = createBotProviderCredentialSignature();
 
 /** Covers stdio env/config, configured headers, preset API keys, and the durable OAuth grant. */
+// Unreadable credential storage reads as "no grant" for that one server (in the
+// core), so it cannot take every other server out of the Bot catalog with it.
 export const botMcpCredentialSignature = createBotMcpCredentialSignatureCore({
   readPresetKey: async (server) => {
     const preset = assertMcpPresetServer(server);
     return preset?.auth.kind === "apiKey"
       ? secrets.getOrBindLegacyProviderKey(
           presetSecretId(server.id),
-          JSON.stringify(mcpCredentialConnectionSnapshot(server)),
+          mcpPresetKeyBinding(server),
         )
       : null;
   },

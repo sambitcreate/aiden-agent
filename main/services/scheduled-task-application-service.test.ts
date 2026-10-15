@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createScheduledTaskApplicationService, scheduledTaskRevision } from "./scheduled-task-application-service.js";
-import type { AppSettings, ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
+import type { AppSettings, McpServer, ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
 
-function fixture() {
+function fixture(mcpServers: McpServer[] = []) {
   let clock = 10;
   let settings: AppSettings = {};
   const tasks = new Map<string, ScheduledTask>();
@@ -69,7 +69,7 @@ function fixture() {
     getSettings: async () => settings,
     setSettings: async (patch) => (settings = { ...settings, ...patch }),
     getWorkspace: async (id) => id === "workspace-1" ? ({ id, name: "One", permission: "full", folderPath: "/safe", createdAt: 1, updatedAt: 1 }) : undefined,
-    listMcpServers: async () => [],
+    listMcpServers: async () => mcpServers,
     validateMcpSelection: () => undefined,
     listScripts: async () => ["safe.sh"],
     nextRuns: (_cron, _timezone, count) => Array.from({ length: count }, (_, index) => index + 1),
@@ -148,4 +148,10 @@ test("Bot routines stay out of the generic automation surfaces", async () => {
     /not found/u,
   );
   assert.equal(value.tasks.get("routine-1")?.name, "Weekly meal prep");
+});
+
+test("the schedule server picker (desktop and Remote) lists only servers a schedule can use", async () => {
+  const remote = (id: string, patch: Partial<McpServer> = {}): McpServer => ({ id, name: id, transport: "http", url: `https://${id}.test`, enabled: true, ...patch });
+  const value = fixture([remote("gmail"), remote("off", { enabled: false }), remote("hidden", { exposure: "hidden" }), remote("partial", { hiddenTools: ["send"] })]);
+  assert.deepEqual(await value.service.mcpServers(), [{ id: "gmail", name: "gmail" }, { id: "partial", name: "partial" }]);
 });
