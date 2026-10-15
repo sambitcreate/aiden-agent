@@ -286,9 +286,14 @@ test("Enter on an argument command fills it in and waits; other commands still r
 import { CombinedAutocompleteProvider, getKeybindings } from "@earendil-works/pi-tui";
 import { ArgumentAwareEditor, createArgumentCommandMatcher } from ${slashEditorUrl};
 
-const templates = { "/prompts/review.md": "Review $ARGUMENTS carefully.", "/prompts/standup.md": "Summarize today." };
+const templates = {
+	"/prompts/review.md": "Review $ARGUMENTS carefully.",
+	"/prompts/target.md": "Review \${ARGUMENTS:-the current diff} carefully.",
+	"/prompts/standup.md": "Summarize today.",
+};
 const commands = [
 	{ name: "review", source: "prompt", sourceInfo: { path: "/prompts/review.md" } },
+	{ name: "target", source: "prompt", sourceInfo: { path: "/prompts/target.md" } },
 	{ name: "standup", source: "prompt", sourceInfo: { path: "/prompts/standup.md" } },
 ];
 const waitsForArgument = createArgumentCommandMatcher(() => commands, (file) => templates[file]);
@@ -299,7 +304,7 @@ async function run(typed) {
 	const editor = new ArgumentAwareEditor(tui, theme, getKeybindings());
 	editor.waitsForArgument = waitsForArgument;
 	editor.setAutocompleteProvider(new CombinedAutocompleteProvider(
-		[{ name: "btw" }, { name: "new" }, { name: "review" }, { name: "standup" }], process.cwd(),
+		[{ name: "btw" }, { name: "new" }, { name: "review" }, { name: "target" }, { name: "standup" }], process.cwd(),
 	));
 	const submitted = [];
 	editor.onSubmit = (text) => submitted.push(text);
@@ -322,6 +327,9 @@ if (JSON.stringify(btw.submitted) !== JSON.stringify(["/btw why?"])) throw new E
 // A template that reads $ARGUMENTS waits; one without placeholders runs right away.
 const review = await run("/rev");
 if (review.editor.getText() !== "/review " || review.submitted.length !== 0) throw new Error("review should wait");
+// pi also reads a braced default, \${ARGUMENTS:-…}.
+const target = await run("/tar");
+if (target.editor.getText() !== "/target " || target.submitted.length !== 0) throw new Error("target should wait");
 const standup = await run("/stand");
 if (JSON.stringify(standup.submitted) !== JSON.stringify(["/standup"])) throw new Error("standup: " + JSON.stringify(standup.submitted));
 

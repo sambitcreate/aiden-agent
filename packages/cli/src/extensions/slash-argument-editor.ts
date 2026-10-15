@@ -15,7 +15,8 @@ import { getKeybindings } from "@earendil-works/pi-tui";
 /** Aiden commands whose handler only reports usage when nothing follows the name. */
 export const AIDEN_ARGUMENT_COMMANDS: ReadonlySet<string> = new Set(["btw", "attach", "search"]);
 
-const TEMPLATE_ARGUMENT = /\$(?:ARGUMENTS\b|@|\d|\{(?:\d|@))|^argument-hint:/mu;
+// pi's placeholders: $1, $@, $ARGUMENTS, ${1:-x}, ${@:-x}, ${ARGUMENTS:-x}, ${@:2}.
+const TEMPLATE_ARGUMENT = /\$(?:ARGUMENTS\b|@|\d|\{(?:\d|@|ARGUMENTS:-))|^argument-hint:/mu;
 
 /** A prompt template reads arguments when it declares a hint or uses pi's placeholders. */
 export function templateTakesArgument(source: string): boolean {
