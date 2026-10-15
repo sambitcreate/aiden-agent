@@ -408,4 +408,137 @@ class AidenBotOptimisticSavesTest {
             server.shutdown()
         }
     }
+
+    // --- New Bot (R15, as on iOS): Create closes at once; Bots home shows it on its way ---
+
+    /** A Mac that makes one Bot per idempotency key, and can lose its answer or refuse. */
+    private inner class CreatingMac {
+        val made = linkedMapOf<UUID, AidenBotDetail>()
+        val requests = mutableListOf<Pair<AidenBotCreateRequest, UUID>>()
+        var gate: CompletableDeferred<Unit>? = null
+        /** The next create lands but its answer never comes. */
+        var losesAnswer = false
+        var refuses = false
+
+        suspend fun create(request: AidenBotCreateRequest, key: UUID): AidenBotDetail {
+            requests += request to key
+            gate?.await()
+            if (refuses) throw refused()
+            val created = made.getOrPut(key) { bot.copy(name = request.name, revision = "bot_made_${made.size + 1}") }
+            if (losesAnswer) {
+                losesAnswer = false
+                awaitCancellation()
+            }
+            return created
+        }
+    }
+
+    private fun TestScope.createFlow(
+        mac: CreatingMac,
+        connected: suspend () -> Boolean = { true },
+        kept: MutableList<AidenBotDetail> = mutableListOf()
+    ) = AidenBotCreateFlow(waitForConnection = connected, create = mac::create, cache = { kept += it })
+
+    @Test
+    fun aNewBotShowsAsOnItsWayAtOnceAndOpensOnceTheMacMadeIt() = runTest {
+        val mac = CreatingMac().apply { gate = CompletableDeferred() }
+        val kept = mutableListOf<AidenBotDetail>()
+        val flow = createFlow(mac, kept = kept)
+        val opened = mutableListOf<AidenBotDetail>()
+        val listening = launch { flow.created.collect { opened += it } }
+        runCurrent()
+        val draft = AidenBotCreateDraft(name = "  Chef ", help = "Plans meals")
+
+        val attempt = flow.start(draft, catalog)!!
+        assertEquals("the row shows before anything is sent", "Chef", flow.pending.value?.name)
+        assertNull("a second Create waits for this one", flow.start(AidenBotCreateDraft(name = "Other"), catalog))
+        val sending = launch { flow.send(attempt) }
+        runCurrent()
+        assertEquals("Chef", flow.pending.value?.name)
+
+        mac.gate!!.complete(Unit)
+        sending.join()
+        assertNull("the row gives way to the Bot", flow.pending.value)
+        assertNull(flow.failure.value)
+        assertEquals(listOf(mac.made.values.single()), kept)
+        assertEquals(listOf(mac.made.values.single()), opened)
+        listening.cancel()
+    }
+
+    @Test
+    fun aFailedCreateLeavesTryAgainWithTheSameAnswersAndKeyAndNeverMakesTwoBots() = runTest {
+        val mac = CreatingMac().apply { losesAnswer = true }
+        val flow = createFlow(mac)
+        val draft = AidenBotCreateDraft(name = "Chef", help = "Plans meals", model = aidenBotRecommendedModel(catalog))
+
+        val first = flow.start(draft, catalog)!!
+        val sending = launch { flow.send(first) }
+        advanceTimeBy(AIDEN_BOT_SAVE_LIMIT_MILLIS + 1)
+        sending.join()
+        assertNull("the row goes", flow.pending.value)
+        val failure = flow.failure.value!!
+        assertEquals(draft, failure.draft)
+        assertEquals(sbtbiswas.AidenOnTheGo.R.string.bot_editor_create_unreachable, failure.message)
+
+        // Try again reopens New Bot as it was. The Mac's catalog moved on meanwhile.
+        flow.retry()
+        assertNull(flow.failure.value)
+        val reopened = flow.takePrefill()
+        assertEquals(draft, reopened)
+        assertNull("the form takes it once", flow.takePrefill())
+        assertTrue("Create stays enabled for the same answers", flow.replays(reopened!!))
+        val moved = catalog.copy(revision = "catalog_revision_moved")
+        val second = flow.start(reopened, moved)!!
+        assertEquals("the same Idempotency-Key", first.key, second.key)
+        assertEquals("the frozen request, not one rebuilt on the new catalog", first.request, second.request)
+        flow.send(second)
+
+        assertEquals("one Bot, however many tries", 1, mac.made.size)
+        assertEquals(listOf(first.key, first.key), mac.requests.map { it.second })
+        assertNull(flow.failure.value)
+        // Made: the same answers again are another Bot, not a replay of this one.
+        assertFalse(flow.replays(draft))
+        assertFalse(flow.start(draft, catalog)!!.key == first.key)
+    }
+
+    @Test
+    fun aTryThatNeverReachedTheMacKeepsTheKeyOfOneThatMayHave() = runTest {
+        val mac = CreatingMac().apply { losesAnswer = true }
+        var reachable = true
+        val flow = createFlow(mac, connected = { reachable })
+        val draft = AidenBotCreateDraft(name = "Chef")
+        val first = flow.start(draft, catalog)!!
+        val timedOut = launch { flow.send(first) }
+        advanceTimeBy(AIDEN_BOT_SAVE_LIMIT_MILLIS + 1)
+        timedOut.join()
+
+        // Offline: nothing goes out, and the try that may have made the Bot stays the one to replay.
+        reachable = false
+        flow.send(flow.start(draft, catalog)!!)
+        assertEquals(1, mac.requests.size)
+        reachable = true
+        val third = flow.start(draft, catalog)!!
+        assertEquals(first.key, third.key)
+        flow.send(third)
+        assertEquals(1, mac.made.size)
+    }
+
+    @Test
+    fun aRefusedCreateTriesAgainAsANewRequestAndAMadeBotIsNotReplayedLater() = runTest {
+        val mac = CreatingMac().apply { refuses = true }
+        val flow = createFlow(mac)
+        val draft = AidenBotCreateDraft(name = "Chef")
+        val refusedTry = flow.start(draft, catalog)!!
+        flow.send(refusedTry)
+        assertEquals(sbtbiswas.AidenOnTheGo.R.string.bot_editor_create_failed, flow.failure.value?.message)
+        assertFalse("a refusal is never replayed", flow.replays(draft))
+
+        mac.refuses = false
+        val made = flow.start(draft, catalog)!!
+        assertFalse(made.key == refusedTry.key)
+        flow.send(made)
+        // Another Bot with the same answers is another Bot.
+        val another = flow.start(draft, catalog)!!
+        assertFalse(another.key == made.key)
+    }
 }

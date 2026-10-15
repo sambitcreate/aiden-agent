@@ -351,6 +351,12 @@ private fun AidenBotsHomeContent(
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.loadPresets()
     }
 
+    // New Bot closes at once (R15): the Bot shows here on its way, and its chat opens once the
+    // Mac made it while this list is on screen. A failure offers Try again with the same answers.
+    val createFlow = remember(client) { coordinator.botCreateFlow() }
+    val creating by createFlow.pending.collectAsStateWithLifecycle()
+    val createFailure by createFlow.failure.collectAsStateWithLifecycle()
+
     fun openChat(bot: AidenBotSummary) {
         if (serverInfo?.supportsBotDurableSession == true) {
             onNavigateToBotChat(bot.id)
@@ -371,6 +377,11 @@ private fun AidenBotsHomeContent(
                 onNavigateToBotProfile(bot.id)
             }
         }
+    }
+
+    val currentOpenChat by rememberUpdatedState(::openChat)
+    LaunchedEffect(createFlow) {
+        createFlow.created.collect { made -> currentOpenChat(made.summary()) }
     }
 
     LazyColumn(
@@ -401,6 +412,9 @@ private fun AidenBotsHomeContent(
                 }
             }
         }
+        creating?.let { pending ->
+            item(key = "creating") { AidenBotPendingCreateRow(pending.name, reduceMotion) }
+        }
         when (contentState) {
             AidenBotsHomeContentState.LOADING -> item(key = "loading") { AidenBotHomeSkeleton(reduceMotion) }
             AidenBotsHomeContentState.ERROR -> item(key = "error") {
@@ -412,7 +426,8 @@ private fun AidenBotsHomeContent(
                     action = { AidenPrimaryButton(text = stringResource(R.string.action_try_again), onClick = { viewModel.loadBots(force = true) }) }
                 )
             }
-            AidenBotsHomeContentState.EMPTY -> item(key = "empty") {
+            // The first Bot on its way is the list for now.
+            AidenBotsHomeContentState.EMPTY -> if (creating == null) item(key = "empty") {
                 val connected = connectionState == AidenConnectionState.CONNECTED
                 if (connected && presets.isNotEmpty()) {
                     AidenMeetYourFirstBot(
@@ -505,6 +520,23 @@ private fun AidenBotsHomeContent(
             }
         )
     }
+    createFailure?.let { failure ->
+        AlertDialog(
+            onDismissRequest = createFlow::dismissFailure,
+            title = { Text(stringResource(R.string.bot_create_failed_title)) },
+            text = { Text(stringResource(failure.message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    createFlow.retry()
+                    onNavigateToCreateBot()
+                }) { Text(stringResource(R.string.action_try_again), color = palette.accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = createFlow::dismissFailure) { Text(stringResource(R.string.action_ok), color = palette.accent) }
+            },
+            containerColor = palette.raised
+        )
+    }
     deleteError?.let { message ->
         AlertDialog(
             onDismissRequest = { deleteError = null },
@@ -512,6 +544,39 @@ private fun AidenBotsHomeContent(
             confirmButton = { TextButton(onClick = { deleteError = null }) { Text(stringResource(R.string.action_ok), color = palette.accent) } },
             containerColor = palette.raised
         )
+    }
+}
+
+/** A Bot on its way to the Mac (R15): its name at once, a placeholder face, and "Creating…". */
+@Composable
+private fun AidenBotPendingCreateRow(name: String, reduceMotion: Boolean) {
+    val palette = AidenTheme.palette
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .semantics(mergeDescendants = true) {}
+    ) {
+        AidenBotSkeletonBlock(52.dp, 52.dp, CircleShape, reduceMotion)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.foreground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = stringResource(R.string.bot_editor_creating),
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.secondary,
+                maxLines = 1
+            )
+        }
     }
 }
 

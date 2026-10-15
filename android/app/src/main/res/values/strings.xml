@@ -713,6 +713,7 @@
     <string name="bot_editor_new_title">New Bot</string>
     <string name="bot_editor_creating">Creating…</string>
     <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
+    <string name="bot_create_failed_title">Couldn’t Create Bot</string>
     <string name="bot_editor_create_unreachable">Aiden couldn’t reach your Mac to create this Bot. Try again.</string>
     <string name="bot_editor_help_label">What should it help with?</string>
     <string name="bot_editor_help_placeholder">Plan my meals and make a grocery list every week</string>
