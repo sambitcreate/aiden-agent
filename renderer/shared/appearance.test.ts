@@ -83,6 +83,83 @@ test("colored status labels remain readable on their actual fills across presets
   }
 });
 
+function hexHue(hex: string): number {
+  const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const max = Math.max(red, green, blue);
+  const delta = max - Math.min(red, green, blue);
+  if (delta === 0) return 0;
+  const sector = max === red ? ((green - blue) / delta) % 6 : max === green ? (blue - red) / delta + 2 : (red - green) / delta + 4;
+  return (sector * 60 + 360) % 360;
+}
+
+function eachThemeSetting(run: (tokens: Record<string, string>, label: string, scheme: AppearanceScheme) => void): void {
+  for (const preset of THEME_PRESETS) for (const scheme of ["light", "dark"] as const) {
+    for (const contrast of [0, getPresetVariant(preset.id, scheme).contrast, 100]) for (const highContrast of [false, true]) {
+      const tokens = resolveThemeTokens({ ...getPresetVariant(preset.id, scheme), contrast }, scheme, highContrast);
+      run(tokens, `${preset.id}/${scheme}/${contrast}/${highContrast}`, scheme);
+    }
+  }
+}
+
+test("solid accent and danger fills carry WCAG AA content in every state", () => {
+  eachThemeSetting((tokens, label) => {
+    for (const role of ["accent", "danger"] as const) {
+      for (const state of ["", "-hover", "-active"]) {
+        assert.ok(
+          colorContrastRatio(tokens[`--fill-${role}${state}`], tokens[`--fill-${role}-foreground`]) >= 4.5,
+          `${label}: --fill-${role}${state}`,
+        );
+      }
+      // Hover and press must stay visible, even on a pure black or white fill.
+      assert.notEqual(tokens[`--fill-${role}-hover`], tokens[`--fill-${role}`], `${label}: ${role} hover`);
+      assert.notEqual(tokens[`--fill-${role}-active`], tokens[`--fill-${role}-hover`], `${label}: ${role} active`);
+    }
+  });
+});
+
+test("dark themes put white content on a deepened fill that keeps the theme hue", () => {
+  for (const preset of THEME_PRESETS) {
+    const tokens = resolveThemeTokens(getPresetVariant(preset.id, "dark"), "dark");
+    assert.equal(tokens["--fill-danger-foreground"], "#FFFFFF", `${preset.id} danger`);
+    assert.ok(Math.abs(hexHue(tokens["--fill-danger"]) - hexHue(preset.dark.danger)) < 3, `${preset.id} danger hue`);
+    if (preset.id === "monochrome") continue;
+    assert.equal(tokens["--fill-accent-foreground"], "#FFFFFF", `${preset.id} accent`);
+    assert.ok(Math.abs(hexHue(tokens["--fill-accent"]) - hexHue(preset.dark.accent)) < 3, `${preset.id} accent hue`);
+  }
+  // A white accent cannot deepen without turning grey, so it keeps black content.
+  const monochrome = resolveThemeTokens(getPresetVariant("monochrome", "dark"), "dark");
+  assert.equal(monochrome["--fill-accent"], "#FFFFFF");
+  assert.equal(monochrome["--fill-accent-foreground"], "#000000");
+  const yellow = resolveThemeTokens({ ...getPresetVariant("aiden", "dark"), preset: "custom", accent: "#FFE14D" }, "dark");
+  assert.ok(colorContrastRatio(yellow["--fill-accent"], yellow["--fill-accent-foreground"]) >= 4.5);
+});
+
+test("light themes keep their existing accent fill and white control text", () => {
+  for (const preset of THEME_PRESETS) {
+    const tokens = resolveThemeTokens(getPresetVariant(preset.id, "light"), "light");
+    assert.equal(tokens["--fill-accent"], tokens["--accent"], preset.id);
+    assert.equal(tokens["--fill-accent-foreground"], tokens["--accent-foreground"], preset.id);
+    assert.equal(tokens["--fill-danger"], tokens["--support-red"], preset.id);
+    assert.equal(tokens["--fill-danger-foreground"], "#FFFFFF", preset.id);
+  }
+});
+
+test("text stays readable on hovered and selected rows in the sidebar and menus", () => {
+  eachThemeSetting((tokens, label) => {
+    const rows = [tokens["--theme-sidebar"], tokens["--surface-popover"]].flatMap((surface) => [
+      compositeToken(surface, tokens["--surface-list-hover"]),
+      compositeToken(surface, tokens["--surface-list-selection"]),
+    ]);
+    for (const row of rows) {
+      for (const role of ["--text-secondary", "--text-tertiary", "--text-quaternary", "--accent-text",
+        "--support-red", "--support-green", "--support-warning"]) {
+        assert.ok(colorContrastRatio(tokens[role], row) >= 4.5, `${label}: ${role} on ${row}`);
+      }
+      assert.ok(colorContrastRatio(tokens["--toolbar-icon"], row) >= 3, `${label}: toolbar icon on ${row}`);
+    }
+  });
+});
+
 test("the shared mobile appearance fixture exactly matches Electron presets", () => {
   const fixture = JSON.parse(
     readFileSync(new URL("../../protocol/aiden-appearance-v1.json", import.meta.url), "utf8"),
@@ -202,12 +279,12 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
   const light = resolveThemeTokens(getPresetVariant("aiden", "light"), "light");
   const dark = resolveThemeTokens(getPresetVariant("aiden", "dark"), "dark");
   assert.equal(light["--text-primary"], "#3D3F41");
-  assert.equal(light["--text-secondary"], "#545963");
-  assert.equal(light["--text-quaternary"], "#5D6370");
+  assert.equal(light["--text-secondary"], "#535862");
+  assert.equal(light["--text-quaternary"], "#5C626F");
   assert.equal(light["--surface-control"], "rgb(61 63 65 / 0.084)");
   assert.equal(dark["--text-primary"], "#D1D4DA");
-  assert.equal(dark["--text-secondary"], "#A9B1BA");
-  assert.equal(dark["--text-quaternary"], "#9AA3AE");
+  assert.equal(dark["--text-secondary"], "#B0B7C0");
+  assert.equal(dark["--text-quaternary"], "#A3ACB6");
   assert.equal(dark["--surface-control"], "rgb(209 212 218 / 0.094)");
   assert.equal(dark["--accent"], "#3E97F6");
 });
@@ -431,11 +508,11 @@ test("the shared focus treatment separates text entry from non-text keyboard foc
   );
   assert.match(
     ui,
-    /bg-red text-red-foreground[\s\S]*?hover:bg-red[\s\S]*?active:bg-red[\s\S]*?focus-visible:bg-red/u,
+    /bg-fill-danger text-fill-danger-foreground[\s\S]*?hover:bg-fill-danger-hover[\s\S]*?active:bg-fill-danger-active[\s\S]*?focus-visible:bg-fill-danger-hover/u,
   );
   assert.match(
     ui,
-    /SwitchPrimitive\.Root[\s\S]*inline-flex h-6 w-10 shrink-0 items-center overflow-visible[\s\S]*SwitchPrimitive\.Thumb className="[^"]*pointer-events-none[^"]*bg-white[^"]*data-\[state=checked\]:bg-accent-foreground[^"]*"/u,
+    /SwitchPrimitive\.Root[\s\S]*inline-flex h-6 w-10 shrink-0 items-center overflow-visible[\s\S]*SwitchPrimitive\.Thumb className="[^"]*pointer-events-none[^"]*bg-white[^"]*data-\[state=checked\]:bg-fill-accent-foreground[^"]*"/u,
   );
 });
 
@@ -607,8 +684,8 @@ test("status primitives keep semantic fills and icons without decorative edges",
   assert.ok(callout.includes("[&_.text-support-red]:text-status-red"));
   const radio = ui.slice(ui.indexOf("export const RadioGroupItem"), ui.indexOf("export const Command ="));
   assert.match(radio, /bg-tertiary[\s\S]*hover:bg-secondary/u);
-  assert.match(radio, /data-\[state=checked\]:bg-accent/u);
-  assert.match(radio, /Indicator className="size-1.5 rounded-full bg-accent-foreground"/u);
+  assert.match(radio, /data-\[state=checked\]:bg-fill-accent/u);
+  assert.match(radio, /Indicator className="size-1.5 rounded-full bg-fill-accent-foreground"/u);
   assert.doesNotMatch(badge, /(?:border|ring|outline)-(?:accent|red|green|support)/u);
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   for (const scheme of ["light", "dark"] as const) {
@@ -620,7 +697,7 @@ test("status primitives keep semantic fills and icons without decorative edges",
       fallback.includes(`--model-pad-knob-foreground: ${tokens["--model-pad-knob-foreground"]};`),
       `${scheme} fallback Model Pad knob foreground matches the resolver`,
     );
-    for (const [token, value] of Object.entries(tokens).filter(([name]) => ["--status-", "--text-", "--syntax-", "--support-"].some(prefix => name.startsWith(prefix)))) {
+    for (const [token, value] of Object.entries(tokens).filter(([name]) => ["--status-", "--text-", "--syntax-", "--support-", "--fill-", "--accent-text"].some(prefix => name.startsWith(prefix)))) {
       assert.ok(fallback.includes(`${token}: ${value};`), `${scheme} fallback ${token} matches the resolver`);
     }
   }

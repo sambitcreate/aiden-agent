@@ -3,9 +3,9 @@
 	"vars": {
 		"cyan": "#2D6875",
 		"blue": "#080D1A",
-		"green": "#006D52",
-		"red": "#C3001F",
-		"yellow": "#795C00",
+		"green": "#006C51",
+		"red": "#C0001F",
+		"yellow": "#775A00",
 		"text": "#000000",
 		"gray": "#3B3B3B",
 		"dimGray": "#474747",
@@ -79,7 +79,7 @@
 	"export": {
 		"pageBg": "#FFFFFF",
 		"cardBg": "#FFFFFF",
-		"infoBg": "#EBE7D9"
+		"infoBg": "#EBE6D9"
 	},
 	"name": "monochrome-light"
 }

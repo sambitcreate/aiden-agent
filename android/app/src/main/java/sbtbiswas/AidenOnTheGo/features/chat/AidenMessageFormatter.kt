@@ -30,8 +30,8 @@ fun buildAidenFormattedMessage(
     isUser: Boolean
 ): AnnotatedString {
     val tokens = aidenInlineMarkdownPattern.findAll(text)
-    val inlineCodeBg = if (isUser) palette.onAccent.copy(alpha = 0.2f) else palette.canvas
-    val linkColor = if (isUser) palette.onAccent else palette.accent
+    val inlineCodeBg = if (isUser) palette.accentFill.content.copy(alpha = 0.2f) else palette.canvas
+    val linkColor = if (isUser) palette.accentFill.content else palette.accent
 
     return buildAnnotatedString {
         var cursor = 0

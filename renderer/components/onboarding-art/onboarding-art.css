@@ -118,7 +118,7 @@
   white-space: nowrap;
 }
 .oa-button .oa-icon { width: 8px; height: 8px; }
-.oa-button[data-variant="primary"] { background: var(--accent); color: var(--accent-foreground); }
+.oa-button[data-variant="primary"] { background: var(--fill-accent); color: var(--fill-accent-foreground); }
 .oa-button[data-variant="ghost"] { background: var(--oa-fill); color: var(--text-primary); }
 .oa-selected { background: var(--surface-list-selection); color: var(--text-primary); }
 .oa-radio {
@@ -129,13 +129,13 @@
   border-radius: 50%;
   box-shadow: inset 0 0 0 1px var(--border-field);
 }
-.oa-radio[data-checked="true"] { background: var(--accent); box-shadow: none; }
+.oa-radio[data-checked="true"] { background: var(--fill-accent); box-shadow: none; }
 .oa-radio[data-checked="true"]::after {
   content: "";
   position: absolute;
   inset: 2.75px;
   border-radius: 50%;
-  background: var(--accent-foreground);
+  background: var(--fill-accent-foreground);
 }
 .oa-toggle {
   position: relative;
@@ -156,7 +156,7 @@
   background: #fff;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
 }
-.oa-toggle[data-on="true"] { background: var(--accent); }
+.oa-toggle[data-on="true"] { background: var(--fill-accent); }
 .oa-toggle[data-on="true"]::after { left: 8.5px; }
 
 /* Composer */
@@ -187,8 +187,8 @@
   height: 16px;
   flex: none;
   border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--fill-accent);
+  color: var(--fill-accent-foreground);
 }
 .oa-send .oa-icon { width: 9px; height: 9px; }
 .oa-caret {

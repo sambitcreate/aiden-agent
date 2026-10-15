@@ -447,11 +447,9 @@ struct AidenBotSessionChatView: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(palette.onAccent)
                         .frame(width: 40, height: 40)
-                        .background(palette.accent, in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
                 .disabled(!canWrite || !model.canSend
                           || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send")
@@ -571,8 +569,7 @@ struct AidenBotRoutineProposalCardView: View {
                     Button(AidenBotSessionCopy.addRoutine) { onRespond(.accept) }
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
+                        .aidenSolidFillTint()
                     Button(AidenBotSessionCopy.notNow) { onRespond(.dismiss) }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.capsule)
@@ -603,8 +600,7 @@ struct AidenBotFailedTurnCard: View {
                 Button(AidenBotSessionCopy.retry, action: onRetry)
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
+                    .aidenSolidFillTint()
                     .disabled(isBusy)
             }
         }
@@ -640,14 +636,12 @@ struct AidenBotInterruptedCard: View {
                     Button(AidenBotSessionCopy.openAdvanced, action: onOpenAdvanced)
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
+                        .aidenSolidFillTint()
                 } else {
                     Button(AidenBotSessionCopy.resume, action: onResume)
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
+                        .aidenSolidFillTint()
                 }
                 Button(AidenBotSessionCopy.dismiss, action: onDismiss)
                     .buttonStyle(.bordered)
@@ -684,8 +678,7 @@ struct AidenBotNeedsModelCard: View {
                 Button(AidenBotSessionCopy.setUp, action: onSetUp)
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
+                    .aidenSolidFillTint()
             } else {
                 Text(AidenBotSessionCopy.needsModelHint)
                     .font(.footnote)
@@ -753,8 +746,7 @@ struct AidenBotConnectCardView: View {
                 Button(AidenBotSessionCopy.finishOnMac, action: onRequest)
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
+                    .aidenSolidFillTint()
             }
         case .dismissed:
             EmptyView()

@@ -189,7 +189,7 @@ function PullRequestRow({
             {view.title ? ` ${view.title}` : ""}
           </span>
           {current ? (
-            <span className="shrink-0 rounded-control bg-status-accent-surface px-1.5 py-0.5 text-mini text-accent">
+            <span className="shrink-0 rounded-control bg-status-accent-surface px-1.5 py-0.5 text-mini text-status-accent">
               Current
             </span>
           ) : null}
@@ -854,7 +854,7 @@ export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
       </span>
       <button
         type="button"
-        className="shrink-0 rounded-control px-1.5 py-0.5 text-small text-accent outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
+        className="shrink-0 rounded-control px-1.5 py-0.5 text-small text-accent-text outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
         onClick={() => openPullRequestExternal(view.url)}
       >
         View pull request →
@@ -1081,7 +1081,7 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
               <Button
                 variant="transparent"
                 size="small"
-                className="shrink-0 gap-1 px-1.5 text-accent"
+                className="shrink-0 gap-1 px-1.5 text-accent-text"
                 onClick={() => openPullRequestExternal(currentView.url)}
               >
                 View pull request

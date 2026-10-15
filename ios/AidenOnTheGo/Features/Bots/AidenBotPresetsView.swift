@@ -48,8 +48,7 @@ struct AidenBotMeetFirstBotView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
-                .tint(palette.accent)
-                .foregroundStyle(palette.onAccent)
+                .aidenSolidFillTint()
                 .disabled(isBusy || !canCreate || current == nil)
 
                 Button(action: onCreateOwn) {

@@ -3,19 +3,19 @@
 	"vars": {
 		"cyan": "#2E6976",
 		"blue": "#943071",
-		"green": "#136D5C",
-		"red": "#AA3944",
-		"yellow": "#7F5A22",
+		"green": "#136A5A",
+		"red": "#A53742",
+		"yellow": "#7B5721",
 		"text": "#443F4A",
-		"gray": "#5E5560",
-		"dimGray": "#635A65",
-		"darkGray": "#685E69",
+		"gray": "#5C535E",
+		"dimGray": "#605762",
+		"darkGray": "#655B66",
 		"accent": "#B42C70",
 		"selectedBg": "#F2DCE7",
 		"userMsgBg": "#F0E9ED",
 		"toolPendingBg": "#F4EDF0",
-		"toolSuccessBg": "#E4E7E8",
-		"toolErrorBg": "#F3E1E5",
+		"toolSuccessBg": "#E4E6E7",
+		"toolErrorBg": "#F2E1E5",
 		"customMsgBg": "#F5E4EC"
 	},
 	"colors": {
@@ -58,7 +58,7 @@
 		"toolDiffAdded": "green",
 		"toolDiffRemoved": "red",
 		"toolDiffContext": "gray",
-		"syntaxComment": "#635A65",
+		"syntaxComment": "#605762",
 		"syntaxKeyword": "#B32E41",
 		"syntaxFunction": "#7C365D",
 		"syntaxVariable": "#9C4914",
@@ -67,10 +67,10 @@
 		"syntaxType": "#31636F",
 		"syntaxOperator": "text",
 		"syntaxPunctuation": "text",
-		"thinkingOff": "#685E69",
-		"thinkingMinimal": "#635A65",
-		"thinkingLow": "#5E5560",
-		"thinkingMedium": "#804566",
+		"thinkingOff": "#655B66",
+		"thinkingMinimal": "#605762",
+		"thinkingLow": "#5C535E",
+		"thinkingMedium": "#7F4365",
 		"thinkingHigh": "#9A386B",
 		"thinkingXhigh": "#B42C70",
 		"thinkingMax": "#8D3363",
@@ -79,7 +79,7 @@
 	"export": {
 		"pageBg": "#FBF4F7",
 		"cardBg": "#FFFFFF",
-		"infoBg": "#E8DDD7"
+		"infoBg": "#E8DCD7"
 	},
 	"name": "berry-light"
 }

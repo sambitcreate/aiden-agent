@@ -48,6 +48,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenCheckboxColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -520,7 +521,7 @@ fun AidenGitScreen(
                     Checkbox(
                         checked = stagedOnly,
                         onCheckedChange = { stagedOnly = it },
-                        colors = CheckboxDefaults.colors(checkedColor = palette.accent)
+                        colors = aidenCheckboxColors()
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
@@ -855,10 +856,10 @@ fun AidenGitScreen(
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = palette.accent,
-                            contentColor = palette.onAccent,
-                            disabledContainerColor = palette.accent.copy(alpha = 0.6f),
-                            disabledContentColor = palette.onAccent
+                            containerColor = palette.accentFill.fill,
+                            contentColor = palette.accentFill.content,
+                            disabledContainerColor = palette.accentFill.fill.copy(alpha = 0.6f),
+                            disabledContentColor = palette.accentFill.content
                         ),
                         shape = AidenShape.Button
                     ) {

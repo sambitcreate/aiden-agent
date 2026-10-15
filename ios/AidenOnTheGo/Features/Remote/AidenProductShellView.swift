@@ -703,8 +703,7 @@ private struct AidenBotSwitcherCoachmarkView: View {
 
             Button("Got it", action: onContinue)
                 .buttonStyle(.borderedProminent)
-                .tint(palette.accent)
-                .foregroundStyle(palette.onAccent)
+                .aidenSolidFillTint()
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .foregroundStyle(palette.foreground)

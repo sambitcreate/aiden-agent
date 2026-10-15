@@ -63,10 +63,10 @@ struct AidenSimulatorDeviceButton: View {
                     if count > 1 {
                         Text(count, format: .number)
                             .font(.caption2.weight(.bold))
-                            .foregroundStyle(palette.onAccent)
+                            .foregroundStyle(palette.onFillAccent)
                             .padding(.horizontal, 4)
                             .frame(minWidth: 16, minHeight: 16)
-                            .background(palette.accent, in: Capsule())
+                            .background(palette.fillAccent, in: Capsule())
                             .offset(x: 4, y: -4)
                     }
                 }

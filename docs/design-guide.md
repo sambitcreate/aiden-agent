@@ -49,6 +49,21 @@ an action's meaning: primary actions retain their accent, destructive actions
 retain their semantic treatment, and transparent actions gain a soft fill on
 hover. Avoid decorative borders and outlines.
 
+Solid fills that carry a label or glyph use the `--fill-accent*` and
+`--fill-danger*` pairs (`bg-fill-accent text-fill-accent-foreground`): primary
+and destructive buttons, highlighted menu rows, checked switches, checkboxes and
+radios, and send buttons. The hue moves toward black just enough for white
+content to reach WCAG AA (4.5:1). Light presets already pass and keep their
+accent, dark presets deepen, and a white accent (Monochrome) keeps black content.
+Hover and press stay visible even on a pure black or white fill. iOS
+(`AidenSolidFill`) and Android (`AidenPalette.accentFill`/`dangerFill`) use the
+same rule and values. Keep `--accent`
+for dots, bars and other non-text marks, and use `text-accent-text` when the
+accent colors text (links, inline actions): it is corrected to stay readable on
+every surface and on hovered or selected rows. A highlighted menu row turns all of
+its content, including icons and secondary labels, to the row's foreground;
+destructive rows highlight with the danger fill rather than the accent.
+
 Preserve neutral `focus-visible` outlines on non-text controls, accessible labels
 for icon actions, disabled semantics, and existing hit-target sizes. Text-entry
 focus uses fill and caret changes without a new border or ring. Reuse existing

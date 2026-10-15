@@ -544,12 +544,12 @@ struct AidenPairingView: View {
         let button = Button(action: action) {
             label()
                 .frame(maxWidth: .infinity)
-                .foregroundStyle(palette.onAccent)
+                .foregroundStyle(palette.onFillAccent)
         }
         .font(.headline)
         .frame(maxWidth: .infinity)
         .controlSize(.large)
-        .tint(palette.accent)
+        .aidenSolidFillTint()
 
         if #available(iOS 26, *) {
             button.buttonStyle(.glassProminent)
@@ -603,9 +603,9 @@ struct AidenPairingView: View {
         HStack(alignment: .top, spacing: 14) {
             Text("\(number)")
                 .font(.caption.bold())
-                .foregroundStyle(palette.canvas)
+                .foregroundStyle(palette.onFillAccent)
                 .frame(width: 26, height: 26)
-                .background(palette.accent, in: Circle())
+                .background(palette.fillAccent, in: Circle())
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.headline)
                 Text(detail).font(.subheadline).foregroundStyle(palette.secondary)

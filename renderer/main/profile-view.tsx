@@ -90,7 +90,7 @@ function ProfileIdentity() {
     <section aria-label="Local profile" className="flex min-h-24 items-center gap-4 py-5">
       <div
         aria-hidden="true"
-        className="grid size-13 shrink-0 place-items-center rounded-full bg-accent/12 text-[16px] font-semibold text-accent"
+        className="grid size-13 shrink-0 place-items-center rounded-full bg-accent/12 text-[16px] font-semibold text-accent-text"
       >
         {profile.data ? profileInitials(profile.data.name) : ""}
       </div>

@@ -573,7 +573,7 @@ export function PillApp() {
               <button
                 type="button"
                 onClick={() => recordedRetryConsent.resolve(true)}
-                className="rounded-control bg-accent px-2 py-1 text-mini font-medium text-accent-foreground"
+                className="rounded-control bg-fill-accent px-2 py-1 text-mini font-medium text-fill-accent-foreground"
               >
                 Retry
               </button>

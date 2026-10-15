@@ -59,6 +59,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShapes
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenSwitchColors
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
@@ -256,14 +257,14 @@ fun AidenWorkspaceDirectoryScreen(
                         val currentWs = selectedWorkspace ?: return@FloatingActionButton
                         startChat(currentWs)
                     },
-                    containerColor = palette.accent,
-                    contentColor = palette.onAccent,
+                    containerColor = palette.accentFill.fill,
+                    contentColor = palette.accentFill.content,
                     shape = AidenFabShape,
                     interactionSource = fabInteraction,
                     modifier = Modifier.tactilePress(fabInteraction)
                 ) {
                     if (isCreatingChat) {
-                        AidenActivityDot(color = palette.onAccent, size = 10.dp, contentDescription = stringResource(R.string.workspace_opening_new_chat))
+                        AidenActivityDot(color = palette.accentFill.content, size = 10.dp, contentDescription = stringResource(R.string.workspace_opening_new_chat))
                     } else {
                         Icon(Icons.Default.Add, contentDescription = stringResource(R.string.workspace_new_chat))
                     }
@@ -441,8 +442,8 @@ fun AidenWorkspaceDirectoryScreen(
                             onClick = { showCreateMenu = true },
                             enabled = !isCreatingWorkspace,
                             shape = AidenFabShape,
-                            color = palette.accent,
-                            contentColor = palette.onAccent,
+                            color = palette.accentFill.fill,
+                            contentColor = palette.accentFill.content,
                             shadowElevation = 3.dp,
                             interactionSource = addInteraction,
                             modifier = Modifier
@@ -452,9 +453,9 @@ fun AidenWorkspaceDirectoryScreen(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 if (isCreatingWorkspace) {
-                                    AidenActivityDot(color = palette.onAccent, size = 10.dp, contentDescription = stringResource(R.string.workspace_creating))
+                                    AidenActivityDot(color = palette.accentFill.content, size = 10.dp, contentDescription = stringResource(R.string.workspace_creating))
                                 } else {
-                                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.workspace_add), tint = palette.onAccent, modifier = Modifier.size(22.dp))
+                                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.workspace_add), tint = palette.accentFill.content, modifier = Modifier.size(22.dp))
                                 }
                             }
                         }
@@ -1077,10 +1078,10 @@ fun AidenFolderBrowserSheet(
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = palette.accent,
-                        contentColor = palette.onAccent,
-                        disabledContainerColor = palette.accent.copy(alpha = 0.6f),
-                        disabledContentColor = palette.onAccent
+                        containerColor = palette.accentFill.fill,
+                        contentColor = palette.accentFill.content,
+                        disabledContainerColor = palette.accentFill.fill.copy(alpha = 0.6f),
+                        disabledContentColor = palette.accentFill.content
                     ),
                     shape = AidenShape.Button,
                     interactionSource = addInteraction,
@@ -1570,7 +1571,7 @@ internal fun AidenWorkspaceMemoryRow(
                 Text(stringResource(R.string.workspace_use_memory), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
                 Text(stringResource(R.string.workspace_use_memory_body), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
             }
-            Switch(checked = checked, onCheckedChange = null)
+            Switch(checked = checked, onCheckedChange = null, colors = aidenSwitchColors())
         }
     }
 }

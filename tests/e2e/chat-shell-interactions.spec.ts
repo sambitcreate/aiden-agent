@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
+import { colorContrastRatio, getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
 import { expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
@@ -335,6 +335,76 @@ test.describe("with a workspace", () => {
     await app.evaluate(({ BrowserWindow }, bounds) => {
       BrowserWindow.getAllWindows()[0]?.setBounds(bounds);
     }, originalWindowBounds!);
+  });
+
+  test("highlighted menu rows keep readable content and destructive rows stay red", async ({ aiden }) => {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+    await page.evaluate(async () => {
+      const bridge = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+        }
+      ).aidenAPI.ipc;
+      await bridge.invoke("workspaces:create", { name: "Second fixture", permission: "ask" });
+    });
+    await page.reload();
+    await expect(page.locator("textarea")).toBeVisible();
+
+    const toHex = (rgb: string) => {
+      const channels = /^rgba?\((\d+), (\d+), (\d+)/u.exec(rgb);
+      expect(channels, rgb).not.toBeNull();
+      return `#${channels!.slice(1, 4).map((value) => Number(value).toString(16).padStart(2, "0")).join("")}`;
+    };
+    const expectReadableRow = async (row: ReturnType<typeof page.getByRole>, scheme: "light" | "dark") => {
+      const [background, color] = await row.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return [style.backgroundColor, style.color];
+      });
+      expect(colorContrastRatio(toHex(color), toHex(background))).toBeGreaterThanOrEqual(4.5);
+      if (scheme === "dark") expect(color).toBe("rgb(255, 255, 255)");
+      // Icons and secondary labels inside the row follow the row's content color.
+      await expect(row.locator("svg").last()).toHaveCSS("color", color);
+    };
+
+    for (const scheme of ["light", "dark"] as const) {
+      const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
+      const fills = await page.evaluate((themeTokens) => {
+        for (const [name, value] of Object.entries(themeTokens)) document.documentElement.style.setProperty(name, value);
+        const read = (name: string) => {
+          const probe = document.createElement("div");
+          probe.style.backgroundColor = `var(${name})`;
+          document.body.append(probe);
+          const color = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return color;
+        };
+        return { accent: read("--fill-accent"), danger: read("--fill-danger") };
+      }, tokens);
+
+      await page.getByRole("button", { name: "Organize sidebar" }).click();
+      const recent = page.getByRole("menuitemradio", { name: "Recent" });
+      await recent.hover();
+      await expect(recent).toHaveCSS("background-color", fills.accent);
+      await expectReadableRow(recent, scheme);
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toBeHidden();
+
+      const workspaceActions = page.getByRole("button", { name: "Actions for Aiden E2E workspace", exact: true });
+      await workspaceActions.focus();
+      await workspaceActions.press("Enter");
+      const remove = page.getByRole("menuitem", { name: /^Remove “/u });
+      await remove.hover();
+      await expect(remove).toHaveCSS("background-color", fills.danger);
+      const [background, color] = await remove.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return [style.backgroundColor, style.color];
+      });
+      expect(colorContrastRatio(toHex(color), toHex(background))).toBeGreaterThanOrEqual(4.5);
+      if (scheme === "dark") expect(color).toBe("rgb(255, 255, 255)");
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toBeHidden();
+    }
   });
 
   test("needs attention view orders chats by what is waiting on the user", async ({ aiden }) => {

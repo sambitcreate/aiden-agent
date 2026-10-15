@@ -136,7 +136,7 @@ fun AidenSimulatorDeviceButton(count: Int, onClick: () -> Unit, modifier: Modifi
         shape = AidenShape.Button,
         modifier = modifier.semantics { contentDescription = label }
     ) {
-        BadgedBox(badge = { if (count > 1) Badge { Text(count.toString()) } }) {
+        BadgedBox(badge = { if (count > 1) Badge(containerColor = AidenTheme.palette.dangerFill.fill, contentColor = AidenTheme.palette.dangerFill.content) { Text(count.toString()) } }) {
             Icon(Icons.Default.Smartphone, contentDescription = null, modifier = Modifier.size(20.dp))
         }
     }

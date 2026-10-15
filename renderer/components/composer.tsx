@@ -1908,7 +1908,7 @@ export function Composer({
                 className="composer-drop-overlay pointer-events-none absolute inset-0 z-30 grid place-items-center bg-popover"
               >
                 <span className="composer-drop-overlay absolute inset-0 bg-status-accent-surface" />
-                <span className="relative flex items-center gap-2 text-small-strong font-medium text-accent">
+                <span className="relative flex items-center gap-2 text-small-strong font-medium text-accent-text">
                   <Paperclip className="size-4" aria-hidden="true" />
                   Drop to attach
                 </span>
@@ -1940,7 +1940,7 @@ export function Composer({
                   {selectedSkillState?.state === "checking" ? (
                     <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
                   ) : (
-                    <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+                    <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent-text" />
                   )}
                   <span className="truncate font-medium">
                     {selectedSkill.invocation.displayName}

@@ -33,6 +33,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenSwitchColors
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenCheckboxColors
 
 /** The Custom access choices, seeded from the Mac's current catalog. */
 data class AidenBotCustomAccessDraft(
@@ -376,7 +378,7 @@ private fun AidenBotCustomAccessSections(
                     checked = draft.shellEnabled,
                     onCheckedChange = null,
                     enabled = catalog.shellAvailable,
-                    colors = SwitchDefaults.colors(checkedTrackColor = palette.accent)
+                    colors = aidenSwitchColors()
                 )
             }
         }
@@ -407,7 +409,7 @@ private fun AidenBotToggleGroup(
                 val on = checked.contains(id)
                 AidenGroupCard(index = index, count = items.size, role = Role.Checkbox, onClick = { onToggle(id, !on) }) {
                     Text(label, color = palette.foreground, modifier = Modifier.weight(1f))
-                    Checkbox(checked = on, onCheckedChange = null, colors = CheckboxDefaults.colors(checkedColor = palette.accent))
+                    Checkbox(checked = on, onCheckedChange = null, colors = aidenCheckboxColors())
                 }
             }
         }

@@ -302,7 +302,7 @@ test("shared controls use theme fills for text entry and focus states", () => {
   const selectTrigger = between(ui, "export const SelectTrigger =", "export const SelectContent =");
   assert.match(button, /focus-visible:bg-list-selection/u);
   assert.match(button, /focus-visible:bg-control-active/u);
-  assert.match(button, /focus-visible:bg-accent-hover/u);
+  assert.match(button, /focus-visible:bg-fill-accent-hover/u);
   assert.doesNotMatch(button, /focus-visible:ring/u);
   for (const control of [input, textarea]) {
     assert.doesNotMatch(control, /focus:border-focus-ring/u);

@@ -665,7 +665,7 @@ export function AppCommandPalette({
                           {selected ? (
                             <>
                               <span className="sr-only">Current</span>
-                              <Check aria-hidden="true" className="size-4 shrink-0 text-accent" />
+                              <Check aria-hidden="true" className="size-4 shrink-0 text-accent-text" />
                             </>
                           ) : null}
                         </PaletteResultItem>
@@ -771,7 +771,7 @@ export function AppCommandPalette({
                       {appearanceMode === item.mode ? (
                         <>
                           <span className="sr-only">Current</span>
-                          <Check aria-hidden="true" className="ml-auto size-4 text-accent" />
+                          <Check aria-hidden="true" className="ml-auto size-4 text-accent-text" />
                         </>
                       ) : null}
                     </PaletteResultItem>

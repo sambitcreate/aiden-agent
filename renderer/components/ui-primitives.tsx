@@ -115,10 +115,10 @@ export function Checkbox({
         checked={checked}
         disabled={disabled}
         onCheckedChange={(next) => onCheckedChange(next === true)}
-        className="grid size-4 shrink-0 place-items-center rounded-md bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow] duration-(--motion-duration) ease-standard hover:bg-control-active disabled:pointer-events-none disabled:opacity-45 data-[state=checked]:bg-accent data-[state=checked]:shadow-control"
+        className="grid size-4 shrink-0 place-items-center rounded-md bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow] duration-(--motion-duration) ease-standard hover:bg-control-active disabled:pointer-events-none disabled:opacity-45 data-[state=checked]:bg-fill-accent data-[state=checked]:shadow-control"
       >
         <CheckboxPrimitive.Indicator>
-          <Check aria-hidden="true" className="size-3 text-accent-foreground" strokeWidth={3} />
+          <Check aria-hidden="true" className="size-3 text-fill-accent-foreground" strokeWidth={3} />
         </CheckboxPrimitive.Indicator>
       </CheckboxPrimitive.Root>
       <label htmlFor={id} className="min-w-0 text-small text-primary">

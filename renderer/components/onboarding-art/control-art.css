@@ -234,7 +234,7 @@
 
 /* Aiden in Telegram */
 .oa-tg-head { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 7px; }
-.oa-tg-avatar { display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: var(--accent); color: var(--accent-foreground); }
+.oa-tg-avatar { display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: var(--fill-accent); color: var(--fill-accent-foreground); }
 .oa-tg-avatar .oa-icon { width: 9px; height: 9px; }
 .oa-tg-body { display: flex; flex-direction: column; gap: 5px; padding: 8px; background: var(--oa-fill); height: 100%; }
 .oa-tg-bubble {
@@ -254,7 +254,7 @@
 .oa-tg-bubble[data-out] .oa-bar { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 .oa-tg-voice { display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 7px; }
 .oa-tg-voice svg { color: var(--accent); fill: currentColor; }
-.oa-tg-play { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); color: var(--accent-foreground); }
+.oa-tg-play { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: var(--fill-accent); color: var(--fill-accent-foreground); }
 .oa-tg-play .oa-icon { width: 7px; height: 7px; fill: currentColor; }
 .oa-tg-input {
   display: flex;

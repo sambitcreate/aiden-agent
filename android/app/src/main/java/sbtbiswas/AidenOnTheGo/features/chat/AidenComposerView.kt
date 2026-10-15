@@ -494,14 +494,14 @@ fun AidenComposerView(
                     Spacer(modifier = Modifier.width(8.dp))
                     AidenComposerMorphingAction(
                         state = AidenComposerActionState.BUSY,
-                        containerColor = palette.danger,
+                        containerColor = palette.dangerFill.fill,
                         onClick = onStop,
                         enabled = canStop && !isReadOnly
                     ) {
                         Icon(
                             imageVector = Icons.Default.Stop,
                             contentDescription = stringResource(R.string.chat_composer_stop_generation),
-                            tint = Color.White,
+                            tint = palette.dangerFill.content,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -511,8 +511,8 @@ fun AidenComposerView(
                     AidenComposerMorphingAction(
                         state = aidenComposerSendActionState(isStreaming, canSend),
                         containerColor = when {
-                            isStreaming -> palette.danger
-                            canSend -> palette.accent
+                            isStreaming -> palette.dangerFill.fill
+                            canSend -> palette.accentFill.fill
                             else -> palette.canvas.copy(alpha = 0.6f)
                         },
                         onClick = {
@@ -540,14 +540,14 @@ fun AidenComposerView(
                                 Icon(
                                     imageVector = Icons.Default.Stop,
                                     contentDescription = stringResource(R.string.chat_composer_stop_generation),
-                                    tint = Color.White,
+                                    tint = palette.dangerFill.content,
                                     modifier = Modifier.size(18.dp)
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.ArrowUpward,
                                     contentDescription = stringResource(R.string.chat_composer_send),
-                                    tint = if (canSend) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
+                                    tint = if (canSend) palette.accentFill.content else palette.secondary.copy(alpha = 0.4f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -655,7 +655,7 @@ private fun AidenRunInputSplitButton(
     ) {
         Surface(
             shape = primaryShape,
-            color = palette.accent,
+            color = palette.accentFill.fill,
             modifier = Modifier
                 .fillMaxHeight()
                 .widthIn(min = AidenUi.MinimumTouchTarget)
@@ -701,7 +701,7 @@ private fun AidenRunInputSplitButton(
                         text = stringResource(label),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
-                        color = palette.onAccent,
+                        color = palette.accentFill.content,
                         maxLines = 1,
                         // The segment announces its action instead.
                         modifier = Modifier.clearAndSetSemantics {}
@@ -714,7 +714,7 @@ private fun AidenRunInputSplitButton(
                 onClick = { showMenu = !showMenu },
                 enabled = canChooseMode,
                 shape = trailingShape,
-                color = palette.accent,
+                color = palette.accentFill.fill,
                 interactionSource = menuInteraction,
                 modifier = Modifier
                     .fillMaxHeight()
@@ -729,7 +729,7 @@ private fun AidenRunInputSplitButton(
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
                         contentDescription = null,
-                        tint = palette.onAccent,
+                        tint = palette.accentFill.content,
                         modifier = Modifier
                             .size(18.dp)
                             .graphicsLayer { rotationZ = chevronRotation }

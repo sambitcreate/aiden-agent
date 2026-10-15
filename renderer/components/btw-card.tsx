@@ -162,7 +162,7 @@ export function BtwCard({
             />
             <button
               type="button"
-              className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground disabled:opacity-40"
+              className="grid size-8 shrink-0 place-items-center rounded-full bg-fill-accent text-fill-accent-foreground disabled:opacity-40"
               aria-label="Ask follow-up side question"
               disabled={running || !draft.trim()}
               onClick={submit}

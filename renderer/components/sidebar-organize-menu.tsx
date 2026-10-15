@@ -38,7 +38,7 @@ export interface SidebarOrganizeMenuItemsProps {
   machines?: SidebarMachineMenuOptions;
 }
 
-const ICON_CLASS = "size-4 text-secondary group-data-[highlighted]:text-accent-foreground";
+const ICON_CLASS = "size-4 text-secondary";
 
 function pick<T extends string>(values: readonly T[], onChange: (value: T) => void) {
   return (value: string) => {
