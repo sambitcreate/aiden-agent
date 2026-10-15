@@ -19,7 +19,8 @@ import {
 import { Button, Text, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { browserApi, onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
-import { browserLinkCommand } from "../lib/browser-links";
+import { resolveLinkOpen } from "../lib/browser-link-routing";
+import type { BrowserCommand } from "../shared/browser";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -394,9 +395,25 @@ function TerminalViewport({
             return true;
           },
           canActivateLink: (url) =>
-            browserLinkCommand(url, { metaKey: false, ctrlKey: false }) !== null,
+            resolveLinkOpen({
+              href: url,
+              modifiers: { metaKey: false, ctrlKey: false },
+              preference: "browser",
+              browserAvailable: true,
+            }) !== null,
           onLinkActivate: (url, event) => {
-            const command = browserLinkCommand(url, event);
+            const route = resolveLinkOpen({
+              href: url,
+              modifiers: { metaKey: event.metaKey, ctrlKey: event.ctrlKey },
+              preference: "browser",
+              browserAvailable: true,
+            });
+            const command: BrowserCommand | null =
+              route?.kind === "browser" || route?.kind === "external"
+                ? { action: "open_link", url: route.url }
+                : route?.kind === "file"
+                  ? { action: "open_file", path: route.path }
+                  : null;
             if (command) {
               void browserApi
                 .command(session.workspaceId, command)
