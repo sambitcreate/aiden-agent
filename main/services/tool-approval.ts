@@ -57,6 +57,7 @@ export function toolApprovalBlockReason(
     case "unavailable":
       return "Aiden could not present the approval request. Return to the chat and retry the action.";
     case "cancelled":
+    default:
       return "The action was cancelled before approval.";
   }
 }

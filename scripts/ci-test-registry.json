@@ -350,6 +350,7 @@
         "main/services/acp/generation-host.test.ts",
         "main/services/antigravity/service.test.ts",
         "main/services/agents-instructions.test.ts",
+        "main/services/schedule-execution-tool-policy.test.ts",
         "main/services/subagents/eligibility-harness.test.ts",
         "main/services/antigravity/definition.test.ts",
         "main/services/aiden-remote-approved-roots.test.ts",
