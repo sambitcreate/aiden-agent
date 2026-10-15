@@ -108,7 +108,3 @@ export async function installRendererDiagnostics(): Promise<void> {
     reportRendererDiagnostic(report.kind, report.error, report.context);
   }
 }
-
-export function rendererDiagnosticPolicyForTest(): RendererDiagnosticPolicy {
-  return policy;
-}

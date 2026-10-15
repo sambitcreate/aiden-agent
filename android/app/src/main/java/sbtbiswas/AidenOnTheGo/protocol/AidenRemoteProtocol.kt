@@ -69,6 +69,8 @@ object AidenRemoteProtocol {
     const val BOT_MEMORY_FEATURE = "bot-memory-v1"
     /** Contract revision 27: routine proposal answers, routine suggestions and the routine notification feed. */
     const val BOT_PROACTIVE_FEATURE = "bot-proactive-v1"
+    /** Contract revision 30: the status line, Steer and Queue, Queued bubbles and Chat activity. */
+    const val BOT_ACTIVITY_FEATURE = "bot-activity-v1"
     /** Contract revision 28: assistant messages may carry inline `visuals`,
      * each shown through a snapshot image attachment the Mac stores. */
     const val CHAT_VISUALS_FEATURE = "chat-visuals-v1"
@@ -520,6 +522,11 @@ data class AidenRemoteCapability(val rawValue: String) {
          * Bot session entries. It grants no authority.
          */
         val BOT_CARDS = AidenRemoteCapability("bot:cards")
+        /**
+         * Contract revision 30: this phone receives the activity and queued session frames and
+         * Bot detail `chatActivity`. It grants no authority.
+         */
+        val BOT_ACTIVITY = AidenRemoteCapability("bot:activity")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -541,11 +548,14 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** The Bot card rendering grant, negotiable behind `bot-memory-v1` or `bot-proactive-v1`. */
         val PHONE_BOT_CARDS = listOf(BOT_CARDS)
 
+        /** Negotiable behind `bot-activity-v1`. */
+        val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
+
         /** Every grant `POST /device/capabilities` may add. */
-        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS
+        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
-        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS
+        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY
     }
 }
 

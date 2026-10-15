@@ -1,0 +1,18 @@
+{
+  "evidenceKind": "active-prototype-offline-provenance",
+  "baselinePreparation": "prepare-context-compaction-baseline.py",
+  "stages": [
+    {
+      "patch": "context-compaction-historical-pruning.patch",
+      "patchSha256": "cb4fa3384438bc389486f17c691aca6b52fb896f6d0df4309037d1addf721c62",
+      "output": "tmp/research/generation-context-before-active.ts",
+      "outputSha256": "965a130046591bd565b59544f24534a0b0a753665758455f0b1553f379907acd"
+    },
+    {
+      "patch": "context-compaction-active-prototype.patch",
+      "patchSha256": "a837ab4353f050c833510af40b1857e365c799187fbca696b5df123b6b28a4dc",
+      "output": "tmp/research/generation-context-active-prototype.ts",
+      "outputSha256": "ccf64f0558606e754d385da114bdd8b69589160ea0f0d0d2d00c18cb8f136c8a"
+    }
+  ]
+}

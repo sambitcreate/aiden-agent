@@ -16,6 +16,7 @@ import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
+import { externalUrl } from "./services/browser/core.js";
 import { shutdownDevices } from "./handlers/devices.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
@@ -30,7 +31,8 @@ import {
   disposeShortcut,
   initShortcutBindingsChanged,
 } from "./services/shortcut.js";
-import { mcpManager } from "./services/mcp.js";
+import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
+import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
   foundationModelsConnection,
@@ -1141,14 +1143,7 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
 
 function openExternalUrl(value: string): void {
   try {
-    const url = new URL(value);
-    if (
-      url.protocol === "http:" ||
-      url.protocol === "https:" ||
-      url.protocol === "mailto:"
-    ) {
-      void shell.openExternal(url.toString());
-    }
+    void shell.openExternal(externalUrl(value));
   } catch {
     logger.warn("main", "Blocked invalid external URL", { value });
   }
@@ -1814,7 +1809,14 @@ if (!ownsSingleInstanceLock) {
     reloadAndReconcilePortableConfig,
     () => {
       skillRegistry.invalidate();
-      ipcMain.broadcast("app:config-externally-changed", {});
+      // Values typed into config.json by hand move into the keychain before
+      // Settings re-reads it, so the renderer never holds (and later re-saves)
+      // the plain-text copy.
+      void sealPlaintextMcpServerFields()
+        .catch((error: unknown) =>
+          logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
+        )
+        .finally(() => ipcMain.broadcast("app:config-externally-changed", {}));
     },
     (error: unknown) =>
       logger.warn(
@@ -2165,6 +2167,13 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      // Env and header values still written in config.json move into the keychain.
+      await sealPlaintextMcpServerFields().catch((error: unknown) =>
+        logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
+      );
+      // Connect enabled MCP servers in the background so the first turn finds
+      // warm connections and cached inventories. Never blocks startup.
+      prewarmMcpServers();
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
       await restoreDockIconPreference(appearance.dockIcon);

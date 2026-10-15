@@ -1,6 +1,6 @@
 // React Query hooks for providers, chats, and settings.
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   keepPreviousData,
   queryOptions,
@@ -49,6 +49,7 @@ import type {
   Provider,
   Chat,
   GitHubPullRequestStatus,
+  McpLiveStatus,
   UsageDateRange,
 } from "./types";
 
@@ -86,6 +87,10 @@ export const queryKeys = {
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
   mcpPresets: ["mcpPresets"] as const,
+  mcpLiveStatus: ["mcpLiveStatus"] as const,
+  mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
+  mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
+  mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
@@ -748,7 +753,77 @@ export function useMcpServers() {
 }
 
 export function useMcpPresets() {
-  return useQuery({ queryKey: queryKeys.mcpPresets, queryFn: mcpApi.presets });
+  return useQuery({
+    queryKey: queryKeys.mcpPresets,
+    queryFn: mcpApi.presets,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Live per-server MCP status keyed by server id. Reads the current snapshot
+ * once, then applies main's `mcp:statusChanged` pushes; it never polls. A
+ * change in sign-in health refreshes the preset list's readiness.
+ */
+export function useMcpLiveStatus() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const unsubscribe = mcpApi.onStatusChanged((status) => {
+      let signInChanged = false;
+      queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
+        const previous = current.find((entry) => entry.serverId === status.serverId);
+        signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
+        const others = current.filter((entry) => entry.serverId !== status.serverId);
+        return status.removed ? others : [...others, status];
+      });
+      if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
+    });
+    return () => {
+      unsubscribe();
+      // Pushes sent while nothing listens are lost, so the cached snapshot is
+      // only trusted while subscribed: the next mount reads main's current one.
+      // Main answers that read after any push it sent earlier, so the snapshot
+      // is never older than the pushes that arrive before it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.mcpLiveStatus, refetchType: "none" });
+    };
+  }, [queryClient]);
+  const query = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity });
+  return useMemo(
+    () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),
+    [query.data],
+  );
+}
+
+/**
+ * A server's tools from its last discovery (never connects). Keyed by the live
+ * inventory revision (a digest of names and titles), so any rediscovery that
+ * changes the list refetches, even when the tool count is unchanged.
+ */
+export function useMcpToolList(serverId: string, toolsRevision: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.mcpToolList(serverId, toolsRevision),
+    queryFn: () => mcpApi.toolList(serverId),
+    staleTime: Infinity,
+  });
+}
+
+/** Local servers waiting for approval to run, keyed by server id. */
+export function useMcpLaunchApprovals() {
+  const query = useQuery({ queryKey: queryKeys.mcpLaunchApprovals, queryFn: mcpApi.launchApprovals, staleTime: 0 });
+  return useMemo(
+    () => new Map((query.data ?? []).map((approval) => [approval.serverId, approval] as const)),
+    [query.data],
+  );
+}
+
+/** Schedules and Bots that depend on a server; fetched when a confirmation needs them. */
+export function useMcpDependents(serverId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.mcpDependents(serverId ?? ""),
+    queryFn: () => mcpApi.dependents(serverId!),
+    enabled: Boolean(serverId),
+    staleTime: 0,
+  });
 }
 
 export function useExaConfig() {

@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import { getMcpPreset, serverFromPreset } from "../mcp-presets.js";
+import type { McpServer } from "../types.js";
 import {
   createSuggestConnectionTool,
+  isBotConnectionReady,
   type SuggestConnectionDeps,
 } from "./suggest-connection.js";
 
@@ -127,4 +130,41 @@ test("an aborted call appends nothing", async () => {
     tool.execute("c1", { pluginId: "notion", reason: "Notes." }, controller.signal),
   );
   assert.equal(cards.length, 0);
+});
+
+test("a plugin counts as connected only when its preset is enabled and signed in", async () => {
+  const notion = serverFromPreset(getMcpPreset("notion")!);
+  const composio = serverFromPreset(getMcpPreset("composio")!);
+  let servers: McpServer[] = [notion, composio];
+  const signedIn = new Set<string>();
+  const keys = new Set<string>();
+  const deps = {
+    listServers: async () => servers,
+    hasPresetKey: async (server: McpServer) => keys.has(server.id),
+    hasOAuthTokens: async (server: McpServer) => signedIn.has(server.id),
+  };
+  // Saved but never signed in: the Bot must still be able to suggest it.
+  assert.equal(await isBotConnectionReady("notion", deps), false);
+  signedIn.add(notion.id);
+  assert.equal(await isBotConnectionReady("notion", deps), true);
+  servers = [{ ...notion, enabled: false }, composio];
+  assert.equal(await isBotConnectionReady("notion", deps), false);
+  // Switched off for the model: the Bot can't use it, so it is not "connected".
+  servers = [{ ...notion, exposure: "hidden" }, composio];
+  assert.equal(await isBotConnectionReady("notion", deps), false);
+  servers = [{ ...notion, exposure: "direct", hiddenTools: ["search"] }, composio];
+  assert.equal(await isBotConnectionReady("notion", deps), true);
+  servers = [notion, composio];
+
+  // An API-key preset is connected only once its key is saved.
+  assert.equal(await isBotConnectionReady("composio", deps), false);
+  keys.add(composio.id);
+  assert.equal(await isBotConnectionReady("composio", deps), true);
+  // Apps reached through Composio are never reported: Aiden can't see inside it.
+  assert.equal(await isBotConnectionReady("gmail", deps), false);
+
+  // A record that is not a valid preset server is not usable.
+  servers = [{ ...notion, url: "https://attacker.invalid/mcp" }, composio];
+  assert.equal(await isBotConnectionReady("notion", deps), false);
+  assert.equal(await isBotConnectionReady("not-a-plugin", deps), false);
 });

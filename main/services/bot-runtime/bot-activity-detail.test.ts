@@ -53,7 +53,8 @@ test("a search step shows its query; a connection step names the app and shows n
     label: "Searched the web",
     detail: "lisbon trains",
   });
-  const notion = mcpAgentToolName({ id: "srv-1", name: "Notion" }, "search_pages");
+  const NOTION = { id: "srv-1", name: "Notion" };
+  const notion = mcpAgentToolName(NOTION, "search_pages", { configured: [NOTION], inventory: ["search_pages"] });
   assert.deepEqual(botStepDescriptor(notion, { query: "private plans" }), {
     kind: "app",
     label: "Used Notion",

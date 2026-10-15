@@ -21,6 +21,15 @@
   `test:serial`; registry `sourceScripts` point at those. Root
   `pretest`/`posttest` hooks are rejected by `validateRegistry`.
 - Duplicate proof: before 718 file runs (613 unique, 75 duplicated), after 613.
+- 2026-10-15 test-execution audit: ~40 files (test:preflight, command-system,
+  scheduled, google-provider, config-recovery, concentrate,
+  codex-auth-view-state) were unreachable from the serial graph and never ran.
+  They are now in `test:serial` and lanes (source 975 -> 1015 files).
+  `validateRegistry` now discovers test files on disk and requires each to be
+  in the serial graph, a `workflowScripts` entry, or the `manual` allowlist.
+  Duplicate prerequisite/preserved ids are rejected (the JSON had every
+  prerequisite twice, so the planner ran 26 builds instead of 13), and
+  `test:serial` no longer repeats its big tsx segment.
 
 ## Flakes (EXT-43)
 - Fixed: Tailscale controller tests used the production route lock on UDP

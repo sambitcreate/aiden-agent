@@ -5,10 +5,11 @@ import {
   type BotAccessView,
   type BotCapabilityCatalog,
 } from "../../renderer/shared/bot-capabilities.js";
-import type {
-  BotCreateInput,
-  BotDefinition,
-  BotUpdateInput,
+import {
+  resolveBotChatActivity,
+  type BotCreateInput,
+  type BotDefinition,
+  type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
 import {
   BotCapabilityCatalogConflictError,
@@ -245,6 +246,8 @@ type BotApplicationPort = {
 
 export interface AidenRemoteBotServiceOptions {
   application: BotApplicationPort;
+  /** Contract revision 30 (`bot-activity-v1`): Bot detail carries `chatActivity` and `PATCH` accepts it. */
+  chatActivity?: boolean;
   chatStore: { get(chatId: string): Promise<Chat | null> };
   /** Permanently erases a Bot (the durable session's `deleteBot`). */
   deleteBot?(botId: string): Promise<void>;
@@ -283,6 +286,11 @@ export class AidenRemoteBotService {
 
   constructor(private readonly options: AidenRemoteBotServiceOptions) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
+  }
+
+  /** Revision 30: whether Bot detail carries `chatActivity` and `PATCH` accepts it. */
+  get supportsChatActivity(): boolean {
+    return this.options.chatActivity === true;
   }
 
   /** Shared with the durable-session routes so every Bot POST uses one ledger. */
@@ -472,6 +480,7 @@ export class AidenRemoteBotService {
       access: parseAidenRemoteBotAccessView(access),
       ...(modelSelection ? { modelSelection } : {}),
       ...(visionModelSelection ? { visionModelSelection } : {}),
+      ...(this.supportsChatActivity ? { chatActivity: resolveBotChatActivity(bot.chatActivity) } : {}),
     });
   }
 
@@ -665,7 +674,8 @@ export class AidenRemoteBotService {
     audienceId?: string,
   ): Promise<AidenRemoteBotDetail> {
     const parsed = parseRequest(
-      parseAidenRemoteBotIdentityPatchRequest,
+      (value: unknown) =>
+        parseAidenRemoteBotIdentityPatchRequest(value, { allowChatActivity: this.supportsChatActivity }),
       input,
       "The Bot identity update is invalid.",
     );
@@ -693,6 +703,8 @@ export class AidenRemoteBotService {
           : existing.description ? { description: existing.description } : {}),
         instructions: parsed.instructions ?? existing.instructions,
         avatar: recipe(parsed.avatar ?? existing.avatar),
+        // Absent keeps the saved choice (slice B ruling 2); only an explicit pick changes it.
+        ...(parsed.chatActivity ? { chatActivity: parsed.chatActivity } : {}),
       });
       this.options.notifyBotsChanged?.(updated.id);
       return this.detail(updated, audienceId);

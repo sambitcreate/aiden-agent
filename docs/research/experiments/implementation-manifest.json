@@ -1,0 +1,46 @@
+{
+  "evidenceKind": "local-uncommitted-implementation-provenance",
+  "baselineCommit": "203a8f2082aaa60c3d22bc8b464a7f29541606dd",
+  "patch": "docs/research/experiments/implementation.patch",
+  "patchSha256": "81cdd9350c85cc8f38a0955039457f4e4e3db5ef838dd4c1736c613e22b8c2a6",
+  "cleanBaselinePatchCheck": "passed using temporary index; current index untouched",
+  "filesSha256": {
+    "android/app/src/test/java/sbtbiswas/AidenOnTheGo/AidenChatTest.kt": "a8287e1c3c08a6db37f4f3c558d153bbfd342c8471f64b8c507dd9a2e5df1d7a",
+    "ios/AidenOnTheGoTests/AidenChatTests.swift": "26c1eacecdd4e10776b8b92b929fe47d895842ebc6d64822b8076406100d5b94",
+    "main/services/assistant/automation-runtime-contract.test.ts": "1bb9f7546e1d1aa0c53cc91f04a0f56e0d576eaf564e60d22d80d7f7435c2dd1",
+    "main/services/assistant/tool-loop-guard.test.ts": "dfd1008d49e11d0fe64e2272f4eded85c96af0f1168cb1a33e8f9853bbaac160",
+    "main/services/coding-tools.test.ts": "a91ee4649683d76ee51e7437a8a0fa8c5bd0d090808c0aac2c3c6cdc202a3d63",
+    "main/services/coding-tools.ts": "64ded69305aed4d62694cbda65e17f85655e670b655b51e400f977bcb4c7f2be",
+    "main/services/generation-context.test.ts": "bf8a73edaba5970dd8bb18f8a2b629753c2e6ac3ab3082d6fc357707d2052038",
+    "main/services/generation-context.ts": "873cabae72d8caa85960aafb941c975d8848fb67d26224decab7fb0ecb241173",
+    "main/services/llm-client.ts": "210deee3c65c463448027739d24ab41dbea31526dffb9dcf504ad92a8eb9c6d7",
+    "main/services/pi-agent-runtime-harness.test.ts": "b86a97acc3f2b92419cb9c852bf2485fc112d4e92106acb37bc1cc1fb846b01e",
+    "main/services/pi-codemode.test.ts": "55e1436b19c923d434c824abb649be7cb2460a73b7ad8da62ac7788e819b7d75",
+    "main/services/pi-codemode.ts": "1d3381a1e667f5391883d7877f5356318a5677a7e21e907d7cf23bae8fabc724",
+    "main/services/pi-compaction-core.test.ts": "ee833d083a96a859b4cb7ffc7ea0f7de4c147def919eb33d944445f447ad83e9",
+    "main/services/pi-compaction-core.ts": "8b5abd2b7de551619e595a1af4af1ded55d1afbbb4a6c632b584360535e8fe5d",
+    "main/services/pi-session-port.test.ts": "a6704c927aacf28f5c8ac67f00baf12b6cc5aa6fd110c1f89874d1bd340fd5e4",
+    "main/services/pi-session-port.ts": "1b617ba296fc23b07ff16c575dcece3d97d12f82ca63d9f662135cacf5dbd77c",
+    "main/services/pi-tool-discovery.test.ts": "fae8f8a6df940c08be895d06cff36e27295a0f66bade5068f03d7899110831d6",
+    "main/services/pi-tool-discovery.ts": "d1ce020efbf01c89394950e9b0647fc164c69cb5e1a84b5086813cb455837202",
+    "main/services/pi-turn-context.ts": "b806111b70eada65f066d9333f8f4aa832e90d08b706da1dd969ddcf43274855",
+    "main/services/pi-upgrade-evaluation.test.ts": "6531d211b1c3878243f26f9aa37a0516fe38487c851e0de21e1ceb2f4e78b17b",
+    "main/services/pi-upgrade-replay-runner.ts": "564357716224a62d1c2d60c32c3c010c1a78c7be8fc2620b50759cd91a6b9149",
+    "main/services/subagents/subagent-shell.test.ts": "e9dd58588782c7d0199fde382091dcff9e586f479238cd9e5353028069ebf674",
+    "main/services/subagents/subagent-shell.ts": "a474c152ca991b451b152ebb499a3ae529b858ed29b9a501a3ef515a98fce497",
+    "main/services/tool-output-store.test.ts": "7e791f8977eacb71ab0ddd2b705a61c4d0749c20a14699b770d22fc3a29b1a37",
+    "packages/cli/src/daemon-chats.ts": "1226eff0f6792d47558be7087b41e4b3d4497cd7d932b4f84931b9448dca124c",
+    "packages/cli/src/extensions/todo.ts": "c7ce99135dbd5717063af2503fae4c3a574e51c78b5064dfe389e43392a75c26",
+    "packages/cli/src/parity-test-api.ts": "c471f1c596064ecac6fd333a3f6852d9e4c1d64dcae4fca75b3ed8603f249766",
+    "packages/cli/src/subagent-process.ts": "da4f89d4d5277dd984f7862920169abb371c0453c3068784201829af7e6481f1",
+    "packages/cli/tests/parity.test.mjs": "9e40afd9fd9e190c028f935e0125409d47d988aa03b9a241643de0d279edcad5"
+  },
+  "lockfilesSha256": {
+    "package-lock.json": "8f6a1f2461929b956fa07763319d41d306b2efc618ddd19c3100545931ab7c48",
+    "packages/cli/package-lock.json": "e5f521e9abb9c92b0a459dca777051cf4d2d5e2e73733e32968adf5ffdc953d0"
+  },
+  "limitations": [
+    "Local source artifact, not a commit, CI receipt, rollout receipt or release.",
+    "Narrative report, plans index and research scripts are preserved separately; implementation patch covers source and behavioral tests only."
+  ]
+}

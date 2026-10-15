@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
+import { readRegistry } from "./ci-test-registry.mjs";
 import { buildPlan, executePlan, parseArguments } from "./run-ci-tests.mjs";
 
 // Fixture lanes run small Node scripts instead of tsx so the runner's
@@ -85,4 +86,25 @@ test("the default plan runs each unit file once across lanes", () => {
   assert.deepEqual(plan.unitCommands.flatMap((command) => command.files).toSorted(), ["a.test.ts", "b.test.ts", "c.test.ts"]);
   assert.deepEqual(plan.prerequisites.map((entry) => entry.id), ["build"]);
   assert.deepEqual(plan.preserved.map((entry) => entry.id), ["mode"]);
+});
+
+test("the real registry schedules every build and preserved command exactly once", () => {
+  const registry = readRegistry();
+  const counts = (entries) => {
+    const tally = new Map();
+    for (const entry of entries) tally.set(JSON.stringify(entry.command), (tally.get(JSON.stringify(entry.command)) ?? 0) + 1);
+    return [...tally.values()];
+  };
+  for (const argumentsList of [[], ["--parallel"], ["--lane", "core-git"], ["--lane", "runtime-subagents"], ["--lane", "renderer-other"]]) {
+    const plan = buildPlan(registry, parseArguments(argumentsList));
+    const label = argumentsList.join(" ") || "default";
+    assert.ok(plan.prerequisites.length > 0, label);
+    assert.ok(counts(plan.prerequisites).every((count) => count === 1), `${label}: a prerequisite runs more than once`);
+    assert.ok(counts(plan.preserved).every((count) => count === 1), `${label}: a preserved command runs more than once`);
+    const required = new Set([
+      ...plan.lanes.flatMap((lane) => lane.prerequisites ?? []),
+      ...plan.preserved.flatMap((entry) => entry.requires ?? []),
+    ]);
+    assert.deepEqual(plan.prerequisites.map((entry) => entry.id).toSorted(), [...required].toSorted(), label);
+  }
 });

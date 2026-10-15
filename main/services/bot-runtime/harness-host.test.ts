@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { AssistantEntry, createRegistry } from "@earendil-works/pi-durable";
@@ -212,6 +213,43 @@ test("(f) a corrupt session file is moved aside and a fresh conversation opens",
     // The notice is one-time.
     const again = await host.open("bot-corrupt");
     assert.equal(again.recoveredCorruptFile, undefined);
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(g) a storage failure drops the failed session, reports it, and the Bot reopens with its history", async () => {
+  const profile = tempProfile();
+  const fauxModels = createFauxModels([fauxAssistantMessage("before"), fauxAssistantMessage("after")]);
+  const reports: unknown[] = [];
+  const host = await hostFor(profile, fauxModels, { onReport: (_botId, error) => reports.push(error) });
+  try {
+    const first = await host.open("bot-fail");
+    await first.conversation.configure({ model: FAUX_MODEL_REF }, ctx);
+    await (await first.conversation.submit({ type: "input", content: "one" }, ctx)).wait(ctx);
+
+    // Another connection holds the write lock past SQLite's busy timeout, so the next commit throws.
+    const blocker = new DatabaseSync(path.join(profile, "bots", "bot-fail", BOT_SESSION_FILE));
+    try {
+      blocker.exec("BEGIN EXCLUSIVE");
+      await assert.rejects(first.conversation.submit({ type: "input", content: "lost" }, ctx));
+      await waitFor(() => !host.isOpen("bot-fail"), { what: "failed session eviction", timeoutMs: 15_000 });
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+    }
+    assert.equal(reports.length > 0, true, "the storage failure reaches onReport");
+
+    const reopened = await host.open("bot-fail");
+    assert.notEqual(reopened.harness, first.harness, "a fresh session replaces the failed one");
+    assert.equal(reopened.conversation.id, first.conversation.id);
+    await (await reopened.conversation.submit({ type: "input", content: "two" }, ctx)).wait(ctx);
+    const view = await reopened.conversation.context(ctx);
+    assert.deepEqual(
+      view.entries.filter((entry) => entry.kind === "pi.user").length,
+      2,
+      "committed history survives; the failed submission was never committed",
+    );
   } finally {
     await host.shutdown();
   }

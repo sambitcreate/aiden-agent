@@ -1997,6 +1997,41 @@ final class AidenBotContractTests: XCTestCase {
         ).supportsBotCards)
     }
 
+    /// Revision 30: `bot:activity` is negotiated like `bot:cards`, and the phone
+    /// shows the activity UI only with both the Mac's token and this device's grant.
+    func testBotActivityNeedsTheMacsFeatureAndThisDevicesGrant() throws {
+        let response = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteDeviceCapabilitiesUpdateResponse.self,
+            from: Data(#"{"capabilities":["server:read","bot:read","bot:activity"]}"#.utf8)
+        )
+        XCTAssertTrue(response.capabilities.contains(.botActivity))
+
+        let server = try XCTUnwrap(try sharedFixtureObject()["server"] as? [String: Any])
+        let features = try XCTUnwrap(server["features"] as? [String])
+        let granted = try XCTUnwrap(server["capabilities"] as? [String])
+        let supported = try XCTUnwrap(server["serverCapabilities"] as? [String])
+        func decoded(feature: Bool, offered: Bool, grant: Bool) throws -> AidenServer {
+            var object = server
+            object["features"] = feature ? features + ["bot-activity-v1"] : features
+            object["serverCapabilities"] = offered ? supported + ["bot:activity"] : supported
+            object["capabilities"] = grant ? granted + ["bot:activity"] : granted
+            return try AidenRemoteJSONDecoder.decode(AidenServer.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+
+        let neither = try decoded(feature: false, offered: false, grant: false)
+        XCTAssertFalse(neither.offersBotActivity, "an older Mac does not offer the opt-in")
+        XCTAssertFalse(neither.supportsBotActivity)
+        let featureOnly = try decoded(feature: true, offered: true, grant: false)
+        XCTAssertTrue(featureOnly.offersBotActivity, "the phone may ask for it")
+        XCTAssertFalse(featureOnly.supportsBotActivity, "but has not been granted it yet")
+        XCTAssertFalse(try decoded(feature: false, offered: true, grant: true).supportsBotActivity, "a grant without the token")
+        XCTAssertTrue(try decoded(feature: true, offered: true, grant: true).supportsBotActivity)
+        XCTAssertFalse(
+            try decoded(feature: true, offered: false, grant: false).offersBotActivity,
+            "the token alone is no offer to ask for the grant"
+        )
+    }
+
     func testRevision27ShapesFailClosedLikeTheHostParsers() throws {
         let raw = try sharedFixtureObject()
         let memory = try XCTUnwrap(raw["botMemory"] as? [String: Any])

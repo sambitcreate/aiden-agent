@@ -46,11 +46,13 @@ test("Aiden palettes replace pi's built-in dark and light themes", () => {
 	const light = JSON.parse(readFileSync(join(appDir, "src", "modes", "interactive", "theme", "light.json"), "utf-8"));
 	assert.equal(dark.name, "dark");
 	assert.equal(light.name, "light");
-	// Accent anchors from renderer/shared/appearance.ts THEME_PRESETS.
-	assert.equal(dark.vars.accent, "#3E97F6");
-	assert.equal(light.vars.accent, "#006AD6");
-	assert.equal(dark.vars.text, "#D1D4DA");
-	assert.equal(light.vars.text, "#3D3F41");
+	// themes.test.mjs owns palette fidelity to appearance.ts; here the bundle
+	// must carry the generated builtins rather than pi's originals.
+	const piThemeDir = join(pkgDir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "modes", "interactive", "theme");
+	for (const [name, bundled] of [["dark", dark], ["light", light]]) {
+		assert.deepEqual(bundled, JSON.parse(readFileSync(join(pkgDir, "themes", "builtin", `${name}.json`), "utf-8")));
+		assert.notDeepEqual(bundled, JSON.parse(readFileSync(join(piThemeDir, `${name}.json`), "utf-8")));
+	}
 });
 
 test("all theme presets and pi originals ship beside the bundle", () => {
@@ -113,10 +115,11 @@ test("pi telemetry is removed, not just disabled", () => {
 	// The entry forces PI_TELEMETRY=0, which wins over settings and kills both
 	// the pi.dev report-install ping and pi's attribution headers.
 	assert.match(cliBundle, /PI_TELEMETRY["']?\]?\s*=\s*["']0["']/, "entry must force PI_TELEMETRY=0");
-	// The settings default flips to off so /config reflects reality.
-	// minifySyntax rewrites `?? false` / `?? true` as `??!1` / `??!0`
-	assert.ok(everything.includes("enableInstallTelemetry??!1"), "install telemetry must default off");
-	assert.ok(!everything.includes("enableInstallTelemetry??!0"), "stock default-on telemetry must not survive");
+	// The settings default flips to off so /config reflects reality (the
+	// parity suite checks the real SettingsManager reads it as false).
+	// minifySyntax rewrites `false` / `true` as `!1` / `!0`.
+	assert.ok(everything.includes("enableInstallTelemetry:!1"), "install telemetry must default off");
+	assert.ok(!everything.includes("enableInstallTelemetry:!0"), "stock default-on telemetry must not survive");
 	assert.ok(!everything.includes("reportInstallTelemetry(VERSION)"), "ping call sites must be patched out");
 	assert.ok(!everything.includes("pi.dev/api/report-install"), "the telemetry endpoint must not ship");
 	// The startup wordmark: 5-row solid-block AIDEN banner (oh-my-pi style),

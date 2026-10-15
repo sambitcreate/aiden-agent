@@ -655,6 +655,16 @@ export function RemoteChatPane({
                 </Text>
               </ControlNotice>
             ) : null}
+            {state?.unresolvedFork ? (
+              <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => { void control?.dismissFork().catch(() => toast.error("Couldn’t dismiss this saved fork.")); }}>I checked the host</Button>}>
+                <Text as="p" variant="small">Couldn't confirm the earlier fork. Check this computer's chat list before creating another. Repeating the same fork can recover it within the safe retry window.</Text>
+              </ControlNotice>
+            ) : null}
+            {state?.recoveryError ? (
+              <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => void control?.restore()}>Retry recovery</Button>}>
+                <Text as="p" variant="small">{state.recoveryError}</Text>
+              </ControlNotice>
+            ) : null}
             {unresolved ? (
               <ControlNotice
                 tone="warning"
@@ -666,14 +676,14 @@ export function RemoteChatPane({
                       variant="muted"
                       size="small"
                       disabled={unresolved.retrying}
-                      onClick={() => control?.dismissUnresolved()}
+                      onClick={() => { void control?.dismissUnresolved().catch(() => toast.error("Couldn’t dismiss this saved request. Try again.")); }}
                     >
                       Dismiss
                     </Button>
                     <Button
                       variant="accent"
                       size="small"
-                      disabled={unresolved.retrying || refusal(unresolved.kind === "submitInput" ? "steer" : unresolved.kind) !== null}
+                      disabled={!unresolved.retryAllowed || unresolved.retrying || refusal(unresolved.kind === "submitInput" ? "steer" : unresolved.kind) !== null}
                       onClick={retry}
                     >
                       {unresolved.retrying ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
@@ -691,7 +701,7 @@ export function RemoteChatPane({
                   </Text>
                 ) : null}
                 <Text variant="small" color="tertiary" as="p" className="mt-1">
-                  Retry checks with that Mac and never applies it twice.
+                  Retry uses the original request within its safe delivery window. Nothing is resent automatically.
                 </Text>
               </ControlNotice>
             ) : null}
@@ -720,7 +730,7 @@ export function RemoteChatPane({
                 key={composerKey}
                 chatId={composerKey}
                 surfaces={composerSurfacesFor(capabilities ?? new Set())}
-                ready={sendRefusal === null && !unresolved && !summaryHold}
+                ready={sendRefusal === null && !state?.recovering && !unresolved && !summaryHold}
                 readinessMessage={
                   sendRefusal ??
                   (unresolved ? "Retry or dismiss the message above before sending another." : (summaryHold ?? undefined))

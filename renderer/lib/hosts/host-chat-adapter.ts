@@ -88,6 +88,8 @@ export interface HostChatObserver {
 }
 
 export interface HostChatSendInput {
+  /** Main must bind this locally saved request to its original pairing before sending. Never sent on the wire. */
+  savedIntent?: boolean;
   text: string;
   /** Minted once per user intent and reused by a retry, so a lost acknowledgement never starts a second turn. */
   idempotencyKey: string;
@@ -115,12 +117,16 @@ export interface HostChatTurnReceipt {
 }
 
 export interface HostChatCancelInput {
+  /** Main must bind this locally saved request to its original pairing before sending. Never sent on the wire. */
+  savedIntent?: boolean;
   /** The run to stop (a local stream ID or a host run ID), wherever it was started. */
   runId: string;
   idempotencyKey?: string;
 }
 
 export interface HostChatApprovalInput {
+  /** Main must bind this locally saved request to its original pairing before sending. Never sent on the wire. */
+  savedIntent?: boolean;
   /** The run that raised the prompt. A paired host requires it. */
   runId?: string;
   approvalId: string;
@@ -139,6 +145,8 @@ export type HostChatApprovalResult =
 
 export interface HostChatQuestionInput {
   source?: "remote";
+  /** Main must bind this locally saved request to its original pairing before sending. Never sent on the wire. */
+  savedIntent?: boolean;
   runId?: string;
   promptId: string;
   response: AskUserQuestionResponseV1;
@@ -151,6 +159,8 @@ export interface HostChatQuestionResult {
 }
 
 export interface HostChatInput {
+  /** Main must bind this locally saved request to its original pairing before sending. Never sent on the wire. */
+  savedIntent?: boolean;
   runId: string;
   mode: ChatRunInputMode;
   text: string;
@@ -164,6 +174,8 @@ export interface HostChatRenameInput {
 }
 
 export interface HostChatForkInput {
+  /** Main must bind this locally saved request to its original pairing before sending. Never sent on the wire. */
+  savedIntent?: boolean;
   messageId: string;
   position: ChatForkPosition;
   /** Fork with summary: the host summarizes what the fork leaves out. */

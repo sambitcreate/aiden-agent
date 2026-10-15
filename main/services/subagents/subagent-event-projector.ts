@@ -206,7 +206,8 @@ function safeToolMilestone(toolName: string): {
         milestone: "inspecting",
       };
     default:
-      return /__.*_[a-f0-9]{12}$/u.test(toolName)
+      // A child's only `<server>__<tool>` names are its scoped MCP tools.
+      return toolName.includes("__")
         ? {
             activity: "Preparing connector access",
             milestone: "inspecting",

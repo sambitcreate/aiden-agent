@@ -60,3 +60,13 @@ test("only IPv4 addresses are kept, the latest per installation, for a bounded n
   assert.equal(book.address("install_a"), undefined, "the oldest installation is dropped");
   assert.equal(book.address(`install_${MAX_PEER_LAN_ADDRESSES - 1}`), "10.0.0.1");
 });
+
+test("authenticated interface hints retain all bounded alternatives and can be discarded", async () => {
+  const book = new PeerLanAddresses(resolver({}));
+  book.rememberAll("studio", ["192.168.1.4", "10.1.0.7", "192.168.1.4", "fe80::1"]);
+  assert.deepEqual(await resolve(book.lookupFor("studio"), "studio.local", { all: true }), {
+    error: null, address: [{ address: "192.168.1.4", family: 4 }, { address: "10.1.0.7", family: 4 }],
+  });
+  book.forget("studio");
+  assert.equal((await resolve(book.lookupFor("studio"), "studio.local")).error?.code, "ENOTFOUND");
+});

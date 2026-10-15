@@ -1,3 +1,4 @@
+import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
@@ -46,8 +47,12 @@ import type {
   GitWorktree,
   LocalVoiceModel,
   McpServer,
+  McpLiveStatus,
   McpPresetState,
+  McpServerDependents,
   McpStatus,
+  McpToolSummary,
+  McpPendingLaunchApproval,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -157,6 +162,7 @@ import {
   parseChatReadResponse,
   rememberChatReadReconciliation,
   rememberDetachedLifecycleStream,
+  rememberOwnGenerationStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
@@ -267,6 +273,11 @@ export const localRunsApi = {
 };
 
 export const peerHostsApi = {
+  removeRoute: (hostId: string, routeId: string) => invoke<void>("remote:peerRouteRemove", hostId, routeId),
+  restoreRoutes: (hostId: string) => invoke<void>("remote:peerRoutesRestore", hostId),
+  pendingIntents: (hostId: string, chatId: string) => invoke<SavedChatIntent[]>("remote:peerIntentsList", hostId, chatId),
+  saveIntent: (intent: SavedChatIntent) => invoke<void>("remote:peerIntentsPut", intent),
+  removeIntent: (hostId: string, chatId: string, key: string) => invoke<void>("remote:peerIntentsRemove", hostId, chatId, key),
   list: () => invoke<PeerHostView[]>("remote:peersList"),
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
@@ -281,8 +292,8 @@ export const peerHostsApi = {
     invoke<unknown>("remote:peerOperation", hostId, operation),
   onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
   /** Like `operation`, but failures come back as typed outcomes instead of throwing. */
-  call: (hostId: string, operation: PeerOperation) =>
-    invoke<PeerOperationOutcome>("remote:peerCall", hostId, operation),
+  call: (hostId: string, operation: PeerOperation, admission?: { savedIntent: boolean }) =>
+    invoke<PeerOperationOutcome>("remote:peerCall", hostId, operation, admission),
   statuses: () => invoke<PeerHostStatus[]>("remote:peerHostStatuses"),
   /** Last-known rows; null when the host is disabled or unknown. */
   feed: (hostId: string) => invoke<PeerHostFeedSnapshot | null>("remote:peerHostFeed", hostId),
@@ -551,12 +562,31 @@ export const mcpApi = {
   /** Save (or clear, with an empty string) a preset's API key. Keys never come back. */
   setPresetKey: (serverId: string, key: string) =>
     invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
-  save: (server: McpServer) => invoke<McpServer>("mcp:save", server),
+  /** Resolves to the stored record (env/header values replaced by markers). `approveLaunch`: the editor, which shows the command, approves a local server to run. `fromEditor`: an editor save (sign-in and provider consent included), so kept values may follow an address it changed. */
+  save: (server: McpServer, options?: { approveLaunch?: boolean; fromEditor?: boolean }) => invoke<McpServer>("mcp:save", server, options),
+  /** Local servers not approved to run on this device (added or changed outside Aiden). */
+  launchApprovals: () => invoke<McpPendingLaunchApproval[]>("mcp:launchApprovals"),
+  approveLaunch: (id: string, fingerprint: string) => invoke<{ approved: true }>("mcp:approveLaunch", id, fingerprint),
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) => invoke<{ authorized: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+  /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
+  cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
+  /** Forget this server's OAuth session and disconnect it. */
+  signOut: (id: string) => invoke<{ authorized: false }>("mcp:signOut", id),
+  /** Connect to an unsaved draft without persisting it. `apiKey` is a pasted, unsaved preset key. */
+  testDraft: (server: McpServer, apiKey?: string) => invoke<McpStatus>("mcp:testDraft", server, apiKey),
+  /** Schedules and Bots that rely on this server. */
+  dependents: (id: string) => invoke<McpServerDependents>("mcp:dependents", id),
+  /** Current per-server live status; changes arrive on `mcp:statusChanged`. */
+  liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
+  /** The server's tools from its last discovery (never connects); null when none yet. */
+  toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
+  onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
+    onNotification<McpLiveStatus>("mcp:statusChanged", handler),
+  oauthStatus: (id: string) =>
+    invoke<{ authorized: boolean; needsSignIn?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
   providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
@@ -887,6 +917,11 @@ export const browserApi = {
     ),
   onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+  linkPreference: () =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:link-preference"),
+  setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
+  openExternal: (url: string) => invoke<void>("browser:open-external", url),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
@@ -1592,6 +1627,7 @@ export function startGeneration(
   messageTurnId: string,
 ): GenerationHandle {
   const streamId = messageTurnId;
+  rememberOwnGenerationStream(streamId);
   const stream = subscribeGenerationStream(
     streamId,
     { chatId: params.chatId, workspaceId: params.workspaceId },

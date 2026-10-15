@@ -59,9 +59,14 @@ fun AidenBotMemoryScreen(
     val client by coordinator.client.collectAsStateWithLifecycle()
     val name = rememberAidenBotChatIdentity(coordinator, botId, "").name
     val cl = client
-    val controller = remember(botId, cl) { cl?.let { AidenBotMemoryController(botId, AidenRemoteBotMemoryTransport(it)) } }
-    LaunchedEffect(controller) { controller?.load() }
-    val ui = controller?.state?.collectAsStateWithLifecycle()?.value
+    // One page per pairing; it reads the client at each request and waits for the Mac, so it
+    // opens on skeletons, never a "connect" screen, and its edits apply at once (R15).
+    val saveHost = remember(cl) { coordinator.botSaveHost() }
+    val controller = remember(botId, saveHost) {
+        AidenBotMemoryController(botId, AidenRemoteBotMemoryTransport(saveHost.client), waitForConnection = saveHost.waitForConnection)
+    }
+    LaunchedEffect(controller, cl) { controller.load() }
+    val ui = controller.state.collectAsStateWithLifecycle().value
     var confirmingErase by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -78,14 +83,8 @@ fun AidenBotMemoryScreen(
             )
         }
     ) { padding ->
-        val view = ui?.view
+        val view = ui.view
         when {
-            controller == null || ui == null -> AidenEmptyState(
-                icon = Icons.Default.CloudOff,
-                title = stringResource(R.string.bot_memory_title),
-                body = stringResource(R.string.bot_memory_connect),
-                modifier = Modifier.fillMaxSize().padding(padding)
-            )
             view == null && ui.isLoading -> AidenBotMemorySkeleton(Modifier.padding(padding))
             view == null -> AidenEmptyState(
                 icon = Icons.Default.CloudOff,
@@ -131,14 +130,14 @@ fun AidenBotMemoryScreen(
                 ui.actionError?.let { error ->
                     Text(
                         aidenBotMemoryActionErrorText(error),
-                        color = palette.danger,
+                        color = aidenBotErrorTextColor(),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
                 if (ui.eraseFailed) {
                     Text(
                         stringResource(R.string.bot_memory_erase_failed),
-                        color = palette.danger,
+                        color = aidenBotErrorTextColor(),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -152,8 +151,8 @@ fun AidenBotMemoryScreen(
         }
     }
 
-    val editing = ui?.editing
-    if (controller != null && editing != null) {
+    val editing = ui.editing
+    if (editing != null) {
         val groupName = when (editing.target) {
             AidenBotMemoryTarget.USER -> stringResource(R.string.bot_memory_about_you)
             AidenBotMemoryTarget.MEMORY -> stringResource(R.string.bot_memory_notes, name)
@@ -183,7 +182,7 @@ fun AidenBotMemoryScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     editing.error?.let { error ->
-                        Surface(color = palette.danger.copy(alpha = 0.12f), shape = MaterialTheme.shapes.medium) {
+                        Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium) {
                             Text(
                                 when (error) {
                                     AidenBotMemoryError.BLOCKED -> stringResource(R.string.bot_memory_error_blocked)
@@ -191,7 +190,7 @@ fun AidenBotMemoryScreen(
                                     AidenBotMemoryError.NOT_FOUND -> stringResource(R.string.bot_memory_error_not_found)
                                     AidenBotMemoryError.FAILED -> stringResource(R.string.bot_memory_error_failed)
                                 },
-                                color = palette.danger,
+                                color = aidenBotErrorTextColor(),
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(12.dp)
                             )
@@ -212,7 +211,7 @@ fun AidenBotMemoryScreen(
         )
     }
 
-    if (controller != null && confirmingErase) {
+    if (confirmingErase) {
         AlertDialog(
             onDismissRequest = { confirmingErase = false },
             title = { Text(stringResource(R.string.bot_memory_erase_title, name)) },
@@ -221,7 +220,7 @@ fun AidenBotMemoryScreen(
                 AidenDialogConfirmButton(
                     text = stringResource(R.string.bot_memory_erase),
                     destructive = true,
-                    enabled = ui?.isErasing != true,
+                    enabled = !ui.isErasing,
                     onClick = {
                         confirmingErase = false
                         scope.launch { controller.erase() }
@@ -331,7 +330,7 @@ private fun AidenBotMemoryRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
+                        text = { Text(stringResource(R.string.action_delete), color = aidenBotErrorTextColor()) },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                         onClick = {
                             showMenu = false

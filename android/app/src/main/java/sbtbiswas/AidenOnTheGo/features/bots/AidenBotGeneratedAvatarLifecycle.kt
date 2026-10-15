@@ -266,7 +266,7 @@ fun AidenBotGeneratedAvatarLifecycleView(
         if (error != null) {
             Text(
                 text = error ?: "",
-                color = MaterialTheme.colorScheme.error,
+                color = aidenBotErrorTextColor(),
                 style = MaterialTheme.typography.bodySmall
             )
         }

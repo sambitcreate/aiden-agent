@@ -61,7 +61,7 @@ export interface AidenRemoteTailscaleTakeoverReviewView {
 export interface AidenRemoteDeviceView {
   id: string;
   name: string;
-  type: "iphone" | "ipad" | "mac" | "linux";
+  type: "iphone" | "ipad" | "android" | "mac" | "linux";
   clientVersion: string;
   capabilities: string[];
   createdAt: number;

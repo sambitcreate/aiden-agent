@@ -1,3 +1,4 @@
+import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
@@ -621,6 +622,10 @@ export interface McpServer {
   /** Set when this record came from the built-in preset catalog (see mcp-presets.ts). */
   presetId?: string;
   enabled: boolean;
+  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
+  exposure?: McpExposure;
+  /** Raw remote tool names withheld from every model surface. */
+  hiddenTools?: string[];
 }
 
 /** An Agent Skill — instructions exposed to the model as a callable tool. */

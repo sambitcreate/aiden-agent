@@ -19,6 +19,7 @@ import { CodexProviderSettings } from "./settings/codex-provider-settings";
 import { OnboardingOpenAiLogin } from "./onboarding-openai-login";
 import { Button, Dialog, Field, Input, Text, toast } from "./ui";
 import { appApi, botsApi, profileApi, providersApi } from "../lib/ipc";
+import { useBrowserSurfaceBlocker } from "../lib/link-opener";
 import {
   clearLegacyOnboardingCompletion,
   markOnboardingComplete,
@@ -258,6 +259,11 @@ export function OnboardingFlow({
 
   /** The starter Bot Start Chat made; its chat opens when onboarding finishes. */
   const startedBotIdRef = React.useRef<string | null>(null);
+
+  // While this overlay is drawn over the app, links behind it (e.g. in a
+  // provider editor) must go straight to the system browser, never prompt or
+  // open a tab hidden behind the overlay.
+  useBrowserSurfaceBlocker(open);
 
   if (!open) return null;
   const visibleSteps = onboardingFlowSteps(botsStepVisible);
@@ -992,7 +998,8 @@ export function OnboardingFlow({
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
                       Phone and tablet access starts off. After setup, choose Connect a device in
                       Settings → Connections; Aiden must stay running, and Tailscale is
-                      optional.
+                      optional. Paired computers can switch between verified local-network and Tailscale
+                      routes. If delivery is uncertain, review the saved request before choosing Retry.
                     </Text>
                   </div>
                 </div>

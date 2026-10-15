@@ -9,10 +9,10 @@ import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import { homedir } from "node:os";
 import { open } from "node:fs/promises";
-import { resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
+import { createBotMcpScopeCache, resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
 import { resolveBotCapabilitySkills } from "../../../main/services/bot-skill-inventory.js";
-import { exactBotMcpToolNames } from "../../../main/services/bot-tool-authority.js";
-import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
+import { botMcpLiveToolMatchesGrant, exactBotMcpToolNames } from "../../../main/services/bot-tool-authority.js";
+import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { createCliMcpPool, mcpCredentialSignature } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
 import { join } from "node:path";
@@ -107,6 +107,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       },
     });
   }
+  const mcpScopeCache = createBotMcpScopeCache({ generation: () => inventoryLeases.revision() });
   const catalog = createBotCapabilityCatalogMainService(createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: () => keyStore.load(), loadNoticeStatus: (id) => capabilities.noticeStatus(id),
     listProviders: () => listCliProviders(agentDir),
@@ -116,7 +117,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     })).digest("hex"),
     listMcpServers: mcp.listServers,
     inspectMcpScopes: (signal) => resolveBotMcpInventory(signal, { listServers: mcp.listServers, inspectTools: mcp.inspectTools,
-      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations }),
+      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations, scopeCache: mcpScopeCache }),
     listSkills: (target) => skills(target?.botId),
     listApprovedLocations: async () => approvedRoots().map((item) => ({ sourceId: item.id, label: item.label, available: true,
       scopeFingerprint: botCapabilityFactsFingerprint({ device: item.device, inode: item.inode, policyRevision: item.policyRevision }) })),
@@ -164,14 +165,17 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     const snapshot = await catalog.snapshotForRuntime({ botId: authority.botId, signal: admission.signal,
       retainedBindings: retained ? [retained] : undefined, retainedProviders: [authority.provider, ...(authority.visionProvider ? [authority.visionProvider] : [])] });
     const servers = await mcp.listServers();
-    const names = exactBotMcpToolNames(authority, snapshot.resources.connections, (id, name) => {
-      const server = servers.find((item) => item.id === id);
-      if (!server) throw new Error("Selected MCP server disappeared.");
-      return mcpAgentToolName(server, name);
-    });
+    const built: Awaited<ReturnType<typeof mcp.agentTools>> = [];
     for (const server of servers.filter((item) => authority.connections.some((grant) => grant.sourceId === item.id))) {
-      selected.push(...(await mcp.agentTools(server, admission.signal)).filter((tool) => names.has(tool.name)));
+      built.push(...(await mcp.agentTools(server, admission.signal)));
     }
+    // Joined by MCP identity, so the built tools' real names are what is granted.
+    const names = exactBotMcpToolNames(authority, snapshot.resources.connections, built);
+    // A same-identity tool is not enough: the live tool must carry the grant's exact schema and effect.
+    selected.push(...built.filter((tool) => {
+      const grant = names.get(tool.name);
+      return grant !== undefined && botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool));
+    }));
     const currentSkills = await skills(authority.botId);
     for (const grant of authority.skills) {
       const published = snapshot.resources.skills.find((skill) => skill.option.available && skill.sourceId === grant.sourceId && skill.exactFingerprint === grant.exactFingerprint);

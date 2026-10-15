@@ -61,18 +61,22 @@ import { composerPlaceholder } from "../lib/composer-placeholder";
 import { useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
+  completeSlashCommandToken,
   deriveSlashSession,
   failedSendAttachments,
   failedSendDraft,
   moveSlashSelectionId,
   pageSlashSelectionId,
+  parseSubmittedSlashCommand,
   rankSlashResults,
   slashActionCommitIsCurrent,
   slashActionDraftCommitIsCurrent,
+  slashCommandTakesArgument,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
   type SelectedSkillInvocation,
   type SlashResult,
+  type SlashSession,
   type SlashSessionTracker,
   selectedSkillComposerReducer,
   selectedSkillStatus,
@@ -1065,20 +1069,22 @@ export function Composer({
   );
 
   const selectSlashResult = React.useCallback(
-    async (result: SlashResult) => {
+    async (result: SlashResult, submittedSession?: SlashSession) => {
+      // A palette pick uses the live slash session; Send passes the command it parsed.
+      const session = submittedSession ?? slashSession;
       if (
         firstSendPendingRef.current ||
         slashActionPendingRef.current ||
-        !slashSession ||
-        result.kind !== slashSession.kind ||
+        !session ||
+        result.kind !== session.kind ||
         !slashResultSelectable(result)
       ) {
         return;
       }
       if (result.kind === "skill") {
         if (!skillScopeId) return;
-        const nextText = consumeSlashToken(text, slashSession);
-        const nextCaret = slashSession.tokenStart;
+        const nextText = consumeSlashToken(text, session);
+        const nextCaret = session.tokenStart;
         dispatchSkillSelection({
           type: "select",
           selected: {
@@ -1103,16 +1109,36 @@ export function Composer({
         });
         return;
       }
-      const argument = validateSlashCommandArgument(result.command, slashSession.argument);
+      const argument = validateSlashCommandArgument(result.command, session.argument);
       if (!argument.valid) {
         toast.info(argument.reason ?? "That command argument is invalid.");
         return;
       }
+      if (
+        !submittedSession &&
+        slashCommandTakesArgument(result.command) &&
+        !session.argument.trim()
+      ) {
+        // Picking a command that reads text after it fills in "/name " and waits;
+        // Send runs it with whatever follows.
+        const completion = completeSlashCommandToken(text, session, result.command);
+        setText(completion.text);
+        setSelection({ start: completion.caret, end: completion.caret });
+        dismissSlash();
+        setActiveSlashId(undefined);
+        requestAnimationFrame(() => {
+          const textarea = inputRef?.current;
+          if (!textarea) return;
+          textarea.focus({ preventScroll: true });
+          textarea.setSelectionRange(completion.caret, completion.caret);
+        });
+        return;
+      }
       const nextText =
         result.command.argument !== "none"
-          ? text.slice(0, slashSession.tokenStart)
-          : consumeSlashToken(text, slashSession);
-      const nextCaret = slashSession.tokenStart;
+          ? text.slice(0, session.tokenStart)
+          : consumeSlashToken(text, session);
+      const nextCaret = session.tokenStart;
       const expectedCommit = {
         draft: text,
         epoch: slashTracker.epoch,
@@ -1144,7 +1170,7 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, session).trim();
           const missingPromptMessage =
             instruction === "btw"
               ? "Add a question after /btw, then send."
@@ -1225,7 +1251,10 @@ export function Composer({
         return;
       }
       if (!attempt.handled) {
-        toast.info("That app action is unavailable right now.");
+        // Composer instructions already explained why they did not send.
+        if (result.command.action.kind !== "composer-instruction") {
+          toast.info("That app action is unavailable right now.");
+        }
         return;
       }
       // Composer instructions own their optimistic clear and guarded rollback.
@@ -1600,6 +1629,25 @@ export function Composer({
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
+    const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text) : null;
+    if (submittedCommand) {
+      const availability = slashCommandAvailability(submittedCommand.command, slashActionContext);
+      if (!availability.available) {
+        blockSend(availability.reason ?? "That command is unavailable right now.");
+        return;
+      }
+      await selectSlashResult(
+        {
+          kind: "command",
+          id: `slash-option-command-${submittedCommand.command.name}`,
+          command: submittedCommand.command,
+          score: 0,
+        },
+        submittedCommand.session,
+      );
+      return;
+    }
     const mode = isGenerating
       ? (busyModeOverride ?? busyMode)
       : hasQueuedMessages || queueDuringCompaction || queueForForkSummary

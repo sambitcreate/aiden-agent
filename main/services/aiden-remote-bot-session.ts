@@ -15,6 +15,14 @@
 //   `approval` frame, in the same order. Phones answer it by `waitId` through
 //   the shared `POST /approvals/{id}/respond` route (`respondApproval`),
 //   idempotent per request UUID; Computer Use can only be denied from a phone.
+// - Contract revision 30 (`bot-activity-v1`): devices holding `bot:activity`
+//   also get `activity` (the §5 phase, cut to `{ phase, app?, startedAt }`) and
+//   `queued` (the person's waiting messages) in the snapshot and as frames.
+//   Other devices get the state they already hold at those seqs. A waiting
+//   input shows only once the session classified it as the person's own, so a
+//   routine's or the self-intro's prompt never reaches a phone. The person's
+//   own messages also carry the `submissionId` they were sent as, so a phone
+//   settles its optimistic bubble exactly; other devices never see the key.
 // - Routines, connection requests and starter presets call their main services.
 
 import { randomUUID } from "node:crypto";
@@ -39,7 +47,12 @@ import {
 } from "../../renderer/shared/bot-routine-proposals.js";
 import type { BotMemoryService } from "./bot-memory/bot-memory-main.js";
 import {
+  AIDEN_REMOTE_BOT_ACTIVITY_APP_MAX_CHARS,
   AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES,
+  AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS,
+  AIDEN_REMOTE_BOT_QUEUED_MAX,
+  type AidenRemoteBotQueuedMessage,
+  type AidenRemoteBotSessionActivity,
   parseAidenRemoteBotMemory,
   parseAidenRemoteBotMemoryEditRequest,
   parseAidenRemoteBotRoutineProposalId,
@@ -53,6 +66,7 @@ import {
   AIDEN_REMOTE_BOT_PRESETS_MAX,
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS,
+  AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteBotConnectionRequest,
   parseAidenRemoteBotMessageRequest,
@@ -85,8 +99,21 @@ import { openCursorSse, sseFrame, type CursorSseHandle } from "./aiden-remote-ss
 import type { BotApprovals } from "./bot-runtime/bot-approvals.js";
 import type { BotQuestions } from "./bot-runtime/bot-questions.js";
 import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
-import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
-import { livePartialText, projectBotTranscript } from "./bot-runtime/live-projection.js";
+import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
+import { BotSessionError, type BotSessionErrorReason, type BotSessionState } from "./bot-runtime/bot-session-service.js";
+import type { BotLiveActivity } from "../../renderer/shared/bot-live.js";
+import { stopWithIntents, type BotTurnIntent, type BotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
+import {
+  liveBotActivity,
+  livePartialText,
+  liveQueuedMessages,
+  liveRunKey,
+  createBotRunStarts,
+  createQueuedInputClassifier,
+  projectBotTranscript,
+  type BotRunStarts,
+  type QueuedInputClassifier,
+} from "./bot-runtime/live-projection.js";
 import {
   botRoutineLabel,
   botRoutinePromptOf,
@@ -97,14 +124,33 @@ import {
 /** Kind of the typed connect card entry `suggest_connection` appends. */
 export { BOT_CONNECT_CARD_ENTRY_KIND } from "./bot-runtime/live-projection.js";
 const ctx = BACKGROUND_CONTEXT;
+/** The transcript window's own cap, applied on top of what the snapshot budget leaves it. */
 const MAX_SESSION_JSON_BYTES = 768 * 1_024;
+/**
+ * Serialized bytes one session snapshot's `session` object may take: the
+ * transport's SSE frame limit less a margin for the SSE id and event lines and
+ * the frame envelope (`protocolVersion`, `botId`, `epoch`, `seq`, `type`, at most
+ * about 1 KB with a 160-scalar `botId`). The snapshot allocates this budget in
+ * priority order (see `snapshot`).
+ */
+const SNAPSHOT_BUDGET_BYTES = AIDEN_REMOTE_MAX_SSE_FRAME_BYTES - 64 * 1_024;
+/**
+ * Serialized bytes the queued list may take. Oldest items first; the first one
+ * that would overflow ends the list, so the rest are left out of the projection
+ * (phones keep their own outbox copies). Text is never truncated.
+ */
+const MAX_QUEUED_JSON_BYTES = 256 * 1_024;
 const MAX_PENDING_FRAMES = 256;
 const PROJECTOR_IDLE_MS = 60_000;
+/** Pause before a failed queued-input classification is tried again (the desktop's throttle). */
+const CLASSIFY_RETRY_MS = 1_000;
+const WIRE_SUBMISSION_ID = /^[A-Za-z0-9._:-]{1,64}$/u;
 
 export interface AidenRemoteBotSessionRuntime {
   send(
     botId: string,
-    input: { text: string; requestId: string },
+    /** `whenBusy` while a turn runs: `steer` joins it, `followUp` (the default) runs after it. */
+    input: { text: string; requestId: string; whenBusy?: "steer" | "followUp" },
   ): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
@@ -112,11 +158,25 @@ export interface AidenRemoteBotSessionRuntime {
   stop(botId: string): Promise<BotSessionState>;
   state(botId: string): Promise<BotSessionState>;
   conversation(botId: string): Promise<Conversation>;
+  /**
+   * For each queued submission id it can find: `true` for a routine's input or
+   * the hidden self-intro, `false` for the person's own message. Ids it cannot
+   * find are left out (`BotSessionRuntime.quietInputs`).
+   */
+  quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
+  /**
+   * The person's own inputs placed in the running turn, by the `pi.user`
+   * entry each became (entry id → submission id); never a routine's input or
+   * the self-intro (`BotSessionRuntime.placedSubmissions`).
+   */
+  placedSubmissions(botId: string): Promise<ReadonlyMap<string, string>>;
 }
 
 export interface AidenRemoteBotSessionServiceOptions {
   /** The live Bot lookup and the shared idempotency ledger (`AidenRemoteBotService`). */
   bots: {
+    /** The Bot service projects and accepts Chat activity (`chatActivity: true`): half of `bot-activity-v1`. */
+    readonly supportsChatActivity?: boolean;
     bot(botId: string): Promise<BotDefinition>;
     summaryOf(botId: string): Promise<AidenRemoteBotSummary>;
     executeIdempotent<Result>(
@@ -130,6 +190,28 @@ export interface AidenRemoteBotSessionServiceOptions {
   questions?: Pick<BotQuestions, "pending" | "answer" | "onChange">;
   /** The Bot's waiting tool approvals (the same bridge the desktop answers through). */
   approvals?: Pick<BotApprovals, "pending" | "decide" | "onChange">;
+  /**
+   * Stop and Resume from any surface (`botTurnIntents`). A phone's Stop is
+   * announced here, and taken back if it fails, so open desktop chats read
+   * "Stopping" too. Resume is announced by the session itself (`onResumed`).
+   * With the Bot service's Chat activity gate it is also revision 30: open
+   * streams hear every surface's Stop and Resume (`supportsActivity`).
+   */
+  turnIntents?: Pick<BotTurnIntents, "announce" | "onIntent">;
+  /**
+   * A queued input could not be classified (it stays off phones and is
+   * retried), or the submission a new message was placed as could not be read
+   * (that bubble goes without its id). Each is reported once per failing streak.
+   */
+  onReport?(botId: string, error: unknown): void;
+  /** Pause before a failed classification is retried; defaults to one second. */
+  classifyRetryMs?: number;
+  /**
+   * Run start times shared with the desktop live projection (`botRunStarts`):
+   * a projector created mid-run, or after the 60 s idle close, keeps the
+   * run's start instead of its own creation time. Defaults to this service's own.
+   */
+  runStarts?: BotRunStarts;
   routines?: Pick<BotRoutineService, "list" | "create" | "update" | "delete">;
   presets?: {
     list(): readonly BotPreset[];
@@ -208,8 +290,15 @@ const wireEntryId = (id: string) => `entry_${id}`;
  * turns are left out, tool traffic stays on the Mac, a failed turn is a typed
  * `failed_turn` entry (with the message Retry resends),
  * and each plugin has one connect card (latest status at the first card's place).
+ *
+ * `submissions` (revision 30) names the submission each of the person's own
+ * messages was sent as, by entry id. Only a `user` message takes one: a
+ * routine's input and a question answer never do, whatever the map says.
  */
-export function projectBotSessionEntries(entries: readonly EntryRecord[]): AidenRemoteBotSessionEntry[] {
+export function projectBotSessionEntries(
+  entries: readonly EntryRecord[],
+  submissions: ReadonlyMap<string, string> = new Map(),
+): AidenRemoteBotSessionEntry[] {
   const output: AidenRemoteBotSessionEntry[] = [];
   const cards = new Map<string, number>();
   for (const entry of projectBotTranscript(entries)) {
@@ -219,6 +308,7 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
       case "routine": {
         const createdAt = isoOf(entry.at);
         const label = entry.type === "routine" ? wireText(entry.label, 120).trim() : "";
+        const submissionId = entry.type === "user" ? submissions.get(entry.id) : undefined;
         output.push({
           type: "message",
           id,
@@ -227,6 +317,7 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
           text: bounded(entry.type === "routine" ? botRoutinePromptOf(entry.text) : entry.text),
           ...(createdAt ? { createdAt } : {}),
           ...(label ? { label } : {}),
+          ...(submissionId !== undefined && WIRE_SUBMISSION_ID.test(submissionId) ? { submissionId } : {}),
         });
         break;
       }
@@ -328,10 +419,106 @@ export function withoutBotCards(entries: readonly AidenRemoteBotSessionEntry[]):
   );
 }
 
+/** The entry a device without `bot:activity` may see: shipped phones decode message keys strictly. */
+function withoutSubmissionId(entry: AidenRemoteBotSessionEntry): AidenRemoteBotSessionEntry {
+  if (entry.type !== "message" || entry.submissionId === undefined) return entry;
+  const { submissionId: _submissionId, ...rest } = entry;
+  return rest;
+}
+
+/** The entries one device is sent: cards for `bot:cards`, submission ids for `bot:activity`. */
+function entriesFor(entries: readonly AidenRemoteBotSessionEntry[], audience: Audience): AidenRemoteBotSessionEntry[] {
+  const shown = audience.cards ? [...entries] : withoutBotCards(entries);
+  return audience.activity ? shown : shown.map(withoutSubmissionId);
+}
+
 /** Text of the in-flight (or paused) assistant partial, if any. A reply heading for `[SILENT]` is never shown. */
 export function projectBotSessionPartial(view: Pick<ConversationView, "docs">): string | undefined {
   const text = livePartialText(view.docs);
   return text ? bounded(text) : undefined;
+}
+
+/** The §11 allow-list, picked by name: nothing from the step crosses the wire. */
+export function projectBotSessionActivity(
+  live: Pick<BotLiveActivity, "phase" | "app" | "startedAt">,
+): AidenRemoteBotSessionActivity {
+  const app = live.phase === "app" && live.app
+    ? wireText(live.app, AIDEN_REMOTE_BOT_ACTIVITY_APP_MAX_CHARS).trim()
+    : "";
+  return {
+    phase: live.phase,
+    ...(app ? { app } : {}),
+    startedAt: Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(live.startedAt))),
+  };
+}
+
+/**
+ * The person's waiting messages, oldest first: only inputs in `personal`
+ * (classified as the person's own) show, so an input not yet classified stays
+ * off the wire. A photo with no words has no text to show and is left out.
+ * The list keeps the oldest items whose serialized bytes fit
+ * `MAX_QUEUED_JSON_BYTES`, in order, and omits the rest.
+ */
+export function projectBotSessionQueued(
+  docs: Readonly<Record<string, unknown>>,
+  personal: ReadonlySet<string>,
+): AidenRemoteBotQueuedMessage[] {
+  const seen = new Set<string>();
+  const valid: AidenRemoteBotQueuedMessage[] = [];
+  for (const message of liveQueuedMessages(docs, personal)) {
+    const text = wireText(message.text, AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS);
+    if (!text.trim() || !WIRE_SUBMISSION_ID.test(message.submissionId) || seen.has(message.submissionId)) continue;
+    seen.add(message.submissionId);
+    valid.push({ submissionId: message.submissionId, mode: message.mode === "steer" ? "steer" : "queue", text });
+    if (valid.length === AIDEN_REMOTE_BOT_QUEUED_MAX) break;
+  }
+  return oldestThatFit(valid, MAX_QUEUED_JSON_BYTES);
+}
+
+/**
+ * The oldest items whose serialized JSON array fits `budgetBytes`, in order. The
+ * first item that would overflow ends the list, so the rest are omitted; an item
+ * is never cut.
+ */
+function oldestThatFit<Item>(items: readonly Item[], budgetBytes: number): Item[] {
+  const kept: Item[] = [];
+  let bytes = 2; // the brackets
+  for (const item of items) {
+    const size = Buffer.byteLength(JSON.stringify(item), "utf8") + (kept.length > 0 ? 1 : 0);
+    if (bytes + size > budgetBytes) break;
+    kept.push(item);
+    bytes += size;
+  }
+  return kept;
+}
+
+/** The serialized bytes of a JSON string's content: its quotes excluded, its escapes counted as written. */
+function jsonContentBytes(text: string): number {
+  return Buffer.byteLength(JSON.stringify(text), "utf8") - 2;
+}
+
+/**
+ * The longest tail of `text`, cut on a code-point boundary, whose JSON string
+ * content fits `budgetBytes`. Text that fits is returned whole; otherwise its
+ * front is cut, so a phone keeps the newest streamed words.
+ */
+export function tailWithinJsonBytes(text: string, budgetBytes: number): string {
+  if (jsonContentBytes(text) <= budgetBytes) return text;
+  const points = [...text];
+  let bytes = 0;
+  let start = points.length;
+  while (start > 0) {
+    const size = jsonContentBytes(points[start - 1]!);
+    if (bytes + size > budgetBytes) break;
+    bytes += size;
+    start -= 1;
+  }
+  return points.slice(start).join("");
+}
+
+/** The serialized bytes one `"key":value` member adds to a JSON object, its separating comma included. */
+function memberBytes(key: string, value: unknown): number {
+  return Buffer.byteLength(JSON.stringify({ [key]: value }), "utf8") - 1;
 }
 
 export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSessionStateView {
@@ -344,11 +531,21 @@ export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSe
   return { state: state.kind as AidenRemoteBotSessionStateKind, interrupted: false };
 }
 
-function windowed(entries: AidenRemoteBotSessionEntry[]): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } {
+/**
+ * The newest entries that fit the transcript's share of the snapshot: at most
+ * `budgetBytes` of serialized entries and `MAX_SESSION_JSON_BYTES`. An entry
+ * that cannot fit is left out (`hasOlder`), never cut, so the snapshot stays
+ * inside the frame limit whatever else it carries.
+ */
+function windowed(
+  entries: AidenRemoteBotSessionEntry[],
+  budgetBytes: number,
+): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } {
+  const limit = Math.min(MAX_SESSION_JSON_BYTES, budgetBytes);
   let start = Math.max(0, entries.length - AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
   let window = entries.slice(start);
-  while (window.length > 1 && Buffer.byteLength(JSON.stringify(window), "utf8") > MAX_SESSION_JSON_BYTES) {
-    start += Math.max(1, Math.floor(window.length / 4));
+  while (window.length > 0 && Buffer.byteLength(JSON.stringify(window), "utf8") > limit) {
+    start = Math.min(entries.length, start + Math.max(1, Math.floor(window.length / 4)));
     window = entries.slice(start);
   }
   return { entries: window, hasOlder: start > 0 };
@@ -358,12 +555,34 @@ function windowed(entries: AidenRemoteBotSessionEntry[]): { entries: AidenRemote
 // Live projector: one per Bot, shared by every client.
 // ---------------------------------------------------------------------------
 
-interface Subscriber {
+/** What one device opted into. It changes what the device is sent, never what it may do. */
+interface Audience {
+  /** `bot:cards`: memory and routine proposal entries (revision 27). */
+  cards: boolean;
+  /** `bot:activity`: the `activity` and `queued` frames and snapshot keys (revision 30). */
+  activity: boolean;
+}
+
+interface Subscriber extends Audience {
   frames: string[];
   handle?: CursorSseHandle;
   overflowed: boolean;
-  /** The device negotiated `bot:cards` and may receive memory and routine proposal entries. */
-  cards: boolean;
+}
+
+/** Frames only `bot:activity` devices can parse. */
+const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set(["activity", "queued"]);
+
+/** What a projector needs to project revision 30; absent on hosts without `bot-activity-v1`. */
+interface ProjectorActivity {
+  /** `AidenRemoteBotSessionRuntime.quietInputs` for this Bot. */
+  classify(submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
+  /** `AidenRemoteBotSessionRuntime.placedSubmissions` for this Bot. */
+  placed(): Promise<ReadonlyMap<string, string>>;
+  now(): number;
+  /** Shared with the desktop feed: a projector opened mid-run keeps the run's start. */
+  runStarts: BotRunStarts;
+  retryMs: number;
+  report(error: unknown): void;
 }
 
 class BotLiveProjector {
@@ -374,11 +593,43 @@ class BotLiveProjector {
   state: AidenRemoteBotSessionStateView = { state: "idle", interrupted: false };
   question: AidenRemoteBotQuestion | null = null;
   approval: AidenRemoteBotApproval | null = null;
+  /** What the running turn is doing, in the §11 shape; null while no turn runs. */
+  activity: AidenRemoteBotSessionActivity | null = null;
+  /** The person's messages waiting for the running turn. */
+  queued: AidenRemoteBotQueuedMessage[] = [];
   readonly subscribers = new Set<Subscriber>();
   private view: ConversationView | undefined;
   private stopWatch: (() => Promise<unknown>) | undefined;
   private lane: Promise<void> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** When the current run started, on this Mac's clock. */
+  private runStartedAt = 0;
+  /** Identity of the current run (`liveRunKey`): a queued follow-up replaces the run while the state stays running. */
+  private runKey: string | null = null;
+  /** Stop was pressed during this run. */
+  private stopping = false;
+  /** A Stop was heard; it applies only if the published state is running. */
+  private stopRequested = false;
+  /** This run is a Resume and has not moved on yet. */
+  private resuming = false;
+  /** `pi.live` when the Resume was heard, serialized once (`BotLiveActivityInput.resumedFrom`). */
+  private resumedFrom: string | undefined;
+  /** The session resumed: the run it publishes as running reads "Picking up where it left off". */
+  private resumeRequested = false;
+  /** Which queued inputs are the person's own (the desktop feed's classifier). */
+  private readonly classifier: QueuedInputClassifier | undefined;
+  /**
+   * Entry id → submission id of the person's messages placed while this
+   * projector lived. A finished turn's submission drops out of the session,
+   * but its bubble keeps the id while it is in view, so a reconnect snapshot
+   * still names it. Pruned to the entries in the session window, so it stays
+   * bounded by that window.
+   */
+  private readonly submissionOf = new Map<string, string>();
+  /** The newest `pi.user` entry already looked up, so each message is asked about once. */
+  private placedThrough = -1;
+  /** The last placement lookup failed: a failing streak is reported once. */
+  private placedFailing = false;
   closed = false;
 
   constructor(
@@ -389,17 +640,42 @@ class BotLiveProjector {
     private readonly onClosed: () => void,
     private readonly readQuestion: () => AidenRemoteBotQuestion | null = () => null,
     private readonly readApproval: () => AidenRemoteBotApproval | null = () => null,
-  ) {}
+    /** Revision 30; without it nothing is derived and no activity or queued frame is ever sent. */
+    private readonly activityDeps?: ProjectorActivity,
+  ) {
+    this.classifier = activityDeps
+      ? createQueuedInputClassifier({
+          classify: (ids) => activityDeps.classify(ids),
+          now: () => activityDeps.now(),
+          retryMs: activityDeps.retryMs,
+          report: (error) => activityDeps.report(error),
+          // One retry after the pause, on the serial lane, even if no frame arrives.
+          retry: () => {
+            void this.serial(async () => {
+              if (!this.closed && this.view) await this.publish(this.view);
+            });
+          },
+        })
+      : undefined;
+  }
 
   async attach(conversation: Conversation): Promise<void> {
     const watch = await conversation.watch(ctx);
     this.stopWatch = () => watch.stop();
     this.view = watch.value;
-    this.entries = await this.resolveEntries(projectBotSessionEntries(watch.value.entries));
+    this.entries = await this.resolveEntries(
+      projectBotSessionEntries(watch.value.entries, await this.submissionsFor(watch.value.entries)),
+    );
+    this.pruneSubmissions(this.entries);
     this.partial = projectBotSessionPartial(watch.value);
     this.state = await this.readState();
     this.question = this.readQuestion();
     this.approval = this.readApproval();
+    if (this.activityDeps) {
+      this.trackRun({ state: "idle", interrupted: false }, this.state, watch.value.docs);
+      this.activity = this.deriveActivity(watch.value, this.state, this.question !== null || this.approval !== null);
+      this.queued = await this.queuedFor(watch.value.docs);
+    }
     watch.start(async (view) => {
       await this.advance(view);
     });
@@ -407,23 +683,57 @@ class BotLiveProjector {
     this.armIdle();
   }
 
-  /** The session as a device sees it: without card entries unless it holds `bot:cards`. */
-  snapshot(cards: boolean): AidenRemoteBotSession {
+  /**
+   * The session as one device sees it, inside the snapshot budget by
+   * construction. Parts are allocated in priority order:
+   *  1. identity, state, question, approval and activity ship whole (measured
+   *     first; their protocol maxima sit well under half the budget);
+   *  2. the partial, cut to its tail if it no longer fits;
+   *  3. the queued list, oldest first, at most `MAX_QUEUED_JSON_BYTES` and what is left;
+   *  4. the transcript window, with whatever is left (possibly none).
+   */
+  snapshot(audience: Audience): AidenRemoteBotSession {
+    const showActivity = audience.activity && this.activityDeps !== undefined;
+    let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
+    for (const [key, value] of Object.entries(this.state)) used += memberBytes(key, value);
+    used += memberBytes("question", this.question) + memberBytes("approval", this.approval);
+    if (showActivity) used += memberBytes("activity", this.activity);
+
+    let partial: string | undefined;
+    if (this.partial !== undefined) {
+      partial = tailWithinJsonBytes(this.partial, SNAPSHOT_BUDGET_BYTES - used - memberBytes("partial", ""));
+      used += memberBytes("partial", partial);
+    }
+
+    let queued: AidenRemoteBotQueuedMessage[] | undefined;
+    if (showActivity) {
+      // "[]" is already counted in the member's empty form, hence the + 2.
+      const arrayBudget = SNAPSHOT_BUDGET_BYTES - used - memberBytes("queued", []) + 2;
+      queued = oldestThatFit(this.queued, Math.min(MAX_QUEUED_JSON_BYTES, arrayBudget));
+      used += memberBytes("queued", queued);
+    }
+
+    // The transcript's members are reserved empty; `hasOlder` takes its larger, `false`, form.
+    const transcriptBudget =
+      SNAPSHOT_BUDGET_BYTES - used - memberBytes("entries", []) - memberBytes("hasOlder", false) + 2;
+    const { entries, hasOlder } = windowed(entriesFor(this.entries, audience), transcriptBudget);
     return parseAidenRemoteBotSession({
       botId: this.botId,
       epoch: this.epoch,
       seq: this.seq,
       ...this.state,
-      ...(this.partial !== undefined ? { partial: this.partial } : {}),
-      ...windowed(cards ? this.entries : withoutBotCards(this.entries)),
+      ...(partial !== undefined ? { partial } : {}),
+      entries,
+      hasOlder,
       question: this.question,
       approval: this.approval,
+      ...(showActivity ? { activity: this.activity, queued } : {}),
     });
   }
 
   /** The `snapshot` frame for the current seq (first frame of a stream, or a history rewrite). */
-  snapshotFrame(cards: boolean): string {
-    const session = this.snapshot(cards);
+  snapshotFrame(audience: Audience): string {
+    const session = this.snapshot(audience);
     return sseFrame(`${session.epoch}:${session.seq}`, "snapshot", {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
       botId: session.botId,
@@ -434,14 +744,21 @@ class BotLiveProjector {
     });
   }
 
-  /** `legacy` is the same frame as a device without `bot:cards` must see it. */
-  private broadcast(text: string, legacy: string = text): void {
+  /** Renders a frame once per kind of audience and queues it for every subscriber. */
+  private broadcast(render: (audience: Audience) => string): void {
+    const rendered = new Map<string, string>();
     for (const subscriber of this.subscribers) {
       if (subscriber.frames.length >= MAX_PENDING_FRAMES) {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        subscriber.frames.push(subscriber.cards ? text : legacy);
+        const key = `${subscriber.cards}:${subscriber.activity}`;
+        let text = rendered.get(key);
+        if (text === undefined) {
+          text = render(subscriber);
+          rendered.set(key, text);
+        }
+        subscriber.frames.push(text);
       }
       subscriber.handle?.wake();
     }
@@ -458,18 +775,25 @@ class BotLiveProjector {
     };
     const id = `${this.epoch}:${this.seq}`;
     const text = sseFrame(id, event.type, data);
-    // A card entry must never reach a revision-26 parser, but its seq must:
-    // clients refetch on any gap. Such a device gets the state it already
-    // holds under that seq instead, which changes nothing it shows.
     const card =
       event.type === "entry" &&
       (AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES as readonly string[]).includes(
         (event.payload as { entry?: { type?: string } }).entry?.type ?? "",
       );
-    this.broadcast(
-      text,
-      card ? sseFrame(id, "state", { ...data, type: "state", payload: this.state }) : text,
-    );
+    const activityOnly = ACTIVITY_FRAME_TYPES.has(event.type);
+    // A frame a device can't parse (a card entry before revision 27, an
+    // activity or queued frame without `bot:activity`) must still reach it as
+    // its seq: clients refetch on any gap. That device gets the state it
+    // already holds under that seq instead, which changes nothing it shows.
+    const noOp = card || activityOnly ? sseFrame(id, "state", { ...data, type: "state", payload: this.state }) : text;
+    // A bubble tagged with its submission id reaches other devices without the key.
+    const entry = event.type === "entry" ? (event.payload as { entry: AidenRemoteBotSessionEntry }).entry : undefined;
+    const bare = entry && withoutSubmissionId(entry);
+    const untagged = bare && bare !== entry ? sseFrame(id, "entry", { ...data, payload: { entry: bare } }) : text;
+    this.broadcast((audience) => {
+      if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp;
+      return audience.activity ? text : untagged;
+    });
   }
 
   /**
@@ -501,17 +825,162 @@ class BotLiveProjector {
     });
   }
 
+  /**
+   * Stop, a Stop that failed, or a Resume the session carried out, from any
+   * surface. A Stop applies only if the state it publishes with is running,
+   * so a Stop with nothing running changes nothing.
+   */
+  noteIntent(intent: BotTurnIntent): Promise<void> {
+    return this.serial(async () => {
+      if (!this.activityDeps) return;
+      if (intent === "stopping") this.stopRequested = true;
+      else if (intent === "stopCancelled") {
+        this.stopRequested = false;
+        this.stopping = false;
+      } else this.resumeRequested = true;
+      if (this.view) await this.publish(this.view);
+    });
+  }
+
+  /**
+   * Scope Stop, Resume and the start time to one run, like the desktop feed: a
+   * run starts when the state turns running or when a queued follow-up
+   * replaces the run (a new `liveRunKey`) while it stays running.
+   */
+  private trackRun(
+    previous: AidenRemoteBotSessionStateView,
+    next: AidenRemoteBotSessionStateView,
+    docs: Readonly<Record<string, unknown>>,
+  ): void {
+    const runKey = liveRunKey(docs);
+    const deps = this.activityDeps!;
+    if (next.state === "running") {
+      const replaced = runKey !== null && this.runKey !== null && runKey !== this.runKey;
+      if (previous.state !== "running" || replaced) {
+        this.stopping = false;
+        this.resuming = false;
+      }
+      // Asked on every running frame, so the run's key is recorded as soon as
+      // it shows. Not the attach time: a phone that opens mid-run sees how long
+      // the run has really gone, and a replaced run gets its own start.
+      this.runStartedAt = deps.runStarts.startedAt(this.botId, runKey, () => deps.now());
+      if (this.resumeRequested) {
+        this.resumeRequested = false;
+        this.resuming = true;
+        this.resumedFrom = JSON.stringify(docs["pi.live"]);
+      }
+      if (this.stopRequested) this.stopping = true;
+    } else {
+      this.stopping = false;
+      this.resuming = false;
+      deps.runStarts.ended(this.botId);
+      // A Resume is heard before the session publishes the run it resumed, so a
+      // paused state still on its way out keeps it; any other state ends it.
+      if (next.state !== "interrupted") this.resumeRequested = false;
+    }
+    this.stopRequested = false;
+    this.runKey = runKey;
+  }
+
+  /** Slice B's derivation from `pi.live`, cut to the wire. A paused Bot keeps `pi.live.run` but is not working. */
+  private deriveActivity(
+    view: ConversationView,
+    state: AidenRemoteBotSessionStateView,
+    waiting: boolean,
+  ): AidenRemoteBotSessionActivity | null {
+    if (state.state !== "running") return null;
+    const live = liveBotActivity({
+      entries: view.entries,
+      docs: view.docs,
+      waiting,
+      stopping: this.stopping,
+      resuming: this.resuming,
+      resumedFrom: this.resumedFrom,
+      startedAt: this.runStartedAt,
+    }) ?? { phase: "preparing" as const, startedAt: this.runStartedAt };
+    if (live.phase !== "resuming") this.resuming = false;
+    return projectBotSessionActivity(live);
+  }
+
+  /**
+   * The person's queued messages (the desktop's `queuedFor`): an id not yet
+   * known to be the person's stays off the wire (fail closed), so a routine's
+   * prompt never shows as their message.
+   */
+  private async queuedFor(docs: Readonly<Record<string, unknown>>): Promise<AidenRemoteBotQueuedMessage[]> {
+    return projectBotSessionQueued(docs, await this.classifier!.personal(docs));
+  }
+
+  /**
+   * The submission ids of the person's messages, by entry id (revision 30).
+   * Looked up on the serial lane when a new `pi.user` entry appears: its input
+   * is placed in the same commit, so the session still lists it unless its
+   * turn already ended. An id that can't be found is left out; phones then
+   * match the bubble by its text.
+   */
+  private async submissionsFor(entries: readonly EntryRecord[]): Promise<ReadonlyMap<string, string>> {
+    if (!this.activityDeps) return this.submissionOf;
+    let newest = this.placedThrough;
+    for (const record of entries) {
+      if (record.kind === "pi.user" && Number(record.id) > newest) newest = Number(record.id);
+    }
+    if (newest <= this.placedThrough) return this.submissionOf;
+    this.placedThrough = newest;
+    let placed: ReadonlyMap<string, string>;
+    try {
+      placed = await this.activityDeps.placed();
+      this.placedFailing = false;
+    } catch (error) {
+      // The field is optional: without it the phone matches this bubble by its text.
+      if (!this.placedFailing) this.activityDeps.report(error);
+      this.placedFailing = true;
+      return this.submissionOf;
+    }
+    for (const [entryId, submissionId] of placed) {
+      if (WIRE_SUBMISSION_ID.test(submissionId)) this.submissionOf.set(entryId, submissionId);
+    }
+    return this.submissionOf;
+  }
+
+  /** How many bubble tags this projector holds (the memo's size, for tests of its bound). */
+  get submissionTagCount(): number {
+    return this.submissionOf.size;
+  }
+
+  /** Forget the ids of bubbles that left the session window: no snapshot can show them again. */
+  private pruneSubmissions(entries: readonly AidenRemoteBotSessionEntry[]): void {
+    if (this.submissionOf.size === 0) return;
+    // Either window: a device without `bot:cards` sees further back past the cards it skips.
+    const inView = new Set(
+      [...entries.slice(-AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES), ...withoutBotCards(entries).slice(-AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES)]
+        .map((entry) => entry.id),
+    );
+    for (const entryId of [...this.submissionOf.keys()]) {
+      if (!inView.has(wireEntryId(entryId))) this.submissionOf.delete(entryId);
+    }
+  }
+
   private async publish(view: ConversationView): Promise<void> {
     if (this.closed) return;
-    const next = await this.resolveEntries(projectBotSessionEntries(view.entries));
+    const next = await this.resolveEntries(projectBotSessionEntries(view.entries, await this.submissionsFor(view.entries)));
     const partial = projectBotSessionPartial(view);
     const state = await this.readState().catch(() => this.state);
     const question = this.readQuestion();
     const approval = this.readApproval();
+    const queued = this.activityDeps ? await this.queuedFor(view.docs) : [];
     if (this.closed) return;
+    let activity: AidenRemoteBotSessionActivity | null = null;
+    if (this.activityDeps) {
+      this.trackRun(this.state, state, view.docs);
+      activity = this.deriveActivity(view, state, question !== null || approval !== null);
+    }
 
     const previous = this.entries;
-    const previousById = new Map(previous.map((entry) => [entry.id, JSON.stringify(entry)]));
+    this.pruneSubmissions(next);
+    // A bubble's tag is set when it first shows and only dropped once it leaves
+    // the window, so a tag change alone is never news: re-sending an old bubble
+    // would make phones that no longer hold it append it at the bottom.
+    const previousById = new Map(previous.map((entry) => [entry.id, JSON.stringify(withoutSubmissionId(entry))]));
     const nextIds = new Set(next.map((entry) => entry.id));
     // Appends and in-place updates are entry events; anything that removes or
     // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
@@ -525,12 +994,14 @@ class BotLiveProjector {
       this.state = state;
       this.question = question;
       this.approval = approval;
+      this.activity = activity;
+      this.queued = queued;
       this.seq += 1;
-      this.broadcast(this.snapshotFrame(true), this.snapshotFrame(false));
+      this.broadcast((audience) => this.snapshotFrame(audience));
       return;
     }
     for (const entry of next) {
-      if (previousById.get(entry.id) === JSON.stringify(entry)) continue;
+      if (previousById.get(entry.id) === JSON.stringify(withoutSubmissionId(entry))) continue;
       this.frame({ type: "entry", payload: { entry } });
     }
     if (partial !== this.partial) {
@@ -550,6 +1021,15 @@ class BotLiveProjector {
     if (approval?.waitId !== this.approval?.waitId) {
       this.approval = approval;
       this.frame({ type: "approval", payload: { approval } });
+    }
+    // After the state frame, so a phone never sees a phase for a turn that already ended.
+    if (JSON.stringify(activity) !== JSON.stringify(this.activity)) {
+      this.activity = activity;
+      this.frame({ type: "activity", payload: { activity } });
+    }
+    if (JSON.stringify(queued) !== JSON.stringify(this.queued)) {
+      this.queued = queued;
+      this.frame({ type: "queued", payload: { queued } });
     }
   }
 
@@ -573,6 +1053,7 @@ class BotLiveProjector {
     if (this.closed) return;
     this.closed = true;
     clearTimeout(this.idleTimer);
+    this.classifier?.close();
     this.frame({ type: "closed", payload: {} });
     this.onClosed();
     await this.stopWatch?.().catch(() => undefined);
@@ -595,7 +1076,38 @@ function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: st
   };
 }
 
+/**
+ * Refusals the session makes from its state before it changes anything: no
+ * host, no model (or one that can't run), or a paused turn a send won't
+ * replace. Each is checked before any input is written or any run resumes.
+ */
+const REFUSED_BEFORE_RUNNING: ReadonlySet<BotSessionErrorReason> = new Set([
+  "needs_model",
+  "model_error",
+  "unavailable",
+  "bot_paused",
+]);
+
+/**
+ * Runs one session call inside an idempotent request. A refusal from state
+ * leaves no record in the operation ledger, so the same key is evaluated
+ * again once the Bot is fixed (a model chosen, the Bot resumed) instead of
+ * replaying the refusal for a day.
+ */
+async function unlessRefusedBeforeRunning<Result>(call: () => Promise<Result>): Promise<Result> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof BotSessionError && REFUSED_BEFORE_RUNNING.has(error.reason)) {
+      throw new AidenOperationNotExecutedError(error);
+    }
+    throw error;
+  }
+}
+
 function mapSessionError(error: unknown): never {
+  // A ledger always unwraps it; a bare `executeIdempotent` passes it through.
+  if (error instanceof AidenOperationNotExecutedError) return mapSessionError(error.cause);
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotSessionError) {
     switch (error.reason) {
@@ -605,6 +1117,7 @@ function mapSessionError(error: unknown): never {
       case "access_changed":
         throw new AidenRemoteServiceError("capability_denied", error.message, 403);
       case "needs_model":
+      case "model_error":
       case "unavailable":
       case "bot_paused":
         throw new AidenRemoteServiceError("operation_stale", error.message, 409);
@@ -696,14 +1209,23 @@ export class AidenRemoteBotSessionService {
   private readonly subscriptions = new Map<string, Set<CursorSseHandle>>();
   /** Bot approval ids answered here recently, so a retried request replays its receipt. */
   private readonly answeredApprovals = new Set<string>();
+  private readonly stopIntents: (() => void) | undefined;
+  private readonly runStarts: BotRunStarts;
 
   constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
+    this.runStarts = options.runStarts ?? createBotRunStarts();
     // A question or approval asked or settled is published in order with entries and state.
     const refresh = (botId: string) => {
       void this.projectors.get(botId)?.then((projector) => projector.refresh(), () => undefined);
     };
     options.questions?.onChange(refresh);
     options.approvals?.onChange(refresh);
+    // A Stop or Resume from the Mac or any phone reaches every open session stream.
+    this.stopIntents = this.supportsActivity
+      ? options.turnIntents!.onIntent((botId, intent) => {
+          void this.projectors.get(botId)?.then((projector) => projector.noteIntent(intent), () => undefined);
+        })
+      : undefined;
   }
 
   get supportsRoutines(): boolean {
@@ -720,6 +1242,16 @@ export class AidenRemoteBotSessionService {
 
   get supportsMemory(): boolean {
     return Boolean(this.options.memory);
+  }
+
+  /**
+   * Activity and queued frames and `whenBusy` (revision 30, `bot-activity-v1`):
+   * Stop and Resume reach this host (`turnIntents`) and the Bot service has
+   * the Chat activity gate. Without both the host sends revision-29 frames and
+   * refuses `whenBusy`.
+   */
+  get supportsActivity(): boolean {
+    return Boolean(this.options.turnIntents) && this.options.bots.supportsChatActivity === true;
   }
 
   /** Proposal answers, suggestions and the notification feed are one feature (`bot-proactive-v1`). */
@@ -1001,6 +1533,17 @@ export class AidenRemoteBotSessionService {
         },
         () => this.questionOf(botId),
         () => this.approvalOf(botId),
+        // Without revision 30 nothing is derived, so revision-29 streams are byte-for-byte unchanged.
+        this.supportsActivity
+          ? {
+              classify: (ids) => runtime.quietInputs(botId, ids),
+              placed: () => runtime.placedSubmissions(botId),
+              now: () => this.options.now?.() ?? Date.now(),
+              runStarts: this.runStarts,
+              retryMs: this.options.classifyRetryMs ?? CLASSIFY_RETRY_MS,
+              report: (error) => this.options.onReport?.(botId, error),
+            }
+          : undefined,
       );
       await projector.attach(conversation);
       return projector;
@@ -1012,28 +1555,44 @@ export class AidenRemoteBotSessionService {
     return created;
   }
 
+  /**
+   * Test seam: how many bubble tags the Bot's open projector remembers, or 0
+   * with none open. The memo is bounded by the session window.
+   */
+  async submissionTagsHeld(botId: string): Promise<number> {
+    const projector = await this.projectors.get(botId)?.catch(() => undefined);
+    return projector?.submissionTagCount ?? 0;
+  }
+
   /** A projector whose watch already ended is replaced by a fresh epoch. */
   private async liveProjector(botId: string): Promise<BotLiveProjector> {
     const projector = await this.projector(botId);
     return projector.closed ? this.projector(botId) : projector;
   }
 
-  /** `cards`: the device negotiated `bot:cards` (memory and routine proposal entries). */
-  async session(botId: string, options: { cards?: boolean } = {}): Promise<AidenRemoteBotSession> {
+  /** What a device that negotiated these opt-ins is sent; `activity` needs this host's revision 30. */
+  private audience(options: { cards?: boolean; activity?: boolean }): Audience {
+    return { cards: options.cards === true, activity: options.activity === true && this.supportsActivity };
+  }
+
+  /** `cards`: the device holds `bot:cards`; `activity`: it holds `bot:activity`. */
+  async session(botId: string, options: { cards?: boolean; activity?: boolean } = {}): Promise<AidenRemoteBotSession> {
     const bot = await this.options.bots.bot(botId);
+    const audience = this.audience(options);
     try {
       const state = await this.stateView(bot.id);
       if (state.state === "unavailable") {
         // Bots are held by another Aiden process: nothing can be opened.
         return parseAidenRemoteBotSession({
           botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false, question: null, approval: null,
+          ...(audience.activity ? { activity: null, queued: [] } : {}),
         });
       }
       const projector = await this.liveProjector(bot.id);
       // A state change without a commit (a desktop Stop, a lock change) is not
       // seen by the watch; a fetch always reports the current state.
       await projector.refresh();
-      return projector.snapshot(options.cards === true);
+      return projector.snapshot(audience);
     } catch (error) {
       return mapSessionError(error);
     }
@@ -1045,7 +1604,7 @@ export class AidenRemoteBotSessionService {
     botId: string,
     response: ServerResponse,
     admit: () => void = () => {},
-    options: { cards?: boolean } = {},
+    options: { cards?: boolean; activity?: boolean } = {},
   ): Promise<void> {
     const bot = await this.options.bots.bot(botId);
     let projector: BotLiveProjector;
@@ -1062,8 +1621,8 @@ export class AidenRemoteBotSessionService {
       throw new AidenRemoteServiceError("operation_stale", "This Bot's chat closed. Try again.", 409, true);
     }
     admit();
-    const cards = options.cards === true;
-    const subscriber: Subscriber = { frames: [projector.snapshotFrame(cards)], overflowed: false, cards };
+    const audience = this.audience(options);
+    const subscriber: Subscriber = { frames: [projector.snapshotFrame(audience)], overflowed: false, ...audience };
     const unsubscribe = projector.subscribe(subscriber);
     const handle = openCursorSse(response, {
       pull: () => {
@@ -1095,6 +1654,7 @@ export class AidenRemoteBotSessionService {
   }
 
   async close(): Promise<void> {
+    this.stopIntents?.();
     for (const deviceId of [...this.subscriptions.keys()]) this.revokeDevice(deviceId);
     const projectors = await Promise.allSettled([...this.projectors.values()]);
     for (const result of projectors) if (result.status === "fulfilled") await result.value.close();
@@ -1107,7 +1667,12 @@ export class AidenRemoteBotSessionService {
   }
 
   async send(deviceId: string, botId: string, key: string, input: unknown): Promise<AidenRemoteBotMessageReceipt> {
-    const parsed = parseOrInvalid(parseAidenRemoteBotMessageRequest, input, "The Bot message is invalid.");
+    // `whenBusy` is revision 30: a host that does not announce it refuses the key.
+    const parsed = parseOrInvalid(
+      (value) => parseAidenRemoteBotMessageRequest(value, { allowWhenBusy: this.supportsActivity }),
+      input,
+      "The Bot message is invalid.",
+    );
     const bot = await this.options.bots.bot(botId);
     try {
       const receipt = await this.options.bots.executeIdempotent(
@@ -1116,7 +1681,12 @@ export class AidenRemoteBotSessionService {
         async () => {
           const runtime = await this.options.runtime();
           // The request UUID is the session request id: a resubmission dedupes.
-          const sent = await runtime.send(bot.id, { text: parsed.text, requestId: `remote:${deviceId}:${key}` });
+          const sent = await unlessRefusedBeforeRunning(() => runtime.send(bot.id, {
+            text: parsed.text,
+            requestId: `remote:${deviceId}:${key}`,
+            // Steer joins the running turn; Queue (or nothing, as before) runs after it.
+            ...(parsed.whenBusy ? { whenBusy: parsed.whenBusy === "steer" ? "steer" as const : "followUp" as const } : {}),
+          }));
           return { ...sent, ...projectBotSessionState(await runtime.state(bot.id)) };
         },
       );
@@ -1143,10 +1713,19 @@ export class AidenRemoteBotSessionService {
         async () => {
           const runtime = await this.options.runtime();
           const requestId = `remote:${deviceId}:${key}`;
-          if (action === "resume") return projectBotSessionState(await runtime.resume(bot.id, requestId));
-          if (action === "dismiss") return projectBotSessionState(await runtime.dismiss(bot.id, requestId));
-          // Stop ends a running turn; a paused one belongs to Dismiss.
-          return projectBotSessionState(await runtime.stop(bot.id));
+          if (action === "resume") {
+            return projectBotSessionState(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId)));
+          }
+          if (action === "dismiss") {
+            return projectBotSessionState(await unlessRefusedBeforeRunning(() => runtime.dismiss(bot.id, requestId)));
+          }
+          // Stop ends a running turn; a paused one belongs to Dismiss. Every
+          // surface reads "Stopping" until the run ends, or until the Stop fails.
+          const stop = () => unlessRefusedBeforeRunning(() => runtime.stop(bot.id));
+          const state = this.options.turnIntents
+            ? await stopWithIntents(this.options.turnIntents, bot.id, stop)
+            : await stop();
+          return projectBotSessionState(state);
         },
       );
       await this.afterAction(bot.id);

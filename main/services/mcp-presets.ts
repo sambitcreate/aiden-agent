@@ -98,16 +98,6 @@ export function getMcpPresetForServerId(serverId: string): McpPreset | undefined
 }
 
 /**
- * API-key preset requests must not automatically follow redirects: unlike the
- * standard Authorization header, provider-specific key headers are not
- * guaranteed to be stripped when a redirect crosses origins.
- */
-export function createNoRedirectFetch(fetchImpl: typeof fetch = globalThis.fetch): typeof fetch {
-  return ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
-    fetchImpl(input, { ...init, redirect: "error" })) as typeof fetch;
-}
-
-/**
  * Validate the renderer-authored identity and endpoint before main resolves a
  * preset credential. Paths may vary for provider-owned session/read-only
  * endpoints, but credentials never cross the catalog's exact HTTPS origins.

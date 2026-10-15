@@ -43,8 +43,7 @@ export function buildTheme(presetId: string, scheme: AppearanceScheme, variant: 
 	const warning = t("--support-warning");
 
 	return {
-		$schema:
-			"https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+		$schema: "https://pi.dev/schemas/theme.schema.json",
 		vars: {
 			cyan: t("--terminal-cyan"),
 			blue: t("--terminal-blue"),

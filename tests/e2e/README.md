@@ -36,6 +36,17 @@ persisted product endpoint remains unchanged. Teardown reports
 server/process leaks and preserves an original test failure when cleanup also
 fails.
 
+A spec that needs the real Bot store opts into `test.use({ isolatedKeychain: true })`
+(macOS only). Before launch, the fixture creates an unlocked, passwordless keychain
+inside the fixture HOME and makes it that HOME's default with `/usr/bin/security`,
+run with `HOME` pinned to the fixture root. It refuses to proceed unless the
+fixture HOME starts with an empty keychain search list, so the developer's login
+keychain and keychain preferences are never touched, and teardown deletes the
+keychain. Production code is unchanged: the Bot store writes its rollback
+authority through the same `security` calls it uses for real users.
+`bots-persistence.spec.ts` uses it to create a Bot, run real turns against the
+deterministic model, relaunch on the same profile and read the transcript back.
+
 The separately selected live vision acceptance is opt-in and is never part of
 the CI or release gate:
 

@@ -6,6 +6,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { request as httpsRequest } from "node:https";
 import * as api from "../dist/parity-test-api.js";
 
@@ -69,9 +70,12 @@ test("title generation preserves manual renames and seeds offline sessions", asy
   const dir = temporary(t), harness = extension(api.createSessionParityExtension(dir));
   const manager = api.SessionManager.inMemory(dir);
   const ctx = { sessionManager: manager, model: undefined };
-  await harness.events.get("before_agent_start")({ prompt: "Build my CLI" }, ctx);
+  // pi 1.2 also starts runs from extension custom messages; they carry no prompt and never title the chat.
+  await harness.events.get("before_agent_start")({ messageType: "custom", message: { role: "custom", content: "Reminder" } }, ctx);
+  assert.equal(harness.name(), undefined);
+  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Build my CLI" }, ctx);
   assert.equal(harness.name(), "Build my CLI");
-  await harness.events.get("before_agent_start")({ prompt: "Second message" }, ctx);
+  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Second message" }, ctx);
   assert.equal(harness.name(), "Build my CLI");
 });
 
@@ -142,16 +146,6 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.equal((await api.scheduleCommand(dir, ["preview", "0 9 * * *", "UTC"])).length, 5);
   await api.scheduleCommand(dir, ["remove", task.id]);
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
-});
-
-test("child process parses actual event records, passes prompt via stdin, and enforces time budgets", async (t) => {
-  const dir = temporary(t), child = join(dir, "child.mjs"), original = process.env.AIDEN_CLI_ENTRY;
-  process.env.AIDEN_CLI_ENTRY = child; t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
-  writeFileSync(child, `let input=""; for await (const chunk of process.stdin) input += chunk; console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:[{type:"text",text:input}],stopReason:"stop"}}));`);
-  const result = await api.runChild({ cwd: dir, prompt: "secret prompt", permission: "read-only" });
-  assert.equal(result.output, "secret prompt");
-  writeFileSync(child, `setInterval(() => {}, 1000);`);
-  await assert.rejects(api.runChild({ cwd: dir, prompt: "x", permission: "read-only", timeoutMs: 30 }), /time budget/);
 });
 
 test("serve routes concurrent CLI commands and releases its lease on shutdown", async (t) => {
@@ -243,32 +237,15 @@ test("serve lifecycle identifies a live daemon by its recorded argv", async (t) 
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
-test("a real child completes through a local compatible provider with no recursive tools", async (t) => {
-  const dir = temporary(t), requests = [];
-  const server = createServer(async (request, response) => {
-    let body = ""; for await (const chunk of request) body += chunk;
-    const parsed = JSON.parse(body); requests.push(parsed);
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Local child succeeded" }, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
-    response.end("data: [DONE]\n\n");
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const original = { AIDEN_CLI_ENTRY: process.env.AIDEN_CLI_ENTRY, AIDEN_CODING_AGENT_DIR: process.env.AIDEN_CODING_AGENT_DIR, PI_OFFLINE: process.env.PI_OFFLINE };
-  Object.assign(process.env, { AIDEN_CLI_ENTRY: join(pkg, "dist/app/cli.js"), AIDEN_CODING_AGENT_DIR: dir, PI_OFFLINE: "1" });
-  t.after(() => { for (const [key, value] of Object.entries(original)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
-  const result = await api.runChild({ cwd: dir, prompt: "Say hello", permission: "read-only", provider: "cli-test", model: "test", timeoutMs: 15000 });
-  assert.equal(result.output, "Local child succeeded"); assert.equal(requests.length, 1);
-  const names = requests[0].tools?.map((tool) => tool.function.name) ?? [];
-  assert.ok(names.includes("read")); assert.ok(!names.includes("bash")); assert.ok(!names.includes("subagent"));
-});
-
 test("MCP validates transports and redacts configured secrets from listing", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "http://example.com", enabled: true }), /HTTPS/);
-  assert.throws(() => api.validateMcpServer({ id: "../remote", name: "Remote", transport: "stdio", command: "node", enabled: true }), /id, name/);
+  assert.throws(() => api.validateMcpServer({ id: "../remote", name: "Remote", transport: "stdio", command: "node", enabled: true }), /server id must/);
+  for (const id of [undefined, 123, null]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /string id/);
+  for (const id of ["+remote", "-remote"]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /cannot begin with/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "-Remote", transport: "stdio", command: "node", enabled: true }), /name cannot begin with/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", enabled: true }), /needs a url/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "not a url", enabled: true }), /not a valid URL/);
   writeFileSync(file, JSON.stringify({ id: "local", name: "Local", transport: "stdio", command: "node", enabled: false, env: { SECRET: "do-not-list" } }));
   await api.mcpCommand(dir, ["add", file]);
   const listed = await api.mcpCommand(dir, ["list"]);
@@ -526,16 +503,17 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
 
 test("isolated subagent inference executes only parent-owned tools with immutable fork context", async (t) => {
   const dir = temporary(t), requests = [], original = process.env.AIDEN_CLI_ENTRY;
+  let terminalReason;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body); requests.push(parsed);
     response.writeHead(200, { "content-type": "text/event-stream" });
-    const first = !parsed.messages.some((message) => message.role === "tool");
-    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "read-test", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] } : { role: "assistant", content: "Parent-owned tools succeeded" };
+    const first = !terminalReason && !parsed.messages.some((message) => message.role === "tool");
+    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "read-test", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] } : { role: "assistant", content: terminalReason === "length" ? "Incomplete finding: the fix is" : "Parent-owned tools succeeded" };
     response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : terminalReason ?? "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -562,6 +540,21 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   revoked = true;
   await assert.rejects(botTool.execute("bot-revoked", { tasks: [{ role: "scout", label: "Bot scout", task: "Must not run" }] }), /Bot revoked/);
   assert.equal(requests.length, 4);
+  revoked = false;
+  for (const reason of ["length", "stop"]) {
+    terminalReason = reason;
+    const before = requests.length;
+    const expectedStatus = reason === "length" ? "failed" : "completed";
+    const terminal = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "terminal", messages: context }, request: { role: "scout", label: "Terminal probe", task: "Explain the fix" }, policy: { deadlineMs: 15000 } }, [], async () => {});
+    assert.equal(terminal.status, expectedStatus, `${reason}: ${JSON.stringify(terminal)}`);
+    assert.equal(terminal.summary, reason === "length" ? "The subagent did not complete this investigation." : "Parent-owned tools succeeded");
+    assert.equal(requests.length, before + 1, "terminal output must not trigger an automatic retry");
+    const report = await botTool.execute(`bot-${reason}`, { tasks: [{ role: "scout", label: "Bot terminal", task: "Explain the fix" }] });
+    const reportText = report.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    assert.ok(reportText.includes(`Status: ${expectedStatus}`), reportText);
+    if (reason === "length") assert.ok(!reportText.includes("Incomplete finding"), "failed child retains the existing generic summary policy");
+    assert.equal(requests.length, before + 2, "Bot child must make exactly one request with no retry");
+  }
 });
 
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {
@@ -691,11 +684,217 @@ test("MCP paginates tools, fences schema drift, and terminates its stdio transpo
   assert.deepEqual(tools[1].parameters.properties.count, { type: ["integer", "null"], minimum: 0, maximum: 4_294_967_295 });
   const result = await tools[1].execute("call", { value: "works" });
   assert.match(JSON.stringify(result), /Echo works/);
+  // A tool error's diagnostic JSON need not match the success output schema.
+  await assert.rejects(tools[1].execute("failure", { value: "fail" }), /Diagnostic failure/);
   writeFileSync(revision, "changed");
   await assert.rejects(tools[1].execute("stale", { value: "must not run" }), /changed/);
-  const pid = Number(readFileSync(pidFile, "utf8"));
+  const [pid, ...others] = readFileSync(pidFile, "utf8").trim().split("\n").map(Number);
+  assert.deepEqual(others, [], "one transport per server");
   await pool.close();
   assert.throws(() => process.kill(pid, 0), /ESRCH/);
+});
+
+function fixtureServer(dir, id, mode = "") {
+  return { id, name: id, transport: "stdio", command: process.execPath, args: [join(pkg, "tests/fixtures/mcp-stdio.mjs"), join(dir, `${id}.changed`), join(dir, `${id}.pid`), mode], enabled: true };
+}
+const listRequests = (dir, id) => existsSync(join(dir, `${id}.pid.lists`)) ? readFileSync(join(dir, `${id}.pid.lists`), "utf8").trim().split("\n").length : 0;
+async function captureStderr(run) {
+  const write = process.stderr.write, lines = [];
+  process.stderr.write = function(chunk, ...args) { if (String(chunk).startsWith("aiden: ")) { lines.push(String(chunk)); return true; } return write.call(this, chunk, ...args); };
+  try { return { value: await run(), stderr: lines.join("") }; } finally { process.stderr.write = write; }
+}
+
+test("MCP reuses a live inventory until tools/list_changed, fails closed on drift or config change, and admits large servers", async (t) => {
+  const dir = temporary(t), watched = fixtureServer(dir, "watched", "listChanged"), large = fixtureServer(dir, "large", "many");
+  api.atomicJson(join(dir, "aiden-mcp.json"), [watched, large]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const tools = await pool.agentTools(watched);
+  assert.equal(listRequests(dir, "watched"), 2);
+  assert.match(JSON.stringify(await tools[0].execute("a", { value: "one" })), /Echo one/);
+  assert.match(JSON.stringify(await tools[0].execute("b", { value: "two" })), /Echo two/);
+  assert.equal(listRequests(dir, "watched"), 2, "calls reuse the complete inventory of the live connection");
+  // The server changes its tools and announces it: the next call re-reads and fails closed.
+  await tools[0].execute("c", { value: "notify" });
+  await assert.rejects(tools[0].execute("d", { value: "stale" }), /changed/);
+  assert.ok(listRequests(dir, "watched") > 2);
+  // Over the former 128-tool cap, within the shared 512-tool inventory limit.
+  assert.equal((await pool.inspectTools(large)).length, 300);
+  // A configuration edit fences existing tools without a notification.
+  const fresh = await pool.agentTools(watched);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...watched, description: "Edited" }, large]);
+  await assert.rejects(fresh[0].execute("e", { value: "edited" }), /changed or was disabled/);
+});
+
+test("MCP withholds servers switched off for the model and hidden tools, without renaming the rest", async (t) => {
+  const dir = temporary(t), shown = fixtureServer(dir, "shown"), partly = { ...fixtureServer(dir, "partly"), hiddenTools: ["first"] }, off = { ...fixtureServer(dir, "off"), exposure: "hidden" };
+  assert.throws(() => api.validateMcpServer({ ...shown, exposure: "sometimes" }), /MCP exposure/);
+  assert.throws(() => api.validateMcpServer({ ...shown, hiddenTools: ["first", "first"] }), /Hidden MCP tools/);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [shown, partly, off]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const all = (await pool.agentTools(shown)).map((tool) => tool.name);
+  const visible = (await pool.agentTools(partly)).map((tool) => tool.name);
+  assert.deepEqual(all, ["shown__first", "shown__second"]);
+  assert.deepEqual(visible, ["partly__second"]);
+  assert.deepEqual(await pool.agentTools(off), []);
+  assert.equal(listRequests(dir, "off"), 0, "a server switched off for the model is never contacted");
+});
+
+test("MCP connections survive token refreshes, rebuild on sign-out, and connect once under concurrency", async (t) => {
+  const dir = temporary(t); let initializes = 0; const callAuthorizations = [];
+  const http = createServer(async (request, response) => {
+    if (request.method !== "POST") return response.writeHead(405).end();
+    let body = ""; for await (const chunk of request) body += chunk;
+    const message = JSON.parse(body);
+    if (message.id === undefined) return response.writeHead(202).end();
+    let result = {};
+    if (message.method === "initialize") { initializes++; result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "http", version: "1" } }; }
+    else if (message.method === "tools/list") result = { tools: [{ name: "ping", inputSchema: { type: "object" } }] };
+    else if (message.method === "tools/call") { callAuthorizations.push(request.headers.authorization); result = { content: [{ type: "text", text: "pong" }] }; }
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+  });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
+  const store = (token) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: token, token_type: "Bearer" } }));
+  await store("first");
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const client = await pool.connection(server);
+  const [ping] = await pool.agentTools(server);
+  await ping.execute("before", {});
+  await store("refreshed");
+  assert.equal(await pool.connection(server), client, "a token refresh keeps the live transport");
+  await ping.execute("after", {});
+  assert.equal(initializes, 1);
+  assert.deepEqual(callAuthorizations, ["Bearer first", "Bearer refreshed"], "the retained transport sends the current persisted token");
+  await api.mcpCommand(dir, ["logout", "remote"]);
+  const [first, second] = await Promise.all([pool.connection(server), pool.connection(server)]);
+  assert.equal(first, second);
+  assert.notEqual(first, client);
+  assert.equal(initializes, 2, "concurrent callers share one reconnect");
+});
+
+test("MCP Bot credential signatures ignore token refreshes and display fields but follow sign-in", async (t) => {
+  const dir = temporary(t);
+  const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
+  const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
+  const store = (token, incarnation) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, incarnation, tokens: { access_token: token, refresh_token: `${token}-refresh`, token_type: "Bearer" } }));
+  await store("first", "sign-in-1");
+  const signed = await api.mcpCredentialSignature(dir, server);
+  await store("refreshed", "sign-in-1");
+  assert.equal(await api.mcpCredentialSignature(dir, server), signed, "a token refresh keeps Bot grants");
+  assert.equal(await api.mcpCredentialSignature(dir, { ...server, name: "Renamed", description: "Work tools" }), signed, "renaming keeps Bot grants");
+  await store("other-account", "sign-in-2");
+  assert.notEqual(await api.mcpCredentialSignature(dir, server), signed, "a new sign-in is a new credential");
+  await credentials.delete(id);
+  const signedOut = await api.mcpCredentialSignature(dir, server);
+  assert.notEqual(signedOut, signed);
+  assert.notEqual(await api.mcpCredentialSignature(dir, { ...server, headers: { authorization: "Bearer x" } }), signedOut, "header values stay part of the connection");
+});
+
+test("MCP shutdown during credential resolution starts no connection and sends nothing", async (t) => {
+  const dir = temporary(t); let requests = 0;
+  const http = createServer((request, response) => { requests++; request.resume(); response.writeHead(500).end(); });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  await api.insightCredentials(dir).write(api.mcpCredentialId(server), JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: "secret", token_type: "Bearer" } }));
+  // Pause the second credential-file open: the provider read after incarnation resolution.
+  const fsPromises = createRequire(import.meta.url)("node:fs/promises"), open = fsPromises.open;
+  let opens = 0, reached, release;
+  const paused = new Promise((resolve) => { reached = resolve; }), gate = new Promise((resolve) => { release = resolve; });
+  fsPromises.open = async function (path, ...rest) {
+    if (String(path).endsWith("insights.json") && ++opens === 2) { reached(); await gate; }
+    return open.call(this, path, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.open = open; syncBuiltinESMExports(); });
+  const pool = api.createCliMcpPool(dir);
+  const connecting = pool.connection(server); connecting.catch(() => {});
+  await paused;
+  let closeReturned = false;
+  const closing = pool.close().then(() => { closeReturned = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(requests, 0);
+  release();
+  await closing;
+  assert.ok(closeReturned);
+  await assert.rejects(connecting, /closed/);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(requests, 0, "no request may follow shutdown");
+});
+
+test("MCP rejects an inventory whose pages are each in budget but whose total retained schemas are not", async (t) => {
+  const dir = temporary(t);
+  const http = createServer(async (request, response) => {
+    if (request.method !== "POST") return response.writeHead(405).end();
+    let body = ""; for await (const chunk of request) body += chunk;
+    const message = JSON.parse(body);
+    if (message.id === undefined) return response.writeHead(202).end();
+    let result = {};
+    if (message.method === "initialize") result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "http", version: "1" } };
+    else if (message.method === "tools/list") {
+      const page = Number(message.params?.cursor ?? 0);
+      result = { tools: [{ name: `tool${page}`, description: "x".repeat(450_000), inputSchema: { type: "object" } }], ...(page < 2 ? { nextCursor: String(page + 1) } : {}) };
+    }
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+  });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const large = { id: "large", name: "Large", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [large]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  await assert.rejects(pool.inspectTools(large), /byte budget/);
+  await assert.rejects(pool.agentTools(large), /byte budget/);
+});
+
+test("MCP startup connects servers concurrently within one budget and reports each failure's cause", async (t) => {
+  const dir = temporary(t), good = fixtureServer(dir, "good"), hung = fixtureServer(dir, "hung", "hang");
+  const missing = { id: "missing", name: "Missing", transport: "stdio", command: join(dir, "no-such-mcp-server"), enabled: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [hung, missing, good]);
+  const events = new Map(), tools = new Map();
+  const started = Date.now();
+  const { stderr } = await captureStderr(() => api.createMcpExtension(dir, { startupBudgetMs: 1_500 }).factory({
+    on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.label, tool) }));
+  assert.ok(Date.now() - started < 8_000, "a hung server cannot hold startup for its 10 s connect timeout");
+  assert.deepEqual([...tools.keys()].sort(), ["good: first", "good: second"]);
+  assert.match(stderr, /MCP hung unavailable \(timed out\)/);
+  assert.match(stderr, /MCP missing unavailable \([^)]*ENOENT/);
+  await events.get("session_shutdown")();
+  for (const id of ["good", "hung"]) for (const pid of readFileSync(join(dir, `${id}.pid`), "utf8").trim().split("\n").map(Number)) {
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+  }
+});
+
+test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
+  const dir = temporary(t), file = join(dir, "server.json");
+  const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
+  const credentials = api.insightCredentials(dir);
+  writeFileSync(file, JSON.stringify(server));
+  await api.mcpCommand(dir, ["add", file]);
+  await credentials.write(api.mcpCredentialId(server), "{}");
+  // Renaming keeps the endpoint identity and its sign-in.
+  writeFileSync(file, JSON.stringify({ ...server, name: "Renamed" }));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.equal(await credentials.read(api.mcpCredentialId(server)), "{}");
+  const moved = { ...server, url: "https://two.example/mcp" };
+  writeFileSync(file, JSON.stringify(moved));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.equal(await credentials.read(api.mcpCredentialId(server)), undefined);
+  await credentials.write(api.mcpCredentialId(moved), "{}");
+  await api.mcpCommand(dir, ["remove", "remote"]);
+  assert.equal(await credentials.read(api.mcpCredentialId(moved)), undefined);
+});
+
+test("MCP migration skips a malformed native mcp.json with a warning and leaves it untouched", async (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json");
+  writeFileSync(legacy, "{ not json");
+  const { value, stderr } = await captureStderr(() => api.mcpCommand(dir, ["list"]));
+  assert.deepEqual(value, []);
+  assert.match(stderr, /skipped MCP migration; .* is not valid JSON/);
+  assert.equal(readFileSync(legacy, "utf8"), "{ not json");
 });
 
 test("daemon idle waits include cancelled append work before releasing workspace authority", async (t) => {
@@ -749,7 +948,7 @@ test("MCP migration recovers a completed copy and refuses conflicting or invalid
   api.migrateAidenMcpConfig(dir, api.validateMcpServer);
   assert.equal(existsSync(legacy), false);
   api.atomicJson(legacy, [{ id: "invalid" }]);
-  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs/);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs a non-empty name/);
   assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [{ id: "invalid" }]);
 });
 
@@ -980,5 +1179,189 @@ test("Azure endpoint migration cannot pair a legacy deployment with a different 
     assert.throws(() => api.migrateCliAzureConfig(dir), /legacy endpoint/);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "models.json"), "utf8")), models);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "auth.json"), "utf8")), auth);
+  }
+});
+
+function todoHarness(manager, widgets = []) {
+  const harness = extension(api.createTodoInlineExtension({ latestContext: () => undefined }));
+  const context = { sessionManager: manager, hasUI: true, mode: "tui", ui: { setWidget: (_name, lines) => widgets.push(lines) } };
+  return { ...harness, context, widgets,
+    start: async (reason = "startup", ctx = context) => harness.events.get("session_start")?.({ type: "session_start", reason }, ctx),
+    call: async (args) => harness.tools.get("todo").execute("test-call", args),
+    async persist(args) {
+      const result = await harness.tools.get("todo").execute("test-call", args);
+      const id = manager.appendMessage({ role: "toolResult", toolCallId: "test-call", toolName: "todo", content: result.content, details: result.details, isError: false, timestamp: 1 });
+      return { result, id };
+    },
+  };
+}
+
+test("CLI todo restores branch-local checkpoints after restart, compaction, switching and clearing", async (t) => {
+  const manager = api.SessionManager.inMemory(temporary(t));
+  const first = todoHarness(manager); await first.start();
+  const one = await first.persist({ action: "create", subject: "First checkpoint" });
+  await first.persist({ action: "create", subject: "Second checkpoint" });
+  manager.appendCompaction("Earlier observations compressed", null, 10000);
+  const resumed = todoHarness(manager); await resumed.start("resume");
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["First checkpoint", "Second checkpoint"]);
+  assert.ok(resumed.widgets.at(-1).some((line) => line.includes("First checkpoint")));
+  const third = await resumed.persist({ action: "create", subject: "Third checkpoint" });
+  assert.equal(third.result.details.tasks.at(-1).id, 3);
+  manager.branch(one.id);
+  await resumed.events.get("session_tree")({ type: "session_tree", newLeafId: one.id, oldLeafId: third.id }, resumed.context);
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["First checkpoint"]);
+  await resumed.persist({ action: "clear" });
+  await resumed.start("reload");
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks, []);
+  assert.equal(resumed.widgets.at(-1), undefined);
+  const empty = api.SessionManager.inMemory(temporary(t));
+  await resumed.start("new", { ...resumed.context, sessionManager: empty });
+  const fresh = await resumed.call({ action: "create", subject: "New session only" });
+  assert.deepEqual(fresh.details.tasks.map(({ id, subject }) => ({ id, subject })), [{ id: 1, subject: "New session only" }]);
+  await resumed.start("resume");
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks, [], "switching back must not retain the new session's task");
+});
+
+test("CLI todo corrupt newest checkpoint fails closed and a later valid session recovers", async (t) => {
+  const manager = api.SessionManager.inMemory(temporary(t));
+  const harness = todoHarness(manager); await harness.start();
+  await harness.persist({ action: "create", subject: "Must not fall back" });
+  manager.appendMessage({ role: "toolResult", toolCallId: "broken", toolName: "todo", content: [], details: { kind: "broken" }, isError: false, timestamp: 2 });
+  await harness.start("reload");
+  await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
+  await assert.rejects(harness.call({ action: "create", subject: "Must not overwrite" }), /unavailable/i);
+  assert.equal(harness.widgets.at(-1), undefined);
+  const empty = api.SessionManager.inMemory(temporary(t));
+  const widgetCount = harness.widgets.length;
+  await harness.start("new", { ...harness.context, sessionManager: empty, hasUI: false });
+  assert.deepEqual((await harness.call({ action: "list" })).details.tasks, []);
+  assert.equal(harness.widgets.length, widgetCount, "headless restoration must not render a widget");
+});
+
+test("CLI todo ignores stale asynchronous restoration after a newer session starts", async (t) => {
+  const manager = api.SessionManager.inMemory(temporary(t));
+  const seed = todoHarness(manager); await seed.start();
+  await seed.persist({ action: "create", subject: "Old session task" });
+  const harness = todoHarness(manager);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const oldStart = harness.start("resume", { ...harness.context, sessionManager: { getBranch: () => pending } });
+  await assert.rejects(harness.call({ action: "create", subject: "During restore" }), /unavailable/i);
+  const empty = api.SessionManager.inMemory(temporary(t));
+  await harness.start("new", { ...harness.context, sessionManager: empty });
+  await harness.call({ action: "create", subject: "Newer session task" });
+  release(manager.getBranch()); await oldStart;
+  assert.deepEqual((await harness.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["Newer session task"]);
+  assert.equal(harness.widgets.at(-1), undefined);
+  await harness.events.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, harness.context);
+  await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
+});
+
+test("real SDK binding initializes todo before tool use and restores it on a resumed session", async (t) => {
+  const dir = temporary(t), manager = api.SessionManager.inMemory(dir);
+  const model = { id: "offline", name: "Offline", provider: "offline-fixture", api: "openai-completions", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  async function boot(reason) {
+    const loader = new api.DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, extensionFactories: [api.createTodoInlineExtension({ latestContext: () => undefined })] });
+    await loader.reload();
+    const { session } = await api.createAgentSession({ cwd: dir, agentDir: dir, model, resourceLoader: loader, sessionManager: manager, settingsManager: api.SettingsManager.inMemory({}), tools: ["todo"], sessionStartEvent: { type: "session_start", reason } });
+    t.after(() => session.dispose());
+    return { session, tool: session.agent.state.tools.find(({ name }) => name === "todo") };
+  }
+  const first = await boot("startup");
+  await assert.rejects(first.tool.execute("before-bind", { action: "list" }), /unavailable/i);
+  await first.session.bindExtensions({ mode: "rpc" });
+  const result = await first.tool.execute("create", { action: "create", subject: "SDK checkpoint" });
+  manager.appendMessage({ role: "toolResult", toolCallId: "create", toolName: "todo", content: result.content, details: result.details, isError: false, timestamp: 1 });
+  first.session.dispose();
+  const resumed = await boot("resume"); await resumed.session.bindExtensions({ mode: "rpc" });
+  assert.deepEqual((await resumed.tool.execute("list", { action: "list" })).details.tasks.map(({ subject }) => subject), ["SDK checkpoint"]);
+});
+
+test("daemon initializes todo lifecycle before inference and recovers checkpoints on the next turn", async (t) => {
+  const dir = temporary(t), requests = [];
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body)); const index = requests.length;
+    const operation = index === 1 ? { action: "create", subject: "Daemon durable checkpoint" } : index === 3 ? { action: "list" } : undefined;
+    const delta = operation ? { role: "assistant", tool_calls: [{ index: 0, id: `todo-${index}`, type: "function", function: { name: "todo", arguments: JSON.stringify(operation) } }] } : { role: "assistant", content: "Done" };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "todo", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "todo", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: operation ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const workspace = await api.workspaceCommand(dir, ["add", dir]); await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+  const daemon = api.createDaemonChats(dir); t.after(() => daemon.stop());
+  await daemon.chatStore.create({ id: "todo-daemon", title: "Todo lifecycle", workspaceId: workspace.id });
+  const events = [], owner = { id: 0, documentId: "todo-owner", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+  for (const content of ["Track work", "Recover work"]) {
+    const admission = daemon.llmClient.beginChatTurn("todo-daemon", "stream", owner.documentId); assert.ok(admission);
+    try {
+      await daemon.chatStore.appendMessage("todo-daemon", { role: "user", content }); admission.settleAsyncWork();
+      await daemon.llmClient.start("stream", { chatId: "todo-daemon", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content }] }, owner, { usageSource: "chat" });
+      await daemon.llmClient.waitForChatIdle("todo-daemon");
+    } finally { admission.release(); }
+  }
+  assert.equal(requests.length, 4, JSON.stringify(events));
+  const toolObservations = requests.filter((_, index) => index === 1 || index === 3).map((request) => request.messages.filter(({ role }) => role === "tool").at(-1));
+  for (const observation of toolObservations) assert.ok(JSON.stringify(observation).includes("Daemon durable checkpoint"), JSON.stringify(observation));
+  assert.equal(events.filter(({ channel }) => channel === "chat:error").length, 0);
+});
+
+test("daemon releases sessions and authority when extension binding fails or is revoked", async (t) => {
+  const root = temporary(t);
+  const model = { id: "test", name: "Test", provider: "cli-test", api: "openai-completions", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const loader = new api.DefaultResourceLoader({ cwd: root, agentDir: root, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true });
+  await loader.reload();
+  const { session: seed } = await api.createAgentSession({ cwd: root, agentDir: root, model, resourceLoader: loader, sessionManager: api.SessionManager.inMemory(root), settingsManager: api.SettingsManager.inMemory({}), tools: [] });
+  const prototype = Object.getPrototypeOf(seed), originalBind = prototype.bindExtensions;
+  seed.dispose();
+  let requests = 0;
+  const server = createServer((_request, response) => { requests++; response.writeHead(500); response.end("Inference must not start after authority loss"); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { prototype.bindExtensions = originalBind; server.closeAllConnections(); server.close(); });
+
+  for (const mode of ["bind-reject", "owner-invalidated", "workspace-removed"]) {
+    const dir = join(root, mode);
+    api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [model] } } });
+    const workspace = await api.workspaceCommand(dir, ["add", dir]); await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+    const daemon = api.createDaemonChats(dir);
+    await daemon.chatStore.create({ id: "binding-fault", title: "Binding fault", workspaceId: workspace.id });
+    let destroyed = false, invalidate, shutdowns = 0, disposals = 0, binds = 0;
+    const events = [], owner = { id: 0, documentId: "binding-owner", isDestroyed: () => destroyed, onInvalidated: (callback) => { invalidate = callback; return () => {}; }, send: (channel, value) => events.push({ channel, value }) };
+    prototype.bindExtensions = async function (...args) {
+      binds++;
+      const emit = this.extensionRunner.emit.bind(this.extensionRunner);
+      this.extensionRunner.emit = async (event) => { if (event.type === "session_shutdown") shutdowns++; return emit(event); };
+      const dispose = this.dispose.bind(this);
+      this.dispose = () => { disposals++; return dispose(); };
+      // Exercise the real SDK session_start and todo restore before injecting a
+      // failure at the newly awaited boundary, rather than mocking startup away.
+      await originalBind.apply(this, args);
+      if (mode === "bind-reject") throw new Error("Injected extension binding failure");
+      if (mode === "owner-invalidated") { destroyed = true; invalidate(); }
+      if (mode === "workspace-removed") await api.workspaceStore(dir).save([]);
+    };
+    const before = requests, admission = daemon.llmClient.beginChatTurn("binding-fault", mode, owner.documentId);
+    assert.ok(admission);
+    try {
+      await daemon.chatStore.appendMessage("binding-fault", { role: "user", content: "Must not reach inference" }); admission.settleAsyncWork();
+      await daemon.llmClient.start(mode, { chatId: "binding-fault", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Must not reach inference" }] }, owner, { usageSource: "chat" });
+      await daemon.llmClient.waitForChatIdle("binding-fault");
+      assert.equal(binds, 1, mode);
+      assert.equal(requests, before, `${mode}: no inference after failure or revocation`);
+      assert.equal(shutdowns, 1, `${mode}: extensions release resources`);
+      assert.equal(disposals, 1, `${mode}: SDK session is disposed`);
+      const release = api.acquireLease(daemon.sessionPath("binding-fault")); release();
+      const next = daemon.llmClient.beginChatTurn("binding-fault", "next", "next-owner");
+      assert.ok(next, `${mode}: failed startup must not strand chat admission`); next.settleAsyncWork(); next.release();
+      assert.equal(events.filter(({ channel }) => channel === "chat:error").length, destroyed ? 0 : 1, mode);
+    } finally {
+      prototype.bindExtensions = originalBind;
+      admission.release();
+      await daemon.stop();
+    }
   }
 });

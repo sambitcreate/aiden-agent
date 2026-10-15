@@ -19,6 +19,93 @@ private struct AidenBotProfileSkeletonView: View {
     }
 }
 
+/// Saves Profile's identity edits (R15). Each edit already shows on the page; it
+/// goes to the Mac after the ones before it, on the newest revision, waiting
+/// briefly for a connection. A lost answer is settled by re-reading the Bot, so
+/// a retry never repeats a change the Mac saved; anything else hands back the
+/// Mac's Bot (when it could be read) for the page to roll back to, with an error.
+@MainActor
+final class AidenBotIdentitySaver {
+    enum Outcome: Equatable {
+        case saved(AidenBotDetail)
+        case failed(authoritative: AidenBotDetail?)
+    }
+
+    static let failedMessage = "That change wasn’t saved. Please try again."
+
+    private(set) var inFlight = 0
+    private var revision: String?
+    private var lane: Task<Void, Never>?
+    private let send: AidenBotMainActorCall<@MainActor (AidenBotIdentityPatch, String) async throws -> AidenBotDetail>
+    private let refresh: AidenBotMainActorCall<@MainActor () async throws -> AidenBotDetail>
+    private let waitForConnection: (@MainActor (Duration) async -> Bool)?
+    private let connectionHold: Duration
+    private let requestLimit: Duration
+
+    init(
+        send: @escaping @MainActor (AidenBotIdentityPatch, String) async throws -> AidenBotDetail,
+        refresh: @escaping @MainActor () async throws -> AidenBotDetail,
+        waitForConnection: (@MainActor (Duration) async -> Bool)? = nil,
+        connectionHold: Duration = .seconds(8),
+        requestLimit: Duration = .seconds(12)
+    ) {
+        self.send = AidenBotMainActorCall(send)
+        self.refresh = AidenBotMainActorCall(refresh)
+        self.waitForConnection = waitForConnection
+        self.connectionHold = connectionHold
+        self.requestLimit = requestLimit
+    }
+
+    /// The Bot as last read. A read never moves the revision under a save in flight.
+    func adopt(_ detail: AidenBotDetail) {
+        if inFlight == 0 { revision = detail.revision }
+    }
+
+    func save(_ patch: AidenBotIdentityPatch) async -> Outcome {
+        inFlight += 1
+        defer { inFlight -= 1 }
+        let previous = lane
+        let job = Task { @MainActor [weak self] () -> Outcome in
+            await previous?.value
+            guard let self else { return .failed(authoritative: nil) }
+            return await self.run(patch)
+        }
+        lane = Task { _ = await job.value }
+        return await job.value
+    }
+
+    private func run(_ patch: AidenBotIdentityPatch) async -> Outcome {
+        do {
+            if let waitForConnection, await waitForConnection(connectionHold) == false {
+                throw URLError(.notConnectedToInternet)
+            }
+            guard let revision else { throw URLError(.resourceUnavailable) }
+            let send = send
+            let detail = try await aidenBotWithin(requestLimit) { try await send.call(patch, revision) }
+            self.revision = detail.revision
+            return .saved(detail)
+        } catch {
+            let refresh = refresh
+            guard let fresh = try? await aidenBotWithin(requestLimit, { try await refresh.call() }) else {
+                return .failed(authoritative: nil)
+            }
+            revision = fresh.revision
+            return patch.isSatisfied(by: fresh) ? .saved(fresh) : .failed(authoritative: fresh)
+        }
+    }
+}
+
+extension AidenBotIdentityPatch {
+    /// The Bot already holds every field this patch sets.
+    func isSatisfied(by detail: AidenBotDetail) -> Bool {
+        (name == nil || name == detail.name)
+            && (purpose == nil || purpose == detail.purpose)
+            && (instructions == nil || instructions == detail.instructions)
+            && (avatar == nil || avatar == detail.avatar.semantic)
+            && (chatActivity == nil || chatActivity == detail.chatActivity)
+    }
+}
+
 private enum AidenBotProfileField: Hashable {
     case name
     case subtitle
@@ -46,7 +133,7 @@ struct AidenBotProfileView: View {
     @State private var isLoading = true
     @State private var loadError: String?
     @State private var mutationError: String?
-    @State private var isSaving = false
+    @State private var saver: AidenBotIdentitySaver?
     @State private var isDeleting = false
     @State private var loadGeneration: UInt = 0
     @State private var nameText = ""
@@ -71,11 +158,12 @@ struct AidenBotProfileView: View {
         AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
     }
 
+    /// Edits apply at once, cached or fresh, connected or not (R15); each waits
+    /// briefly for the Mac and rolls back with an error if it doesn't reach it.
     private var canWrite: Bool {
         capturedContext.map(coordinator.isCurrent) == true
-            && coordinator.connectionState == .connected
+            && saver != nil
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
-            && !isSaving
             && !isDeleting
     }
 
@@ -91,7 +179,7 @@ struct AidenBotProfileView: View {
                     if showsDismissButton {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Done") { dismiss() }
-                                .disabled(isSaving || isDeleting)
+                                .disabled(isDeleting)
                         }
                     }
                     if detail != nil {
@@ -101,10 +189,15 @@ struct AidenBotProfileView: View {
                     }
                 }
                 .navigationDestination(isPresented: $isShowingAdvanced) {
-                    AidenBotAdvancedView(coordinator: coordinator, botID: botID) { updated in
-                        apply(updated)
-                        onChanged()
-                    }
+                    AidenBotAdvancedView(
+                        coordinator: coordinator,
+                        botID: botID,
+                        onSaved: { updated in
+                            apply(updated)
+                            onChanged()
+                        },
+                        onSaveFailed: { mutationError = $0 }
+                    )
                 }
                 .navigationDestination(isPresented: $isShowingMemory) {
                     if let memoryModel {
@@ -112,16 +205,22 @@ struct AidenBotProfileView: View {
                     }
                 }
         }
-        .interactiveDismissDisabled(isSaving || isDeleting || avatarModel?.isBusy == true)
-        .task(id: sessionIdentity) {
+        .interactiveDismissDisabled(isDeleting || avatarModel?.isBusy == true)
+        // A new pairing starts over; a connection coming up only re-reads, keeping edits.
+        .task(id: sessionIdentity.pairing) {
             let expectedSession = sessionIdentity
             reset(for: expectedSession)
             await load(for: expectedSession)
         }
+        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+            guard connected, detail != nil else { return }
+            let expectedSession = sessionIdentity
+            Task { await load(for: expectedSession) }
+        }
         .task(id: avatarModel?.sessionIdentity) {
             await avatarModel?.sessionDidChangeAndRefresh()
         }
-        .onChange(of: sessionIdentity) { oldValue, newValue in
+        .onChange(of: sessionIdentity.pairing) { oldValue, newValue in
             if showsDismissButton, capturedContext != nil, oldValue != newValue { dismiss() }
         }
         .onChange(of: photoItem) { _, item in
@@ -301,7 +400,10 @@ struct AidenBotProfileView: View {
                 photoMenu(detail)
             }
             if avatarModel?.isBusy == true {
-                ProgressView()
+                // The photo is on its way: a shimmer, never a spinner (R15).
+                AidenBotSkeletonBlock(width: 112, height: 6, radius: 3, reduceMotion: reduceMotion)
+                    .accessibilityElement()
+                    .accessibilityLabel("Saving photo")
             }
             if avatarModel?.hasCandidate == true {
                 HStack(spacing: 12) {
@@ -384,7 +486,7 @@ struct AidenBotProfileView: View {
     private func instructionsRow(_ detail: AidenBotDetail) -> some View {
         NavigationLink {
             AidenBotInstructionsEditorView(initialText: detail.instructions, canSave: canWrite) { text in
-                await saveInstructions(text)
+                startInstructionsSave(text)
             }
         } label: {
             HStack(spacing: 12) {
@@ -417,7 +519,7 @@ struct AidenBotProfileView: View {
         isLoading = true
         loadError = nil
         mutationError = nil
-        isSaving = false
+        saver = nil
         character = nil
         memoryModel = nil
         isShowingMemory = false
@@ -427,6 +529,7 @@ struct AidenBotProfileView: View {
 
     @MainActor
     private func apply(_ loaded: AidenBotDetail) {
+        saver?.adopt(loaded)
         detail = loaded
         if focusedField != .name { nameText = loaded.name }
         if focusedField != .subtitle { subtitleText = loaded.purpose }
@@ -449,9 +552,25 @@ struct AidenBotProfileView: View {
         await model.load()
     }
 
+    /// The saver for this pairing, made once the page has a Bot to edit.
+    @MainActor
+    private func prepareSaver(context: AidenRemoteRequestContext) {
+        guard saver == nil else { return }
+        let botID = botID
+        saver = AidenBotIdentitySaver(
+            send: { patch, revision in
+                try await coordinator.remoteClient(for: context).updateBotIdentity(id: botID, revision: revision, patch: patch)
+            },
+            refresh: { try await coordinator.remoteClient(for: context).bot(id: botID) },
+            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) }
+        )
+        if let detail { saver?.adopt(detail) }
+    }
+
     @MainActor
     private func load(for expectedSession: AidenBotCustomAccessSessionIdentity) async {
-        guard sessionIdentity == expectedSession, !isSaving else { return }
+        // An edit on its way keeps what the page shows until the Mac answers it.
+        guard sessionIdentity.pairing == expectedSession.pairing, saver?.inFlight ?? 0 == 0 else { return }
         loadGeneration &+= 1
         let generation = loadGeneration
         isLoading = true
@@ -465,13 +584,17 @@ struct AidenBotProfileView: View {
                let cachedDetail = cached.details.first(where: { $0.id == botID }),
                isCurrentLoad(generation, session: expectedSession, context: context) {
                 apply(cachedDetail)
+                // The saved details are editable at once; edits wait for the Mac (R15).
+                capturedContext = context
+                prepareSaver(context: context)
                 isLoading = false
             }
             let loaded = try await coordinator.remoteClient(for: context).bot(id: botID)
             guard isCurrentLoad(generation, session: expectedSession, context: context),
-                  loaded.id == botID, !Task.isCancelled else { return }
+                  loaded.id == botID, !Task.isCancelled, saver?.inFlight ?? 0 == 0 else { return }
             apply(loaded)
             capturedContext = context
+            prepareSaver(context: context)
             loadError = nil
             if opensAdvanced, !hasOpenedAdvanced {
                 hasOpenedAdvanced = true
@@ -501,8 +624,9 @@ struct AidenBotProfileView: View {
         } catch {
             if let context = requestContext,
                await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard loadGeneration == generation, sessionIdentity == expectedSession else { return }
-            capturedContext = nil
+            guard loadGeneration == generation, sessionIdentity.pairing == expectedSession.pairing else { return }
+            // Saved details stay editable offline; with none, there is nothing to edit.
+            if detail == nil { capturedContext = nil }
             loadError = detail == nil ? error.localizedDescription : "Offline — showing saved details"
             isLoading = false
         }
@@ -514,7 +638,7 @@ struct AidenBotProfileView: View {
         session: AidenBotCustomAccessSessionIdentity,
         context: AidenRemoteRequestContext
     ) -> Bool {
-        loadGeneration == generation && sessionIdentity == session && coordinator.isCurrent(context)
+        loadGeneration == generation && sessionIdentity.pairing == session.pairing && coordinator.isCurrent(context)
     }
 
     // MARK: Saving
@@ -542,41 +666,32 @@ struct AidenBotProfileView: View {
     @MainActor
     private func saveCharacter(_ next: AidenBotCharacterDraft) async {
         guard let detail, let patch = try? next.identityPatch(comparedTo: detail) else { return }
-        let previous = character
+        // Shown at once; a failed save puts back the Mac's character.
         character = next
-        if await !saveIdentity(patch) { character = previous }
+        _ = await saveIdentity(patch)
     }
 
+    /// The editor closes at once and the change goes out (R15). Returns why it
+    /// can't be saved, for the editor to show, or nil once it is on its way.
     @MainActor
-    private func saveInstructions(_ text: String) async -> Bool {
-        guard let detail else { return false }
+    private func startInstructionsSave(_ text: String) -> String? {
+        guard let detail else { return AidenBotIdentitySaver.failedMessage }
         let next = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard next != detail.instructions else { return true }
-        guard !next.isEmpty else {
-            mutationError = "Instructions can’t be empty."
-            return false
-        }
-        guard let patch = try? AidenBotIdentityPatch(instructions: next) else {
-            mutationError = "Those instructions are too long."
-            return false
-        }
-        return await saveIdentity(patch)
+        guard next != detail.instructions else { return nil }
+        guard !next.isEmpty else { return "Instructions can’t be empty." }
+        guard let patch = try? AidenBotIdentityPatch(instructions: next) else { return "Those instructions are too long." }
+        Task { _ = await saveIdentity(patch) }
+        return nil
     }
 
-    /// Sends one identity change. A lost response is reconciled by re-reading
-    /// the Bot, so a retry never repeats a change the Mac already saved.
+    /// Sends one identity change the page already shows. On failure the page
+    /// rolls back to the Mac's Bot, or to what it showed before, with an error.
     @MainActor
     private func saveIdentity(_ patch: AidenBotIdentityPatch) async -> Bool {
         guard canWrite, let context = capturedContext, coordinator.isCurrent(context),
-              let detail else { return false }
-        isSaving = true
-        defer { isSaving = false }
-        do {
-            let updated = try await coordinator.remoteClient(for: context).updateBotIdentity(
-                id: botID,
-                revision: detail.revision,
-                patch: patch
-            )
+              let saver, let before = detail else { return false }
+        switch await saver.save(patch) {
+        case let .saved(updated):
             guard coordinator.isCurrent(context), updated.id == botID else { return false }
             apply(updated)
             _ = await coordinator.withRetainedInstallationData(for: context) {
@@ -588,16 +703,14 @@ struct AidenBotProfileView: View {
             }
             onChanged()
             return true
-        } catch is CancellationError {
-            return false
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+        case let .failed(authoritative):
             guard coordinator.isCurrent(context) else { return false }
-            if let authoritative = try? await coordinator.remoteClient(for: context).bot(id: botID),
-               coordinator.isCurrent(context) {
-                apply(authoritative)
-            }
-            mutationError = "That change wasn’t saved. Please try again."
+            let restored = authoritative ?? before
+            detail = restored
+            if focusedField != .name { nameText = restored.name }
+            if focusedField != .subtitle { subtitleText = restored.purpose }
+            character = AidenBotCharacterDraft(avatar: restored.avatar.semantic)
+            mutationError = AidenBotIdentitySaver.failedMessage
             return false
         }
     }
@@ -635,14 +748,15 @@ struct AidenBotProfileView: View {
 struct AidenBotInstructionsEditorView: View {
     let initialText: String
     let canSave: Bool
-    let onSave: (String) async -> Bool
+    /// Starts the save and returns nil, or says why it can't be saved.
+    let onSave: (String) -> String?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     @State private var text: String
-    @State private var isSaving = false
+    @State private var problem: String?
 
-    init(initialText: String, canSave: Bool, onSave: @escaping (String) async -> Bool) {
+    init(initialText: String, canSave: Bool, onSave: @escaping (String) -> String?) {
         self.initialText = initialText
         self.canSave = canSave
         self.onSave = onSave
@@ -650,33 +764,41 @@ struct AidenBotInstructionsEditorView: View {
     }
 
     var body: some View {
-        TextEditor(text: $text)
-            .scrollContentBackground(.hidden)
-            .padding(12)
-            .frame(minHeight: 220, alignment: .top)
-            .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .background(palette.canvas.ignoresSafeArea())
-            .navigationTitle("Instructions")
-            .navigationBarTitleDisplayMode(.inline)
-            .accessibilityLabel("Instructions")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") {
-                        Task {
-                            isSaving = true
-                            let saved = await onSave(text)
-                            isSaving = false
-                            if saved { dismiss() }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .aidenSolidFillTint()
-                    .disabled(!canSave || isSaving || text == initialText)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            TextEditor(text: $text)
+                .scrollContentBackground(.hidden)
+                .padding(12)
+                .frame(minHeight: 220, alignment: .top)
+                .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .accessibilityLabel("Instructions")
+            if let problem {
+                Label(problem, systemImage: "exclamationmark.circle")
+                    .font(.footnote)
+                    .foregroundStyle(palette.danger)
             }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("Instructions")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: text) { _, _ in problem = nil }
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                // Saves as it closes; a failure comes back on the Profile (R15).
+                Button("Save") {
+                    if let reason = onSave(text) {
+                        problem = reason
+                    } else {
+                        dismiss()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .aidenSolidFillTint()
+                .disabled(!canSave || text == initialText)
+            }
+        }
     }
 }

@@ -8,6 +8,24 @@ function syncDirectory(path: string): void {
   try { fsyncSync(directory); } finally { closeSync(directory); }
 }
 
+/**
+ * Read the native file only to recognise a legacy Aiden array. Anything else
+ * (absent, a native pi object, unreadable, or malformed) belongs to pi and must
+ * never block Aiden: an unusable file is skipped with a one-line warning.
+ */
+function readLegacySource(legacy: string): { bytes: Buffer; servers: unknown[] } | undefined {
+  let bytes: Buffer;
+  try { bytes = readFileSync(legacy); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") process.stderr.write(`aiden: skipped MCP migration; ${legacy} is unreadable (${(error as NodeJS.ErrnoException).code ?? "error"}).\n`);
+    return undefined;
+  }
+  let data: unknown;
+  try { data = JSON.parse(bytes.toString("utf8")); }
+  catch { process.stderr.write(`aiden: skipped MCP migration; ${legacy} is not valid JSON.\n`); return undefined; }
+  return Array.isArray(data) ? { bytes, servers: data } : undefined;
+}
+
 /** Keep Aiden's server IDs and encrypted credentials separate from native pi MCP. */
 export function migrateAidenMcpConfig(
   agentDir: string,
@@ -16,20 +34,17 @@ export function migrateAidenMcpConfig(
 ): void {
   const legacy = join(agentDir, "mcp.json");
   const destination = join(agentDir, "aiden-mcp.json");
-  // Every store construction runs this, so the no-op paths (no legacy file, or
-  // a native pi config object) stay lock-free: a read must not contend with,
+  // Startup and the first store construction in each process run this, so the
+  // no-op paths (no legacy file, or a native pi config object) stay lock-free: a read must not contend with,
   // or throw beside, another process's writer. Anything else is re-read and
   // validated under the lease below.
-  try { if (!Array.isArray(JSON.parse(readFileSync(legacy, "utf8")))) return; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; }
+  if (!readLegacySource(legacy)) return;
   const release = acquireLease(destination);
   try {
-    let bytes: Buffer;
-    try { bytes = readFileSync(legacy); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
     // Parse, validate and back up the same snapshot, never two different reads.
-    const data: unknown = JSON.parse(bytes.toString("utf8"));
-    if (!Array.isArray(data)) return;
+    const source = readLegacySource(legacy);
+    if (!source) return;
+    const { bytes, servers: data } = source;
     data.forEach(validate);
     const existing = readJson<unknown>(destination, undefined);
     if (existing !== undefined && !isDeepStrictEqual(existing, data)) {

@@ -29,7 +29,12 @@ import {
   summarizeScheduleToolCall,
   type ScheduleToolDependencies,
 } from "./schedule-tool.js";
-import { scheduledMcpServerBinding } from "./schedule-mcp-binding.js";
+import { createHash } from "node:crypto";
+import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import {
+  assertScheduledMcpServerBindings,
+  scheduledMcpServerBinding,
+} from "./schedule-mcp-binding.js";
 
 const ASSISTANT_MODEL_SELECTION = {
   providerId: "local-provider",
@@ -1280,6 +1285,32 @@ test("Assistant approval resolution binds exact enabled MCP names", async () => 
   );
 });
 
+test("an approved schedule survives renaming its MCP server but not a connection change", () => {
+  const renamed = { ...GMAIL_SERVER, name: "Work mail", description: "Inbox for the team" };
+  assert.doesNotThrow(() => assertScheduledMcpServerBindings([renamed], [GMAIL_BINDING]));
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, url: "https://replacement.test/mcp" }], [GMAIL_BINDING]),
+    /changed after this automation was confirmed/iu,
+  );
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, headers: { authorization: "Bearer other" } }], [GMAIL_BINDING]),
+    /changed after this automation was confirmed/iu,
+  );
+  // Schedules approved before display fields left the binding keep running
+  // until the server changes; then they need approval again.
+  const legacy = {
+    id: GMAIL_SERVER.id,
+    fingerprint: createHash("sha256")
+      .update(JSON.stringify(mcpRuntimeConnectionSnapshot(GMAIL_SERVER)))
+      .digest("hex"),
+  };
+  assert.doesNotThrow(() => assertScheduledMcpServerBindings([GMAIL_SERVER], [legacy]));
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, url: "https://replacement.test/mcp" }], [legacy]),
+    /changed after this automation was confirmed/iu,
+  );
+});
+
 test("Assistant automation proposals cannot combine project and MCP capabilities", () => {
   assert.throws(
     () =>
@@ -1605,5 +1636,23 @@ test("generic automation tools never list or change a Bot's routines", async () 
   assert.deepEqual(
     (assistantListed.tasks as Array<{ id: string }>).map((task) => task.id),
     ["task-1"],
+  );
+});
+
+test("schedule_task cannot choose a server switched off for the model", async () => {
+  const fake = fakeDependencies();
+  fake.dependencies.listMcpServers = async () => [{ ...GMAIL_SERVER, exposure: "hidden" }];
+  const proposal = prepareAssistantScheduleProposal(
+    { action: "create", name: "Brief", cron: "0 9 * * *", timezone: "UTC", prompt: "Summarize.", mcpServerIds: ["gmail"] },
+    new Date("2026-07-30T12:00:00.000Z"),
+  );
+  await assert.rejects(resolveAssistantScheduleMcpServers(proposal, fake.dependencies.listMcpServers), /off for the model/u);
+  await assert.rejects(
+    prepareStandardScheduleApproval(
+      { action: "create", name: "Brief", cron: "0 9 * * *", prompt: "Summarize.", permission: "full", mcpServerIds: ["gmail"] },
+      ASSISTANT_MODEL_SELECTION,
+      fake.dependencies,
+    ),
+    /off for the model/u,
   );
 });

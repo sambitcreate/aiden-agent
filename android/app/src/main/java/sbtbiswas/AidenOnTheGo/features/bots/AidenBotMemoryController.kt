@@ -24,9 +24,11 @@ interface AidenBotMemoryTransport {
     suspend fun edit(botId: String, edit: AidenBotMemoryEdit, key: UUID): AidenBotMemory
 }
 
-class AidenRemoteBotMemoryTransport(private val client: AidenRemoteClient) : AidenBotMemoryTransport {
-    override suspend fun memory(botId: String) = client.botMemory(botId)
-    override suspend fun edit(botId: String, edit: AidenBotMemoryEdit, key: UUID) = client.editBotMemory(botId, edit, key)
+/** The memory routes on [client]'s Mac, read at each request so the page needn't wait for the connection to open. */
+class AidenRemoteBotMemoryTransport(private val client: () -> AidenRemoteClient?) : AidenBotMemoryTransport {
+    private fun connected() = client() ?: throw AidenRemoteClientException.Disconnected()
+    override suspend fun memory(botId: String) = connected().botMemory(botId)
+    override suspend fun edit(botId: String, edit: AidenBotMemoryEdit, key: UUID) = connected().editBotMemory(botId, edit, key)
 }
 
 /** Why a memory write didn't land, in the terms the person sees. */
@@ -103,24 +105,44 @@ data class AidenBotMemoryUiState(
 )
 
 /**
- * Drives Profile → Memory: loads `GET /bots/{id}/memory`, saves one edit at a time through
- * `POST /bots/{id}/memory/edits`, and refetches after every failed write because an error
- * answer carries no view.
+ * Drives Profile → Memory: loads `GET /bots/{id}/memory` and saves edits through
+ * `POST /bots/{id}/memory/edits`.
+ *
+ * Every edit applies at once (R15): Save closes the dialog with the new words in place, Delete
+ * takes the row away, Erase empties both groups. The Mac's answer replaces that; a failure puts
+ * back what was there (unless the Mac's own view has replaced it since), says why, reopens an
+ * edit's dialog on the person's words, and reloads, because an error answer carries no view.
+ * Nothing waits for the connection to show a change: a request waits for it, up to
+ * [holdMillis], and is bounded by [limitMillis].
  */
 class AidenBotMemoryController(
     val botId: String,
     private val transport: AidenBotMemoryTransport,
-    private val keys: AidenBotActionKeys = AidenBotActionKeys()
+    private val keys: AidenBotActionKeys = AidenBotActionKeys(),
+    private val waitForConnection: (suspend () -> Boolean)? = null,
+    private val holdMillis: Long = AIDEN_BOT_SAVE_HOLD_MILLIS,
+    private val limitMillis: Long = AIDEN_BOT_SAVE_LIMIT_MILLIS
 ) {
     private val _state = MutableStateFlow(AidenBotMemoryUiState())
     val state: StateFlow<AidenBotMemoryUiState> = _state.asStateFlow()
 
-    /** Reads the memory; returns false when it could not. */
+    /** How many views the Mac has answered with, so a failure rolls back only what nothing newer replaced. */
+    private var macViews = 0
+
+    private suspend fun <T : Any> request(block: suspend () -> T): T = aidenBotHeldRequest(waitForConnection, holdMillis, limitMillis, block)
+
+    private fun macView(view: AidenBotMemory) {
+        macViews += 1
+        _state.update { it.copy(view = view) }
+    }
+
+    /** Reads the memory; returns false when it could not. Skeletons show until it does. */
     suspend fun load(): Boolean {
         _state.update { it.copy(isLoading = true) }
         return try {
-            val view = transport.memory(botId)
-            _state.update { it.copy(view = view, isLoading = false, loadFailed = false) }
+            val view = request { transport.memory(botId) }
+            macView(view)
+            _state.update { it.copy(isLoading = false, loadFailed = false) }
             true
         } catch (error: CancellationException) {
             throw error
@@ -147,47 +169,59 @@ class AidenBotMemoryController(
     }
 
     /**
-     * Saves the open edit. Success closes the dialog with the Mac's fresh view; a failure keeps
-     * it open with the person-facing reason and reloads the page underneath.
+     * Saves the open edit: the dialog closes with the new words in place at once. The Mac's view
+     * replaces them; a failure puts the entry back and reopens the dialog on the person's words
+     * with the reason, and reloads the page underneath.
      */
     suspend fun saveEdit(): Boolean {
         val editing = _state.value.editing ?: return false
         if (!editing.canSave) return false
+        val before = _state.value.view ?: return false
         val edit = AidenBotMemoryEdit.Replace(editing.target, editing.entryId, editing.trimmed)
-        _state.update { it.copy(editing = editing.copy(isSaving = true, error = null)) }
+        val writes = macViews
+        _state.update { it.copy(view = before.replacing(editing.target, editing.entryId, editing.trimmed), editing = null, actionError = null) }
         val action = "replace:${editing.entryId}:${editing.trimmed}"
         return try {
-            val view = transport.edit(botId, edit, keys.key(action))
+            val view = request { transport.edit(botId, edit, keys.key(action)) }
             keys.complete(action)
-            _state.update { it.copy(view = view, editing = null, actionError = null) }
+            macView(view)
             true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             keys.failed(action, error)
             _state.update { current ->
-                current.copy(editing = current.editing?.copy(isSaving = false, error = aidenBotMemoryError(error)))
+                current.copy(
+                    view = if (macViews == writes) before else current.view,
+                    // Another edit opened since keeps its dialog; the reason shows under the page then.
+                    editing = current.editing ?: editing.copy(isSaving = false, error = aidenBotMemoryError(error)),
+                    actionError = if (current.editing != null) aidenBotMemoryError(error) else current.actionError
+                )
             }
             load()
             false
         }
     }
 
-    /** Deletes one entry right away (phones have no Undo). A failure reloads the page. */
+    /** Deletes one entry: the row goes at once (phones have no Undo). A failure brings it back and reloads. */
     suspend fun delete(target: AidenBotMemoryTarget, entryId: String): Boolean {
-        if (_state.value.view?.readable != true || entryId in _state.value.deleting) return false
+        val before = _state.value.view ?: return false
+        if (!before.readable || entryId in _state.value.deleting) return false
         val action = "remove:$entryId"
-        _state.update { it.copy(deleting = it.deleting + entryId, actionError = null, eraseFailed = false) }
+        val writes = macViews
+        _state.update {
+            it.copy(view = before.without(target, entryId), deleting = it.deleting + entryId, actionError = null, eraseFailed = false)
+        }
         return try {
-            val view = transport.edit(botId, AidenBotMemoryEdit.Remove(target, entryId), keys.key(action))
+            val view = request { transport.edit(botId, AidenBotMemoryEdit.Remove(target, entryId), keys.key(action)) }
             keys.complete(action)
-            _state.update { it.copy(view = view) }
+            macView(view)
             true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             keys.failed(action, error)
-            _state.update { it.copy(actionError = aidenBotMemoryError(error)) }
+            _state.update { it.copy(view = if (macViews == writes) before else it.view, actionError = aidenBotMemoryError(error)) }
             load()
             false
         } finally {
@@ -195,20 +229,22 @@ class AidenBotMemoryController(
         }
     }
 
-    /** Erases both groups. It is also the only way out of an unreadable memory. */
+    /** Erases both groups at once. It is also the only way out of an unreadable memory. A failure brings everything back. */
     suspend fun erase(): Boolean {
-        if (_state.value.isErasing || _state.value.view == null) return false
-        _state.update { it.copy(isErasing = true, actionError = null, eraseFailed = false) }
+        val before = _state.value.view ?: return false
+        if (_state.value.isErasing) return false
+        val writes = macViews
+        _state.update { it.copy(view = before.erased(), editing = null, isErasing = true, actionError = null, eraseFailed = false) }
         return try {
-            val view = transport.edit(botId, AidenBotMemoryEdit.Clear, keys.key(ERASE))
+            val view = request { transport.edit(botId, AidenBotMemoryEdit.Clear, keys.key(ERASE)) }
             keys.complete(ERASE)
-            _state.update { it.copy(view = view, editing = null) }
+            macView(view)
             true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             keys.failed(ERASE, error)
-            _state.update { it.copy(eraseFailed = true) }
+            _state.update { it.copy(view = if (macViews == writes) before else it.view, eraseFailed = true) }
             load()
             false
         } finally {
@@ -220,6 +256,31 @@ class AidenBotMemoryController(
         const val ERASE = "clear"
     }
 }
+
+private fun AidenBotMemory.updating(target: AidenBotMemoryTarget, change: (AidenBotMemoryStore) -> AidenBotMemoryStore) = when (target) {
+    AidenBotMemoryTarget.USER -> copy(user = change(user))
+    AidenBotMemoryTarget.MEMORY -> copy(memory = change(memory))
+}
+
+private fun AidenBotMemoryStore.withUsed(used: Int) = copy(usedChars = used.coerceIn(0, AidenBotMemoryWire.MAX_CHARS))
+
+/** [entryId] with [text] in place, as the page shows it until the Mac answers (the Mac gives it a new id). */
+internal fun AidenBotMemory.replacing(target: AidenBotMemoryTarget, entryId: String, text: String) = updating(target) { store ->
+    val old = store.entries.firstOrNull { it.id == entryId } ?: return@updating store
+    store.copy(entries = store.entries.map { if (it.id == entryId) AidenBotMemoryEntry(entryId, text) else it })
+        .withUsed(store.usedChars - old.text.length + text.length)
+}
+
+internal fun AidenBotMemory.without(target: AidenBotMemoryTarget, entryId: String) = updating(target) { store ->
+    val old = store.entries.firstOrNull { it.id == entryId } ?: return@updating store
+    store.copy(entries = store.entries - old).withUsed(store.usedChars - old.text.length)
+}
+
+internal fun AidenBotMemory.erased() = copy(
+    readable = true,
+    user = user.copy(entries = emptyList(), usedChars = 0, overBudget = false),
+    memory = memory.copy(entries = emptyList(), usedChars = 0, overBudget = false)
+)
 
 /** Keeps a draft within the 500-character entry limit, counting code points. */
 fun aidenBotMemoryClamp(text: String): String {

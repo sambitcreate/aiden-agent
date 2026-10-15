@@ -15,10 +15,16 @@ import {
 import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
 import { createModels } from "@earendil-works/pi-ai";
-import { appendPiMessages, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
+import {
+  appendPiMessages,
+  beginPiVisibleTurnLease,
+  syncChatMessagesToPiSession,
+  type PiVisibleTurnLease,
+} from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
 import { buildAgentRuntimeOptions } from "./generation-runtime.js";
 import {
+  isPiManagedCancellationError,
   PiAgentRuntimeExtensionRegistry,
   PiAgentRuntimeHarness,
   PiAgentRuntimeHostError,
@@ -32,11 +38,12 @@ import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
-import { createGenerationContextTransform } from "./generation-context.js";
+import { executeMcpAgentTool } from "./mcp-tool-result.js";
+import { chatContextPressureFromProjection, createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
 import { createChatRunInputAdmission } from "./chat-run-input-admission.js";
-import type { Chat } from "./types.js";
+import type { Chat, ChatMessage } from "./types.js";
 
 function testHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
@@ -69,6 +76,7 @@ async function managedTestHarness(
   options: {
     tools?: AgentTool[];
     deferredTools?: readonly AgentTool[];
+    lateDeferredTools?: PiAgentRuntimeHarnessOptions["lateDeferredTools"];
     extensions?: PiAgentRuntimeHarnessOptions["extensions"];
     identity?: PiAgentRuntimeHarnessOptions["identity"];
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
@@ -87,6 +95,8 @@ async function managedTestHarness(
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
     onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
+    contextPromptSections?: PiAgentRuntimeHarnessOptions["contextPromptSections"];
+    onJournalError?: PiRuntimeSessionBinding["onJournalError"];
   } = {},
 ) {
   const core = createFauxCore({
@@ -128,6 +138,7 @@ async function managedTestHarness(
   );
   const harness = new PiAgentRuntimeHarness({
     deferredTools: options.deferredTools,
+    lateDeferredTools: options.lateDeferredTools,
     extensions: options.extensions,
     identity: options.identity,
     convertToLlm,
@@ -154,6 +165,7 @@ async function managedTestHarness(
     beforeToolCall: options.beforeToolCall,
     prepareNextTurnWithContext: options.prepareNextTurnWithContext,
     ...(options.onContextProjection ? { onContextProjection: options.onContextProjection } : {}),
+    ...(options.contextPromptSections ? { contextPromptSections: options.contextPromptSections } : {}),
     durability: {
       session,
       appendMessages: options.appendMessages ?? appendPiMessages,
@@ -168,6 +180,7 @@ async function managedTestHarness(
       },
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.effects ? { effects: options.effects } : {}),
+      ...(options.onJournalError ? { onJournalError: options.onJournalError } : {}),
     },
   });
   return { core, harness, session };
@@ -799,6 +812,23 @@ test("nested result redaction removes stale structured data before the script re
   assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { content: [{ type: "text", text: "redacted" }], hasStructured: false });
 });
 
+test("nested MCP calls hand the script their full result while the parent transcript stays bounded", async () => {
+  let harness!: PiAgentRuntimeHarness;
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const long = `HEAD${"x".repeat(120_000)}TAIL`;
+  const remote: AgentTool = Object.assign({ name: "mcp_remote", label: "Remote", description: "Remote", parameters: Type.Object({}),
+    execute: () => executeMcpAgentTool(async () => ({ content: [{ type: "text", text: long }], structuredContent: { rows: Array.from({ length: 2_000 }, (_, id) => ({ id })) } })) }, { codemode: true });
+  ({ harness } = testHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'const r = await tools.mcp_remote({}); text({ length: r.content[0].text.length, rows: r.structuredContent.rows.length });' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], { initialState: { tools: [remote, codemode] } }));
+  await harness.prompt("run");
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { length: long.length, rows: 2_000 });
+  assert.ok(JSON.stringify(harness.state.messages).length < 40_000);
+});
+
 test("nested call arguments are retained within per-call and per-script budgets that reset for each parent", async () => {
   let harness!: PiAgentRuntimeHarness;
   const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
@@ -1013,6 +1043,7 @@ test("managed run fails closed when a tool plan cannot become durable", async ()
       return { content: [{ type: "text", text: "unsafe" }], details: null };
     },
   };
+  const journalErrors: unknown[] = [];
   const { harness } = await managedTestHarness(
     [
       fauxAssistantMessage([fauxToolCall(tool.name, {})], {
@@ -1027,6 +1058,7 @@ test("managed run fails closed when a tool plan cannot become durable", async ()
         }
         await appendPiMessages(session, messages);
       },
+      onJournalError: (error) => journalErrors.push(error),
     },
   );
 
@@ -1043,6 +1075,9 @@ test("managed run fails closed when a tool plan cannot become durable", async ()
   assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "session");
   assert.equal(toolCalls, 0);
   assert.doesNotMatch(JSON.stringify(outcome), /PRIVATE_JOURNAL_CANARY/u);
+  // A real write failure must stay distinguishable from a Stop.
+  assert.ok(journalErrors.length > 0);
+  assert.equal(journalErrors.some(isPiManagedCancellationError), false);
 });
 
 test("managed before-tool policy faults stop before another provider request", async () => {
@@ -1394,6 +1429,97 @@ test("managed cancellation settles while input journaling is still pending", asy
   assert.equal(settled?.kind, "app_cancelled");
   assert.equal(outcome.kind, "app_cancelled");
   assert.equal(core.state.callCount, 0);
+});
+
+test("Stop mid-stream reports only a cancellation to the journal and the visible turn recovers intact", async () => {
+  const journalErrors: unknown[] = [];
+  let streaming!: () => void;
+  const atStream = new Promise<void>((resolve) => {
+    streaming = resolve;
+  });
+  const { core, harness, session } = await managedTestHarness([], {
+    onJournalError: (error) => journalErrors.push(error),
+    streamFn: (model, _context, options) => {
+      const stream = createAssistantMessageEventStream();
+      const partial = {
+        ...fauxAssistantMessage("partial answer"),
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial });
+        options?.signal?.addEventListener(
+          "abort",
+          () => stream.push({ type: "error", reason: "aborted", error: { ...partial, stopReason: "aborted" } }),
+          { once: true },
+        );
+        streaming();
+      });
+      return stream;
+    },
+  });
+  const model = core.getModel();
+  const visible = (id: string, role: "user" | "assistant", content: string, createdAt: number): ChatMessage => ({
+    id,
+    role,
+    content,
+    createdAt,
+  });
+  const journalText = async () =>
+    (await session.buildContext()).messages.map((message) => {
+      if (message.role !== "user" && message.role !== "assistant") return [message.role, ""];
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+      return [message.role, text];
+    });
+  await syncChatMessagesToPiSession(
+    session,
+    [visible("u1", "user", "earlier question", 1), visible("a1", "assistant", "earlier answer", 2)],
+    model,
+    false,
+  );
+  const before = await journalText();
+
+  let lease: PiVisibleTurnLease | undefined;
+  const running = harness.runManaged(
+    { kind: "append-and-run", message: { role: "user", content: "new question", timestamp: 3 } },
+    {
+      beforeDurableTurn: async () => {
+        lease = await beginPiVisibleTurnLease(session);
+      },
+    },
+  );
+  await atStream;
+  const settled = await harness.cancelAndSettle();
+  assert.equal(settled?.kind, "app_cancelled");
+  assert.equal((await running).kind, "app_cancelled");
+
+  // Stop interrupts the journal writes the aborted reply would make. Those are
+  // reported as a cancellation, never as a write failure.
+  assert.ok(journalErrors.length > 0);
+  assert.ok(journalErrors.every(isPiManagedCancellationError));
+
+  // The host's recovery: wait for detached writes, roll the turn back, then
+  // re-journal what the visible chat kept.
+  await harness.pendingDurabilitySettlement();
+  assert.ok(lease?.started);
+  await lease.rollback();
+  assert.deepEqual(await journalText(), before);
+  await syncChatMessagesToPiSession(
+    session,
+    [visible("u2", "user", "new question", 3), visible("a2", "assistant", "partial answer", 4)],
+    model,
+    false,
+  );
+  assert.deepEqual(await journalText(), [
+    ["user", "earlier question"],
+    ["assistant", "earlier answer"],
+    ["user", "new question"],
+    ["assistant", "partial answer"],
+  ]);
 });
 
 test("managed startup keeps a prior failed assistant durable", async () => {
@@ -2916,6 +3042,45 @@ test("context projection observers see the coordinator's projection and cannot f
   }
 });
 
+test("the meter's projection breaks static context down and lists tools deferred behind tool search", async () => {
+  const skills = "\n\n<available_skills>" + "skill: summarize documents. ".repeat(40) + "</available_skills>";
+  const remote = Object.assign<AgentTool, object>({
+    name: "remote_docs", label: "Docs", description: "Search documents", replay: "never",
+    parameters: Type.Object({ query: Type.String() }),
+    execute: async () => ({ content: [{ type: "text", text: "found" }], details: null }),
+  }, { codemode: true, discovery: { namespace: "docs", label: "Documents" } });
+  let harness!: PiAgentRuntimeHarness;
+  const codemode = createPiCodemodeTool({ tools: () => harness.getCallableTools(), executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const pressures: ReturnType<typeof chatContextPressureFromProjection>[] = [];
+  const prepared = await managedTestHarness([fauxAssistantMessage("done")], {
+    tools: [codemode],
+    deferredTools: [remote],
+    initialSystemPrompt: `Managed prompt${skills}`,
+    contextPromptSections: { skills },
+    onContextProjection: (projection, options) => {
+      pressures.push(chatContextPressureFromProjection(projection, options));
+    },
+  });
+  harness = prepared.harness;
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "measure", timestamp: 1 },
+  });
+
+  assert.equal(outcome.kind, "completed");
+  const pressure = pressures[0];
+  assert.ok(pressure?.breakdown);
+  const { categories, deferred } = pressure.breakdown;
+  assert.equal(categories.reduce((sum, category) => sum + category.tokens, 0), pressure.staticTokens);
+  assert.ok(categories.some((category) => category.id === "skills" && category.tokens > 0));
+  // codemode is declared host tooling; the remote tool waits behind it, unpriced.
+  assert.equal(categories.some((category) => category.id === "mcp-tools"), false);
+  assert.deepEqual(
+    deferred.map(({ count, servers }) => ({ count, servers: servers.map(({ name, count: tools }) => ({ name, tools })) })),
+    [{ count: 1, servers: [{ name: "Documents", tools: 1 }] }],
+  );
+});
+
 test("between-tool pressure includes queued steering before the next provider request", async () => {
   let toolStarted!: () => void;
   const atTool = new Promise<void>((resolve) => {
@@ -3558,7 +3723,7 @@ test("deferred MCP schemas stay outside provider requests while discovery and ap
   assert.equal(dispatches, 1);
   const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
   if (result?.role !== "toolResult") throw new Error("Missing codemode result");
-  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text.replace(/^==> text \d+\/\d+ <==\n/u, "")));
   assert.equal(outputs[0].tools[0].name, "remote_docs");
   assert.deepEqual(outputs[0].tools[0].inputSchema.required, ["query"]);
   assert.equal(outputs[1].isError, false);
@@ -3569,4 +3734,90 @@ test("deferred MCP schemas stay outside provider requests while discovery and ap
   assert.deepEqual(effects.filter((effect) => effect.toolName === "remote_docs").map((effect) => effect.state).sort(), ["completed", "remote_error"]);
   const fresh = testHarness([], { initialState: { tools: [codemode] } }).harness;
   assert.deepEqual(fresh.getCallableTools().map((tool) => tool.name), ["codemode"]);
+});
+
+test("a persisted system-only prefix adds no hidden summary before bounded active fallback", async () => {
+  const requests: string[] = [];
+  for (const persistSystem of [false, true]) {
+    let summaryCalls = 0;
+    const systemPrompt = "Required policy ".padEnd(44_000, "s");
+    const currentUser: AgentMessage = { role: "user", content: "CURRENT_REQUEST_47 ".padEnd(4_000, "u"), timestamp: 2 };
+    const messages: AgentMessage[] = persistSystem
+      ? [{ role: "system", content: systemPrompt, timestamp: 1 }, currentUser]
+      : [currentUser];
+    const { core, harness, session } = await managedTestHarness([
+      (context) => {
+        const users = context.messages.filter((message) => message.role === "user");
+        requests.push(JSON.stringify(users.map((message) => message.content)));
+        return fauxAssistantMessage("bounded fallback acknowledged");
+      },
+    ], {
+      initialSystemPrompt: systemPrompt, initialMessages: messages, contextWindow: 16_000,
+      generationContextTransform: true,
+      summaryResponses: [() => { summaryCalls += 1; return fauxAssistantMessage("Do not summarize an empty conversation"); }],
+    });
+    await appendPiMessages(session, messages);
+    const before = await session.getEntries();
+    const outcome = await harness.runManaged({ kind: "continue-durable-tail" });
+    assert.equal(outcome.kind, "completed");
+    assert.equal(outcome.emergencyProjection?.kind, "active_payload_replaced");
+    assert.equal(summaryCalls, 0, `persisted system=${persistSystem}`);
+    assert.equal(core.state.callCount, 1);
+    const after = await session.getEntries();
+    assert.deepEqual(after.slice(0, before.length), before, "original durable evidence remains intact");
+    assert.equal(after.some((entry) => entry.type === "compaction"), false);
+  }
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0], requests[1], "provider-facing bounded user fallback is independent of persisted system placement");
+  assert.doesNotMatch(requests[0], /CURRENT_REQUEST_47/u, "the oversized active user was replaced rather than silently truncated");
+});
+
+test("an MCP server that finished discovery after the turn started is searchable and callable through codemode", async (t) => {
+  const store = await effectStoreFixture(t);
+  let harness!: PiAgentRuntimeHarness;
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const toolSets: string[][] = [];
+  const approved: string[] = [];
+  const late: AgentTool[] = [];
+  const remote = Object.assign<AgentTool, object>({
+    name: "late_docs", label: "Docs", description: "Search late documents", replay: "never",
+    parameters: Type.Object({ query: Type.String() }),
+    async execute() {
+      return { content: [{ type: "text", text: "late document" }], details: null };
+    },
+  }, { codemode: true, discovery: Object.freeze({ namespace: "mcp:late", label: "Late docs" }) });
+  // The server arrives while the provider is still planning its first call.
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => { arrive = () => { late.push(remote, { ...remote, name: "codemode" }); resolve(); }; });
+  const codemode = createPiCodemodeTool({
+    tools: () => harness.getCallableTools(),
+    executeTool: (...args) => harness.executeNestedToolCall(...args),
+    settled: () => arrived,
+  });
+  const prepared = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'text(await searchTools("late documents")); text(await tools.late_docs({query:"q"}));' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    tools: [codemode], lateDeferredTools: () => late, effects: { store, chatId: "late" },
+    beforeToolCall: async ({ toolCall }) => { approved.push(toolCall.name); return undefined; },
+    streamFn: (model, context, options) => {
+      toolSets.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return providerCore.streamSimple(model, context, options);
+    },
+  });
+  harness = prepared.harness;
+  providerCore = prepared.core;
+  assert.deepEqual(harness.getCallableTools().map((tool) => tool.name), ["codemode"]);
+  setTimeout(arrive, 10);
+  assert.equal((await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "search", timestamp: 1 } })).kind, "completed");
+  // Declarations never change as the server arrives; a late duplicate name is ignored.
+  assert.deepEqual(toolSets, [["codemode"], ["codemode"]]);
+  assert.deepEqual(harness.getCallableTools().map((tool) => tool.name), ["codemode", "late_docs"]);
+  assert.deepEqual(approved, ["codemode", "late_docs"]);
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text.replace(/^==> text \d+\/\d+ <==\n/u, "")));
+  assert.deepEqual(outputs[0].tools.map((entry: { name: string }) => entry.name), ["late_docs"]);
+  assert.equal(outputs[1].isError, false);
+  assert.match(JSON.stringify(outputs[1]), /late document/u);
 });

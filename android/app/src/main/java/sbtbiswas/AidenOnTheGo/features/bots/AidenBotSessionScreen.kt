@@ -40,9 +40,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.features.chat.AidenPowerSaveScope
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.chat.AidenQuestionCard
+import sbtbiswas.AidenOnTheGo.features.chat.AidenRunInputSplitButton
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
@@ -120,6 +124,22 @@ fun AidenBotSessionScreen(
     /** The "Memory updated" caption opens Profile → Memory. */
     onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
 ) {
+    // One battery-saver receiver for the chat's faces, marks and skeletons.
+    AidenPowerSaveScope {
+        AidenBotSessionContent(botId, coordinator, onNavigateBack, onNavigateToBotProfile, botDeleter, onBotDeleted, onNavigateToBotMemory)
+    }
+}
+
+@Composable
+private fun AidenBotSessionContent(
+    botId: String,
+    coordinator: AidenRemoteCoordinator,
+    onNavigateBack: () -> Unit,
+    onNavigateToBotProfile: (String) -> Unit,
+    botDeleter: AidenBotDeleter?,
+    onBotDeleted: () -> Unit,
+    onNavigateToBotMemory: (String) -> Unit
+) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -129,6 +149,7 @@ fun AidenBotSessionScreen(
     val knownState = coordinator.botCache.botList.value?.bots?.firstOrNull { it.id == botId }?.sessionState
         ?: coordinator.botCache.getBotDetail(botId)?.sessionState
     val cl = client
+    val activitySupportedNow = aidenBotActivitySupported(serverInfo, coordinator.cachedBotActivitySupported)
     if (cl == null) {
         Box(Modifier.fillMaxSize().background(palette.canvas), contentAlignment = Alignment.Center) {
             Text(stringResource(R.string.bot_session_connect), color = palette.secondary)
@@ -136,25 +157,72 @@ fun AidenBotSessionScreen(
         return
     }
     val controller = remember(botId, cl) {
-        AidenBotSessionController(botId, AidenRemoteBotSessionTransport(cl), scope, knownState)
+        // The pairing names the chat's cached transcript and its unsent messages (R14, R17).
+        val sessionKey = coordinator.installationStore.activeInstallation?.let { AidenBotSessionKey(it.instanceId, it.deviceId, botId) }
+        AidenBotSessionController(
+            botId,
+            AidenRemoteBotSessionTransport(cl),
+            scope,
+            knownState,
+            activitySupported = activitySupportedNow,
+            sessionKey = sessionKey,
+            store = coordinator.botSessionStore
+        )
     }
     DisposableEffect(controller) {
         controller.start()
         onDispose { controller.stopFollowing() }
     }
     val ui by controller.state.collectAsStateWithLifecycle()
+    val activitySupported = activitySupportedNow
+    LaunchedEffect(controller, activitySupported) { controller.setActivitySupported(activitySupported) }
+    // The wording comes from the Bot's detail: cached first, then the Mac's. Only a Mac that
+    // offers Chat activity now decides it, and the feed never waits for this read. Only this
+    // Bot's detail is followed, so another Bot's save doesn't redraw the chat.
+    val detailFlow = remember(botId) { coordinator.botCache.botDetails.map { it[botId] }.distinctUntilChanged() }
+    val botDetail by detailFlow.collectAsStateWithLifecycle(coordinator.botCache.getBotDetail(botId))
+    val chatActivity = aidenBotChatActivity(serverInfo, botDetail, coordinator.cachedBotActivitySupported)
+    LaunchedEffect(controller, chatActivity) {
+        controller.setWording(chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
+    }
+    // One read of the Bot per visit; Advanced opens from it (or the cache) without another.
+    LaunchedEffect(controller) {
+        val pairing = coordinator.activePairing
+        try {
+            val fresh = cl.bot(botId)
+            // A read that outlived its pairing never reaches another pairing's cache.
+            if (coordinator.holdsReadAuthority(cl, pairing?.instanceId) && coordinator.holdsPairing(pairing)) {
+                coordinator.botCache.putBotDetail(fresh)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep the cached or default wording; the line still works.
+        }
+    }
     var draft by rememberSaveable(botId) { mutableStateOf("") }
+    // Steer or Queue while the Bot works: Queue by default, and Queue again once the turn ends.
+    var busyMode by remember(botId) { mutableStateOf(AidenStreamInputMode.QUEUE) }
+    LaunchedEffect(ui.isRunning) { busyMode = aidenBotBusyMode(busyMode, ui.isRunning) }
     var confirmingDelete by remember { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
     // "Set up" (no AI model) and "Advanced" (access changed) open the Bot's Advanced settings.
     var advancedBot by remember { mutableStateOf<AidenBotDetail?>(null) }
     var openingAdvanced by remember { mutableStateOf(false) }
+    // Advanced opens at once from the Bot this visit read (or the cache), never waiting on the
+    // connection (R15). Only with nothing cached does it read the Bot first.
     fun openAdvanced() {
+        botDetail?.let {
+            advancedBot = it
+            return
+        }
         if (openingAdvanced) return
         openingAdvanced = true
+        val pairing = coordinator.activePairing
         scope.launch {
             try {
                 val detail = cl.bot(botId)
+                if (!coordinator.holdsReadAuthority(cl, pairing?.instanceId) || !coordinator.holdsPairing(pairing)) return@launch
                 coordinator.botCache.putBotDetail(detail)
                 advancedBot = detail
             } catch (e: CancellationException) {
@@ -194,13 +262,24 @@ fun AidenBotSessionScreen(
     val canAnswerProposals = serverInfo?.supportsBotProactive == true
     val canOpenMemory = serverInfo?.supportsBotMemory == true
     val listState = rememberLazyListState()
-    val entries = ui.session?.entries.orEmpty()
+    // The Mac's transcript, or the cached one while connecting (R14).
+    val entries = ui.entries
     val rows = remember(entries) { aidenBotSessionRows(entries) }
     val partial = ui.session?.partial
+    val outgoing = ui.outgoing
+    // Set by this person's own send, so their message scrolls into view even when they had scrolled up.
+    var justSent by remember { mutableStateOf(false) }
 
-    LaunchedEffect(entries.size, partial, ui.isInterrupted, ui.needsModel) {
-        val count = listState.layoutInfo.totalItemsCount
-        if (count > 0) listState.animateScrollToItem(count - 1)
+    LaunchedEffect(
+        entries.size, partial, ui.isInterrupted, ui.needsModel,
+        ui.queued.size, outgoing.size, ui.session?.activity?.phase
+    ) {
+        val layout = listState.layoutInfo
+        val count = layout.totalItemsCount
+        val last = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+        // Reading back stays put; only the end of the chat (or one's own send) follows new rows.
+        if (count > 0 && aidenBotFollowsTranscriptEnd(last, count, justSent)) listState.animateScrollToItem(count - 1)
+        justSent = false
     }
 
     if (confirmingDelete) {
@@ -232,13 +311,26 @@ fun AidenBotSessionScreen(
     }
 
     advancedBot?.let { bot ->
+        val chatActivityHost = remember(cl) { coordinator.botChatActivityHost() }
+        val saveHost = remember(cl) { coordinator.botSaveHost() }
         AidenBotAdvancedSheet(
             bot = bot,
             client = cl,
             onDismiss = { advancedBot = null },
-            onSaved = { saved ->
-                coordinator.botCache.putBotDetail(saved)
+            // Save applies at once (R15) and writes through the pinned cache, so a save that lands
+            // after an unpair or re-pair never reaches the other pairing's cache.
+            onSaved = {
                 advancedBot = null
+                scope.launch { controller.refetch() }
+            },
+            saveHost = saveHost,
+            onSaveSettled = { scope.launch { controller.refetch() } },
+            onSaveFailed = coordinator::presentError,
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
+            chatActivityHost = chatActivityHost,
+            // The host has already cached the pick (pinned to its pairing); this only refreshes the chat.
+            onChatActivitySaved = { saved ->
+                controller.setWording(saved.chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
                 scope.launch { controller.refetch() }
             }
         )
@@ -275,13 +367,15 @@ fun AidenBotSessionScreen(
                 contentPadding = PaddingValues(horizontal = AidenUi.ScreenGutter, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (ui.isLoading && ui.session == null) {
-                    item(key = "loading") { AidenBotSessionSkeleton() }
-                } else if (ui.loadFailed && ui.session == null && !ui.needsModel) {
+                // Skeletons while the first read is on its way; they hold still once it fails,
+                // and the hint above the composer offers Try again.
+                val skeleton = aidenBotSkeletonLook(ui)
+                if (skeleton != AidenBotSkeletonLook.HIDDEN) {
+                    item(key = "loading") { AidenBotSessionSkeleton(shimmer = skeleton == AidenBotSkeletonLook.SHIMMERING) }
+                } else if (ui.botMissing && ui.session == null) {
                     item(key = "failed") {
                         Text(
-                            if (ui.botMissing) stringResource(R.string.bot_session_missing)
-                            else stringResource(R.string.bot_session_load_failed),
+                            stringResource(R.string.bot_session_missing),
                             color = palette.secondary,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth().padding(top = 48.dp)
@@ -329,6 +423,18 @@ fun AidenBotSessionScreen(
                         AidenBotAssistantBubble(text = partial, streaming = ui.isRunning)
                     }
                 }
+                // The Mac's Queued bubbles, then this phone's own messages on their way (R14).
+                items(ui.queued, key = { "queued-${it.submissionId}" }) { message -> AidenBotQueuedBubble(message) }
+                items(outgoing, key = { it.id }) { message ->
+                    AidenBotOutgoingBubble(
+                        message = message,
+                        look = ui.look(message),
+                        canRetry = ui.canSend,
+                        onRetry = { scope.launch { controller.retrySend(message.id) } },
+                        onRemove = { controller.discardSend(message.id) }
+                    )
+                }
+                item(key = "status") { AidenBotStatusLine(ui) }
                 if (ui.isInterrupted) {
                     item(key = "interrupted") {
                         AidenBotInterruptedCard(
@@ -365,21 +471,30 @@ fun AidenBotSessionScreen(
                 if (ui.needsModel) {
                     item(key = "needs-model") { AidenBotNeedsModelCard(busy = openingAdvanced, onSetUp = ::openAdvanced) }
                 }
-                ui.actionError?.let { message ->
+                // A notice about unsent messages (copy shared with iOS), else the last action's error.
+                (ui.notice?.let { resources.getString(it.text) } ?: ui.actionError)?.let { message ->
                     item(key = "error") {
-                        Text(message, color = palette.danger, style = MaterialTheme.typography.bodySmall)
+                        Text(message, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
+            AidenBotConnectionHintRow(aidenBotConnectionHint(ui, System.currentTimeMillis()), onTryAgain = { scope.launch { controller.refetch() } })
             AidenBotSessionComposer(
                 draft = draft,
                 onDraftChange = { draft = it.take(AidenBotSessionWire.MAX_MESSAGE_LENGTH) },
                 placeholder = aidenBotChatPlaceholder(identity.name),
                 enabled = ui.canSend,
+                busy = ui.offersBusyModes,
+                busyMode = busyMode,
+                onPickBusyMode = { busyMode = it },
                 onSend = {
+                    // The draft clears at once and the bubble shows (R14); a refused message comes back.
                     val text = draft
+                    val mode = if (ui.offersBusyModes) busyMode else null
+                    draft = ""
+                    justSent = true
                     scope.launch {
-                        if (controller.send(text)) draft = ""
+                        if (!controller.send(text, mode) && draft.isEmpty()) draft = text
                     }
                 }
             )
@@ -388,11 +503,12 @@ fun AidenBotSessionScreen(
 }
 
 /** The person's bubble: rounded on every corner but the one nearest the composer. */
-private val AidenBotUserBubbleShape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
+internal val AidenBotUserBubbleShape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
 
-/** Transcript-shaped placeholders while a Bot chat's first read is on its way. */
+/** Transcript-shaped placeholders while a Bot chat's first read is on its way; still once it fails. */
 @Composable
-private fun AidenBotSessionSkeleton() {
+private fun AidenBotSessionSkeleton(shimmer: Boolean) {
+    val animate = shimmer && aidenBotIsResumed()
     val loadingDescription = stringResource(R.string.bot_session_loading)
     Column(
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -401,11 +517,11 @@ private fun AidenBotSessionSkeleton() {
             .padding(top = 12.dp)
             .clearAndSetSemantics { contentDescription = loadingDescription }
     ) {
-        AidenSkeletonBlock(width = 220.dp, height = 44.dp, shape = MaterialTheme.shapes.large, modifier = Modifier.align(Alignment.End))
-        AidenSkeletonBlock(height = 14.dp)
-        AidenSkeletonBlock(width = 240.dp, height = 14.dp)
-        AidenSkeletonBlock(width = 180.dp, height = 44.dp, shape = MaterialTheme.shapes.large, modifier = Modifier.align(Alignment.End))
-        AidenSkeletonBlock(height = 14.dp)
+        AidenSkeletonBlock(width = 220.dp, height = 44.dp, shape = MaterialTheme.shapes.large, animate = animate, modifier = Modifier.align(Alignment.End))
+        AidenSkeletonBlock(height = 14.dp, animate = animate)
+        AidenSkeletonBlock(width = 240.dp, height = 14.dp, animate = animate)
+        AidenSkeletonBlock(width = 180.dp, height = 44.dp, shape = MaterialTheme.shapes.large, animate = animate, modifier = Modifier.align(Alignment.End))
+        AidenSkeletonBlock(height = 14.dp, animate = animate)
     }
 }
 
@@ -417,11 +533,12 @@ private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
             message.label?.let { label ->
                 Text(label, style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp))
             }
-            Surface(color = palette.accentFill.fill, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
+            val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, palette.accentFill, faded = false)
+            Surface(color = colors.container, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
                 Text(
                     message.text,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = palette.accentFill.content,
+                    color = colors.content,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
                 )
             }
@@ -552,7 +669,7 @@ fun AidenBotConnectCard(
                         onClick = onRequest
                     )
                     if (phase == AidenBotConnectRequestPhase.FAILED) {
-                        Text(stringResource(R.string.bot_session_unreachable), style = MaterialTheme.typography.bodySmall, color = palette.danger)
+                        Text(stringResource(R.string.bot_session_unreachable), style = MaterialTheme.typography.bodySmall, color = aidenBotErrorTextColor())
                     }
                 }
             }
@@ -665,7 +782,7 @@ fun AidenBotRoutineProposalCard(
                         )
                     }
                     if (phase == AidenBotProposalPhase.FAILED) {
-                        Text(stringResource(R.string.bot_proposal_failed), style = MaterialTheme.typography.bodySmall, color = palette.danger)
+                        Text(stringResource(R.string.bot_proposal_failed), style = MaterialTheme.typography.bodySmall, color = aidenBotErrorTextColor())
                     }
                 }
             }
@@ -679,6 +796,9 @@ private fun AidenBotSessionComposer(
     onDraftChange: (String) -> Unit,
     placeholder: String,
     enabled: Boolean,
+    busy: Boolean,
+    busyMode: AidenStreamInputMode,
+    onPickBusyMode: (AidenStreamInputMode) -> Unit,
     onSend: () -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -702,14 +822,26 @@ private fun AidenBotSessionComposer(
             modifier = Modifier.weight(1f)
         )
         Spacer(Modifier.width(8.dp))
-        FilledIconButton(
-            onClick = onSend,
-            enabled = enabled && draft.isNotBlank(),
-            shape = AidenShape.Button,
-            colors = aidenFilledIconButtonColors(),
-            modifier = Modifier.size(AidenUi.MinimumTouchTarget)
-        ) {
-            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.bot_session_send))
+        if (busy) {
+            // While the Bot works: Steer joins the reply, Queue sends after it (desktop and iOS
+            // parity). The menu opens with an empty draft too, so a mode can be picked first.
+            AidenRunInputSplitButton(
+                mode = busyMode,
+                canSubmit = enabled && draft.isNotBlank(),
+                canChooseMode = enabled,
+                onSubmit = onSend,
+                onPickMode = onPickBusyMode
+            )
+        } else {
+            FilledIconButton(
+                onClick = onSend,
+                enabled = enabled && draft.isNotBlank(),
+                shape = AidenShape.Button,
+                colors = aidenFilledIconButtonColors(),
+                modifier = Modifier.size(AidenUi.MinimumTouchTarget)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.bot_session_send))
+            }
         }
     }
 }

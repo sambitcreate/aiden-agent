@@ -16,6 +16,7 @@ import {
 } from "./composer-draft-store";
 
 const MAX_DETACHED_STREAMS = 64;
+const MAX_OWN_GENERATION_STREAMS = 256;
 const MAX_DETACHED_CONTENT_CHARS = 1_000_000;
 const MAX_DETACHED_REASONING_CHARS = 250_000;
 const MAX_DETACHED_ARTIFACTS = 8;
@@ -25,6 +26,13 @@ const fallbackLifecycleStreams = new Map<string, DetachedLifecycleStreamOwner>()
 const detachedLifecycleProjections = new Map<string, DetachedLifecycleProjection>();
 /** Runs this window watches but did not start (a phone's turn), one per chat. */
 const observedRunProjections = new Map<string, DetachedLifecycleProjection>();
+/**
+ * Runs this document started, bounded and oldest-first. A detached marker
+ * clears at its terminal, but a watcher started on revisit can still report
+ * the run's end afterwards; the run stays this window's own and is never
+ * mirrored back as someone else's.
+ */
+const ownGenerationStreams = new Set<string>();
 const fallbackSettlementInFlight = new Set<string>();
 const terminalSettlementInFlight = new Set<string>();
 const chatReadReconciliations = new Map<string, ChatReadReconciliation>();
@@ -301,6 +309,18 @@ export function parseChatSettlementNotification(
   };
 }
 
+/** Records a run this document started, so its own journal is never mirrored back to it. */
+export function rememberOwnGenerationStream(streamId: string): void {
+  if (!isSafeSubagentIdentifier(streamId)) return;
+  ownGenerationStreams.delete(streamId);
+  ownGenerationStreams.add(streamId);
+  while (ownGenerationStreams.size > MAX_OWN_GENERATION_STREAMS) {
+    const oldest = ownGenerationStreams.values().next().value;
+    if (oldest === undefined) break;
+    ownGenerationStreams.delete(oldest);
+  }
+}
+
 /**
  * A route transition deliberately releases every owner-bound interaction
  * listener. Keep bounded renderer-safe presentation state so a revisit stays
@@ -317,6 +337,7 @@ export function rememberDetachedLifecycleStream(
   ) {
     return;
   }
+  rememberOwnGenerationStream(owner.streamId);
   detachedLifecycleStreams.delete(owner.streamId);
   detachedLifecycleStreams.set(owner.streamId, owner);
   const content = (seed?.content ?? "").slice(0, MAX_DETACHED_CONTENT_CHARS);
@@ -454,7 +475,10 @@ export function publishObservedRunProjection(
     workspaceId: persistedChatWorkspaceId(owner.workspaceId),
   };
   const key = chatReadReconciliationKey(normalized);
-  if (detachedLifecycleStreams.has(normalized.streamId)) {
+  if (
+    detachedLifecycleStreams.has(normalized.streamId) ||
+    ownGenerationStreams.has(normalized.streamId)
+  ) {
     return clearObservedRunProjection(normalized.chatId, normalized.workspaceId, normalized.streamId);
   }
   const previous = observedRunProjections.get(key);

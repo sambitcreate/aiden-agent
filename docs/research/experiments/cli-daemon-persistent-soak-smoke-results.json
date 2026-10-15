@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "evidenceKind": "offline-persistent-profile-lifecycle-soak",
+  "status": "passed",
+  "startedAt": "2026-10-11T20:43:10.895Z",
+  "durationSeconds": 20,
+  "intervalSeconds": 0,
+  "maxCycles": 4,
+  "restartAfterCycles": 2,
+  "node": "v22.22.3",
+  "forcedGcAvailable": true,
+  "counts": {
+    "cycles": 4,
+    "completedTurns": 10,
+    "requests": 20,
+    "binds": 10,
+    "shutdowns": 10,
+    "disposals": 10,
+    "restarts": 1,
+    "wholePromptChecks": 20,
+    "journalChecks": 10,
+    "compactionEntries": 0
+  },
+  "receipts": [
+    {
+      "cycle": 1,
+      "elapsedMs": 1643,
+      "maxRequestBytes": 6453,
+      "journals": {
+        "a": {
+          "entries": 11,
+          "bytes": 16559,
+          "compactions": 0,
+          "snapshots": 2,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 11,
+          "bytes": 16559,
+          "compactions": 0,
+          "snapshots": 2,
+          "status": "in_progress"
+        }
+      },
+      "rss": 200081408,
+      "heapTotal": 101236736,
+      "heapUsed": 60570744,
+      "external": 7844193,
+      "arrayBuffers": 167104,
+      "resources": {
+        "PipeWrap": 2,
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 2,
+      "elapsedMs": 2097,
+      "maxRequestBytes": 6864,
+      "journals": {
+        "a": {
+          "entries": 15,
+          "bytes": 18312,
+          "compactions": 0,
+          "snapshots": 3,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 15,
+          "bytes": 18310,
+          "compactions": 0,
+          "snapshots": 3,
+          "status": "in_progress"
+        }
+      },
+      "rss": 201228288,
+      "heapTotal": 100188160,
+      "heapUsed": 61507632,
+      "external": 8893121,
+      "arrayBuffers": 3513736,
+      "resources": {
+        "PipeWrap": 2,
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 3,
+      "elapsedMs": 2543,
+      "maxRequestBytes": 7309,
+      "journals": {
+        "a": {
+          "entries": 19,
+          "bytes": 20091,
+          "compactions": 0,
+          "snapshots": 4,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 19,
+          "bytes": 20089,
+          "compactions": 0,
+          "snapshots": 4,
+          "status": "pending"
+        }
+      },
+      "rss": 202063872,
+      "heapTotal": 101498880,
+      "heapUsed": 61983376,
+      "external": 8887528,
+      "arrayBuffers": 3528321,
+      "resources": {
+        "PipeWrap": 2,
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 4,
+      "elapsedMs": 2995,
+      "maxRequestBytes": 7716,
+      "journals": {
+        "a": {
+          "entries": 23,
+          "bytes": 21836,
+          "compactions": 0,
+          "snapshots": 5,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 23,
+          "bytes": 21834,
+          "compactions": 0,
+          "snapshots": 5,
+          "status": "pending"
+        }
+      },
+      "rss": 203046912,
+      "heapTotal": 102023168,
+      "heapUsed": 62493936,
+      "external": 4254987,
+      "arrayBuffers": 167104,
+      "resources": {
+        "PipeWrap": 2,
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    }
+  ],
+  "sourceSha256": {
+    "packages/cli/dist/parity-test-api.js": "7f15bd2c5ab78e1c7e8b09e702e0c77c5bcc808b21e5fd3b0ee8c6c0ac392737",
+    "packages/cli/src/daemon-chats.ts": "1226eff0f6792d47558be7087b41e4b3d4497cd7d932b4f84931b9448dca124c",
+    "packages/cli/src/extensions/todo.ts": "c7ce99135dbd5717063af2503fae4c3a574e51c78b5064dfe389e43392a75c26"
+  },
+  "limitations": [
+    "Scripted sequential interleaving, not simultaneous execution or model decisions.",
+    "Fixed synthetic profile and two bounded journals; no private profiles or real providers.",
+    "128k declared context avoids intentional pressure; unexpected hidden summaries fail the two-request protocol. Compaction entries are counted, not assumed absent.",
+    "Heap/resource trends are diagnostics and include growing receipts/journals; not proof of a leak or its absence.",
+    "SIGINT/SIGTERM and turn timeout are failures. Hard watchdog may leave a synthetic temp directory if graceful cleanup hangs."
+  ],
+  "stopReason": "bounded-cycle-cap",
+  "finishedAt": "2026-10-11T20:43:13.903Z",
+  "finalResources": [
+    "PipeWrap",
+    "PipeWrap",
+    "TCPServerWrap",
+    "TCPSocketWrap"
+  ],
+  "finalMemory": {
+    "rss": 203046912,
+    "heapTotal": 102023168,
+    "heapUsed": 62441824,
+    "external": 4183722,
+    "arrayBuffers": 167104
+  }
+}

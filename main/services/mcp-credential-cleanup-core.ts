@@ -1,4 +1,5 @@
 import type { McpServer } from "./types.js";
+import { mcpServerExposure, type McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import { createHash } from "node:crypto";
 
 export interface McpCredentialConnectionSnapshot {
@@ -21,6 +22,15 @@ export interface McpRuntimeConnectionSnapshot extends McpCredentialConnectionSna
   name: string;
   description?: string;
   enabled: boolean;
+  /**
+   * Model exposure. Present only when non-default, so servers that never
+   * changed exposure keep the snapshot (and fingerprints) they had before.
+   * Deliberately absent from the credential and authority snapshots: hiding a
+   * tool fences live leases and child scopes without touching sign-in or
+   * long-lived Bot and schedule approvals.
+   */
+  exposure?: McpExposure;
+  hiddenTools?: string[];
 }
 
 export interface PendingMcpCredentialCleanupV1 {
@@ -78,7 +88,10 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
   ) {
     throw new Error("Invalid pending MCP credential cleanup.");
   }
-  return structuredClone(record) as unknown as McpCredentialConnectionSnapshot;
+  // Journals written before credentials stopped being bound to env/header
+  // values still carry their hashes; compare them as the canonical identity.
+  const { envHash: _env, headersHash: _headers, ...identity } = structuredClone(record);
+  return identity as unknown as McpCredentialConnectionSnapshot;
 }
 
 export function mcpCredentialConnectionSnapshot(
@@ -100,11 +113,40 @@ export function mcpCredentialConnectionSnapshot(
   };
 }
 
+/**
+ * The connection identity stored credentials are bound to: OAuth sessions,
+ * provider grants, preset API keys and the cleanup journal. It leaves out the
+ * env and header values. None of those credentials is bound to them, and how
+ * those values are stored (plain text in config.json or a keychain marker) must
+ * not decide whether credentials survive. Changing a value still changes the
+ * full credential snapshot, which Bot grants, schedule bindings and connection
+ * leases use.
+ */
+export function mcpCredentialCleanupSnapshot(server: McpServer): McpCredentialConnectionSnapshot {
+  const { envHash: _env, headersHash: _headers, ...identity } = mcpCredentialConnectionSnapshot(server);
+  return identity;
+}
+
+/** The binding a preset's API key is saved and read against. */
+export function mcpPresetKeyBinding(server: McpServer): string {
+  return JSON.stringify(mcpCredentialCleanupSnapshot(server));
+}
+
 export function sameMcpCredentialConnection(
   left: McpCredentialConnectionSnapshot | null,
   right: McpCredentialConnectionSnapshot | null,
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * Connection identity for approvals that outlive a session (Bot grants and
+ * schedule bindings). Unlike the runtime snapshot it leaves out the display
+ * name, description, and enabled flag, so renaming or re-describing a server
+ * keeps its approvals. Every caller checks enablement separately.
+ */
+export function mcpAuthorityConnectionSnapshot(server: McpServer): McpCredentialConnectionSnapshot {
+  return mcpCredentialConnectionSnapshot(server);
 }
 
 export function mcpRuntimeConnectionSnapshot(server: McpServer): McpRuntimeConnectionSnapshot {
@@ -113,6 +155,16 @@ export function mcpRuntimeConnectionSnapshot(server: McpServer): McpRuntimeConne
     name: server.name,
     ...(server.description !== undefined ? { description: server.description } : {}),
     enabled: server.enabled,
+    ...mcpRuntimeExposureFields(server),
+  };
+}
+
+function mcpRuntimeExposureFields(server: McpServer): Pick<McpRuntimeConnectionSnapshot, "exposure" | "hiddenTools"> {
+  const exposure = mcpServerExposure(server);
+  const hiddenTools = [...new Set(server.hiddenTools ?? [])].sort();
+  return {
+    ...(exposure !== "auto" ? { exposure } : {}),
+    ...(hiddenTools.length ? { hiddenTools } : {}),
   };
 }
 
@@ -136,8 +188,8 @@ export function pendingMcpCredentialCleanupForSave(
   targetServer: McpServer,
 ): PendingMcpCredentialCleanupV1 | null {
   if (!current) return null;
-  const previous = mcpCredentialConnectionSnapshot(current);
-  const target = mcpCredentialConnectionSnapshot(targetServer);
+  const previous = mcpCredentialCleanupSnapshot(current);
+  const target = mcpCredentialCleanupSnapshot(targetServer);
   if (sameMcpCredentialConnection(previous, target)) return null;
   return {
     version: 1,
@@ -157,7 +209,7 @@ export function pendingMcpCredentialCleanupForRemove(
     version: 1,
     kind: "remove",
     serverId,
-    previous: mcpCredentialConnectionSnapshot(current),
+    previous: mcpCredentialCleanupSnapshot(current),
     target: null,
   };
 }
@@ -198,7 +250,7 @@ export function mcpCredentialCleanupAfterConfig(
   pending: PendingMcpCredentialCleanupV1,
   current: McpServer | undefined,
 ): McpCredentialCleanupResolution {
-  const snapshot = current ? mcpCredentialConnectionSnapshot(current) : null;
+  const snapshot = current ? mcpCredentialCleanupSnapshot(current) : null;
   if (sameMcpCredentialConnection(snapshot, pending.previous)) {
     return { resolved: true, clearOAuth: false, clearPresetKey: false };
   }
@@ -211,4 +263,19 @@ export function mcpCredentialCleanupAfterConfig(
     // pending, fail closed and clear every credential from the old identity.
     clearPresetKey: pending.kind !== "disable-oauth" || !reachedIntendedTarget,
   };
+}
+
+/**
+ * The cleanup an observed config transition needs (as the portable-config
+ * listener sees it), or null when no stored credential's identity changed.
+ * Moving env/header values into the keychain is never a credential change.
+ */
+export function externalMcpCredentialCleanupKind(
+  before: McpServer,
+  after: McpServer | undefined,
+): PendingMcpCredentialCleanupV1["kind"] | null {
+  const previous = mcpCredentialCleanupSnapshot(before);
+  const target = after ? mcpCredentialCleanupSnapshot(after) : null;
+  if (sameMcpCredentialConnection(previous, target)) return null;
+  return !after ? "remove" : before.oauth && !after.oauth ? "disable-oauth" : "replace";
 }

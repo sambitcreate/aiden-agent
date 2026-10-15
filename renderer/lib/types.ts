@@ -1,3 +1,4 @@
+import type { McpExposure } from "../shared/mcp-exposure";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -790,6 +791,10 @@ export interface McpServer {
   /** Set when this record came from the built-in preset catalog. */
   presetId?: string;
   enabled: boolean;
+  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
+  exposure?: McpExposure;
+  /** Raw remote tool names withheld from every model surface. */
+  hiddenTools?: string[];
 }
 
 export type McpPresetAuth =
@@ -823,6 +828,12 @@ export interface McpPresetState {
   enabled: boolean;
   /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
   ready: boolean;
+  /** OAuth presets: the stored sign-in was rejected and must be renewed. */
+  needsSignIn?: boolean;
+  /** The saved record for this preset is unusable; setup can repair it or it can be removed. */
+  error?: string;
+  /** The saved record failed validation; setup rebuilds it from the preset's official settings. */
+  invalidRecord?: boolean;
 }
 
 export interface Skill {
@@ -1139,7 +1150,15 @@ export interface EngineStatus {
   error: string | null;
 }
 
-export type { McpStatus } from "../shared/mcp-status";
+export type {
+  McpDependent,
+  McpLiveState,
+  McpLiveStatus,
+  McpServerDependents,
+  McpStatus,
+  McpToolSummary,
+  McpPendingLaunchApproval,
+} from "../shared/mcp-status";
 
 export interface ChatStartParams {
   chatId: string;

@@ -15,6 +15,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { assembleAgentTools, type AgentToolSources } from "../agent-tool-assembly.js";
 import { desktopChatExecutionOptions } from "../chat-generation-start.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { appendPiMessages } from "../pi-compaction-session-store.js";
@@ -37,6 +38,7 @@ import {
   subagentChildWriteEnabled,
   subagentChildWebEnabled,
   SUBAGENT_HISTORY_DISABLED_ERROR,
+  SUBAGENTS_FEATURE_FLAG,
   subagentsEnabled,
 } from "./feature-flag.js";
 import { createSubagentOutboundApprovalBrokerV2 } from "./outbound-approval-v2.js";
@@ -274,17 +276,42 @@ test("disabled history requests fail with a stable error before any read can beg
 });
 
 test("production tool assembly reaches the feature-gated lazy factory", async () => {
-  const source = await readFile(new URL("../tools.ts", import.meta.url), "utf-8");
-  const builderStart = source.indexOf("export async function buildAgentTools");
-  const registrationStart = source.indexOf(
-    "registerSubagentTool(tools, ctx.createSubagentTool);",
-    builderStart,
-  );
-  const builderEnd = source.indexOf("\n}", registrationStart);
+  const sources: AgentToolSources = {
+    configuredMcpTools: async () => [],
+    webSearchToolForGeneration: async () => undefined,
+    skillsEnabled: async () => false,
+    skillSnapshot: async () => undefined,
+  };
+  let constructed = 0;
+  const createSubagentTool = (): AgentTool => {
+    constructed += 1;
+    return {
+      name: "subagent",
+      label: "Subagent",
+      description: "Delegate",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    } as unknown as AgentTool;
+  };
+  const names = async (allowSubagents: boolean) =>
+    (await assembleAgentTools({ permission: "full", allowSubagents, createSubagentTool }, sources)).map(
+      (tool) => tool.name,
+    );
 
-  assert.ok(builderStart >= 0);
-  assert.ok(registrationStart > builderStart);
-  assert.ok(builderEnd > registrationStart);
+  assert.ok((await names(true)).includes("subagent"));
+  assert.equal(constructed, 1, "the factory runs once, only when delegation is offered");
+  assert.ok(!(await names(false)).includes("subagent"));
+  assert.equal(constructed, 1, "a generation without delegation never constructs the tool");
+
+  const previous = process.env[SUBAGENTS_FEATURE_FLAG];
+  process.env[SUBAGENTS_FEATURE_FLAG] = "0";
+  try {
+    assert.ok(!(await names(true)).includes("subagent"));
+    assert.equal(constructed, 1, "the disabled feature never constructs the tool");
+  } finally {
+    if (previous === undefined) delete process.env[SUBAGENTS_FEATURE_FLAG];
+    else process.env[SUBAGENTS_FEATURE_FLAG] = previous;
+  }
 });
 
 test("production generation carries parent exclusions and Bot Files authority into child reads", async () => {

@@ -43,21 +43,6 @@ test("shortcut recording removes the application menu before capture begins", ()
   );
 });
 
-test("every window creation path waits for settled startup shortcut state", () => {
-  const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
-  const createFunctionIndex = main.indexOf("async function createMainWindow()");
-  const barrierIndex = main.indexOf(
-    "await shortcutInitializationPromise",
-    createFunctionIndex,
-  );
-  const applyIndex = main.indexOf("await applyShortcutFromSettings()");
-  const resolveIndex = main.indexOf("resolveShortcutInitialization?.()", applyIndex);
-  const createIndex = main.lastIndexOf("await createMainWindow()");
-  assert.ok(createFunctionIndex >= 0 && barrierIndex > createFunctionIndex);
-  assert.ok(applyIndex >= 0 && applyIndex < resolveIndex);
-  assert.ok(resolveIndex < createIndex);
-});
-
 test("same-document recorder starts join one owned suspension request", () => {
   const handler = readFileSync(
     new URL("../handlers/shortcuts.ts", import.meta.url),

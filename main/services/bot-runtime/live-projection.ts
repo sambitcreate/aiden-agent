@@ -413,14 +413,54 @@ export function livePartialText(docs: Readonly<Record<string, unknown>>): string
  * The turn's identity, or null when no run: its first input. A queued follow-up
  * starts a new run (fresh inputs) while `pi.live.run` stays present; steering
  * appends to the inputs and a tool round hands the run to a new generation
- * task, so neither changes the key (and neither is a new turn).
+ * task, so neither changes the key (and neither is a new turn). Remote
+ * projectors scope a run's start time and Stop by the same key.
  */
-function liveRunKey(docs: Readonly<Record<string, unknown>>): string | null {
+export function liveRunKey(docs: Readonly<Record<string, unknown>>): string | null {
   const live = docs["pi.live"] as { run?: { inputs?: unknown } } | undefined;
   const run = live?.run;
   if (run === undefined) return null;
   const first = Array.isArray(run.inputs) ? run.inputs[0] : undefined;
   return String(first);
+}
+
+/**
+ * When each Bot's current run started, as first seen by any live surface in
+ * this process. The desktop feed and every Remote projector share one, so a
+ * surface that opens mid-run, or reopens after an idle close, shows the run's
+ * real elapsed time instead of restarting the clock. Nothing durable records
+ * a run's start, so a run already going when Aiden started is timed from when
+ * a surface first saw it.
+ */
+export interface BotRunStarts {
+  /**
+   * The start of `botId`'s run `runKey` (`liveRunKey`), recorded from `now`
+   * the first time it is asked for. A null key (the run is not in `pi.live`
+   * yet, or is just leaving) belongs to the run already recorded.
+   */
+  startedAt(botId: string, runKey: string | null, now: () => number): number;
+  /** A surface saw `botId` not running: its next run, even a Resume of the same one, starts afresh. */
+  ended(botId: string): void;
+}
+
+export function createBotRunStarts(): BotRunStarts {
+  // One run per Bot: a new run replaces the last, so this stays bounded by the Bots.
+  const runs = new Map<string, { runKey: string | null; at: number }>();
+  return {
+    startedAt(botId, runKey, now) {
+      const known = runs.get(botId);
+      if (known && (known.runKey === runKey || known.runKey === null || runKey === null)) {
+        if (known.runKey === null) known.runKey = runKey;
+        return known.at;
+      }
+      const at = now();
+      runs.set(botId, { runKey, at });
+      return at;
+    },
+    ended(botId) {
+      runs.delete(botId);
+    },
+  };
 }
 
 function liveRunActive(docs: Readonly<Record<string, unknown>>): boolean {
@@ -444,6 +484,13 @@ export interface BotLiveActivityInput {
   stopping: boolean;
   /** This run is a Resume and has not moved on yet. */
   resuming: boolean;
+  /**
+   * `pi.live` as it was when the Resume began, serialized once then
+   * (`JSON.stringify`). While it is unchanged nothing live has happened since,
+   * so a killed run's partial text or tool still in it predates the Resume and
+   * is not the resumed run's work.
+   */
+  resumedFrom?: string;
   startedAt: number;
 }
 
@@ -470,10 +517,11 @@ function callArguments(entries: readonly EntryRecord[], callId: string): unknown
 
 /**
  * The phase of a run from `pi.live` (spec §5): Stop, then an open card,
- * then compaction inside the turn, then the newest running tool (§5.2), then
- * the reply's text, then Resume, then thinking (or "getting ready" before
- * the model produced anything). Thinking content is read only to know the
- * model is generating; its text is never copied.
+ * then a Resume nothing live has happened since, then compaction inside the
+ * turn, then the newest running tool (§5.2), then the reply's text, then
+ * Resume, then thinking (or "getting ready" before the model produced
+ * anything). Thinking content is read only to know the model is generating;
+ * its text is never copied.
  */
 export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | null {
   const live = input.docs["pi.live"] as LiveDocView | undefined;
@@ -481,6 +529,10 @@ export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | 
   const at = (phase: BotActivityPhase): BotLiveActivity => ({ phase, startedAt: input.startedAt });
   if (input.stopping) return at("stopping");
   if (input.waiting) return at("waiting");
+  // After a crash the paused run's text stays in `pi.live` until the resumed run's first event.
+  if (input.resuming && input.resumedFrom !== undefined && input.resumedFrom === JSON.stringify(live)) {
+    return at("resuming");
+  }
   if (live.compactions?.some((compaction) => compaction.blocking === true)) return at("tidying");
   const slot = pickActiveToolSlot(live.tools);
   if (slot) {
@@ -513,13 +565,14 @@ export function liveQueuedInputIds(docs: Readonly<Record<string, unknown>>): str
 }
 
 /**
- * Inputs waiting in `pi.inbox` that the person sent. `quiet` holds the ids of
- * routine and hidden (self-intro) submissions, which are decided by their
- * request id and never shown.
+ * Inputs waiting in `pi.inbox` that the person sent. Only ids in `personal`
+ * (classified as the person's own, `createQueuedInputClassifier`) are listed,
+ * so a routine's or the self-intro's input, or one not classified yet, never
+ * shows: the list is private by construction.
  */
 export function liveQueuedMessages(
   docs: Readonly<Record<string, unknown>>,
-  quiet: ReadonlySet<string> = new Set(),
+  personal: ReadonlySet<string>,
 ): BotQueuedMessage[] {
   const items = (docs["pi.inbox"] as { items?: unknown } | undefined)?.items;
   if (!Array.isArray(items)) return [];
@@ -530,10 +583,90 @@ export function liveQueuedMessages(
     if (typeof item.id !== "number" && typeof item.id !== "string") continue;
     const submissionId = String(item.id);
     const content = item.content as UserContent | undefined;
-    if (content === undefined || quiet.has(submissionId)) continue;
+    if (content === undefined || !personal.has(submissionId)) continue;
     queued.push({ submissionId, mode: item.mode, text: textOf(content), imageCount: imageCount(content) });
   }
   return queued;
+}
+
+export interface QueuedInputClassifierDeps {
+  /**
+   * `quietInputs` for one Bot: `true` for a routine's input or the hidden
+   * self-intro, `false` for the person's own. An id it cannot find is left out.
+   */
+  classify(submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
+  now(): number;
+  /** Pause before a failed or incomplete classification is tried again. */
+  retryMs: number;
+  /** A classification failed: called once per failing streak. */
+  report(error: unknown): void;
+  /** The pause is over: project again (on the caller's own serial lane), even if no frame arrives. */
+  retry(): void;
+}
+
+export interface QueuedInputClassifier {
+  /**
+   * The ids of the inputs waiting in `docs` that are known to be the person's
+   * own. Each id is asked about once. One with no answer yet, or whose lookup
+   * failed, is left out (fail closed) and asked again after the pause, never
+   * on every frame.
+   */
+  personal(docs: Readonly<Record<string, unknown>>): Promise<ReadonlySet<string>>;
+  /** Cancel a pending retry. */
+  close(): void;
+}
+
+/** The queued-input classification the desktop feed and every Remote projector share. */
+export function createQueuedInputClassifier(deps: QueuedInputClassifierDeps): QueuedInputClassifier {
+  /** Queued submission ids already classified as quiet (true) or the person's (false). */
+  const kinds = new Map<string, boolean>();
+  let failing = false;
+  /** No classification before this time: a persistent failure is not retried on every frame. */
+  let notBefore = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+
+  function scheduleRetry(): void {
+    notBefore = Math.max(notBefore, deps.now() + deps.retryMs);
+    if (timer !== undefined || closed) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (closed) return;
+      notBefore = 0;
+      deps.retry();
+    }, deps.retryMs);
+    timer.unref?.();
+  }
+
+  return {
+    async personal(docs) {
+      const ids = liveQueuedInputIds(docs);
+      for (const id of [...kinds.keys()]) if (!ids.includes(id)) kinds.delete(id);
+      const unknown = ids.filter((id) => !kinds.has(id));
+      if (unknown.length > 0 && deps.now() >= notBefore) {
+        try {
+          const answers = await deps.classify(unknown);
+          for (const id of unknown) {
+            const quiet = answers.get(id);
+            if (quiet !== undefined) kinds.set(id, quiet);
+          }
+          failing = false;
+        } catch (error) {
+          if (!failing) deps.report(error);
+          failing = true;
+        }
+        if (unknown.some((id) => !kinds.has(id))) scheduleRetry();
+      } else if (unknown.length > 0) {
+        scheduleRetry();
+      }
+      return new Set(ids.filter((id) => kinds.get(id) === false));
+    },
+    close() {
+      closed = true;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+  };
 }
 
 /* ------------------------------------------------------------------------- */
@@ -560,6 +693,12 @@ export interface BotLiveProjectionDeps {
   approvalPending?(botId: string): boolean;
   /** Clock for `startedAt`; defaults to `Date.now`. */
   now?(): number;
+  /**
+   * Run start times shared with the Remote projectors (`botRunStarts`), so
+   * every surface times a run from the same moment. Defaults to this
+   * projection's own.
+   */
+  runStarts?: BotRunStarts;
   /** The current status of a connect card (connected or dismissed since it was offered). */
   connectCardStatus?(botId: string, card: ConnectCardEntry): Promise<ConnectCardStatus>;
   /** Schedules a subscriber flush. Defaults to the next macrotask. */
@@ -622,17 +761,14 @@ interface Feed {
   question: BotPendingQuestion | null;
   activity: BotLiveActivity | null;
   queued: BotQueuedMessage[];
-  /** Queued submission ids already classified as quiet (true) or the person's (false). */
-  inputKinds: Map<string, boolean>;
-  /** Classifying failed and has not succeeded since; logged once per streak. */
-  classifyFailing: boolean;
-  /** No classification attempt before this time (a throttle for a persistent failure). */
-  classifyNotBefore: number;
-  classifyRetry: ReturnType<typeof setTimeout> | null;
+  /** Which queued inputs are the person's own (fail closed, throttled retries). */
+  classifier: QueuedInputClassifier;
   /** When the current running turn started. */
   startedAt: number;
   stopping: boolean;
   resuming: boolean;
+  /** `pi.live` when this run's Resume began, serialized (`BotLiveActivityInput.resumedFrom`). */
+  resumedFrom: string | undefined;
   /** The newest frame, so approvals, questions and Stop can re-derive the activity. */
   frame: { entries: readonly EntryRecord[]; docs: Readonly<Record<string, unknown>> };
   runActive: boolean;
@@ -654,6 +790,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   const schedule = deps.schedule ?? ((flush: () => void) => void setTimeout(flush, 0));
   const newEpoch = deps.newEpoch ?? (() => randomUUID());
   const now = deps.now ?? Date.now;
+  const runStarts = deps.runStarts ?? createBotRunStarts();
   /** Bots whose next run is a Resume. */
   const resumingBots = new Set<string>();
   const feeds = new Map<string, Feed>();
@@ -748,6 +885,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         waiting: waitingOn(feed),
         stopping: feed.stopping,
         resuming: feed.resuming,
+        resumedFrom: feed.resumedFrom,
         startedAt: feed.startedAt,
       }) ?? { phase: "preparing", startedAt: feed.startedAt }
     );
@@ -763,9 +901,11 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
   /** A new run began: its start time, Stop and Resume marks belong to it alone. */
   function startRun(feed: Feed): void {
-    feed.startedAt = now();
+    // A run another surface already saw keeps the time it started.
+    feed.startedAt = runStarts.startedAt(feed.botId, liveRunKey(feed.frame.docs), now);
     feed.stopping = false;
     feed.resuming = resumingBots.delete(feed.botId);
+    feed.resumedFrom = feed.resuming ? JSON.stringify(feed.frame.docs["pi.live"]) : undefined;
   }
 
   async function resolveCards(botId: string, entries: BotTranscriptEntry[]): Promise<BotTranscriptEntry[]> {
@@ -796,52 +936,21 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     for (const entry of next.slice(previous.length)) emit(feed, { type: "entry", entry });
   }
 
-  /**
-   * The person's queued messages. Each queued id is classified once; an id that
-   * is not yet classified as the person's own stays hidden (fail closed), so a
-   * routine's prompt never shows as a message the person sent. A failed or
-   * incomplete classification is retried after a pause, not on every frame.
-   */
+  /** The person's queued messages: only inputs classified as theirs (`createQueuedInputClassifier`). */
   async function queuedFor(feed: Feed, docs: Readonly<Record<string, unknown>>): Promise<BotQueuedMessage[]> {
-    const ids = liveQueuedInputIds(docs);
-    for (const id of [...feed.inputKinds.keys()]) if (!ids.includes(id)) feed.inputKinds.delete(id);
-    const unknown = ids.filter((id) => !feed.inputKinds.has(id));
-    if (unknown.length > 0 && now() >= feed.classifyNotBefore) {
-      try {
-        const answers = await deps.quietInputs(feed.botId, unknown);
-        for (const id of unknown) {
-          const quiet = answers.get(id);
-          if (quiet !== undefined) feed.inputKinds.set(id, quiet);
-        }
-        feed.classifyFailing = false;
-      } catch (error) {
-        if (!feed.classifyFailing) report(feed.botId, error);
-        feed.classifyFailing = true;
-      }
-      if (unknown.some((id) => !feed.inputKinds.has(id))) scheduleClassifyRetry(feed);
-    } else if (unknown.length > 0) {
-      scheduleClassifyRetry(feed);
-    }
-    return liveQueuedMessages(docs, new Set(ids.filter((id) => feed.inputKinds.get(id) !== false)));
+    return liveQueuedMessages(docs, await feed.classifier.personal(docs));
   }
 
-  /** One retry after the pause, through the feed queue, even if no frame arrives. */
-  function scheduleClassifyRetry(feed: Feed): void {
-    feed.classifyNotBefore = Math.max(feed.classifyNotBefore, now() + classifyRetryMs);
-    if (feed.classifyRetry !== null || feed.ended) return;
-    feed.classifyRetry = setTimeout(() => {
-      feed.classifyRetry = null;
-      void enqueueWork(feed, async () => {
-        if (feed.ended) return;
-        feed.classifyNotBefore = 0;
-        const queued = await queuedFor(feed, feed.frame.docs);
-        if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
-          feed.queued = queued;
-          emit(feed, { type: "queued", queued });
-        }
-      });
-    }, classifyRetryMs);
-    feed.classifyRetry.unref?.();
+  /** The classification pause is over: list the queued messages again, through the feed queue. */
+  function requeue(feed: Feed): void {
+    void enqueueWork(feed, async () => {
+      if (feed.ended) return;
+      const queued = await queuedFor(feed, feed.frame.docs);
+      if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
+        feed.queued = queued;
+        emit(feed, { type: "queued", queued });
+      }
+    });
   }
 
   async function onFrame(feed: Feed, entries: readonly EntryRecord[], docs: Readonly<Record<string, unknown>>) {
@@ -853,6 +962,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       startRun(feed);
     }
     feed.runKey = runKey;
+    // Records the run's key as soon as it shows, so a replacing run is told apart from this one.
+    if (feed.state.kind === "running") feed.startedAt = runStarts.startedAt(feed.botId, runKey, now);
     applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(entries)));
     const partial = livePartialText(docs);
     if (partial !== feed.partial) {
@@ -891,6 +1002,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     if (state.kind !== "running") {
       feed.stopping = false;
       feed.resuming = false;
+      runStarts.ended(feed.botId);
     }
     emit(feed, { type: "state", state });
     updateActivity(feed);
@@ -912,6 +1024,16 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
       const watch = await conversation.watch(context);
       const initial = watch.value;
+      let opened: Feed | undefined;
+      const classifier = createQueuedInputClassifier({
+        classify: (ids) => deps.quietInputs(botId, ids),
+        now,
+        retryMs: classifyRetryMs,
+        report: (error) => report(botId, error),
+        retry: () => {
+          if (opened) requeue(opened);
+        },
+      });
       const feed: Feed = {
         botId,
         epoch: newEpoch(),
@@ -922,13 +1044,11 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         question: deps.question?.(botId) ?? null,
         activity: null,
         queued: [],
-        inputKinds: new Map(),
-        classifyFailing: false,
-        classifyNotBefore: 0,
-        classifyRetry: null,
+        classifier,
         startedAt: now(),
         stopping: false,
         resuming: false,
+        resumedFrom: undefined,
         frame: { entries: initial.entries, docs: initial.docs },
         runActive: liveRunActive(initial.docs),
         runKey: liveRunKey(initial.docs),
@@ -937,7 +1057,9 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         ended: false,
         queue: Promise.resolve(),
       };
+      opened = feed;
       if (feed.state.kind === "running") startRun(feed);
+      else runStarts.ended(botId);
       feed.activity = computeActivity(feed);
       feed.queued = await queuedFor(feed, initial.docs);
       feeds.set(botId, feed);
@@ -978,8 +1100,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
   async function stopFeed(feed: Feed): Promise<void> {
     feed.ended = true;
-    if (feed.classifyRetry !== null) clearTimeout(feed.classifyRetry);
-    feed.classifyRetry = null;
+    feed.classifier.close();
     if (feeds.get(feed.botId) === feed) feeds.delete(feed.botId);
     await feed.watch.stop().catch(() => undefined);
     feed.cancel();

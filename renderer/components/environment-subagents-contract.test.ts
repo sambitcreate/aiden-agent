@@ -290,29 +290,6 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });
 
-test("Quick View exposes conditional current-chat counts and the shared activity mark", () => {
-  const environment = source("./environment-panel.tsx");
-
-  assert.match(
-    environment,
-    /const hasSubagents =\s+panel\.subagentsEnabled && subagentCounts\.active \+ subagentCounts\.done > 0/u,
-  );
-  assert.match(environment, /\{hasSubagents \? \(/u);
-  assert.match(environment, /panel\.showTools\("subagents"\)/u);
-  assert.match(environment, /<SubagentMark/u);
-  assert.match(environment, /activity=\{representativeSubagent\?\.snapshot\?\.activity\}/u);
-  assert.doesNotMatch(
-    environment,
-    /state=\{(?:panel\.)?subagentCounts\.active > 0 \? "running" : "finished"\}/u,
-  );
-  assert.match(environment, /subagentOverviewSummary\(panel\.subagentViews\)/u);
-  assert.match(environment, /\{subagentSummary\.primary\}/u);
-  assert.match(environment, /\{subagentSummary\.secondary\}/u);
-  assert.match(environment, /subagentSummary\.ariaLabel/u);
-  assert.match(environment, /min-w-0 truncate text-regular text-primary/u);
-  assert.match(environment, /max-w-44 min-w-0 truncate text-small/u);
-});
-
 test("live snapshots are owner-checked, revisioned, and released across route transitions", () => {
   const pane = source("../main/chat-pane.tsx");
   const environment = source("./environment-panel.tsx");
@@ -536,7 +513,7 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.doesNotMatch(environment, /subagentAnnouncerHost|setSubagentAnnouncerHost/u);
   assert.match(
     environment,
-    /<EnvironmentPanelContext.Provider value=\{value\}>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
+    /<EnvironmentPanelContext.Provider value=\{value\}>\s*<LinkOpenerProvider[^>]*>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
   );
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);

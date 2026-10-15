@@ -384,9 +384,13 @@ struct AidenBotConversationFilesView: View {
                 }
             }
             Section("Files") {
-                ForEach(entries) { entry in
-                    fileRow(entry)
-                    .disabled(entry.kind != .file || coordinator.connectionState != .connected)
+                if model.isLoading && model.index == nil {
+                    AidenBotFilesLoadingRows()
+                } else {
+                    ForEach(entries) { entry in
+                        fileRow(entry)
+                        .disabled(entry.kind != .file || coordinator.connectionState != .connected)
+                    }
                 }
             }
         }
@@ -424,14 +428,37 @@ struct AidenBotConversationFilesView: View {
 
     @ViewBuilder
     private var fileOverlay: some View {
-            if model.isLoading && model.index == nil { ProgressView("Loading files…") }
-            else if !model.isLoading, model.index?.entries.isEmpty == true {
+            if !model.isLoading, model.index?.entries.isEmpty == true {
                 ContentUnavailableView(
                     "No Files Yet",
                     systemImage: "folder",
                     description: Text("Files this Bot creates for your chats appear here.")
                 )
             }
+    }
+}
+
+/// The Files list while its first read is on the way: skeleton rows shaped like
+/// files, never a spinner (R15). VoiceOver hears one "Loading files".
+struct AidenBotFilesLoadingRows: View {
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    private static let widths: [(name: CGFloat, path: CGFloat)] = [(140, 200), (110, 170), (160, 220), (96, 150), (128, 190)]
+
+    var body: some View {
+        ForEach(Self.widths.indices, id: \.self) { index in
+            HStack(spacing: 12) {
+                AidenBotSkeletonBlock(width: 22, height: 22, radius: 6, reduceMotion: reduceMotion)
+                VStack(alignment: .leading, spacing: 6) {
+                    AidenBotSkeletonBlock(width: Self.widths[index].name, height: 14, radius: 7, reduceMotion: reduceMotion)
+                    AidenBotSkeletonBlock(width: Self.widths[index].path, height: 10, radius: 5, reduceMotion: reduceMotion)
+                }
+            }
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Loading files")
+            .accessibilityHidden(index > 0)
+        }
     }
 }
 

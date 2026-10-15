@@ -1,8 +1,9 @@
 import * as React from "react";
 import { Plus, RotateCw, Trash2 } from "lucide-react";
-import type { BrowserCommand, BrowserCommandResult, BrowserDefaults, BrowserImportSource, BrowserState } from "../shared/browser";
+import type { BrowserCommand, BrowserCommandResult, BrowserDefaults, BrowserImportSource, BrowserLinkOpening, BrowserState } from "../shared/browser";
 import { BROWSER_DEVICE_PRESETS, validBrowserViewport } from "../lib/browser-ui-state";
-import { AlertDialog, Button, Dialog, Input, Text } from "./ui";
+import { browserApi } from "../lib/ipc";
+import { AlertDialog, Button, Dialog, Input, Text, toast } from "./ui";
 
 export function BrowserSettings({ state, open, onOpenChange, run, error = null }: {
   state: BrowserState; open: boolean; onOpenChange: (open: boolean) => void;
@@ -66,8 +67,20 @@ export function BrowserSettings({ state, open, onOpenChange, run, error = null }
           </select>
         </label>
         <label className="browser-setting-row">Open links in
-          <select className="browser-select" value={state.defaults.linkTarget} onChange={(event) => updateDefaults({ linkTarget: event.target.value as BrowserDefaults["linkTarget"] })}>
-            <option value="browser">Aiden browser</option><option value="external">System browser</option>
+          <select
+            className="browser-select"
+            value={state.defaults.linkOpening}
+            onChange={(event) =>
+              void browserApi
+                .setLinkPreference(event.target.value as BrowserLinkOpening)
+                .catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "Couldn't save this setting."),
+                )
+            }
+          >
+            <option value="ask">Ask each time</option>
+            <option value="browser">Aiden browser</option>
+            <option value="external">System browser</option>
           </select>
         </label>
         <label className="browser-setting-row"><span>Allow Aiden to use browsers by default</span><input type="checkbox" checked={state.defaults.agentAccess === "allow"} onChange={(event) => updateDefaults({ agentAccess: event.target.checked ? "allow" : "off" })} /></label>

@@ -13,6 +13,9 @@ import {
   browserResult,
   browserLocalServers,
   BrowserActionQueue,
+  savedLinkOpening,
+  externalUrl,
+  sameBrowserPage,
 } from "./core.js";
 import { playwrightInjectedSource } from "./playwright-source.generated.js";
 
@@ -184,4 +187,39 @@ test("terminal server discovery recognizes only printed loopback URLs without pr
     ["http://localhost:5173/", "http://localhost:3000/", "http://[::1]:8080/test"],
   );
   assert.deepEqual(browserLocalServers("localhost password=secret 3000"), []);
+});
+
+test("saved link opening keeps a valid choice and migrates the legacy target", () => {
+  assert.equal(savedLinkOpening({ linkOpening: "browser" }), "browser");
+  assert.equal(savedLinkOpening({ linkOpening: "external", linkTarget: "browser" }), "external");
+  assert.equal(savedLinkOpening({ linkTarget: "external" }), "external");
+  // The old "browser" default was never chosen by the user, so they get the prompt.
+  assert.equal(savedLinkOpening({ linkTarget: "browser" }), "ask");
+  assert.equal(savedLinkOpening({}), "ask");
+  assert.equal(savedLinkOpening({ linkOpening: "sometimes" }), "ask");
+});
+
+test("external URLs allow only web pages and mail", () => {
+  assert.equal(externalUrl("https://example.com/a?b=1#c"), "https://example.com/a?b=1#c");
+  assert.equal(externalUrl("http://localhost:5173"), "http://localhost:5173/");
+  assert.equal(externalUrl("mailto:hi@example.com"), "mailto:hi@example.com");
+  for (const bad of [
+    "javascript:alert(1)",
+    "file:///etc/passwd",
+    "https://user:pass@example.com",
+    "ftp://example.com",
+    "not a url",
+    "",
+    42,
+    null,
+    `https://example.com/${"a".repeat(9000)}`,
+  ])
+    assert.throws(() => externalUrl(bad), /can't be opened outside Aiden/, String(bad).slice(0, 40));
+});
+
+test("same browser page compares normalized URLs", () => {
+  assert.equal(sameBrowserPage("https://Example.com", "https://example.com/"), true);
+  assert.equal(sameBrowserPage("https://example.com/a", "https://example.com/b"), false);
+  assert.equal(sameBrowserPage("https://example.com/#x", "https://example.com/#y"), false);
+  assert.equal(sameBrowserPage("about:blank", "nope"), false);
 });

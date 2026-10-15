@@ -176,6 +176,14 @@ export interface BotSessionRuntime extends BotSessionService {
    */
   quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
   /**
+   * The person's own inputs the Bot is working on now, keyed by the `pi.user`
+   * entry each one was placed as (entry id → submission id). Placement is
+   * atomic with that entry's append, so an entry a watch shows is already
+   * here; once its turn ends the submission is done and drops out. Routine
+   * inputs and the hidden self-intro are never listed (`quietInputs`).
+   */
+  placedSubmissions(botId: string): Promise<ReadonlyMap<string, string>>;
+  /**
    * Compact the Bot's one conversation now (Telegram `/new`), focused on what
    * the person shared and what the Bot promised (`compactionInstructions`).
    * Resolves once the compaction is admitted; it summarizes in the background.
@@ -323,6 +331,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     });
   }
 
+  /** Not the person's own message: a routine's input or the hidden self-intro, known from its durable request id. */
+  function isQuietSubmission(record: SubmissionRecord): boolean {
+    const requestId = record.requestId ?? "";
+    // `hiddenSubmissions` is latent: the only hidden sender (the self-intro) already has the
+    // `intro:` prefix. Any future hidden sender needs a durable request-id prefix, because this
+    // set is lost on restart.
+    return requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
+  }
+
   function requireHost(): BotHarnessHost {
     if (host === null) throw new BotSessionError("unavailable");
     return host;
@@ -443,17 +460,20 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       const wanted = new Set(submissionIds);
       for (const record of inspection.submissions) {
         const id = String(record.id);
-        if (!wanted.has(id)) continue;
-        const requestId = record.requestId ?? "";
-        // `hiddenSubmissions` is latent: the only hidden sender (the self-intro) already has the
-        // `intro:` prefix. Any future hidden sender needs a durable request-id prefix, because this
-        // set is lost on restart.
-        answers.set(
-          id,
-          requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(id),
-        );
+        if (wanted.has(id)) answers.set(id, isQuietSubmission(record));
       }
       return answers;
+    },
+
+    async placedSubmissions(botId) {
+      const placed = new Map<string, string>();
+      if (deleted.has(botId)) return placed;
+      const inspection = await requireHost().inspect(botId);
+      for (const record of inspection.submissions) {
+        if (record.type !== "input" || record.entry === undefined || isQuietSubmission(record)) continue;
+        placed.set(String(record.entry), String(record.id));
+      }
+      return placed;
     },
 
     state(botId) {

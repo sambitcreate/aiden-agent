@@ -1,0 +1,5043 @@
+{
+  "version": 1,
+  "evidenceKind": "synthetic-shadow",
+  "generatedAt": "2026-10-11T19:27:07.036Z",
+  "baselinePolicy": "current production projectors",
+  "candidatePolicy": "research recoverable old non-error-envelope text-only elision, newest two results protected",
+  "windows": [
+    8000,
+    16000,
+    32000,
+    128000,
+    272000
+  ],
+  "fixtureCount": 17,
+  "pairCount": 85,
+  "negativeControlsPassed": 4,
+  "limitations": [
+    "No model calls, live task success, billed-token savings, or actual recall-store reads measured.",
+    "isError=false describes only a tool-result envelope; it does not establish command exit success or task correctness.",
+    "Counterfactual trigger avoidance means projected shouldCompact changes; no native lifecycle integration is implemented.",
+    "Synthetic recovery handles describe fixture evidence only; they are not actual retained store objects.",
+    "Provider usage anchors remain authoritative and can prevent projected savings despite smaller observation text.",
+    "Emergency projection may remove histories; candidate observation invariants apply before that existing fallback.",
+    "Local one-shot durations are diagnostics, not statistically controlled performance estimates."
+  ],
+  "measurements": [
+    {
+      "fixture": "recoverable-history-unanchored",
+      "inputSha256": "05259afdd68d7eaf4c2d6c3d81672a9dda5b46ec93a9b2080fb35f2dc6ea08a1",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 12.497124999999983
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.07733300000001009
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-unanchored",
+      "inputSha256": "05259afdd68d7eaf4c2d6c3d81672a9dda5b46ec93a9b2080fb35f2dc6ea08a1",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.009416999999985
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.0428749999999809
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-unanchored",
+      "inputSha256": "05259afdd68d7eaf4c2d6c3d81672a9dda5b46ec93a9b2080fb35f2dc6ea08a1",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 16183,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.118832999999995
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.040374999999983174
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-unanchored",
+      "inputSha256": "05259afdd68d7eaf4c2d6c3d81672a9dda5b46ec93a9b2080fb35f2dc6ea08a1",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 72298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8568329999999946
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.03970800000001873
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-unanchored",
+      "inputSha256": "05259afdd68d7eaf4c2d6c3d81672a9dda5b46ec93a9b2080fb35f2dc6ea08a1",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 72298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.980165999999997
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.046125000000017735
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-anchored",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 33,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.060792000000049
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 2,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.2739159999999856
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-anchored",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 33,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8710419999999885
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 5415,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.05675000000002228
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-anchored",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 33,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.9252920000000131
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 5415,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.06233300000002373
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-anchored",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 26864,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8734160000000202
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 5415,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.13608399999998255
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-anchored",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 120000,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7964169999999626
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 120006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 120000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 120000,
+          "estimatedTokensAfter": 120000,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02545900000001211
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-low-anchor",
+      "inputSha256": "ca8b54ab4f644dfddd9134bfd09755ddb463f4e01d7af969b5ea2b781412b3b9",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 22,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8817920000000186
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5000,
+          "estimatedTokensAfter": 5000,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02791700000000219
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -67297,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-low-anchor",
+      "inputSha256": "ca8b54ab4f644dfddd9134bfd09755ddb463f4e01d7af969b5ea2b781412b3b9",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 22,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8255829999999946
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5000,
+          "estimatedTokensAfter": 5000,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.024375000000020464
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -67297,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-low-anchor",
+      "inputSha256": "ca8b54ab4f644dfddd9134bfd09755ddb463f4e01d7af969b5ea2b781412b3b9",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 16188,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.9011249999999791
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5000,
+          "estimatedTokensAfter": 5000,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.027665999999953783
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -67297,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-low-anchor",
+      "inputSha256": "ca8b54ab4f644dfddd9134bfd09755ddb463f4e01d7af969b5ea2b781412b3b9",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 72303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7865830000000074
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5000,
+          "estimatedTokensAfter": 5000,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.019958000000031006
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -67297,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "recoverable-history-low-anchor",
+      "inputSha256": "ca8b54ab4f644dfddd9134bfd09755ddb463f4e01d7af969b5ea2b781412b3b9",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 72303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8405830000000378
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5006,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 0,
+          "usageAnchorIndex": 10,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5000,
+          "estimatedTokensAfter": 5000,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.03129200000000765
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -67297,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "provider-switch",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 22,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.9547079999999823
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 361,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 355,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 361,
+          "estimatedTokensAfter": 361,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.03741700000000492
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "provider-switch",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 22,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.842708000000016
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 361,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 355,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 361,
+          "estimatedTokensAfter": 361,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.03233299999999417
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "provider-switch",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 16188,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7788330000000201
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 361,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 355,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 361,
+          "estimatedTokensAfter": 361,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.016999999999995907
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "provider-switch",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 72303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8303749999999468
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 361,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 355,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 361,
+          "estimatedTokensAfter": 361,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02087499999998954
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "provider-switch",
+      "inputSha256": "8191a78ce0f1d958a4756f335e7527da442a65e1cc76e15b1e5541b33071b9fc",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72303,
+          "messageTokens": 72297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72303,
+          "estimatedTokensAfter": 72303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8064169999999535
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 361,
+          "messageTokens": 355,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 355,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 361,
+          "estimatedTokensAfter": 361,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.018624999999985903
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "unicode",
+      "inputSha256": "350b2204bc4e95925b537c6ecf337d6cce57804dba54510b9652ac79c77c9de5",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 60298,
+          "messageTokens": 60292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 60292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 60298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8637500000000387
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02954200000004903
+      },
+      "estimatedMessageTokenDelta": -59942,
+      "projectedContextTokenDelta": -59942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "unicode",
+      "inputSha256": "350b2204bc4e95925b537c6ecf337d6cce57804dba54510b9652ac79c77c9de5",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 60298,
+          "messageTokens": 60292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 60292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 60298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.7637909999999692
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02208300000000918
+      },
+      "estimatedMessageTokenDelta": -59942,
+      "projectedContextTokenDelta": -59942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "unicode",
+      "inputSha256": "350b2204bc4e95925b537c6ecf337d6cce57804dba54510b9652ac79c77c9de5",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 60298,
+          "messageTokens": 60292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 60292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 60298,
+          "estimatedTokensAfter": 16183,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8510420000000067
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.026791000000002896
+      },
+      "estimatedMessageTokenDelta": -59942,
+      "projectedContextTokenDelta": -59942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "unicode",
+      "inputSha256": "350b2204bc4e95925b537c6ecf337d6cce57804dba54510b9652ac79c77c9de5",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 60298,
+          "messageTokens": 60292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 60292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 60298,
+          "estimatedTokensAfter": 60298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7878329999999778
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.022625000000005002
+      },
+      "estimatedMessageTokenDelta": -59942,
+      "projectedContextTokenDelta": -59942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "unicode",
+      "inputSha256": "350b2204bc4e95925b537c6ecf337d6cce57804dba54510b9652ac79c77c9de5",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 60298,
+          "messageTokens": 60292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 60292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 60298,
+          "estimatedTokensAfter": 60298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.5172089999999798
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 356,
+          "messageTokens": 350,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 356,
+          "estimatedTokensAfter": 356,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.023541999999963537
+      },
+      "estimatedMessageTokenDelta": -59942,
+      "projectedContextTokenDelta": -59942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "no-recovery",
+      "inputSha256": "54e813615bb9308037f0f2256a1133d0fb311590a8d5b2a4d912d1dcd42d42c1",
+      "contextWindow": 8000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.15216700000002
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.0592919999999708
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "no-recovery",
+      "inputSha256": "54e813615bb9308037f0f2256a1133d0fb311590a8d5b2a4d912d1dcd42d42c1",
+      "contextWindow": 16000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.0932500000000118
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.0387920000000008
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "no-recovery",
+      "inputSha256": "54e813615bb9308037f0f2256a1133d0fb311590a8d5b2a4d912d1dcd42d42c1",
+      "contextWindow": 32000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.2079579999999623
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.1242079999999532
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "no-recovery",
+      "inputSha256": "54e813615bb9308037f0f2256a1133d0fb311590a8d5b2a4d912d1dcd42d42c1",
+      "contextWindow": 128000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 96065,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.0333340000000817
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 96065,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.0592080000000124
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "no-recovery",
+      "inputSha256": "54e813615bb9308037f0f2256a1133d0fb311590a8d5b2a4d912d1dcd42d42c1",
+      "contextWindow": 272000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 96065,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.0245419999999967
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 96065,
+          "messageTokens": 96059,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 96059,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 96065,
+          "estimatedTokensAfter": 96065,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.0225000000000364
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "errors",
+      "inputSha256": "bedea169797377efc58d6db7f21ac0c6e89382236ad8a38def199c1c9b145ef7",
+      "contextWindow": 8000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8769590000000562
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.899332999999956
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "errors",
+      "inputSha256": "bedea169797377efc58d6db7f21ac0c6e89382236ad8a38def199c1c9b145ef7",
+      "contextWindow": 16000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8857080000000224
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8942080000000487
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "errors",
+      "inputSha256": "bedea169797377efc58d6db7f21ac0c6e89382236ad8a38def199c1c9b145ef7",
+      "contextWindow": 32000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 16183,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.9346669999999904
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 16183,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8682499999999891
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "errors",
+      "inputSha256": "bedea169797377efc58d6db7f21ac0c6e89382236ad8a38def199c1c9b145ef7",
+      "contextWindow": 128000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 72298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7763330000000224
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 72298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7734169999999949
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "errors",
+      "inputSha256": "bedea169797377efc58d6db7f21ac0c6e89382236ad8a38def199c1c9b145ef7",
+      "contextWindow": 272000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 72298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7972499999999627
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 72298,
+          "messageTokens": 72292,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72298,
+          "estimatedTokensAfter": 72298,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8131250000000136
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "small-context",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 8000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.01816699999994853
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.01658399999996618
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "small-context",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 16000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.014874999999960892
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.01379199999996672
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "small-context",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 32000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.014625000000023647
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.013749999999959073
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "small-context",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 128000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.015957999999955064
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.013666000000057466
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "small-context",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 272000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.014667000000031294
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 303,
+          "messageTokens": 297,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 303,
+          "estimatedTokensAfter": 303,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.013707999999951426
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "orphan-result",
+      "inputSha256": "40099cbb963c631ab8e47265e0406a51b61ac275f46de1b3d6f9edc0977f5e8e",
+      "contextWindow": 8000,
+      "elidedResults": 1,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72291,
+          "messageTokens": 72285,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72285,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72291,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 8,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.9200410000000829
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48322,
+          "messageTokens": 48316,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48316,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 48322,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 8,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 1,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.6053339999999707
+      },
+      "estimatedMessageTokenDelta": -23969,
+      "projectedContextTokenDelta": -23969,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "orphan-result",
+      "inputSha256": "40099cbb963c631ab8e47265e0406a51b61ac275f46de1b3d6f9edc0977f5e8e",
+      "contextWindow": 16000,
+      "elidedResults": 1,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72291,
+          "messageTokens": 72285,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72285,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72291,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 8,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.7606250000000045
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48322,
+          "messageTokens": 48316,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48316,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 48322,
+          "estimatedTokensAfter": 8262,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 1,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.5445000000000846
+      },
+      "estimatedMessageTokenDelta": -23969,
+      "projectedContextTokenDelta": -23969,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "orphan-result",
+      "inputSha256": "40099cbb963c631ab8e47265e0406a51b61ac275f46de1b3d6f9edc0977f5e8e",
+      "contextWindow": 32000,
+      "elidedResults": 1,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72291,
+          "messageTokens": 72285,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72285,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72291,
+          "estimatedTokensAfter": 16176,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.731375000000071
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48322,
+          "messageTokens": 48316,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48316,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 48322,
+          "estimatedTokensAfter": 8262,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 1,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.5610419999999294
+      },
+      "estimatedMessageTokenDelta": -23969,
+      "projectedContextTokenDelta": -23969,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "orphan-result",
+      "inputSha256": "40099cbb963c631ab8e47265e0406a51b61ac275f46de1b3d6f9edc0977f5e8e",
+      "contextWindow": 128000,
+      "elidedResults": 1,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72291,
+          "messageTokens": 72285,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72285,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72291,
+          "estimatedTokensAfter": 72291,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.85775000000001
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48322,
+          "messageTokens": 48316,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48316,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 48322,
+          "estimatedTokensAfter": 48322,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.5319170000000213
+      },
+      "estimatedMessageTokenDelta": -23969,
+      "projectedContextTokenDelta": -23969,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "orphan-result",
+      "inputSha256": "40099cbb963c631ab8e47265e0406a51b61ac275f46de1b3d6f9edc0977f5e8e",
+      "contextWindow": 272000,
+      "elidedResults": 1,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72291,
+          "messageTokens": 72285,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72285,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72291,
+          "estimatedTokensAfter": 72291,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8211670000000595
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48322,
+          "messageTokens": 48316,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48316,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 8,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 48322,
+          "estimatedTokensAfter": 48322,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.6126669999999876
+      },
+      "estimatedMessageTokenDelta": -23969,
+      "projectedContextTokenDelta": -23969,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "system-update",
+      "inputSha256": "bc1e9796a2da0163e536a60f05ef3def94af590c94afb2f3236b9704b7a8df75",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 74333,
+          "messageTokens": 74317,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 74317,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 74333,
+          "estimatedTokensAfter": 27,
+          "kind": "history_removed",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.1120839999999816
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 2391,
+          "messageTokens": 2375,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 2375,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 2391,
+          "estimatedTokensAfter": 2391,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.0515419999999267
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "system-update",
+      "inputSha256": "bc1e9796a2da0163e536a60f05ef3def94af590c94afb2f3236b9704b7a8df75",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 74333,
+          "messageTokens": 74317,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 74317,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 74333,
+          "estimatedTokensAfter": 27,
+          "kind": "history_removed",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.9405839999999444
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 2391,
+          "messageTokens": 2375,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 2375,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 2391,
+          "estimatedTokensAfter": 2391,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.05704200000002402
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "system-update",
+      "inputSha256": "bc1e9796a2da0163e536a60f05ef3def94af590c94afb2f3236b9704b7a8df75",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 74333,
+          "messageTokens": 74317,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 74317,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 74333,
+          "estimatedTokensAfter": 18218,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.87925000000007
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 2391,
+          "messageTokens": 2375,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 2375,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 2391,
+          "estimatedTokensAfter": 2391,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.052042000000028565
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "system-update",
+      "inputSha256": "bc1e9796a2da0163e536a60f05ef3def94af590c94afb2f3236b9704b7a8df75",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 74333,
+          "messageTokens": 74317,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 74317,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 74333,
+          "estimatedTokensAfter": 74333,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8508749999999736
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 2391,
+          "messageTokens": 2375,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 2375,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 2391,
+          "estimatedTokensAfter": 2391,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.04454199999997854
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "system-update",
+      "inputSha256": "bc1e9796a2da0163e536a60f05ef3def94af590c94afb2f3236b9704b7a8df75",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 74333,
+          "messageTokens": 74317,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 74317,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 74333,
+          "estimatedTokensAfter": 74333,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8237500000000182
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 2391,
+          "messageTokens": 2375,
+          "staticTokens": 16,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 2375,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 13,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 2391,
+          "estimatedTokensAfter": 2391,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.04370800000003783
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "queued-large-user",
+      "inputSha256": "bf8d53a48ed51d52e6452e816bd72503195d1ef859e5c9c704fd36aaa562c381",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 187305,
+          "messageTokens": 187299,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 187299,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 187305,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 2.0583330000000615
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 115363,
+          "messageTokens": 115357,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 115357,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 115363,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.2039999999999509
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "queued-large-user",
+      "inputSha256": "bf8d53a48ed51d52e6452e816bd72503195d1ef859e5c9c704fd36aaa562c381",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 187305,
+          "messageTokens": 187299,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 187299,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 187305,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 2.05433400000004
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 115363,
+          "messageTokens": 115357,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 115357,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 115363,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.1271250000000919
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "queued-large-user",
+      "inputSha256": "bf8d53a48ed51d52e6452e816bd72503195d1ef859e5c9c704fd36aaa562c381",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 187305,
+          "messageTokens": 187299,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 187299,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 187305,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 2.755625000000009
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 115363,
+          "messageTokens": 115357,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 115357,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 115363,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.1359999999999673
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "queued-large-user",
+      "inputSha256": "bf8d53a48ed51d52e6452e816bd72503195d1ef859e5c9c704fd36aaa562c381",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 187305,
+          "messageTokens": 187299,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 187299,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 187305,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.8676249999999754
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 115363,
+          "messageTokens": 115357,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 115357,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 115363,
+          "estimatedTokensAfter": 67,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 10,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.1077910000000202
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "queued-large-user",
+      "inputSha256": "bf8d53a48ed51d52e6452e816bd72503195d1ef859e5c9c704fd36aaa562c381",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 187305,
+          "messageTokens": 187299,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 187299,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 187305,
+          "estimatedTokensAfter": 187305,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.8673750000000382
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 115363,
+          "messageTokens": 115357,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 115357,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 10,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 115363,
+          "estimatedTokensAfter": 115363,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.0520420000000286
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "mixed-image-result",
+      "inputSha256": "f2ad9e1d6d9fdfb43983ddcca5b3cc6f3de515630b48ad0e55003dd64dfa30f7",
+      "contextWindow": 8000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8300830000000587
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.7719160000000329
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "mixed-image-result",
+      "inputSha256": "f2ad9e1d6d9fdfb43983ddcca5b3cc6f3de515630b48ad0e55003dd64dfa30f7",
+      "contextWindow": 16000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.7742499999999382
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.7992910000000393
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "mixed-image-result",
+      "inputSha256": "f2ad9e1d6d9fdfb43983ddcca5b3cc6f3de515630b48ad0e55003dd64dfa30f7",
+      "contextWindow": 32000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 20983,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8113749999999982
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 20983,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8062080000000833
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "mixed-image-result",
+      "inputSha256": "f2ad9e1d6d9fdfb43983ddcca5b3cc6f3de515630b48ad0e55003dd64dfa30f7",
+      "contextWindow": 128000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 77098,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8137920000000349
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 77098,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8817080000000033
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "mixed-image-result",
+      "inputSha256": "f2ad9e1d6d9fdfb43983ddcca5b3cc6f3de515630b48ad0e55003dd64dfa30f7",
+      "contextWindow": 272000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 77098,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8061669999999594
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 77098,
+          "messageTokens": 77092,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 77092,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 77098,
+          "estimatedTokensAfter": 77098,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.7971249999999372
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "static-pressure",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 8000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55061,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.05454099999997197
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55061,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.03199999999992542
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "static-pressure",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 16000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55061,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.034291999999936706
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55061,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.030250000000023647
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "static-pressure",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 32000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55061,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.03066599999999653
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55061,
+          "kind": "active_payload_replaced",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 1,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.02983300000005329
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "static-pressure",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 128000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55297,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.01862499999992906
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55297,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.01720799999998235
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "static-pressure",
+      "inputSha256": "0a6c34bcd12b635d2ea0e230f931aa224f23af8f473e1eaae3d6a7e04caeb565",
+      "contextWindow": 272000,
+      "elidedResults": 0,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55297,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.018084000000044398
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 55297,
+          "messageTokens": 297,
+          "staticTokens": 55000,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 297,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 55297,
+          "estimatedTokensAfter": 55297,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.01716600000008839
+      },
+      "estimatedMessageTokenDelta": 0,
+      "projectedContextTokenDelta": 0,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "pending-call",
+      "inputSha256": "a7a983054f4e0b8b0b9b957f865340e1a4d941169448b1e92564595ed78b648e",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72306,
+          "messageTokens": 72300,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72300,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72306,
+          "estimatedTokensAfter": 25,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.9118330000000014
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 364,
+          "messageTokens": 358,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 358,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 364,
+          "estimatedTokensAfter": 364,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.03599999999994452
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "pending-call",
+      "inputSha256": "a7a983054f4e0b8b0b9b957f865340e1a4d941169448b1e92564595ed78b648e",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72306,
+          "messageTokens": 72300,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72300,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72306,
+          "estimatedTokensAfter": 25,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8657500000000482
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 364,
+          "messageTokens": 358,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 358,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 364,
+          "estimatedTokensAfter": 364,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.029708000000027823
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "pending-call",
+      "inputSha256": "a7a983054f4e0b8b0b9b957f865340e1a4d941169448b1e92564595ed78b648e",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72306,
+          "messageTokens": 72300,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72300,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72306,
+          "estimatedTokensAfter": 16191,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.9744170000000167
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 364,
+          "messageTokens": 358,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 358,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 364,
+          "estimatedTokensAfter": 364,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.03775000000007367
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "pending-call",
+      "inputSha256": "a7a983054f4e0b8b0b9b957f865340e1a4d941169448b1e92564595ed78b648e",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72306,
+          "messageTokens": 72300,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72300,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72306,
+          "estimatedTokensAfter": 72306,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7937499999999318
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 364,
+          "messageTokens": 358,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 358,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 364,
+          "estimatedTokensAfter": 364,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.024999999999977263
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "pending-call",
+      "inputSha256": "a7a983054f4e0b8b0b9b957f865340e1a4d941169448b1e92564595ed78b648e",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72306,
+          "messageTokens": 72300,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72300,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72306,
+          "estimatedTokensAfter": 72306,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7833330000000842
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 364,
+          "messageTokens": 358,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 358,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 364,
+          "estimatedTokensAfter": 364,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02183300000001509
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "active-tool-loop",
+      "inputSha256": "4aaf1738e5646d6567710d5fffd18294f4d87bdc55e6ff7c037d36916e449777",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72287,
+          "messageTokens": 72281,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72281,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72287,
+          "estimatedTokensAfter": 369,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 2,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.118415999999911
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 345,
+          "messageTokens": 339,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 339,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 345,
+          "estimatedTokensAfter": 345,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02458400000000438
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "active-tool-loop",
+      "inputSha256": "4aaf1738e5646d6567710d5fffd18294f4d87bdc55e6ff7c037d36916e449777",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72287,
+          "messageTokens": 72281,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72281,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72287,
+          "estimatedTokensAfter": 8271,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 1,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8959160000000566
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 345,
+          "messageTokens": 339,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 339,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 345,
+          "estimatedTokensAfter": 345,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.021624999999971806
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "active-tool-loop",
+      "inputSha256": "4aaf1738e5646d6567710d5fffd18294f4d87bdc55e6ff7c037d36916e449777",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72287,
+          "messageTokens": 72281,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72281,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 72287,
+          "estimatedTokensAfter": 16172,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.850667000000044
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 345,
+          "messageTokens": 339,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 339,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 345,
+          "estimatedTokensAfter": 345,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.018167000000062217
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "active-tool-loop",
+      "inputSha256": "4aaf1738e5646d6567710d5fffd18294f4d87bdc55e6ff7c037d36916e449777",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72287,
+          "messageTokens": 72281,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72281,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72287,
+          "estimatedTokensAfter": 72287,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8455000000000155
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 345,
+          "messageTokens": 339,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 339,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 345,
+          "estimatedTokensAfter": 345,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.0206670000000031
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "active-tool-loop",
+      "inputSha256": "4aaf1738e5646d6567710d5fffd18294f4d87bdc55e6ff7c037d36916e449777",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 72287,
+          "messageTokens": 72281,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 72281,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 72287,
+          "estimatedTokensAfter": 72287,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.9322499999999536
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 345,
+          "messageTokens": 339,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 339,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 0,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 345,
+          "estimatedTokensAfter": 345,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.023583000000030552
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "large-recent-results",
+      "inputSha256": "8b86f872d14ce866fc04bcb5e81a7458a94c8ddc15c295c7e685591f94278c86",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120290,
+          "messageTokens": 120284,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 120284,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120290,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.372792000000004
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48348,
+          "messageTokens": 48342,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48342,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 48348,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.6246249999999236
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "large-recent-results",
+      "inputSha256": "8b86f872d14ce866fc04bcb5e81a7458a94c8ddc15c295c7e685591f94278c86",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120290,
+          "messageTokens": 120284,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 120284,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120290,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.3410000000000082
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48348,
+          "messageTokens": 48342,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48342,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 48348,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.6248329999999669
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "large-recent-results",
+      "inputSha256": "8b86f872d14ce866fc04bcb5e81a7458a94c8ddc15c295c7e685591f94278c86",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120290,
+          "messageTokens": 120284,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 120284,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120290,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 9,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 1.4499170000000277
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48348,
+          "messageTokens": 48342,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48342,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 48348,
+          "estimatedTokensAfter": 16238,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.6493749999999636
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "large-recent-results",
+      "inputSha256": "8b86f872d14ce866fc04bcb5e81a7458a94c8ddc15c295c7e685591f94278c86",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120290,
+          "messageTokens": 120284,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 120284,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 120290,
+          "estimatedTokensAfter": 32065,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 4,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.3376250000000027
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48348,
+          "messageTokens": 48342,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48342,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 48348,
+          "estimatedTokensAfter": 48348,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.5152500000000373
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "large-recent-results",
+      "inputSha256": "8b86f872d14ce866fc04bcb5e81a7458a94c8ddc15c295c7e685591f94278c86",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 120290,
+          "messageTokens": 120284,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 120284,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 120290,
+          "estimatedTokensAfter": 120290,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 1.272958000000017
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 48348,
+          "messageTokens": 48342,
+          "staticTokens": 6,
+          "providerUsageTokens": 0,
+          "addedAfterUsageAnchorTokens": 48342,
+          "usageAnchorIndex": null,
+          "compressibleHistoryMessages": 9,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 48348,
+          "estimatedTokensAfter": 48348,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.5560840000000553
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "anchor-before-tail",
+      "inputSha256": "5e218ac5a31a922e3031d47da9b81c3251fb0b8ca5fda9a08034107f58589690",
+      "contextWindow": 8000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77298,
+          "messageTokens": 72304,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77292,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 11,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8233330000000478
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5356,
+          "messageTokens": 362,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5350,
+          "estimatedTokensAfter": 5350,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.030958000000055108
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "anchor-before-tail",
+      "inputSha256": "5e218ac5a31a922e3031d47da9b81c3251fb0b8ca5fda9a08034107f58589690",
+      "contextWindow": 16000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77298,
+          "messageTokens": 72304,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77292,
+          "estimatedTokensAfter": 17,
+          "kind": "history_removed",
+          "removedHistoryMessages": 11,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 0
+        },
+        "localDurationMs": 0.8632910000000038
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5356,
+          "messageTokens": 362,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5350,
+          "estimatedTokensAfter": 5350,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.023290999999971973
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "anchor-before-tail",
+      "inputSha256": "5e218ac5a31a922e3031d47da9b81c3251fb0b8ca5fda9a08034107f58589690",
+      "contextWindow": 32000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77298,
+          "messageTokens": 72304,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": true
+        },
+        "emergency": {
+          "compacted": true,
+          "estimatedTokensBefore": 77292,
+          "estimatedTokensAfter": 21177,
+          "kind": "active_payload_reduced",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 2,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.8569999999999709
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5356,
+          "messageTokens": 362,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5350,
+          "estimatedTokensAfter": 5350,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.027291999999988548
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": true,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "anchor-before-tail",
+      "inputSha256": "5e218ac5a31a922e3031d47da9b81c3251fb0b8ca5fda9a08034107f58589690",
+      "contextWindow": 128000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77298,
+          "messageTokens": 72304,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 77292,
+          "estimatedTokensAfter": 77292,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7666249999999764
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5356,
+          "messageTokens": 362,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5350,
+          "estimatedTokensAfter": 5350,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.02112499999998363
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    },
+    {
+      "fixture": "anchor-before-tail",
+      "inputSha256": "5e218ac5a31a922e3031d47da9b81c3251fb0b8ca5fda9a08034107f58589690",
+      "contextWindow": 272000,
+      "elidedResults": 2,
+      "observationInvariantsPassed": true,
+      "baseline": {
+        "pressure": {
+          "contextTokens": 77298,
+          "messageTokens": 72304,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 72292,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 77292,
+          "estimatedTokensAfter": 77292,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.7882919999999558
+      },
+      "candidate": {
+        "pressure": {
+          "contextTokens": 5356,
+          "messageTokens": 362,
+          "staticTokens": 6,
+          "providerUsageTokens": 5000,
+          "addedAfterUsageAnchorTokens": 350,
+          "usageAnchorIndex": 1,
+          "compressibleHistoryMessages": 11,
+          "shouldCompact": false
+        },
+        "emergency": {
+          "compacted": false,
+          "estimatedTokensBefore": 5350,
+          "estimatedTokensAfter": 5350,
+          "kind": "none",
+          "removedHistoryMessages": 0,
+          "removedCurrentTurnMessages": 0,
+          "truncatedToolResults": 0,
+          "compactedToolResults": 0,
+          "recoveryMarkersAfter": 4
+        },
+        "localDurationMs": 0.03958299999999326
+      },
+      "estimatedMessageTokenDelta": -71942,
+      "projectedContextTokenDelta": -71942,
+      "counterfactualShouldCompactAvoided": false,
+      "counterfactualShouldCompactIntroduced": false
+    }
+  ]
+}

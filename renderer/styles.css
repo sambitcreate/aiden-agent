@@ -1689,6 +1689,20 @@ textarea {
   }
 }
 
+/* Plugin directory cards pair up only when the Settings content column (not
+ * the window) has room for two readable cards. */
+.settings-plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@container settings-content (max-width: 720px) {
+  .settings-plugin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* The tray moves under the Pad when the card itself is narrow. */
 @container model-pad-fieldset (max-width: 640px) {
   .model-pad-body {
@@ -2098,6 +2112,25 @@ textarea {
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="closed"] {
   animation: aiden-environment-summary-out 120ms ease-in both;
+}
+/* A Quick View card that appears mid-session (Context after the first message, Subagents after the first run). */
+@keyframes quick-view-card-enter {
+  from {
+    opacity: 0;
+    scale: 0.97;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+:root[data-reduce-motion="false"] .quick-view-card-slot[data-entering] {
+  animation: quick-view-card-enter var(--motion-large-duration) var(--motion-large-easing) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-view-card-slot[data-entering] {
+    animation: none;
+  }
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="open"] {
   animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1)

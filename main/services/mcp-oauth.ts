@@ -6,7 +6,6 @@ import { loadMcpOAuthMetadataOverride } from "./mcp-oauth-metadata.js";
 // consent page in the user's browser and capture the authorization code on a
 // short-lived localhost server.
 
-import * as http from "http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -18,8 +17,8 @@ import type {
   OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { shell, logger } from "../platform.js";
-import { mcpOAuthStore } from "./mcp-oauth-store.js";
+import { app, shell, logger } from "../platform.js";
+import { McpOAuthCredentialStorageError, mcpOAuthStore } from "./mcp-oauth-store.js";
 import {
   clearMcpStepUpScope,
   hasMcpOAuthSessionData,
@@ -51,6 +50,13 @@ import { closeAgainAfterSettled } from "./generation-bound-connection-cache.js";
 import type { McpServer } from "./types.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
+import { startMcpOAuthLoopback, type McpOAuthLoopback } from "./mcp-oauth-loopback.js";
+import { mcpLiveStatus } from "./mcp-status-events.js";
+
+/** MCP `clientInfo` for sign-in connections: the running Aiden release, not a hard-coded build. */
+function oauthClientInfo(): { name: string; version: string } {
+  return { name: "aiden-agent", version: app.getVersion() };
+}
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
 // sessions (dynamic client registration records it once).
@@ -178,6 +184,8 @@ class McpOAuthProvider implements OAuthClientProvider {
 
   /** The tokens this provider last handed to (or received from) the SDK. */
   private lastTokens?: Pick<OAuthTokens, "access_token" | "refresh_token">;
+  /** Whether this connection found a stored sign-in at all (sticky across invalidation). */
+  private hadStoredTokens = false;
   /**
    * The SDK reads the PKCE verifier only to exchange an authorization code and
    * reads tokens() only before a refresh, so this tells the two saves apart.
@@ -187,13 +195,18 @@ class McpOAuthProvider implements OAuthClientProvider {
   async tokens(): Promise<OAuthTokens | undefined> {
     this.exchangingCode = false;
     const tokens = (await this.boundSession()).tokens;
-    if (tokens) this.observeTokens?.(tokens);
+    if (tokens) {
+      this.hadStoredTokens = true;
+      this.observeTokens?.(tokens);
+    }
     this.lastTokens = tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
     return tokens;
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     this.assertCanMutate();
+    // A refresh (or sign-in) that minted tokens proves the session works again.
+    if (!this.transaction) mcpLiveStatus.clearAuthFailure(this.serverId);
     // Register the exact material before either persistence or transport reuse.
     // Subagent callers use this hook to retain only a host-owned redactor.
     this.observeTokens?.(tokens);
@@ -236,6 +249,11 @@ class McpOAuthProvider implements OAuthClientProvider {
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     if (!("signal" in this.generation)) {
+      // Stored tokens that could not be used or refreshed: Settings must stop
+      // showing them as signed in. A server never signed in is not "expired".
+      if (this.mutationIsCurrent()) {
+        mcpLiveStatus.backgroundSignInRequired(this.serverId, { hadStoredSignIn: this.hadStoredTokens });
+      }
       throw new Error(
         "This MCP server needs sign-in. Open Settings → Plugins and click Authorize.",
       );
@@ -254,6 +272,10 @@ class McpOAuthProvider implements OAuthClientProvider {
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
   ): Promise<void> {
     this.assertCanMutate();
+    if (!("signal" in this.generation) && (scope === "all" || scope === "tokens")) {
+      // The SDK drops tokens after `invalid_grant` or a rejected refresh.
+      mcpLiveStatus.authFailure(this.serverId, "invalid-grant");
+    }
     if (scope === "all" || scope === "discovery") this.authorization.clearDiscovery();
     if (scope === "all") {
       if (this.transaction) {
@@ -322,7 +344,14 @@ export async function hasOAuthTokens(
   authServerMetadataUrl?: string,
   oauthClientName?: string,
 ): Promise<boolean> {
-  const session = await mcpOAuthStore.get(serverId);
+  let session: McpOAuthSession;
+  try {
+    session = await mcpOAuthStore.get(serverId);
+  } catch (error) {
+    // Status only: an unreadable sign-in is not usable. Connecting reports why.
+    if (error instanceof McpOAuthCredentialStorageError) return false;
+    throw error;
+  }
   if (url && !sessionMatchesMcpBinding(session, mcpAuthorizationBinding(url, authServerMetadataUrl, oauthClientName)))
     return false;
   return Boolean(session.tokens);
@@ -335,6 +364,14 @@ export async function clearOAuth(
   await withMcpConfigurationPublication(serverId, () =>
     mcpOAuthStore.clear(serverId, isCurrent),
   );
+}
+
+/**
+ * Stop a sign-in that is waiting in the browser. The running flow rejects with
+ * `McpOAuthCancelledError` and frees the loopback port; false when none ran.
+ */
+export function cancelMcpAuthorization(serverId: string): boolean {
+  return oauthOperations.cancel(serverId);
 }
 
 export function invalidateMcpOAuthOperation(serverId: string): void {
@@ -358,66 +395,6 @@ export function endReservedMcpAuthorization(
   operation: McpOAuthOperation,
 ): void {
   oauthOperations.end(operation);
-}
-
-interface Loopback {
-  waitForCode: () => Promise<string>;
-  close: () => void;
-}
-
-function startLoopbackServer(authorization: McpOAuthAuthorizationFlow): Promise<Loopback> {
-  return new Promise((resolve, reject) => {
-    let resolveCode!: (code: string) => void;
-    let rejectCode!: (error: Error) => void;
-    const codePromise = new Promise<string>((res, rej) => {
-      resolveCode = res;
-      rejectCode = rej;
-    });
-    // The callback can arrive while the initial transport is still settling.
-    void codePromise.catch(() => undefined);
-
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url ?? "/", OAUTH_REDIRECT_URI);
-      if (req.method !== "GET" || url.pathname !== "/callback") {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-      let callback: ReturnType<McpOAuthAuthorizationFlow["callback"]>;
-      try {
-        callback = authorization.callback(url);
-      } catch {
-        res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-        res.end("Invalid OAuth callback. Return to the sign-in window and try again.");
-        return;
-      }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(CALLBACK_HTML);
-      if ("error" in callback) rejectCode(callback.error);
-      else resolveCode(callback.code);
-    });
-
-    server.once("error", (err: NodeJS.ErrnoException) => {
-      reject(
-        err.code === "EADDRINUSE"
-          ? new Error(
-              `Port ${OAUTH_PORT} is busy — close whatever is using it and try again.`,
-            )
-          : err,
-      );
-    });
-
-    server.listen(OAUTH_PORT, "127.0.0.1", () => {
-      const timer = setTimeout(
-        () => rejectCode(new Error("Sign-in timed out.")),
-        AUTH_TIMEOUT_MS,
-      );
-      resolve({
-        waitForCode: () => codePromise.finally(() => clearTimeout(timer)),
-        close: () => { clearTimeout(timer); server.close(); },
-      });
-    });
-  });
 }
 
 function cancellationError(signal: AbortSignal): Error {
@@ -499,12 +476,18 @@ export async function authorizeMcpServer(
   const operation = reservedOperation ?? oauthOperations.begin(server.id);
   if (!oauthOperations.isCurrent(operation)) {
     oauthOperations.end(operation);
-    throw new Error("MCP authorization was superseded by a config change.");
+    throw operation.signal.aborted
+      ? cancellationError(operation.signal)
+      : new Error("MCP authorization was superseded by a config change.");
   }
   const previousSession = await mcpOAuthStore.get(
     server.id,
     () => isCurrent() && oauthOperations.isCurrent(operation),
-  );
+  ).catch((error: unknown) => {
+    // Signing in again is how the user recovers from an unreadable sign-in.
+    if (error instanceof McpOAuthCredentialStorageError) return {};
+    throw error;
+  });
   const transaction = new McpOAuthSessionTransaction(
     sessionForMcpAuthorizationAttempt(previousSession, binding),
   );
@@ -521,10 +504,18 @@ export async function authorizeMcpServer(
     structuredClone(server),
     ownerSignal ? AbortSignal.any([operation.signal, ownerSignal]) : operation.signal,
   );
-  let loopback: Loopback | null = null;
+  let loopback: McpOAuthLoopback | null = null;
   let commitAttempted = false;
   try {
-    loopback = await startLoopbackServer(authorization);
+    loopback = await startMcpOAuthLoopback({
+      port: OAUTH_PORT,
+      redirectUri: OAUTH_REDIRECT_URI,
+      label: server.name || "MCP server",
+      timeoutMs: AUTH_TIMEOUT_MS,
+      callbackHtml: CALLBACK_HTML,
+      authorization,
+      signal: ownerSignal ? AbortSignal.any([operation.signal, ownerSignal]) : operation.signal,
+    });
     // Re-authorization is transactional: preserve the durable old session
     // while the SDK mutates a private replacement buffer. A renderer reload,
     // failed provider, or process crash before final verification cannot erase
@@ -535,7 +526,7 @@ export async function authorizeMcpServer(
     ]);
     const transport = makeOAuthTransport(server, provider, transportSignal);
     const client = new Client(
-      { name: "aiden-agent", version: "0.27.0" },
+      oauthClientInfo(),
       { capabilities: {} },
     );
     try {
@@ -552,6 +543,7 @@ export async function authorizeMcpServer(
         }),
       );
       clearMcpStepUpScope(server.url);
+      mcpLiveStatus.clearAuthFailure(server.id);
       return;
     } catch (error) {
       await client.close().catch(() => {});
@@ -575,7 +567,7 @@ export async function authorizeMcpServer(
     // Verify the freshly minted tokens actually authorize a connection.
     const verifyTransport = makeOAuthTransport(server, provider, transportSignal);
     const verifyClient = new Client(
-      { name: "aiden-agent", version: "0.27.0" },
+      oauthClientInfo(),
       { capabilities: {} },
     );
     try {
@@ -594,6 +586,7 @@ export async function authorizeMcpServer(
       }),
     );
     clearMcpStepUpScope(server.url);
+    mcpLiveStatus.clearAuthFailure(server.id);
   } catch (error) {
     if (commitAttempted && oauthOperations.isCurrent(operation)) {
       try {

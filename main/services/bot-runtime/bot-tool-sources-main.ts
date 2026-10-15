@@ -15,12 +15,12 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
-import { connectionSuggestionFor, type ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { createSuggestConnectionTool } from "../bot-runtime-tools/suggest-connection.js";
+import { createSuggestConnectionTool, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
@@ -30,8 +30,11 @@ import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { logger } from "../../platform.js";
-import { createMcpInstructionCollector } from "../mcp-server-instructions.js";
-import { presetServerId } from "../mcp-presets.js";
+import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
+import { hasOAuthTokens } from "../mcp-oauth.js";
+import { presetSecretId } from "../mcp-presets.js";
+import { mcpAgentToolIdentity } from "../mcp-tool-identity.js";
+import { secrets } from "../secrets.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { skillRegistry } from "../skill-registry-main.js";
 import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profile.js";
@@ -40,6 +43,9 @@ import { subagentHealthMetrics } from "../subagents/subagent-health-metrics.js";
 import { SubagentSupervisor } from "../subagents/subagent-supervisor.js";
 import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
+import { botMcpLiveToolMatchesGrant } from "../bot-tool-authority.js";
+import { collectMcpAgentTools } from "../mcp.js";
+import { mcpAgentToolDescriptor } from "../mcp-agent-tool-descriptor.js";
 import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
@@ -92,12 +98,25 @@ export async function botFileLocations(admission: BotAdmission): Promise<BotFile
   return locations;
 }
 
-/** Whether a suggested plugin's preset server is enabled (the connect card's "Connected" state). */
-export async function isConnected(pluginId: string): Promise<boolean> {
-  const suggestion = connectionSuggestionFor(pluginId);
-  if (!suggestion) return false;
-  const serverId = presetServerId(suggestion.setupEntry.presetId);
-  return (await configStore.listMcpServers()).some((server) => server.id === serverId && server.enabled);
+/** Whether a suggested plugin is set up, switched on, and signed in (the connect card's "Connected" state). */
+export function isConnected(pluginId: string): Promise<boolean> {
+  return isBotConnectionReady(pluginId, {
+    listServers: () => configStore.listMcpServers(),
+    hasPresetKey: async (server) =>
+      Boolean(
+        await secrets.getOrBindLegacyProviderKey(
+          presetSecretId(server.id),
+          mcpPresetKeyBinding(server),
+        ),
+      ),
+    hasOAuthTokens: (server, preset) =>
+      hasOAuthTokens(
+        server.id,
+        server.url ?? preset.url,
+        server.authServerMetadataUrl,
+        server.oauthClientName,
+      ),
+  });
 }
 
 // Routine services load lazily: they import the scheduler, which must not
@@ -236,6 +255,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     };
   }
 
+  // The MCP tools each Bot's last candidate build produced; policy facts join
+  // grants to these by identity rather than recomputing tool names.
+  const builtMcpTools = new Map<string, readonly AgentTool[]>();
+
   const sources: BotToolSourcesMain = {
     async facts(botId, admission): Promise<ProductionFacts> {
       const authority = admission.authority;
@@ -245,7 +268,20 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         supportsImages: await deps.imageInput(botId),
         fileLocations: (await botFileLocations(admission)).length,
         catalog: async () => (await catalog()).resources,
-        mcpServers: () => configStore.listMcpServers(),
+        mcpTools: async () => builtMcpTools.get(botId) ?? [],
+        liveMcpTools: async () => {
+          const servers = (await configStore.listMcpServers()).filter((server) =>
+            authority.connections.some(({ sourceId }) => sourceId === server.id),
+          );
+          // The same live inventory (and reused tool objects) the turn's tools are built from.
+          const tools = await collectMcpAgentTools(servers, { strict: true });
+          return new Map(
+            tools.flatMap((tool) => {
+              const descriptor = mcpAgentToolDescriptor(tool);
+              return descriptor && mcpAgentToolIdentity(tool) ? [[tool.name, descriptor] as const] : [];
+            }),
+          );
+        },
         skills: async () => ({
           snapshot: await skillRegistry.snapshotResolved({
             id: authority.managedHome.workspaceId,
@@ -264,7 +300,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
       const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
-      const collector = createMcpInstructionCollector();
       const skillSnapshot = await production.skillSnapshot();
       const subagentsAllowed =
         has("subagents") &&
@@ -289,7 +324,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       });
 
       const built = await buildAgentTools({
-        onMcpServerInstructions: collector.capture,
         allowMcpProviderAuth: false,
         workspaceId: workspace.id,
         workspaceRoot: workspace.folderPath,
@@ -303,10 +337,15 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         ...(subagentsAllowed ? { createSubagentTool: () => subagentSchema } : {}),
         includeCodingTools: false,
       });
+      builtMcpTools.set(botId, built.filter((tool) => mcpAgentToolIdentity(tool) !== undefined));
       const mcpNames = await facts.mcpTools();
-      const tools: BotToolCandidate[] = built.map((tool) =>
-        tool.name === SUBAGENT_TOOL ? subagentCandidate(botId, admission, tool) : { tool, ...(mcpNames.has(tool.name) ? { mcp: true } : {}) },
-      );
+      const tools: BotToolCandidate[] = built.flatMap((tool): BotToolCandidate[] => {
+        if (tool.name === SUBAGENT_TOOL) return [subagentCandidate(botId, admission, tool)];
+        const grant = mcpNames.get(tool.name);
+        if (!grant) return [{ tool }];
+        // The built tool itself must be the granted tool, not only a same-named one.
+        return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool)) ? [{ tool, mcp: true }] : [];
+      });
 
       const locations = await botFileLocations(admission);
       if (locations.length > 0) {
@@ -359,7 +398,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       tools.push(botQuestionCandidate(botId, botQuestions));
       return {
         tools,
-        guidance: collector.snapshot(),
         ...(skillSnapshot === undefined ? {} : { skillSnapshot }),
       };
     },

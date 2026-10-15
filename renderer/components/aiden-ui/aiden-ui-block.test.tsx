@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { installBotTestIpc } from "../../main/bots/test-dom";
 import { compileAum } from "../../shared/aiden-ui/compile";
 import type { AidenUiNodeV1, ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import type { Attachment } from "../../../main/services/types";
 import { visualSnapshotImages } from "../../../main/services/visual-snapshot-core";
+import { LinkOpenerProvider } from "../../lib/link-opener";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui-block";
 import { setChartModuleLoader } from "./chart";
 
@@ -81,9 +83,21 @@ test("bound inputs drive the values, chart, and table without a model call", asy
 test("actions send, copy, and open only through their own handlers", async () => {
   const actions: AidenUiAction[] = [];
   const states: Record<string, unknown>[] = [];
+  const calls = installBotTestIpc({
+    "browser:link-preference": () => "ask",
+    "browser:set-link-preference": (value) => value,
+    "browser:open-external": () => undefined,
+  });
   render(
-    <AidenUiBlock visual={visualFrom("tabs")} onAction={(action) => actions.push(action)} onStateChange={(state) => states.push(state)} />,
+    <LinkOpenerProvider workspaceId={null}>
+      <AidenUiBlock
+        visual={visualFrom("tabs")}
+        onAction={(action) => actions.push(action)}
+        onStateChange={(state) => states.push(state)}
+      />
+    </LinkOpenerProvider>,
   );
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
   fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   assert.deepEqual(actions, [{ kind: "send", text: "Start the team plan" }]);
@@ -91,11 +105,31 @@ test("actions send, copy, and open only through their own handlers", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Copy" }));
   await waitFor(() => assert.deepEqual(clipboard, ["Plan: team"]));
 
+  // The open request fires onAction as soon as it's made, not after the user
+  // confirms — the provider doesn't report the choice back.
   fireEvent.click(screen.getByRole("button", { name: "Pricing page" }));
-  const dialog = await screen.findByRole("dialog");
+  await waitFor(() => assert.deepEqual(actions, [
+    { kind: "send", text: "Start the team plan" },
+    { kind: "copy", text: "Plan: team" },
+    { kind: "open", url: "https://example.com/pricing" },
+  ]));
+  const dialog = await screen.findByRole("dialog", { name: "Open this link?" });
   assert.ok(within(dialog).getByText("https://example.com/pricing"));
+  // forcePrompt never offers "remember my choice".
+  assert.equal(within(dialog).queryByRole("checkbox"), null);
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "browser:open-external"),
+    [],
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Pricing page" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Open in system browser" }));
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "browser:open-external"),
+    [{ channel: "browser:open-external", args: ["https://example.com/pricing"] }],
+  );
 
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Solo" }), { button: 0 });
   fireEvent.click(screen.getByRole("tab", { name: "Solo" }));
@@ -271,7 +305,17 @@ test("visual Markdown never loads a remote image or navigates a link directly", 
     fallbackText: compiled.fallbackText,
   };
   const actions: AidenUiAction[] = [];
-  const view = render(<AidenUiBlock visual={visual} onAction={(action) => actions.push(action)} />);
+  const calls = installBotTestIpc({
+    "browser:link-preference": () => "ask",
+    "browser:set-link-preference": (value) => value,
+    "browser:open-external": () => undefined,
+  });
+  const view = render(
+    <LinkOpenerProvider workspaceId={null}>
+      <AidenUiBlock visual={visual} onAction={(action) => actions.push(action)} />
+    </LinkOpenerProvider>,
+  );
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
   const figure = screen.getByRole("figure", { name: "Remote report" });
 
   // The remote image becomes its alt text: nothing is requested.
@@ -283,15 +327,27 @@ test("visual Markdown never loads a remote image or navigates a link directly", 
   fireEvent.click(screen.getByText("plain"));
   assert.equal(screen.queryByRole("dialog"), null);
 
+  // The open request fires onAction as soon as it's made, not after the user
+  // confirms — the provider doesn't report the choice back.
   fireEvent.click(screen.getByRole("button", { name: "Open report" }));
-  const dialog = await screen.findByRole("dialog");
+  assert.deepEqual(actions, [{ kind: "open", url: "https://example.test/report" }]);
+  const dialog = await screen.findByRole("dialog", { name: "Open this link?" });
   assert.ok(within(dialog).getByText("https://example.test/report"));
+  // forcePrompt never offers "remember my choice".
+  assert.equal(within(dialog).queryByRole("checkbox"), null);
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
-  assert.deepEqual(actions, []);
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "browser:open-external"),
+    [],
+  );
 
   // While the visual is still streaming, its link is visible but cannot act.
-  view.rerender(<AidenUiBlock visual={visual} draft />);
+  view.rerender(
+    <LinkOpenerProvider workspaceId={null}>
+      <AidenUiBlock visual={visual} draft />
+    </LinkOpenerProvider>,
+  );
   assert.equal((screen.getByRole("button", { name: "Open report" }) as HTMLButtonElement).disabled, true);
 });
 

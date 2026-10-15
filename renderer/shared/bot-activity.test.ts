@@ -42,11 +42,15 @@ test("every Bot tool maps to the phase in the spec's table, and anything else is
 });
 
 test("a connection tool is Using {app}, named from the connection, and bounded", () => {
-  const tool = "Google_Calendar__list_events_0123456789ab";
+  const tool = "google_calendar__list_events";
   assert.equal(botToolApp(tool), "Google Calendar");
   assert.equal(botToolPhase(tool, botToolApp(tool)), "app");
   assert.equal(botActivityDisplay("app", "follows", "Google Calendar").word, "Using Google Calendar");
-  const long = `${"A".repeat(60)}__search_0123456789ab`;
+  // Two servers sharing a prefix, a long tool name, and a digit-led server keep their app.
+  assert.equal(botToolApp("google_calendar_1a2b3c__list_events"), "Google Calendar");
+  assert.equal(botToolApp("notion__search_pages_and_databases_0123abcd"), "Notion");
+  assert.equal(botToolApp("mcp_1password__item_lookup"), "1password");
+  const long = `${"a".repeat(60)}__search`;
   assert.equal([...(botToolApp(long) ?? "")].length, 40);
   // Not a minted connection tool name: no app.
   assert.equal(botToolApp("web_search"), undefined);
