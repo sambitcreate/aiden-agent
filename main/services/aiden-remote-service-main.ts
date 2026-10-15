@@ -13,6 +13,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { app, BrowserWindow, ipcMain, logger, Notification, onBroadcast } from "../platform.js";
+import { isAuxiliaryWindow } from "../windows/auxiliary-windows.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { recordRemoteRequestHealth } from "./diagnostic-health.js";
@@ -111,6 +112,7 @@ import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
 import { scheduleStore, systemTimezone } from "./schedule-store.js";
@@ -123,6 +125,7 @@ import {
 } from "./aiden-remote-bot-session.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
+import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
 import {
@@ -457,7 +460,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     isSupported: () => Notification.isSupported(),
     create: (options) => new Notification(options),
     focusApp: () => {
-      const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => !candidate.isDestroyed() && !isAuxiliaryWindow(candidate),
+      );
       if (!window) return;
       if (window.isMinimized()) window.restore();
       window.show();
@@ -496,6 +501,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const workspaceBrowser = new AidenRemoteWorkspaceBrowserService({
             instanceId,
             state,
+            approvalStore: userData,
           });
           const models = new AidenRemoteModelService({
             listProviders: listConfiguredProviders,
@@ -584,6 +590,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               : {}),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            // Paired devices see visuals as snapshots, so turns follow Appearance.
+            inlineVisuals: async () =>
+              normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
             deviceSupportsQuestionPrompts: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
                 (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
@@ -844,6 +853,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 throw error;
               }
             },
+            chatActivity: true,
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),
@@ -873,6 +883,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 routines: botRoutineService,
                 questions: botQuestions,
                 approvals: botApprovals,
+                turnIntents: botTurnIntents,
+                // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
+                runStarts: botRunStarts,
+                onReport: (botId, error) => logger.warn("aiden-remote", `Bot ${botId} queued or placed messages could not be read for phones.`, error),
                 presets: {
                   list: () => BOT_PRESETS,
                   // The one process-wide starter the desktop uses: a Mac tap and a

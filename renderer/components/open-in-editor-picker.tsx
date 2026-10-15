@@ -39,10 +39,17 @@ function EditorIcon({ editor, className }: { editor: ExternalEditor; className: 
   return <Icon aria-hidden="true" className={className} />;
 }
 
-export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPickerProps) {
-  const { binding } = useCommandSystem();
-  const shortcutBinding = binding("workspace.openPreferredEditor");
-  const shortcut = prettyAccelerator(shortcutBinding);
+/**
+ * Installed-editor discovery plus the remembered preferred editor for a workspace folder.
+ * Shared by the toolbar picker and the Quick View Folder row; only the picker registers
+ * the `workspace.openPreferredEditor` command so it is never bound twice.
+ */
+export function usePreferredEditor(
+  workspaceId: string | undefined,
+  folderPath: string | undefined,
+  /** Skip the toast when discovery fails; the toolbar picker already reports it. */
+  { silentDiscoveryErrors = false }: { silentDiscoveryErrors?: boolean } = {},
+) {
   const [editors, setEditors] = React.useState<ExternalEditor[]>([]);
   const [storedEditorId, setStoredEditorId] = React.useState<string | null>(readPreferredEditorId);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -56,7 +63,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
         if (mountedRef.current) setEditors(discovered);
         return discovered;
       } catch (error) {
-        if (mountedRef.current) {
+        if (mountedRef.current && !silentDiscoveryErrors) {
           toast.error(error instanceof Error ? error.message : "Couldn't find installed editors.");
         }
         return null;
@@ -64,7 +71,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
         if (mountedRef.current) setIsLoading(false);
       }
     },
-    [],
+    [silentDiscoveryErrors],
   );
 
   React.useEffect(() => {
@@ -121,6 +128,31 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     }
     if (editor) await openInEditor(editor);
   }, [openInEditor, preferredEditor, refreshEditors, storedEditorId]);
+
+  return {
+    editors,
+    isLoading,
+    preferredEditorId,
+    preferredEditor,
+    refreshEditors,
+    openInEditor,
+    openPreferredEditor,
+  };
+}
+
+export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPickerProps) {
+  const { binding } = useCommandSystem();
+  const shortcutBinding = binding("workspace.openPreferredEditor");
+  const shortcut = prettyAccelerator(shortcutBinding);
+  const {
+    editors,
+    isLoading,
+    preferredEditorId,
+    preferredEditor,
+    refreshEditors,
+    openInEditor,
+    openPreferredEditor,
+  } = usePreferredEditor(workspaceId, folderPath);
   useCommandHandler(
     "workspace.openPreferredEditor",
     openPreferredEditor,
@@ -136,11 +168,11 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     <div
       role="group"
       aria-label="Open workspace in editor"
-      className="open-in-editor-picker squircle-control squircle-action-group glass-surface flex h-9 shrink-0 shadow-control transition-shadow duration-150 ease-out hover:shadow-control-hover"
+      className="open-in-editor-picker squircle-control squircle-action-group flex h-7 shrink-0"
     >
       <Button
-        variant="transparent"
-        size="large"
+        variant="bar"
+        size="small"
         disabled={disabled}
         onClick={() => void openPreferredEditor()}
         aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
@@ -149,19 +181,19 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
             ? `Open workspace in ${preferredEditor.label}`
             : "Open workspace in preferred editor"
         }
-        className="h-9 border-0 px-2.5"
+        className="h-7 border-0 px-2 text-small"
       >
         {preferredEditor ? (
-          <EditorIcon editor={preferredEditor} className="size-[18px] shrink-0 rounded-[4px]" />
+          <EditorIcon editor={preferredEditor} className="size-4 shrink-0 rounded-[4px]" />
         ) : (
           <span
             aria-hidden="true"
-            className="size-[18px] shrink-0 animate-pulse rounded-[4px] bg-control"
+            className="size-4 shrink-0 animate-pulse rounded-[4px] bg-control"
           />
         )}
         <span className="open-in-editor-label">Open</span>
       </Button>
-      <span aria-hidden="true" className="my-1.5 w-px shrink-0 bg-separator" />
+      <span aria-hidden="true" className="my-1.5 w-px shrink-0 bg-separator/70" />
       <DropdownMenu
         onOpenChange={(open) => {
           if (open) void refreshEditors(true);
@@ -170,11 +202,11 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
         <DropdownMenuTrigger asChild>
           <Button
             iconOnly
-            variant="transparent"
-            size="large"
+            variant="bar"
+            size="small"
             disabled={disabled}
             aria-label="Choose editor"
-            className="h-9 w-8 border-0 [&_svg]:size-4"
+            className="h-7 w-6 border-0 [&_svg]:size-3.5"
           >
             <ChevronDown aria-hidden="true" />
           </Button>

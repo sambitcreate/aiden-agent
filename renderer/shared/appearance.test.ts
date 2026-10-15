@@ -367,6 +367,20 @@ test("composer context auto-hide defaults on and preserves explicit saved prefer
   assert.throws(() => parseAppearanceConfig({ ...legacy, autoHideComposerContext: "yes" }), /boolean/u);
 });
 
+test("inline visuals default to automatic, migrate legacy settings, and reject unknown modes", () => {
+  assert.equal(createDefaultAppearanceConfig().inlineVisuals, "automatic");
+  const legacy: Record<string, unknown> = { ...createDefaultAppearanceConfig() };
+  delete legacy.inlineVisuals;
+  assert.equal(parseAppearanceConfig(legacy).inlineVisuals, "automatic");
+  for (const inlineVisuals of ["automatic", "on_request", "off"] as const) {
+    const stored = { ...createDefaultAppearanceConfig(), inlineVisuals };
+    assert.equal(parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).inlineVisuals, inlineVisuals);
+  }
+  assert.equal(normalizeAppearanceConfig({ inlineVisuals: "sometimes" }).inlineVisuals, "automatic");
+  assert.equal(normalizeAppearanceConfig({ inlineVisuals: "off" }).inlineVisuals, "off");
+  assert.throws(() => parseAppearanceConfig({ ...legacy, inlineVisuals: "sometimes" }), /inline visuals/i);
+});
+
 test("chat width defaults to the original column, migrates legacy settings, and rejects unknown widths", () => {
   // Existing users keep the 52rem column they had before the preference existed.
   assert.equal(createDefaultAppearanceConfig().chatWidth, "default");
@@ -434,7 +448,12 @@ test("audited UI components retain semantic typography, radii, colors, and radio
     "components/onboarding-flow.tsx",
     "components/ui.tsx",
     "components/settings/provider-model-visibility.tsx",
-    "components/settings/model-pad-settings.tsx",
+    "components/settings/model-pad/model-pad-settings.tsx",
+    "components/settings/model-pad/model-pad-add-popover.tsx",
+    "components/settings/model-pad/model-pad-arrange-menu.tsx",
+    "components/settings/model-pad/model-pad-canvas.tsx",
+    "components/settings/model-pad/model-pad-data-rows.tsx",
+    "components/settings/model-pad/model-pad-tray.tsx",
     "components/settings/telegram-settings.tsx",
   ].map(readRenderer);
   const radiusSources = [
@@ -443,6 +462,11 @@ test("audited UI components retain semantic typography, radii, colors, and radio
     "components/command-palette.tsx",
     "components/composer-slash-palette.tsx",
     "components/environment-panel.tsx",
+    "components/settings/model-pad/model-pad-add-popover.tsx",
+    "components/settings/model-pad/model-pad-arrange-menu.tsx",
+    "components/settings/model-pad/model-pad-canvas.tsx",
+    "components/settings/model-pad/model-pad-data-rows.tsx",
+    "components/settings/model-pad/model-pad-tray.tsx",
     "components/review-panel.tsx",
     "components/terminal-drawer.tsx",
     "components/ui.tsx",

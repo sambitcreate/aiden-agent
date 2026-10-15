@@ -15,24 +15,26 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
-import { connectionSuggestionFor, type ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { createSuggestConnectionTool } from "../bot-runtime-tools/suggest-connection.js";
+import { createSuggestConnectionTool, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
 import { computerUseStatus } from "../computer-use/status.js";
 import type { ComputerUseController } from "../computer-use/controller.js";
-import type { ComputerUseArgs } from "../computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { logger } from "../../platform.js";
-import { createMcpInstructionCollector } from "../mcp-server-instructions.js";
-import { presetServerId } from "../mcp-presets.js";
+import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
+import { hasOAuthTokens } from "../mcp-oauth.js";
+import { presetSecretId } from "../mcp-presets.js";
+import { mcpAgentToolIdentity } from "../mcp-tool-identity.js";
+import { secrets } from "../secrets.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { skillRegistry } from "../skill-registry-main.js";
 import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profile.js";
@@ -41,6 +43,9 @@ import { subagentHealthMetrics } from "../subagents/subagent-health-metrics.js";
 import { SubagentSupervisor } from "../subagents/subagent-supervisor.js";
 import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
+import { botMcpLiveToolMatchesGrant } from "../bot-tool-authority.js";
+import { collectMcpAgentTools } from "../mcp.js";
+import { mcpAgentToolDescriptor } from "../mcp-agent-tool-descriptor.js";
 import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
@@ -51,6 +56,7 @@ import {
   visionCandidate,
 } from "./bot-tool-candidates.js";
 import type { BotToolCall } from "./tool-adapter.js";
+import { botComputerUseApproval } from "./bot-computer-use-approval.js";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
@@ -92,12 +98,25 @@ export async function botFileLocations(admission: BotAdmission): Promise<BotFile
   return locations;
 }
 
-/** Whether a suggested plugin's preset server is enabled (the connect card's "Connected" state). */
-export async function isConnected(pluginId: string): Promise<boolean> {
-  const suggestion = connectionSuggestionFor(pluginId);
-  if (!suggestion) return false;
-  const serverId = presetServerId(suggestion.setupEntry.presetId);
-  return (await configStore.listMcpServers()).some((server) => server.id === serverId && server.enabled);
+/** Whether a suggested plugin is set up, switched on, and signed in (the connect card's "Connected" state). */
+export function isConnected(pluginId: string): Promise<boolean> {
+  return isBotConnectionReady(pluginId, {
+    listServers: () => configStore.listMcpServers(),
+    hasPresetKey: async (server) =>
+      Boolean(
+        await secrets.getOrBindLegacyProviderKey(
+          presetSecretId(server.id),
+          mcpPresetKeyBinding(server),
+        ),
+      ),
+    hasOAuthTokens: (server, preset) =>
+      hasOAuthTokens(
+        server.id,
+        server.url ?? preset.url,
+        server.authServerMetadataUrl,
+        server.oauthClientName,
+      ),
+  });
 }
 
 // Routine services load lazily: they import the scheduler, which must not
@@ -163,24 +182,31 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
   }
 
   /**
-   * The Bot's Computer Use controller, under the same gates as a legacy turn:
-   * platform support, the global beta, the Bot chat's own opt-in and a ready
-   * driver. A controller lives across the Bot's turns until it is no longer
-   * allowed, the Bot is deleted, or the app quits.
+   * The Bot's Computer Use controller: platform support, the global beta, an
+   * existing grant (Always allow, or the Bot chat was allowed from a desktop
+   * turn) and a ready driver. The durable runtime cannot raise the
+   * once-per-chat access card, so an ungranted Bot never gets the tool. A
+   * controller lives across the Bot's turns until it is no longer allowed,
+   * the Bot is deleted, or the app quits.
    */
-  async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
+  async function computerUseGranted(botId: string): Promise<boolean> {
     const chat = await chatStore.get(await deps.canonicalChatId(botId));
-    const enabled =
+    const settings = await configStore.getSettings();
+    return (
       computerUseSupported() &&
-      (await configStore.getSettings()).computerUseEnabled === true &&
-      chat?.computerUseEnabled === true;
-    if (!enabled) {
+      settings.computerUseEnabled === true &&
+      (settings.computerUseAlwaysAllow === true || chat?.computerUseAllowed === true)
+    );
+  }
+
+  async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
+    if (!(await computerUseGranted(botId))) {
       await closeController(botId);
       return undefined;
     }
     const status = await computerUseStatus.status({});
     if (!status.ready) {
-      logger.warn("bots", `Computer Use is enabled for Bot ${botId} but is not ready. ${status.detail}`);
+      logger.warn("bots", `Computer Use is allowed for Bot ${botId} but is not ready. ${status.detail}`);
       await closeController(botId);
       return undefined;
     }
@@ -229,6 +255,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     };
   }
 
+  // The MCP tools each Bot's last candidate build produced; policy facts join
+  // grants to these by identity rather than recomputing tool names.
+  const builtMcpTools = new Map<string, readonly AgentTool[]>();
+
   const sources: BotToolSourcesMain = {
     async facts(botId, admission): Promise<ProductionFacts> {
       const authority = admission.authority;
@@ -238,7 +268,20 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         supportsImages: await deps.imageInput(botId),
         fileLocations: (await botFileLocations(admission)).length,
         catalog: async () => (await catalog()).resources,
-        mcpServers: () => configStore.listMcpServers(),
+        mcpTools: async () => builtMcpTools.get(botId) ?? [],
+        liveMcpTools: async () => {
+          const servers = (await configStore.listMcpServers()).filter((server) =>
+            authority.connections.some(({ sourceId }) => sourceId === server.id),
+          );
+          // The same live inventory (and reused tool objects) the turn's tools are built from.
+          const tools = await collectMcpAgentTools(servers, { strict: true });
+          return new Map(
+            tools.flatMap((tool) => {
+              const descriptor = mcpAgentToolDescriptor(tool);
+              return descriptor && mcpAgentToolIdentity(tool) ? [[tool.name, descriptor] as const] : [];
+            }),
+          );
+        },
         skills: async () => ({
           snapshot: await skillRegistry.snapshotResolved({
             id: authority.managedHome.workspaceId,
@@ -257,7 +300,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
       const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
-      const collector = createMcpInstructionCollector();
       const skillSnapshot = await production.skillSnapshot();
       const subagentsAllowed =
         has("subagents") &&
@@ -282,7 +324,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       });
 
       const built = await buildAgentTools({
-        onMcpServerInstructions: collector.capture,
         allowMcpProviderAuth: false,
         workspaceId: workspace.id,
         workspaceRoot: workspace.folderPath,
@@ -296,10 +337,15 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         ...(subagentsAllowed ? { createSubagentTool: () => subagentSchema } : {}),
         includeCodingTools: false,
       });
+      builtMcpTools.set(botId, built.filter((tool) => mcpAgentToolIdentity(tool) !== undefined));
       const mcpNames = await facts.mcpTools();
-      const tools: BotToolCandidate[] = built.map((tool) =>
-        tool.name === SUBAGENT_TOOL ? subagentCandidate(botId, admission, tool) : { tool, ...(mcpNames.has(tool.name) ? { mcp: true } : {}) },
-      );
+      const tools: BotToolCandidate[] = built.flatMap((tool): BotToolCandidate[] => {
+        if (tool.name === SUBAGENT_TOOL) return [subagentCandidate(botId, admission, tool)];
+        const grant = mcpNames.get(tool.name);
+        if (!grant) return [{ tool }];
+        // The built tool itself must be the granted tool, not only a same-named one.
+        return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool)) ? [{ tool, mcp: true }] : [];
+      });
 
       const locations = await botFileLocations(admission);
       if (locations.length > 0) {
@@ -352,7 +398,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       tools.push(botQuestionCandidate(botId, botQuestions));
       return {
         tools,
-        guidance: collector.snapshot(),
         ...(skillSnapshot === undefined ? {} : { skillSnapshot }),
       };
     },
@@ -361,13 +406,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       if (toolName !== COMPUTER_USE_TOOL_NAME) return undefined;
       const controller = controllers.get(botId);
       if (!controller) throw new Error("Computer Use is not enabled for this response.");
-      const args = call.args as ComputerUseArgs;
-      const descriptor = await controller.approvalFor(args, call.signal);
-      if (!descriptor) return null;
-      return {
-        summary: descriptor.summary,
-        onAllow: () => controller.authorize(call.callId, args, descriptor),
-      };
+      return botComputerUseApproval(controller, call, {
+        granted: () => computerUseGranted(botId),
+        revoke: () => closeController(botId),
+      });
     },
 
     async shutdown() {

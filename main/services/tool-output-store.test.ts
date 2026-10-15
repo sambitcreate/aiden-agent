@@ -7,7 +7,7 @@ import { Type, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { compactGenerationContext } from "./generation-context.js";
 import { ToolOutputStore, toolOutputScope, MAX_STORED_TOOL_OUTPUT_CHARS, toolOutputCredentialFingerprint } from "./tool-output-store.js";
-import { boundedToolOutput, withDurableToolOutputs, markToolOutputSource } from "./tool-output-context.js";
+import { boundedToolOutput, createDurableToolOutputs, withDurableToolOutputs, markToolOutputSource } from "./tool-output-context.js";
 import { executeMcpAgentTool, MAX_MCP_RESULT_TEXT_CHARS } from "./mcp-tool-result.js";
 
 test("retained output survives restart but never crosses chat, authority, tool, deletion or expiry boundaries", async () => {
@@ -56,8 +56,11 @@ test("MCP previews retain recoverable normalized text with fresh authority check
     assert.equal(preview.type, "text");
     if (preview.type !== "text") return;
     assert.ok(preview.text.length <= MAX_MCP_RESULT_TEXT_CHARS);
-    assert.ok(!preview.text.includes("retained-tail"));
-    assert.ok(!preview.text.includes("/secret"));
+    // The preview keeps both ends; the omitted middle is recoverable from the retained copy.
+    assert.ok(preview.text.includes("retained-tail"));
+    assert.ok(preview.text.split("x").length - 1 < 50_000);
+    // Resource links are named as data, never dereferenced.
+    assert.match(preview.text, /no resource was fetched/u);
     const handle = /handle=([a-f0-9-]+)/u.exec(preview.text)?.[1];
     assert.ok(handle);
     const read = await tools[1]!.execute("read", { handle, offset: 50_000 });
@@ -67,6 +70,36 @@ test("MCP previews retain recoverable normalized text with fresh authority check
     const fallback = await tools[0]!.execute("again", {});
     assert.match(JSON.stringify(fallback.content), /no retained output/u);
     assert.match(await boundedToolOutput(raw, 100), /no retained output/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("an MCP tool admitted after the turn started keeps a recoverable oversized result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-mcp-late-spill-"));
+  try {
+    // Previews keep the head and tail, so the recoverable part is the middle.
+    const raw = "x".repeat(25_000) + "late-middle" + "x".repeat(25_000);
+    const lateTool = markToolOutputSource({ name: "mcp_slow_search", label: "Slow", description: "test", parameters: Type.Object({}),
+      execute: async () => executeMcpAgentTool(async () => ({ content: [{ type: "text", text: raw }] })),
+    });
+    const outputs = createDurableToolOutputs({
+      tools: [],
+      store: new ToolOutputStore(() => root), chatId: "a", scope: toolOutputScope("scope"),
+      isCurrent: () => true, assertCurrent: async () => {},
+    });
+    const reader = outputs.tools.find((tool) => tool.name === "read_tool_output")!;
+    const [adopted] = outputs.adopt([lateTool]);
+    assert.equal(outputs.adopt([lateTool])[0], adopted, "the harness snapshots late tools by identity");
+    const result = await adopted!.execute("call", {});
+    const preview = result.content[0];
+    assert.equal(preview?.type, "text");
+    if (preview?.type !== "text") return;
+    assert.ok(!preview.text.includes("late-middle"), "the oversized middle is cut from the preview");
+    const handle = /handle=([a-f0-9-]+)/u.exec(preview.text)?.[1];
+    assert.ok(handle, "the late result was retained");
+    const read = await reader.execute("read", { handle, offset: 24_990 });
+    assert.match(JSON.stringify(read.content), /late-middle/u);
+    // A late tool cannot replace the reader.
+    assert.deepEqual(outputs.adopt([{ ...lateTool, name: "read_tool_output" }]), []);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -242,7 +275,7 @@ test("text-only MCP image projection preserves scoped output recovery through tr
     const text = first.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
     const handle = /read_tool_output handle=([a-f0-9-]+)/u.exec(text)?.[1];
     assert.ok(handle, "text-only projection must not erase the retained output handle");
-    assert.equal((text.match(/\[Output preview\./gu) ?? []).length, 1);
+    assert.equal((text.match(/\[Output truncated:/gu) ?? []).length, 1);
     assert.ok(text.length < 600);
     const read = await tools[1]!.execute("recover", { handle, offset: 50_000 });
     assert.match(JSON.stringify(read.content), /retained-image-tool-tail/u);
@@ -251,7 +284,7 @@ test("text-only MCP image projection preserves scoped output recovery through tr
     const newestText = newest.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
     assert.ok(newestText.length <= 32_000);
     assert.match(newestText, /omitted from this text-only model request/u);
-    assert.equal((newestText.match(/\[Output preview\./gu) ?? []).length, 1);
+    assert.equal((newestText.match(/\[Output truncated:/gu) ?? []).length, 1);
     assert.equal(newest.content.some((part) => part.type === "image"), false);
     assert.equal(JSON.stringify(messages), original, "journal text and image evidence remain unchanged");
     current = false;

@@ -13,7 +13,9 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SdStorage
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -87,6 +89,10 @@ fun AidenBotChatTopBar(
     onOpenProfile: () -> Unit,
     /** Null hides Files, for chats with no file index (the durable session). */
     onOpenFiles: (() -> Unit)?,
+    /** Null hides Memory (a Mac without `bot-memory-v1`). */
+    onOpenMemory: (() -> Unit)? = null,
+    /** Null hides Advanced (legacy chats). */
+    onOpenAdvanced: (() -> Unit)? = null,
     canDelete: Boolean,
     onDelete: () -> Unit
 ) {
@@ -165,9 +171,30 @@ fun AidenBotChatTopBar(
                             }
                         )
                     }
-                    if (canDelete) {
+                    if (onOpenMemory != null) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
+                            text = { Text(stringResource(R.string.bot_menu_memory)) },
+                            leadingIcon = { Icon(Icons.Default.SdStorage, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onOpenMemory()
+                            }
+                        )
+                    }
+                    if (onOpenAdvanced != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.bot_menu_advanced)) },
+                            leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onOpenAdvanced()
+                            }
+                        )
+                    }
+                    if (canDelete) {
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_delete), color = aidenBotErrorTextColor()) },
                             leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                             onClick = {
                                 menuOpen = false

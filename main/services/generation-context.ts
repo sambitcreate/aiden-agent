@@ -9,7 +9,16 @@ import {
 } from "@earendil-works/pi-ai";
 import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, estimateContextTokens, estimateTokens, shouldCompact } from "./pi-legacy-harness.js";
-import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
+import type {
+  ChatContextPressureV1,
+  ContextBreakdownV1,
+  ContextCategoryId,
+  DeferredContextServer,
+} from "../../renderer/shared/context-pressure.js";
+import { withoutAgentsInstructions } from "./agents-instructions.js";
+import { withoutMcpServersSection } from "./mcp-server-instructions.js";
+import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
+import type { PiRuntimeTool } from "./pi-runtime-tool.js";
 
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
 const RECENT_TOOL_OUTPUT_BUDGET_TOKENS = 40_000;
@@ -36,7 +45,22 @@ export interface GenerationContextOptions {
    * `supportsMidConvoSystemMessages`) instead of one replayed prompt.
    */
   retainsSystemUpdates?: boolean;
+  /**
+   * Text of the prompt parts recorded where they were built, for the context
+   * breakdown only. AGENTS.md guidance and the `mcp_servers` section are
+   * measured from `systemPrompt` itself, since generation rebuilds the prompt
+   * from the transcript.
+   */
+  promptSections?: Partial<Record<ContextPromptSectionId, string>>;
+  /** Tools held back behind tool search: reported in the breakdown, never priced. */
+  deferredTools?: readonly AgentTool[];
 }
+
+/** Breakdown categories recorded as prompt text where the prompt is assembled. */
+export type ContextPromptSectionId = Exclude<
+  ContextCategoryId,
+  "system-prompt" | "builtin-tools" | "mcp-tools" | "project-instructions" | "mcp-instructions"
+>;
 
 /** Whether Pi sends this model's later system messages in place. */
 export function modelRetainsSystemUpdates(model: { compat?: unknown }): boolean {
@@ -141,6 +165,102 @@ export function estimateStaticContextTokens(options: GenerationContextOptions): 
   let chars = options.systemPrompt.length;
   for (const tool of options.tools) chars += toolChars(tool);
   return Math.ceil(chars / 4);
+}
+
+const PROMPT_SECTION_IDS: readonly ContextPromptSectionId[] = [
+  "skills",
+  "memory",
+  "bot-instructions",
+];
+
+function isMcpTool(tool: EstimatedTool): boolean {
+  return (tool as PiRuntimeTool).codemode === true && Boolean((tool as PiDiscoverableTool).discovery);
+}
+
+/**
+ * Convert per-category character counts to tokens that sum to exactly
+ * `ceil(total / 4)`: every category gets its floor, and the few leftover tokens
+ * go to the categories with the largest fractional remainders (ties favour the
+ * earlier category, so the system prompt first).
+ */
+function apportionTokens<T extends string>(chars: readonly (readonly [T, number])[]): Map<T, number> {
+  const total = chars.reduce((sum, [, value]) => sum + value, 0);
+  const tokens = new Map<T, number>();
+  let leftover = Math.ceil(total / 4);
+  for (const [id, value] of chars) {
+    const whole = Math.floor(value / 4);
+    tokens.set(id, whole);
+    leftover -= whole;
+  }
+  const byRemainder = chars
+    .map(([id, value], index) => ({ id, remainder: value % 4, index }))
+    .filter(({ remainder }) => remainder > 0)
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index);
+  for (const { id } of byRemainder.slice(0, leftover)) tokens.set(id, (tokens.get(id) ?? 0) + 1);
+  return tokens;
+}
+
+/**
+ * Where `estimateStaticContextTokens` comes from. The static categories use the
+ * same chars/4 rule and tool sizes, so their tokens sum exactly to it. The
+ * system prompt is what the recorded sections leave of the prompt; a section
+ * recorded longer than the prompt finally sent is scaled down to fit.
+ */
+export function estimateContextBreakdown(options: GenerationContextOptions): ContextBreakdownV1 {
+  let builtinChars = 0;
+  let mcpChars = 0;
+  const declared = new Set<string>();
+  for (const tool of options.tools) {
+    declared.add(tool.name);
+    if (isMcpTool(tool)) mcpChars += toolChars(tool);
+    else builtinChars += toolChars(tool);
+  }
+  const promptChars = options.systemPrompt.length;
+  const withoutProject = withoutAgentsInstructions(options.systemPrompt);
+  const projectChars = promptChars - withoutProject.length;
+  const mcpInstructionChars = withoutProject.length - withoutMcpServersSection(withoutProject).length;
+  const recorded = PROMPT_SECTION_IDS.map(
+    (id) => [id, options.promptSections?.[id]?.length ?? 0] as const,
+  );
+  const recordedChars = recorded.reduce((sum, [, value]) => sum + value, 0);
+  const available = promptChars - projectChars - mcpInstructionChars;
+  const scale = recordedChars > available ? available / recordedChars : 1;
+  const sections = recorded.map(([id, value]) => [id, Math.floor(value * scale)] as const);
+  const sectionChars = sections.reduce((sum, [, value]) => sum + value, 0);
+  const tokens = apportionTokens<ContextCategoryId>([
+    ["system-prompt", available - sectionChars],
+    ["builtin-tools", builtinChars],
+    ["mcp-tools", mcpChars],
+    ...sections,
+    ["mcp-instructions", mcpInstructionChars],
+    ["project-instructions", projectChars],
+  ]);
+  const categories = [...tokens]
+    .filter(([, value]) => value > 0)
+    .map(([id, value]) => ({ id, tokens: value }));
+
+  const servers = new Map<string, { name: string; count: number; chars: number }>();
+  for (const tool of options.deferredTools ?? []) {
+    if (declared.has(tool.name)) continue;
+    const discovery = (tool as PiDiscoverableTool).discovery;
+    const key = discovery?.namespace ?? "";
+    const server = servers.get(key) ?? { name: discovery?.label || "MCP service", count: 0, chars: 0 };
+    server.count += 1;
+    server.chars += toolChars(tool);
+    servers.set(key, server);
+  }
+  const deferredServers: DeferredContextServer[] = [...servers.values()]
+    .map(({ name, count, chars }) => ({ name, count, tokens: Math.ceil(chars / 4) }))
+    .sort((left, right) => right.tokens - left.tokens);
+  const deferred = deferredServers.length
+    ? [{
+        id: "mcp-tools" as const,
+        tokens: deferredServers.reduce((sum, server) => sum + server.tokens, 0),
+        count: deferredServers.reduce((sum, server) => sum + server.count, 0),
+        servers: deferredServers,
+      }]
+    : [];
+  return { categories, deferred };
 }
 
 function messageTokens(messages: AgentMessage[]): number {
@@ -333,17 +453,29 @@ function projectRequestMessages(messages: readonly AgentMessage[], supportsImage
   return limitBrowserSnapshotImages(limitComputerUseImages(projectMessagesForModel(messages, supportsImages)));
 }
 
+const TOOL_OUTPUT_RECOVERY_NOTICE =
+  "\\[Output truncated: ([0-9]{1,10}) of ([0-9]{1,10}) characters omitted from the middle; read the full text with read_tool_output handle=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}; offsets are UTF-16 characters\\. Retained [0-9]{1,10} of ([0-9]{1,10}) characters, for up to 7 days subject to storage limits\\.\\]";
+const TOOL_OUTPUT_RECOVERY_SUFFIX = new RegExp(`(?:^|\\n)(${TOOL_OUTPUT_RECOVERY_NOTICE})$`, "u");
+const TOOL_OUTPUT_RECOVERY_MIDDLE = new RegExp(`\\n(${TOOL_OUTPUT_RECOVERY_NOTICE})\\n`, "gu");
+
 /**
- * Retain only the bounded, complete suffix emitted by boundedToolOutput. The
- * reference remains untrusted tool data: only read_tool_output's chat/scope
- * checks grant access. Do not preserve surrounding output as instructions.
+ * Retain only the bounded notice emitted by boundedToolOutput: either in place,
+ * where the part's length must match the omission it reports, or as the
+ * complete suffix that truncateToolResult moves to the end. The reference
+ * remains untrusted tool data: only read_tool_output's chat/scope checks grant
+ * access. Do not preserve surrounding output as instructions.
  */
 function toolOutputRecoveryMarker(message: ToolResultMessage): string {
   for (let index = message.content.length - 1; index >= 0; index -= 1) {
     const part = message.content[index];
     if (part.type !== "text") continue;
-    const match = /(?:^|\n)(\[Output preview\. Read retained output with read_tool_output handle=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}; offsets are UTF-16 characters\. Retained [0-9]{1,10} of [0-9]{1,10} characters, for up to 7 days subject to storage limits\.\])$/u.exec(part.text.slice(-400));
-    if (match) return `\n${match[1]}`;
+    const suffix = TOOL_OUTPUT_RECOVERY_SUFFIX.exec(part.text.slice(-400));
+    if (suffix) return `\n${suffix[1]}`;
+    for (const match of part.text.matchAll(TOOL_OUTPUT_RECOVERY_MIDDLE)) {
+      const [whole, notice, omitted, total, retainedOf] = match;
+      if (total !== retainedOf) continue;
+      if (part.text.length === Number(total) - Number(omitted) + whole.length) return `\n${notice}`;
+    }
   }
   return "";
 }
@@ -531,6 +663,8 @@ export function chatContextPressureFromProjection(
 ): ChatContextPressureV1 {
   const limits = contextLimits(options);
   const anchored = projection.usageAnchorIndex !== null;
+  const breakdown = estimateContextBreakdown(options);
+  const breakdownTokens = breakdown.categories.reduce((sum, category) => sum + category.tokens, 0);
   return {
     contextTokens: projection.contextTokens,
     contextWindow: limits.contextWindow,
@@ -556,6 +690,8 @@ export function chatContextPressureFromProjection(
     ...(anchored
       ? { addedAfterUsageAnchorTokens: projection.addedAfterUsageAnchorTokens }
       : {}),
+    // Options that changed after the projection describe a different request.
+    ...(breakdownTokens === projection.staticTokens ? { breakdown } : {}),
   };
 }
 

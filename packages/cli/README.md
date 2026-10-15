@@ -2,7 +2,7 @@
 
 A headless Aiden Agent: the full pi coding agent TUI, rebranded and themed as Aiden, deployable on macOS and Linux with Node.js ≥ 22.19, including servers with no display.
 
-Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.0.3` — the same line the Aiden desktop app uses). The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
+Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.2.0` — the same line the Aiden desktop app uses). The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
 
 ## Build and run
 
@@ -36,6 +36,7 @@ The CLI bundles Aiden's own extension cores (imported from `main/services/` — 
 | Todo | `todo` | Durable journal-replayed task graph + live widget above the editor (statuses, blockers, progress count) |
 | Memory | `recall_memory`, `remember_fact` | Per-workspace SQLite facts shared with the desktop at `~/.aiden/memory` (`ws-<folder-hash>` scopes); toggle with `memoryEnabled` in `aiden.json` |
 | Web Search | `web_search` | Aiden's provider router; anonymous Exa default-on, more providers via `<PROVIDER>_API_KEY` env vars |
+| Visuals | `render_artifact`, `render_ui` | HTML visuals export to a standalone file; native catalog visuals print as their plain-text rendering |
 | Display Image | `display_image` | Inline images in the TUI (Kitty/iTerm2 protocols); copies archived under `<agentDir>/artifacts` |
 | Advisor | `advisor` | One tool-free second opinion per response via Aiden's AdvisorRuntime (bundled from `main/services`); reviewer picked through Ask User Question when unnamed |
 | btw | `/btw <question>` | Bounded read-only side question about the conversation, with ephemeral session-scoped follow-ups |
@@ -79,7 +80,7 @@ npm run themes   # in packages/cli — a fidelity test fails if committed files 
 
 ## How the rebrand works
 
-pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }` — that is the entire rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals (`chord`, `jiti`, `photon-node`) resolve from this package's `node_modules`.
+pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }` — that is the entire rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals (`jiti`, `photon-node`) resolve from this package's `node_modules`.
 
 The entry (`src/cli.ts`) disables pi.dev's version feed (`PI_SKIP_VERSION_CHECK=1`, overridable) because this CLI versions independently, registers the bundled theme presets through pi's public `--theme` flag, and defaults the TUI to pi's fullscreen alt-screen renderer — an explicit `--tui-mode` flag or any `tuiMode` saved in settings (e.g. via `/config`) always wins over that default.
 

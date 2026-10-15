@@ -264,6 +264,139 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: legacyTimeline))
     }
 
+    private func questionnaireStepJSON(
+        id: Int,
+        toolName: String = "ask_user_question",
+        status: String = "completed",
+        contentOffset: Int = 0,
+        questionnaire: String?
+    ) -> String {
+        let recap = questionnaire.map { #","questionnaire":\#($0)"# } ?? ""
+        return #"{"id":"tool-\#(id)","order":\#(id - 1),"kind":"tool","toolCallId":"call-\#(id)","toolName":"\#(toolName)","label":"Tool","status":"\#(status)","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(contentOffset)\#(recap)}"#
+    }
+
+    private func decodeQuestionnaireStep(_ json: String) throws -> AidenAgentStep {
+        try JSONDecoder().decode(AidenAgentStep.self, from: Data(json.utf8))
+    }
+
+    func testQuestionnaireRecapDecodesOnCompletedAskStepAndReadsAsAnswers() throws {
+        let answered = #"{"version":1,"outcome":"answered","items":[{"question":"Which database?","header":"Database","kind":"option","answers":["Postgres"]},{"question":"Which regions?","header":"Regions","kind":"multi","answers":["US","EU"]},{"question":"Anything else?","header":"Notes","kind":"custom","answers":["Keep it cheap"]},{"question":"Budget?","header":"Budget","kind":"skipped","answers":[]}]}"#
+        let step = try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: answered))
+        let recap = try XCTUnwrap(step.questionnaire)
+        XCTAssertTrue(step.isQuestionnaire)
+        XCTAssertEqual(recap.outcome, .answered)
+        XCTAssertEqual(recap.items.map(\.question), ["Which database?", "Which regions?", "Anything else?", "Budget?"])
+        XCTAssertEqual(
+            recap.items.map { $0.answer(for: recap.outcome) },
+            [.chosen("Postgres"), .chosen("US, EU"), .custom("\u{201C}Keep it cheap\u{201D}"), .unanswered("Skipped")]
+        )
+
+        for (outcome, label) in [("dismissed", "Dismissed"), ("expired", "No answer")] {
+            let unanswered = #"{"version":1,"outcome":"\#(outcome)","items":[{"question":"Which database?","header":"Database","kind":"skipped","answers":[]}]}"#
+            let recap = try XCTUnwrap(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: unanswered)).questionnaire)
+            XCTAssertEqual(recap.items.map { $0.answer(for: recap.outcome) }, [.unanswered(label)])
+        }
+
+        // The recap survives the chat cache's encode/decode round trip.
+        let roundTripped = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+        XCTAssertEqual(roundTripped.questionnaire, recap)
+    }
+
+    func testMalformedOrMisplacedQuestionnaireRecapIsDroppedButTheStepStillDecodes() throws {
+        func item(_ kind: String, _ answers: String, question: String = "Which database?", header: String = "Database") -> String {
+            #"{"question":"\#(question)","header":"\#(header)","kind":"\#(kind)","answers":\#(answers)}"#
+        }
+        func recap(_ items: [String], outcome: String = "answered", version: Int = 1) -> String {
+            #"{"version":\#(version),"outcome":"\#(outcome)","items":[\#(items.joined(separator: ","))]}"#
+        }
+        let invalidRecaps: [(String, String)] = [
+            ("no items", recap([])),
+            ("five items", recap(Array(repeating: item("skipped", "[]"), count: 5))),
+            ("unknown version", recap([item("option", #"["Postgres"]"#)], version: 2)),
+            ("unknown outcome", recap([item("skipped", "[]")], outcome: "cancelled")),
+            ("unknown kind", recap([item("ranked", #"["Postgres"]"#)])),
+            ("option with two answers", recap([item("option", #"["Postgres","MySQL"]"#)])),
+            ("multi with no answers", recap([item("multi", "[]")])),
+            ("multi with six answers", recap([item("multi", #"["a","b","c","d","e","f"]"#)])),
+            ("multi with duplicates", recap([item("multi", #"["US","US"]"#)])),
+            ("custom over 1000 characters", recap([item("custom", #"["\#(String(repeating: "a", count: 1_001))"]"#)])),
+            ("option label over 60 characters", recap([item("option", #"["\#(String(repeating: "b", count: 61))"]"#)])),
+            ("skipped with an answer", recap([item("skipped", #"["Postgres"]"#)])),
+            ("answer on a dismissed card", recap([item("option", #"["Postgres"]"#)], outcome: "dismissed")),
+            ("answer on an expired card", recap([item("custom", #"["Later"]"#)], outcome: "expired")),
+            ("blank question", recap([item("skipped", "[]", question: "  ")])),
+            ("header over 16 characters", recap([item("skipped", "[]", header: String(repeating: "h", count: 17))])),
+            ("control character in question", recap([item("skipped", "[]", question: #"Which\u0007database?"#)])),
+            ("not an object", #""answered""#),
+        ]
+        for (name, invalid) in invalidRecaps {
+            let step = try decodeQuestionnaireStep(questionnaireStepJSON(id: 3, questionnaire: invalid))
+            XCTAssertNil(step.questionnaire, name)
+            XCTAssertFalse(step.isQuestionnaire, name)
+            XCTAssertEqual(step.id, "tool-3", name)
+            XCTAssertEqual(step.toolName, "ask_user_question", name)
+        }
+
+        // Boundary values the host accepts still decode.
+        let boundary = recap([
+            item("custom", #"["\#(String(repeating: "😀", count: 1_000))"]"#, header: String(repeating: "h", count: 16)),
+            item("multi", #"["a","b","c","d","e"]"#),
+            item("option", #"["\#(String(repeating: "b", count: 60))"]"#, question: #"Line one\nline two"#),
+            item("skipped", "[]"),
+        ])
+        XCTAssertEqual(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: boundary)).questionnaire?.items.count, 4)
+
+        let valid = recap([item("option", #"["Postgres"]"#)])
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, toolName: "read_file", questionnaire: valid)).questionnaire)
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, status: "running", questionnaire: valid)).questionnaire)
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, status: "cancelled", questionnaire: valid)).questionnaire)
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: nil)).questionnaire)
+    }
+
+    func testChronologicalProjectionGivesQuestionnaireItsOwnRowOutsideActivity() throws {
+        let recap = #"{"version":1,"outcome":"answered","items":[{"question":"Which database?","header":"Database","kind":"option","answers":["Postgres"]}]}"#
+        let steps = [
+            questionnaireStepJSON(id: 1, toolName: "read_file", contentOffset: 7, questionnaire: nil),
+            questionnaireStepJSON(id: 2, contentOffset: 7, questionnaire: recap),
+            questionnaireStepJSON(id: 3, toolName: "grep", contentOffset: 7, questionnaire: nil),
+        ]
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(steps.joined(separator: ","))]}"#.utf8
+        ))
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline))
+        XCTAssertEqual(rows.map(\.kind), [.text, .tool, .questionnaire, .tool, .text])
+        XCTAssertEqual(rows.map { $0.steps.map(\.id) }, [[], ["tool-1"], ["tool-2"], ["tool-3"], []])
+        XCTAssertEqual(rows.map(\.text), ["Before.", "", "", "", "After."])
+        XCTAssertEqual(rows[2].steps.first?.questionnaire?.items.first?.answers, ["Postgres"])
+
+        // Fallback transcripts list the recap separately and leave it out of the activity feed and its tally.
+        XCTAssertEqual(AidenAgentActivityPresentation.activitySteps(timeline, reasoningVisible: false).map(\.id), ["tool-1", "tool-3"])
+        XCTAssertEqual(AidenAgentActivityPresentation.questionnaireSteps(timeline).map(\.id), ["tool-2"])
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, 1 search")
+
+        // A stopped questionnaire carries no recap and stays an ordinary activity line.
+        let stopped = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-2","status":"cancelled","startedAt":1000,"finishedAt":2000,"steps":[\#(questionnaireStepJSON(id: 1, status: "cancelled", contentOffset: 7, questionnaire: nil))]}"#.utf8
+        ))
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: stopped)?.map(\.kind),
+            [.text, .tool, .text]
+        )
+        XCTAssertTrue(AidenAgentActivityPresentation.questionnaireSteps(stopped).isEmpty)
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(stopped), "1 tool call")
+
+        // Live tool rows show only until the timeline accounts for a call; a
+        // recap card stands in for its question, so the row is not repeated.
+        let liveTools = [AidenLiveTool(id: "tool_1", name: "ask_user_question", status: "succeeded")]
+        let recapOnly = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-3","status":"running","startedAt":1000,"steps":[\#(questionnaireStepJSON(id: 1, contentOffset: 7, questionnaire: recap))]}"#.utf8
+        ))
+        XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: recapOnly, reasoningVisible: true))
+        XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: stopped, reasoningVisible: false))
+        XCTAssertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: nil, reasoningVisible: true))
+        XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
@@ -1030,6 +1163,7 @@ final class AidenChatTests: XCTestCase {
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
         extraCapabilities: [AidenRemoteCapability] = [],
         networkPath: AidenNetworkPathSource? = nil,
+        streamingRevealTick: (@Sendable () async throws -> Void)? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         let cache = cache ?? testCache!
@@ -1099,6 +1233,7 @@ final class AidenChatTests: XCTestCase {
             draftStore: draftStore,
             modelPreferenceStore: modelPreferenceStore,
             networkPath: networkPath ?? AidenNetworkAvailability(),
+            streamingRevealTick: streamingRevealTick ?? { try await Task.sleep(for: AidenStreamingRevealGate.tick) },
             onChatUpdated: onChatUpdated
         )
     }
@@ -1494,6 +1629,436 @@ final class AidenChatTests: XCTestCase {
         fixture.allowReads = true
         try await waitUntil("recovered transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
         try await waitUntil("cleared live output") { model.liveText.isEmpty }
+    }
+
+    @MainActor
+    private func makeAnnouncedRunModel(
+        _ fixture: AidenAnnouncedRunFixture,
+        responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil
+    ) async throws -> AidenChatViewModel {
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: responseOverride ?? { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        model.announcedRunRetrySleep = { _ in try await Task.sleep(for: .milliseconds(10)) }
+        await model.load(observeProgress: true)
+        try await waitForCondition("open progress stream") { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+        // The opening lookup, then one for the first roster's turn, whose run
+        // could have registered after the opening lookup was answered.
+        try await waitForCondition("attach on load") { fixture.currentRunRequests == 2 && !model.isLookingForForeignRun }
+        XCTAssertEqual(fixture.chatReads, 1, "Finding nothing new reads no transcript.")
+        XCTAssertEqual(model.currentAgentTurnId, "turn-old")
+        XCTAssertTrue(model.liveText.isEmpty)
+        XCTAssertFalse(model.isObservingForeignRun)
+        return model
+    }
+
+    @MainActor
+    private func waitForCondition(_ label: String, _ condition: () -> Bool) async throws {
+        for _ in 0..<500 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for \(label)")
+    }
+
+    @MainActor
+    func testIdleChatAttachesToARunTheRosterAnnouncesAndShowsItLive() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeAnnouncedRunModel(fixture)
+
+        // A turn starts on the Mac while the chat sits open and idle.
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
+
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertTrue(model.isObservingForeignRun)
+        XCTAssertEqual(model.currentAgentTurnId, "turn-new")
+        XCTAssertEqual(fixture.currentRunRequests, 3, "One attach for the announced turn.")
+        XCTAssertEqual(fixture.chatReads, 1, "Showing a live run reads no transcript.")
+    }
+
+    @MainActor
+    func testAnnouncedRunNotYetRegisteredIsAttachedByOneRetry() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .registersLate)
+        let model = try await makeAnnouncedRunModel(fixture)
+
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
+
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertEqual(fixture.currentRunRequests, 4, "The announced run answered 404 once, then attached.")
+    }
+
+    @MainActor
+    func testAnnouncedRunThatEndedBeforeTheAttachIsReadFromTheTranscriptOnce() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .endedBeforeAttach)
+        let model = try await makeAnnouncedRunModel(fixture)
+        XCTAssertEqual(fixture.chatReads, 1)
+
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
+
+        try await waitForCondition("reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
+        try await waitForCondition("attach finished") { !model.isLookingForForeignRun }
+        // A later roster revision of the same turn neither attaches nor reads again.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 3))
+        try await waitForCondition("revision applied") { model.agentRoster?.revision == 3 }
+        XCTAssertFalse(model.isLookingForForeignRun)
+        XCTAssertEqual(fixture.chatReads, 2, "Exactly one transcript read follows the finished run.")
+        XCTAssertEqual(fixture.currentRunRequests, 3)
+        XCTAssertTrue(model.liveText.isEmpty, "A run that finished before the attach is never replayed live.")
+        XCTAssertFalse(model.isObservingForeignRun)
+
+        // A newer turn whose run has not registered finds only the run already
+        // read: it is looked for once more, then neither replayed nor read again.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-newer", revision: 4))
+        try await waitForCondition("newer turn looked up") { fixture.currentRunRequests == 5 && !model.isLookingForForeignRun }
+        XCTAssertEqual(fixture.chatReads, 2)
+        XCTAssertTrue(model.liveText.isEmpty)
+        XCTAssertFalse(model.isObservingForeignRun)
+    }
+
+    @MainActor
+    func testARunRegisteredAfterTheOpeningLookupIsAttachedWhenTheFirstRosterArrives() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        let rosterHeld = expectation(description: "first roster read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
+        let loading = Task { await model.load(observeProgress: true) }
+        await fulfillment(of: [rosterHeld], timeout: 3)
+        // The opening lookup is answered before the run registers on the Mac,
+        // and the run registers before the first roster arrives.
+        try await waitForCondition("opening lookup answered") {
+            fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
+        }
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertTrue(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.currentRunRequests, 2, "The first roster's turn is looked up once.")
+        XCTAssertEqual(fixture.chatReads, 1)
+    }
+
+    @MainActor
+    func testARunThatEndedBeforeTheFirstRosterArrivedIsReadFromTheTranscript() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .endedBeforeAttach)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        let rosterHeld = expectation(description: "first roster read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
+        let loading = Task { await model.load(observeProgress: true) }
+        await fulfillment(of: [rosterHeld], timeout: 3)
+        try await waitForCondition("opening lookup answered") {
+            fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
+        }
+        // A run starts and finishes on the Mac after the load read the
+        // transcript, and before the first roster arrives.
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+
+        try await waitForCondition("reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
+        XCTAssertEqual(fixture.chatReads, 2, "The finished run's reply is read once.")
+        XCTAssertTrue(model.liveText.isEmpty, "A run that finished before the attach is never replayed live.")
+    }
+
+    @MainActor
+    func testATurnAnnouncedWhileTheOpeningLookupReplaysAnEndedRunIsLookedUpAfterIt() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .previousRunEnded)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        // The opening lookup is answered with an earlier run that has ended,
+        // but held in flight.
+        let lookupHeld = expectation(description: "opening lookup held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/runs/current/events") { lookupHeld.fulfill() }
+        await model.load(observeProgress: true)
+        await fulfillment(of: [lookupHeld], timeout: 3)
+        try await waitForCondition("open progress stream") { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+
+        // Meanwhile a new turn starts on the Mac.
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
+        try await waitForCondition("turn announced") { model.currentAgentTurnId == "turn-new" }
+
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertTrue(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.currentRunRequests, 2, "The announced turn is looked up once the replay ends.")
+        XCTAssertEqual(fixture.chatReads, 1, "The load already read the earlier run's reply.")
+    }
+
+    @MainActor
+    func testATurnAnnouncedDuringALookupTheChatStopsIsNotLookedUp() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        let lookupHeld = expectation(description: "opening lookup held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/runs/current/events") { lookupHeld.fulfill() }
+        await model.load(observeProgress: true)
+        await fulfillment(of: [lookupHeld], timeout: 3)
+        try await waitForCondition("open progress stream") { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
+        try await waitForCondition("turn announced") { model.currentAgentTurnId == "turn-new" }
+
+        // The chat stops observing before the lookup returns.
+        model.stopForeignRunObservation()
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(fixture.currentRunRequests, 1, "A stopped lookup does not start another for the queued turn.")
+        XCTAssertFalse(model.isLookingForForeignRun)
+        XCTAssertTrue(model.liveText.isEmpty)
+    }
+
+    @MainActor
+    func testTurnsAnnouncedDuringAnInFlightLookupAreLookedUpOnceItFindsNothing() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        // The opening lookup is answered "no run" but held in flight.
+        let lookupHeld = expectation(description: "opening lookup held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/runs/current/events") { lookupHeld.fulfill() }
+        await model.load(observeProgress: true)
+        await fulfillment(of: [lookupHeld], timeout: 3)
+        try await waitForCondition("open progress stream") { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+        XCTAssertTrue(model.isLookingForForeignRun)
+
+        // Meanwhile the first roster arrived and a new turn starts on the Mac.
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
+        try await waitForCondition("turn announced") { model.currentAgentTurnId == "turn-new" }
+        XCTAssertEqual(fixture.currentRunRequests, 1, "No second lookup runs alongside the first.")
+
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertTrue(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.currentRunRequests, 2, "Both announcements are looked up once, together.")
+    }
+
+    @MainActor
+    func testThisPhonesOwnTurnAnnouncedAfterItsStreamEndedIsNotLookedUp() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .endedBeforeAttach)
+        let model = try await makeAnnouncedRunModel(fixture)
+
+        // This phone sends a turn; its run streams here and finishes.
+        model.draft = "Hello"
+        await model.send()
+        try await waitForCondition("own reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
+        model.draft = "Next"
+        try await waitForCondition("own stream finished") { model.canSend }
+        let reads = fixture.chatReads
+        let lookups = fixture.currentRunRequests
+
+        // The roster announces this phone's turn only after its stream ended.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-own", revision: 2))
+        try await waitForCondition("own turn announced") { model.currentAgentTurnId == "turn-own" }
+        XCTAssertFalse(model.isLookingForForeignRun, "The phone's own turn is not looked up as another device's run.")
+        XCTAssertEqual(fixture.currentRunRequests, lookups)
+        XCTAssertEqual(fixture.chatReads, reads, "The phone's own run is not read from the transcript again.")
+        XCTAssertTrue(model.liveText.isEmpty)
+        XCTAssertFalse(model.isObservingForeignRun)
+    }
+
+    @MainActor
+    func testThisPhonesOwnTurnAnnouncedWhileItsStreamIsRestoredIsShownOnce() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        // On a cold launch this phone's own run is still going on the Mac, and
+        // the first roster names its turn.
+        let fixture = AidenAnnouncedRunFixture(scenario: .live, firstRosterTurnId: "turn-own")
+        fixture.startRun()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.restoredOwnRunResponse($0) ?? fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        try await testCache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "run-mac", turnId: "turn-own", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: testCache.reserveChatWrite()
+        )
+        // The status read that restores the stream is held while progress
+        // observation, started alongside the load, delivers that roster.
+        let statusHeld = expectation(description: "stream status read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/streams/run-mac") { statusHeld.fulfill() }
+        let loading = Task { await model.load(observeProgress: true) }
+        await fulfillment(of: [statusHeld], timeout: 3)
+        model.startProgressObservation()
+        try await waitForCondition("own turn announced") { model.currentAgentTurnId == "turn-own" }
+        // A lookup started for that turn would find the run and show it live.
+        try await waitForCondition("announcement handled") { !model.isLookingForForeignRun || model.isObservingForeignRun }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+
+        try await waitForCondition("own replay applied") { model.tools.count == 1 }
+        XCTAssertEqual(model.liveText, "Hello from the Mac", "The restored reply is shown once.")
+        XCTAssertFalse(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.currentRunRequests, 0, "The phone's own run is not looked up as another device's.")
+    }
+
+    @MainActor
+    func testAnOwnStreamTakingOverALiveForeignRunShowsItsReplayOnce() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeAnnouncedRunModel(
+            fixture,
+            responseOverride: { fixture.restoredOwnRunResponse($0) ?? fixture.response($0) }
+        )
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-own", revision: 2))
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+
+        // A reload restores this phone's stream for the run shown live.
+        try await testCache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "run-mac", turnId: "turn-own", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: testCache.reserveChatWrite()
+        )
+        await model.load(observeProgress: true)
+
+        try await waitForCondition("own replay applied") { model.tools.count == 1 }
+        XCTAssertEqual(model.liveText, "Hello from the Mac", "The replay replaces the live run's copy.")
+        XCTAssertFalse(model.isObservingForeignRun)
+    }
+
+    @MainActor
+    func testStoppingProgressWhileLoadIsSuspendedKeepsTheProbeStopped() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live, rosterReadable: false)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        let readHeld = expectation(description: "transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/chat-progress-lifecycle") { readHeld.fulfill() }
+        let loading = Task { await model.load(observeProgress: true) }
+        await fulfillment(of: [readHeld], timeout: 3)
+        // The chat leaves the foreground while its load waits on the network.
+        model.stopProgressObservation()
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+
+        XCTAssertFalse(model.isProbingForForeignRuns, "A load resumed in the background does not start the probe.")
+        XCTAssertFalse(model.isProgressObservationRunning)
+    }
+
+    @MainActor
+    func testForegroundProbeFindsRunsWithoutTheRosterAndStopsInTheBackground() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live, rosterReadable: false)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        let delays = AidenProbeDelayRecorder()
+        model.foreignRunProbeSleep = { delay in
+            delays.record(delay)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(model.canReadAgentRoster)
+
+        await model.load(observeProgress: true)
+        // The load's attach plus two probes find nothing, backing off.
+        try await waitForCondition("idle probes") { fixture.currentRunRequests >= 3 }
+        model.stopProgressObservation()
+        XCTAssertFalse(model.isProbingForForeignRuns, "Leaving the foreground stops the probe.")
+        let requestsWhenSuspended = fixture.currentRunRequests
+        // Checks start at 5s and back off once one finds nothing.
+        XCTAssertEqual(delays.values.first, .seconds(5))
+        XCTAssertEqual(delays.values.first { $0 != .seconds(5) }, .seconds(10))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(fixture.currentRunRequests, requestsWhenSuspended, "No probe runs in the background.")
+
+        // Back in the foreground, the probe starts again from its shortest delay
+        // and attaches once a run has started on the Mac.
+        delays.reset()
+        fixture.startRun()
+        model.startProgressObservation()
+        XCTAssertTrue(model.isProbingForForeignRuns)
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertEqual(delays.values.first, .seconds(5))
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testForegroundProbeBacksOffFromFiveToThirtySeconds() {
+        let delays = (0..<6).map { AidenChatViewModel.foreignRunProbeDelay(afterIdleProbes: $0) }
+        XCTAssertEqual(delays, [.seconds(5), .seconds(10), .seconds(20), .seconds(30), .seconds(30), .seconds(30)])
+    }
+
+    @MainActor
+    func testAMacRunsTextWaitsForTheRevealTickUntilAToolStarts() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let fixture = AidenLiveForeignRunFixture()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            streamingRevealTick: { await ticks.tick() }
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { model.streamState == .running && ticks.pending == 1 }
+        XCTAssertEqual(model.liveText, "", "the Mac's text waits for the next reveal tick")
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(3, "text_delta", #"{"text":"ld, "}"#))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "", "more text still waits for the tick")
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(
+            4, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#
+        ))
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Hello world, ", "text received before the tool shows before it")
+    }
+
+    @MainActor
+    func testAMacRunsRetainedTextShowsWithTheToolThatFollowedItWhenThePhoneAttaches() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let fixture = AidenLiveForeignRunFixture(
+            replay: AidenLiveForeignRunFixture.frame(2, "text_delta", #"{"text":"Checking the file"}"#)
+                + AidenLiveForeignRunFixture.frame(3, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#)
+        )
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            streamingRevealTick: { await ticks.tick() }
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Checking the file", "the text before the tool shows with it, without waiting for a tick")
     }
 
     @MainActor
@@ -2922,11 +3487,15 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     private func waitForChatWrite(_ gate: AidenChatWriteTestGate) async {
-        for _ in 0..<200 {
-            if await gate.isHolding { return }
-            try? await Task.sleep(for: .milliseconds(10))
+        // Wakes as soon as the caller parks on the gate; the timer only bounds
+        // a caller that never arrives, so a slow simulator does not fail it.
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(10))
+            await gate.stopWaitingForHold()
         }
-        XCTFail("Expected caller to reach held chat write")
+        let reached = await gate.untilHolding()
+        deadline.cancel()
+        if !reached { XCTFail("Expected caller to reach held chat write") }
     }
 
     @MainActor
@@ -3145,6 +3714,159 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(model.isWaitingForNetwork)
         XCTAssertNil(model.presentedError)
         XCTAssertEqual(fixture.eventCursors, [0, 1], "one reconnect, resumed after the last applied sequence")
+    }
+
+    // MARK: - Streaming reveal gate
+
+    @MainActor
+    private func makeRevealModel(
+        ticks: AidenManualRevealTicks,
+        initialChat: AidenChat? = nil
+    ) async throws -> (AidenChatViewModel, AidenRevealStreamFixture) {
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            initialChat: initialChat,
+            streamingRevealTick: { await ticks.tick() }
+        )
+        let fixture = AidenRevealStreamFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await testCache!.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-reveal", turnId: "turn-reveal", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: testCache!.reserveChatWrite()
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+        return (model, fixture)
+    }
+
+    @MainActor
+    func testRevealTicksShowWholeWordsAndReleaseAHeldFragmentOnTheNextTick() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        let (model, _) = try await makeRevealModel(ticks: ticks)
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Hello wor"}"#))
+        try await waitUntil { ticks.pending == 1 && model.streamState == .running }
+        XCTAssertEqual(model.liveText, "", "received text waits for the next reveal tick")
+
+        ticks.releaseAll()
+        try await waitUntil { !model.liveText.isEmpty }
+        XCTAssertEqual(model.liveText, "Hello ", "a tick shows whole words and holds the partial one")
+
+        // No whitespace arrives: the held fragment is released one tick later
+        // rather than stalling until the word completes.
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { model.liveText == "Hello wor" }
+
+        // A burst of tokens between ticks lands as one update.
+        for (offset, token) in ["ld, ", "how ", "are ", "you?"].enumerated() {
+            AidenChatProgressLifecycleURLProtocol.pushEvent(
+                AidenRevealStreamFixture.frame(2 + offset, "text_delta", #"{"text":"\#(token)"}"#)
+            )
+        }
+        try await waitUntil { ticks.pending == 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "Hello wor")
+        ticks.releaseAll()
+        try await waitUntil { model.liveText != "Hello wor" }
+        XCTAssertEqual(model.liveText, "Hello world, how are ")
+    }
+
+    @MainActor
+    func testDoneRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
+        try await assertTerminalRevealsBufferedText(type: "done", payload: #"{"messageId":"reply"}"#, state: .done)
+    }
+
+    @MainActor
+    func testErrorRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
+        try await assertTerminalRevealsBufferedText(type: "error", payload: #"{"code":"internal_error","message":"Model failed"}"#, state: .error)
+    }
+
+    @MainActor
+    func testCancelRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
+        try await assertTerminalRevealsBufferedText(type: "cancelled", payload: #"{"source":"server"}"#, state: .cancelled)
+    }
+
+    @MainActor
+    private func assertTerminalRevealsBufferedText(
+        type: String,
+        payload: String,
+        state: AidenStreamState
+    ) async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Hello wor"}"#))
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "text_delta", #"{"text":"ld"}"#))
+        try await waitUntil { ticks.pending == 1 }
+        XCTAssertEqual(model.liveText, "")
+        let readsBeforeTerminal = fixture.chatReads
+        let held = expectation(description: "\(type) transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, type, payload, terminal: true))
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertEqual(model.streamState, state)
+        XCTAssertEqual(model.liveText, "Hello world", "\(type) shows the whole reply without waiting for a tick")
+        XCTAssertEqual(fixture.chatReads, readsBeforeTerminal + 1)
+    }
+
+    @MainActor
+    func testABotChatSnapshotDropsRevealedBufferedAndReasoningText() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let botChat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(
+            #"{"id":"chat-progress-lifecycle","workspaceId":"managed-home","botId":"bot-1","title":"Bot","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8
+        ))
+        let (model, _) = try await makeRevealModel(ticks: ticks, initialChat: botChat)
+        XCTAssertTrue(model.chat.isBotChat)
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Old shown "}"#))
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { model.liveText == "Old shown " }
+        // Reasoning, then reply text received but not yet revealed.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Thinking"}"#))
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, "text_delta", #"{"text":"old buffered "}"#))
+        try await waitUntil { ticks.pending == 1 && model.reasoning == "Thinking" }
+        XCTAssertEqual(model.liveText, "Old shown ")
+
+        let held = expectation(description: "snapshot transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
+            4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","nextSequence":5}"#
+        ))
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertEqual(model.liveText, "")
+        XCTAssertEqual(model.reasoning, "")
+        // The tick that was waiting when the snapshot landed reveals nothing.
+        ticks.releaseAll()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "", "the buffered text was dropped with the old copy")
+
+        // The cumulative replacement after the reset starts from empty.
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Fresh copy "}"#))
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { !model.liveText.isEmpty }
+        XCTAssertEqual(model.liveText, "Fresh copy ")
+    }
+
+    @MainActor
+    func testTextBeforeAToolStartIsShownBeforeTheToolRow() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        let (model, _) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Checking the bui"}"#))
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "tool_started", #"{"toolId":"tool-1","name":"bash"}"#)
+        )
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Checking the bui")
+        XCTAssertEqual(model.tools.map(\.name), ["bash"])
     }
 
     @MainActor
@@ -4053,6 +4775,308 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.id, "html-1")
         XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.title, "Dependencies")
         XCTAssertTrue(chat.messages.first?.htmlArtifacts?.first?.isWireSafe ?? false)
+    }
+
+    // MARK: Inline visuals (contract revision 28)
+
+    private static let visualFixtureMessageID = "message_fixture_assistant_01"
+
+    private func visualFixtureRoot() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    /// The shared fixture chat, after `mutate` edits the visual-bearing message's JSON.
+    private func visualFixtureChat(
+        mutate: (inout [String: Any]) -> Void = { _ in }
+    ) throws -> AidenChat {
+        var chat = try XCTUnwrap(try visualFixtureRoot()["chat"] as? [String: Any])
+        var messages = try XCTUnwrap(chat["messages"] as? [[String: Any]])
+        let index = try XCTUnwrap(messages.firstIndex { $0["id"] as? String == Self.visualFixtureMessageID })
+        mutate(&messages[index])
+        chat["messages"] = messages
+        return try AidenRemoteJSONDecoder.decode(
+            AidenChat.self,
+            from: JSONSerialization.data(withJSONObject: chat, options: [.sortedKeys])
+        )
+    }
+
+    private func visualFixtureMessage(
+        mutate: (inout [String: Any]) -> Void = { _ in }
+    ) throws -> AidenChatMessage {
+        try XCTUnwrap(try visualFixtureChat(mutate: mutate).messages.first { $0.id == Self.visualFixtureMessageID })
+    }
+
+    func testSharedFixtureChatAndMessagesWindowDecodeInlineVisuals() throws {
+        struct Fixture: Decodable {
+            let chat: AidenChat
+            let messagesWindow: AidenChatMessagesWindow
+        }
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try AidenRemoteJSONDecoder.decode(Fixture.self, from: Data(contentsOf: url))
+        let chatMessage = try XCTUnwrap(fixture.chat.messages.first { $0.id == Self.visualFixtureMessageID })
+        let windowMessage = try XCTUnwrap(fixture.messagesWindow.messages.first { $0.id == Self.visualFixtureMessageID })
+
+        for message in [chatMessage, windowMessage] {
+            let visuals = try XCTUnwrap(message.visuals)
+            XCTAssertEqual(visuals.map(\.id), ["artifact_fixture_01", "ui_fixture_01"])
+            XCTAssertEqual(visuals.map(\.kind), [.html, .ui])
+            XCTAssertEqual(visuals.map(\.toolCallId), ["call-1", "call-2"])
+            XCTAssertEqual(visuals[0].layout, .wide)
+            XCTAssertNil(visuals[1].layout)
+            XCTAssertNil(visuals[0].fallbackText)
+            XCTAssertEqual(visuals[1].fallbackText, "Plan options\nSolo: $12.00\nTeam: $60.00")
+            // Every named snapshot resolves to a displayable image on the same message.
+            for visual in visuals {
+                let snapshot = try XCTUnwrap(AidenChatVisualPresentation.snapshotAttachment(for: visual, in: message))
+                XCTAssertEqual(snapshot.id, visual.snapshotAttachmentId)
+                XCTAssertEqual(snapshot.kind, .image)
+            }
+            XCTAssertTrue(message.isWireSafe)
+            // The offline transcript cache keeps the visuals.
+            XCTAssertEqual(try JSONDecoder().decode(AidenChatMessage.self, from: JSONEncoder().encode(message)), message)
+        }
+        // A client that ignores visuals still sees the snapshots as ordinary images.
+        XCTAssertEqual(chatMessage.attachments?.map(\.kind), [.image, .image])
+        XCTAssertEqual(chatMessage.htmlArtifacts?.map(\.id), ["artifact_fixture_01"])
+    }
+
+    func testChronologicalRowsPlaceEachVisualAfterTheToolStepThatDrewIt() throws {
+        let message = try visualFixtureMessage()
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: message.text,
+            reasoning: message.reasoning ?? "",
+            timeline: message.timeline,
+            visuals: message.visuals ?? []
+        ))
+        func describe(_ row: AidenChronologicalRow) -> String {
+            switch row.kind {
+            case .text: return "text:\(row.text)"
+            case .reasoning: return "reasoning"
+            case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
+            case .questionnaire: return "questionnaire"
+            case .visual(let visual): return "visual:\(visual.id)"
+            }
+        }
+        XCTAssertEqual(rows.map(describe), [
+            "tool:call-1", "visual:artifact_fixture_01",
+            "tool:call-2", "visual:ui_fixture_01",
+            "text:Starting the review.",
+        ])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+
+        // A visual whose tool call is missing from the timeline (an interrupted
+        // run) trails the reply instead of being dropped; visuals between text
+        // segments follow their own step.
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"render_ui","label":"Draw visual","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7}]}"#.utf8
+        ))
+        let orphan = AidenChatVisual(id: "ui-orphan", kind: .ui, title: "Orphan", toolCallId: "call-9")
+        let untied = AidenChatVisual(id: "ui-untied", kind: .ui, title: "Untied")
+        let placed = AidenChatVisual(id: "ui-placed", kind: .ui, title: "Placed", toolCallId: "call-1")
+        let mixed = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: "Before.After.",
+            reasoning: "",
+            timeline: timeline,
+            visuals: [orphan, placed, untied]
+        ))
+        XCTAssertEqual(mixed.map(describe), [
+            "text:Before.", "tool:call-1", "visual:ui-placed", "text:After.",
+            "visual:ui-orphan", "visual:ui-untied",
+        ])
+        // The live (streaming) projection passes no visuals and is unchanged.
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline)?.map(describe),
+            ["text:Before.", "tool:call-1", "text:After."]
+        )
+    }
+
+    func testMalformedVisualIsDroppedWhileItsMessageAndChatSurvive() throws {
+        func editVisual(at index: Int, _ edit: @escaping (inout [String: Any]) -> Void) -> (inout [String: Any]) -> Void {
+            { message in
+                var visuals = message["visuals"] as? [[String: Any]] ?? []
+                edit(&visuals[index])
+                message["visuals"] = visuals
+            }
+        }
+        let malformations: [(String, (inout [String: Any]) -> Void)] = [
+            ("missing title", editVisual(at: 0) { $0.removeValue(forKey: "title") }),
+            ("empty title", editVisual(at: 0) { $0["title"] = "" }),
+            ("missing id", editVisual(at: 0) { $0.removeValue(forKey: "id") }),
+            ("unsafe tool call", editVisual(at: 0) { $0["toolCallId"] = "call-0" }),
+            ("oversized fallback", editVisual(at: 0) { $0["fallbackText"] = String(repeating: "a", count: 4_001) }),
+            ("non-object entry", { message in
+                var visuals = message["visuals"] as? [Any] ?? []
+                visuals[0] = 42
+                message["visuals"] = visuals
+            }),
+        ]
+        for (name, malformation) in malformations {
+            let message = try visualFixtureMessage(mutate: malformation)
+            XCTAssertEqual(message.visuals?.map(\.id), ["ui_fixture_01"], name)
+            XCTAssertEqual(message.text, "Starting the review.", name)
+        }
+
+        // A visuals value that is not a list leaves the message without visuals.
+        let notAList = try visualFixtureMessage { $0["visuals"] = "nope" }
+        XCTAssertNil(notAList.visuals)
+        XCTAssertEqual(notAList.attachments?.count, 2)
+
+        // A future kind still decodes so its snapshot and text can show.
+        let futureKind = try visualFixtureMessage(mutate: editVisual(at: 1) { $0["kind"] = "chart3d" })
+        XCTAssertEqual(futureKind.visuals?.map(\.kind), [.html, .other])
+
+        // More than 40 visuals is outside the wire bound.
+        let visual = AidenChatVisual(id: "v", kind: .ui, title: "Visual")
+        let atBound = AidenChatMessage(id: "m", role: .assistant, text: "", visuals: Array(repeating: visual, count: 40), createdAt: Date())
+        let overBound = AidenChatMessage(id: "m", role: .assistant, text: "", visuals: Array(repeating: visual, count: 41), createdAt: Date())
+        XCTAssertTrue(atBound.isWireSafe)
+        XCTAssertFalse(overBound.isWireSafe)
+    }
+
+    func testSnapshotAttachmentsAreHiddenFromTheAttachmentStrip() throws {
+        let fixture = try visualFixtureMessage()
+        XCTAssertEqual(fixture.attachments?.count, 2)
+        XCTAssertEqual(AidenChatVisualPresentation.stripAttachments(for: fixture), [])
+
+        // Ordinary images stay. A reserved snapshot id is hidden even when no
+        // visual references it, and a referenced id is hidden whatever its name.
+        let photo = AidenMessageAttachment(id: "photo-1", name: "Photo.png", mimeType: "image/png", kind: .image, size: 10)
+        let orphanSnapshot = AidenMessageAttachment(
+            id: "visual-snapshot_\(String(repeating: "3", count: 64))",
+            name: "Old.png", mimeType: "image/png", kind: .image, size: 10
+        )
+        let namedSnapshot = AidenMessageAttachment(id: "custom-snap", name: "Chart.png", mimeType: "image/png", kind: .image, size: 10)
+        let message = AidenChatMessage(
+            id: "m", role: .assistant, text: "Here.",
+            attachments: [photo, orphanSnapshot, namedSnapshot],
+            visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart", snapshotAttachmentId: "custom-snap")],
+            createdAt: Date()
+        )
+        XCTAssertEqual(AidenChatVisualPresentation.stripAttachments(for: message).map(\.id), ["photo-1"])
+        XCTAssertEqual(AidenChatVisualPresentation.snapshotAttachment(for: message.visuals![0], in: message), namedSnapshot)
+    }
+
+    func testHtmlArtifactCardIsReplacedOnlyByAVisualWithASnapshot() throws {
+        let withSnapshot = try visualFixtureMessage()
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withSnapshot), [])
+
+        let withoutSnapshot = try visualFixtureMessage { message in
+            var visuals = message["visuals"] as? [[String: Any]] ?? []
+            visuals[0].removeValue(forKey: "snapshotAttachmentId")
+            message["visuals"] = visuals
+        }
+        XCTAssertNil(withoutSnapshot.visuals?.first?.snapshotAttachmentId)
+        XCTAssertEqual(
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot).map(\.id),
+            ["artifact_fixture_01"]
+        )
+
+        // A snapshot that names an attachment the message does not carry
+        // cannot replace the card.
+        let danglingSnapshot = try visualFixtureMessage { message in
+            message["attachments"] = [Any]()
+        }
+        XCTAssertNil(AidenChatVisualPresentation.snapshotAttachment(for: danglingSnapshot.visuals![0], in: danglingSnapshot))
+        XCTAssertEqual(
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: danglingSnapshot).map(\.id),
+            ["artifact_fixture_01"]
+        )
+
+        // An older Mac without visuals keeps every card.
+        let legacy = try visualFixtureMessage { $0.removeValue(forKey: "visuals") }
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: legacy).map(\.id), ["artifact_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy), [])
+    }
+
+    func testLateSnapshotRefetchIsBoundedToARecentReplyStillAwaitingSnapshots() throws {
+        let settled = try visualFixtureMessage()
+        let finishedAt = try XCTUnwrap(settled.timeline?.finishedAt)
+        let committed = Date(timeIntervalSince1970: finishedAt / 1_000)
+        let soon = committed.addingTimeInterval(5)
+        let awaiting = try visualFixtureMessage { message in
+            var visuals = message["visuals"] as? [[String: Any]] ?? []
+            visuals[1].removeValue(forKey: "snapshotAttachmentId")
+            message["visuals"] = visuals
+        }
+        typealias Reconciliation = AidenVisualSnapshotReconciliation
+
+        // Every visual already has its snapshot: nothing to wait for.
+        XCTAssertNil(Reconciliation.nextDelay(for: settled, attempt: 0, now: soon))
+        // One snapshot is missing: about 4 s, 10 s and 20 s after settling, then stop.
+        XCTAssertEqual(
+            (0...3).map { Reconciliation.nextDelay(for: awaiting, attempt: $0, now: soon) },
+            [.seconds(4), .seconds(6), .seconds(10), nil]
+        )
+        // A reply that settled more than two minutes ago is not waited on.
+        XCTAssertNil(Reconciliation.nextDelay(for: awaiting, attempt: 0, now: committed.addingTimeInterval(121)))
+        XCTAssertNotNil(Reconciliation.nextDelay(for: awaiting, attempt: 0, now: committed.addingTimeInterval(119)))
+        // A long reply is recent by when it finished, not when it started.
+        let longReply = AidenChatMessage(
+            id: "long", role: .assistant, text: "Done.",
+            visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart")],
+            timeline: AidenGenerationTimeline(
+                version: 3, generationId: "g", status: .completed,
+                startedAt: (soon.timeIntervalSince1970 - 600) * 1_000,
+                finishedAt: (soon.timeIntervalSince1970 - 10) * 1_000,
+                steps: []
+            ),
+            createdAt: soon.addingTimeInterval(-600)
+        )
+        XCTAssertEqual(Reconciliation.nextDelay(for: longReply, attempt: 0, now: soon), .seconds(4))
+        // No visuals, or not an assistant reply: nothing to wait for.
+        XCTAssertNil(Reconciliation.nextDelay(
+            for: AidenChatMessage(id: "plain", role: .assistant, text: "Hi", createdAt: soon), attempt: 0, now: soon
+        ))
+        XCTAssertNil(Reconciliation.nextDelay(for: nil, attempt: 0, now: soon))
+
+        // Only the newest assistant reply is considered.
+        let user = AidenChatMessage(id: "u", role: .user, text: "Next", createdAt: soon)
+        XCTAssertEqual(Reconciliation.awaitedMessage(in: [awaiting, user])?.id, awaiting.id)
+        let newer = AidenChatMessage(id: "newer", role: .assistant, text: "Later", createdAt: soon)
+        XCTAssertEqual(Reconciliation.awaitedMessage(in: [awaiting, user, newer])?.id, "newer")
+        XCTAssertNil(Reconciliation.awaitedMessage(in: [user]))
+    }
+
+    func testHtmlVisualWithoutAUsableSnapshotLeavesItsCardAsTheOnlyRepresentation() throws {
+        func transcriptRowIDs(_ message: AidenChatMessage) throws -> [String] {
+            try XCTUnwrap(AidenChronologicalProjection.rows(
+                text: message.text,
+                reasoning: message.reasoning ?? "",
+                timeline: message.timeline,
+                visuals: AidenChatVisualPresentation.rowVisuals(in: message)
+            )).compactMap { row in
+                if case .visual(let visual) = row.kind { return visual.id }
+                return nil
+            }
+        }
+
+        // With its snapshot, the html visual gets a row and replaces the card.
+        let withSnapshot = try visualFixtureMessage()
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withSnapshot).map(\.id), ["artifact_fixture_01", "ui_fixture_01"])
+        XCTAssertEqual(try transcriptRowIDs(withSnapshot), ["artifact_fixture_01", "ui_fixture_01"])
+
+        // Without one, the card alone represents it: no row, card kept. The ui
+        // visual keeps its row.
+        let withoutSnapshot = try visualFixtureMessage { message in
+            var visuals = message["visuals"] as? [[String: Any]] ?? []
+            visuals[0].removeValue(forKey: "snapshotAttachmentId")
+            message["visuals"] = visuals
+        }
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot).map(\.id), ["ui_fixture_01"])
+        XCTAssertEqual(try transcriptRowIDs(withoutSnapshot), ["ui_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot).map(\.id), ["artifact_fixture_01"])
+
+        // A named snapshot the message does not carry is not usable either; the
+        // ui visual still falls back to its description, and to its title.
+        let danglingSnapshots = try visualFixtureMessage { $0["attachments"] = [Any]() }
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: danglingSnapshots).map(\.id), ["ui_fixture_01"])
+        let bareUi = AidenChatMessage(
+            id: "m", role: .assistant, text: "Here.",
+            visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart")],
+            createdAt: Date()
+        )
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: bareUi).map(\.id), ["ui-1"])
     }
 
     func testFormFillActivityDecodesCountOnlyOutcome() throws {
@@ -7437,11 +8461,16 @@ final class AidenChatTests: XCTestCase {
     }
 }
 
+
 @MainActor
 private final class AidenHeldAttachmentPreparation {
     private var continuation: CheckedContinuation<Void, Never>?
+    /// A release before the preparation parks lets it pass straight through
+    /// instead of suspending forever.
+    private var released = false
 
     func wait(onStart: () -> Void) async {
+        guard !released else { return onStart() }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
             onStart()
@@ -7449,6 +8478,7 @@ private final class AidenHeldAttachmentPreparation {
     }
 
     func release() {
+        released = true
         continuation?.resume()
         continuation = nil
     }
@@ -7535,6 +8565,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     /// An override status that drops the connection instead of answering,
     /// as when the Mac commits a write but its response is lost.
     static let connectionLostStatus = -1
+    /// An override status that answers 200 with the given body and keeps the
+    /// response open, so the test can push further frames with `pushEvent`.
+    static let openEventStreamStatus = -2
     nonisolated(unsafe) private static var responseOverride: Override?
     static func setResponseOverride(_ handler: @escaping Override) {
         lock.withLock { responseOverride = handler }
@@ -7694,7 +8727,15 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
                 return
             }
-            result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
+            if custom.0 == Self.openEventStreamStatus {
+                shouldFinish = false
+                Self.lock.withLock {
+                    Self.eventSink = { [self] data in client?.urlProtocol(self, didLoad: data) }
+                }
+                result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: custom.2)
+            } else {
+                result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
+            }
         } else {
         switch path {
         case "/api/aiden/v1/server":
@@ -10039,6 +11080,40 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
 /// A Mac whose chat has a run started elsewhere: the phone attaches mid-run,
 /// the run ends on the reconnect, and transcript reads then fail until allowed.
+/// A Mac run that is live when the chat opens; its event response stays open,
+/// so the test pushes each later frame with `pushEvent`.
+private final class AidenLiveForeignRunFixture: @unchecked Sendable {
+    /// Events the Mac has retained for the run when the phone attaches.
+    private let replay: String
+
+    init(replay: String = AidenLiveForeignRunFixture.frame(2, "text_delta", #"{"text":"Hello wor"}"#)) {
+        self.replay = replay
+    }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read","approval:respond","runs:observe","runs:control"]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            return (200, "application/json", Data(#"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
+            return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "", Data((
+                Self.frame(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                    + replay
+            ).utf8))
+        default:
+            return nil
+        }
+    }
+
+    static func frame(_ sequence: Int, _ type: String, _ payload: String) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}\n\n"
+    }
+}
+
 private final class AidenForeignRunRecoveryFixture: @unchecked Sendable {
     private let lock = NSLock()
     private var ended = false
@@ -10175,21 +11250,43 @@ private final class AidenHeldChatCacheFileManager: FileManager, @unchecked Senda
 private actor AidenChatWriteTestGate {
     private var armed = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var holdWaiters: [CheckedContinuation<Bool, Never>] = []
     var isHolding: Bool { continuation != nil }
     func arm() { armed = true }
     func waitIfArmed() async {
         guard armed else { return }
         armed = false
-        await withCheckedContinuation { continuation = $0 }
+        await withCheckedContinuation { continuation = $0; resumeHoldWaiters(true) }
     }
+    /// Resolves true once a caller parks on the gate, or false if
+    /// `stopWaitingForHold` runs first.
+    func untilHolding() async -> Bool {
+        if continuation != nil { return true }
+        return await withCheckedContinuation { holdWaiters.append($0) }
+    }
+    func stopWaitingForHold() { resumeHoldWaiters(false) }
+    /// Releases a parked caller. A release that arrives before the caller
+    /// parks disarms the gate instead, so the late caller passes straight
+    /// through rather than suspending forever.
     func release() {
+        armed = false
         continuation?.resume()
         continuation = nil
+    }
+    private func resumeHoldWaiters(_ holding: Bool) {
+        let waiters = holdWaiters
+        holdWaiters = []
+        for waiter in waiters { waiter.resume(returning: holding) }
     }
 }
 
 private final class AidenFailedRemovalFileManager: FileManager, @unchecked Sendable {
     override func removeItem(at URL: URL) throws { throw CocoaError(.fileWriteNoPermission) }
+}
+
+@MainActor
+private final class AidenSnapshotRefreshLog {
+    var delays: [Duration] = []
 }
 
 private final class AidenRenameRequestLog: @unchecked Sendable {
@@ -10355,6 +11452,101 @@ extension AidenChatTests {
         await model.loadEarlierMessages()
         XCTAssertEqual(model.chat.messages.map(\.id), (1...80).map { "n\($0)" })
         XCTAssertFalse(model.hasOlderMessages)
+    }
+
+    private func snapshotReply(captured: Bool) -> [AidenChatMessage] {
+        let snapshotID = "visual-snapshot_\(String(repeating: "a", count: 64))"
+        return [
+            AidenChatMessage(id: "m1", role: .user, text: "Draw it", createdAt: Date()),
+            AidenChatMessage(
+                id: "m2", role: .assistant, text: "Here it is.",
+                attachments: captured
+                    ? [AidenMessageAttachment(id: snapshotID, name: "Chart.png", mimeType: "image/png", kind: .image, size: 1_024)]
+                    : nil,
+                visuals: [AidenChatVisual(
+                    id: "ui-1", kind: .ui, title: "Chart", fallbackText: "A chart.",
+                    snapshotAttachmentId: captured ? snapshotID : nil
+                )],
+                createdAt: Date()
+            ),
+        ]
+    }
+
+    @MainActor
+    func testOpenChatAdoptsASnapshotCapturedAfterTheReplySettled() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: snapshotReply(captured: false), revision: "snap-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let log = AidenSnapshotRefreshLog()
+        model.visualSnapshotRefreshSleep = { delay in
+            log.delays.append(delay)
+            // The Mac stores the snapshot while the phone waits for its second retry.
+            if log.delays.count == 2 {
+                fixture.replaceTranscript(self.snapshotReply(captured: true), revision: "snap-r2")
+            }
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertNil(model.chat.messages.last?.visuals?.first?.snapshotAttachmentId)
+        await model.visualSnapshotRefreshTask?.value
+
+        XCTAssertEqual(log.delays, [.seconds(4), .seconds(6)], "stops as soon as the snapshot arrives")
+        XCTAssertEqual(fixture.windowRequests.count, 3, "the opening read plus two follow-ups")
+        XCTAssertEqual(model.chat.revision, "snap-r2")
+        let reply = try XCTUnwrap(model.chat.messages.last)
+        let visual = try XCTUnwrap(reply.visuals?.first)
+        XCTAssertNotNil(AidenChatVisualPresentation.snapshotAttachment(for: visual, in: reply))
+        XCTAssertNil(model.visualSnapshotRefreshTask)
+    }
+
+    @MainActor
+    func testLateSnapshotRefetchGivesUpAfterThreeTriesAndStopsWhenTheChatCloses() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: snapshotReply(captured: false), revision: "snap-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let log = AidenSnapshotRefreshLog()
+        model.visualSnapshotRefreshSleep = { log.delays.append($0) }
+
+        // A capture that never lands: three follow-ups, then no more polling.
+        await model.load(observeProgress: false)
+        await model.visualSnapshotRefreshTask?.value
+        XCTAssertEqual(log.delays, [.seconds(4), .seconds(6), .seconds(10)])
+        XCTAssertEqual(fixture.windowRequests.count, 4)
+        XCTAssertNil(model.visualSnapshotRefreshTask)
+
+        // Leaving the chat while a follow-up waits cancels it before it fetches.
+        log.delays = []
+        model.visualSnapshotRefreshSleep = { [weak model] delay in
+            log.delays.append(delay)
+            model?.setChatForegrounded(false)
+        }
+        await model.load(observeProgress: false)
+        let requestsAfterReopen = fixture.windowRequests.count
+        await model.visualSnapshotRefreshTask?.value
+        XCTAssertEqual(log.delays, [.seconds(4)])
+        XCTAssertEqual(fixture.windowRequests.count, requestsAfterReopen, "no read after the chat closed")
+        XCTAssertNil(model.visualSnapshotRefreshTask)
+
+        // Coming back on screen (say, closing an image viewer) waits again,
+        // and a snapshot that landed meanwhile ends it after one read.
+        log.delays = []
+        model.visualSnapshotRefreshSleep = { log.delays.append($0) }
+        fixture.replaceTranscript(snapshotReply(captured: true), revision: "snap-r2")
+        model.setChatForegrounded(true)
+        await model.visualSnapshotRefreshTask?.value
+        XCTAssertEqual(log.delays, [.seconds(4)])
+        XCTAssertEqual(fixture.windowRequests.count, requestsAfterReopen + 1)
+        XCTAssertNotNil(model.chat.messages.last?.visuals?.first?.snapshotAttachmentId)
     }
 
     func testWindowMetadataDecodesAsTheChatAndFailsClosedWhenPartial() throws {
@@ -10589,5 +11781,1126 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
             data.append(buffer, count: count)
         }
         return data
+    }
+}
+
+// MARK: - Markdown content cache margin inference
+
+final class AidenMarkdownContentCacheTests: XCTestCase {
+    private typealias Cache = AidenMarkdownChunkSpacing
+
+    func testFencedCodeBlockStartingWithDashesIsNotASetextHeading() {
+        // A fenced YAML block whose first content line is `---` (the YAML
+        // document separator) was being misclassified as a Setext heading,
+        // causing an 8pt margin jump from 16pt to 24pt in rendered content.
+        let yaml = """
+        ```yaml
+        ---
+        foo: bar
+        ```
+        """
+        let topMargin = Cache.topMargin(ofFirstBlockIn: yaml)
+        XCTAssertEqual(topMargin, 0, "fenced code blocks should have zero top margin")
+    }
+
+    func testQuotedThematicBreakHasHeadingMargin() {
+        // Quoted thematic breaks should inherit the heading margin (24pt, the
+        // child's natural margin in MarkdownUI), not the block default (16pt).
+        // This matches topMargin behavior for quoted ATX headings and thematic
+        // breaks.
+        let quoted = "> ---"
+        let bottomMargin = Cache.bottomMargin(ofLastBlockIn: quoted)
+        // thematicBreak is 24.0
+        XCTAssertEqual(bottomMargin, 24.0, "quoted thematic breaks should use heading margin")
+    }
+
+    func testFencedBackticksAndTildesAreRecognized() {
+        // Sanity check: both ``` and ~~~ are valid fence markers, and both
+        // starting with `---` should not be treated as Setext headings.
+        for fence in ["```", "~~~"] {
+            let code = "\(fence)\n---\ncontent\n\(fence)"
+            let topMargin = Cache.topMargin(ofFirstBlockIn: code)
+            XCTAssertEqual(topMargin, 0)
+        }
+    }
+}
+
+// MARK: - Transcript follow latch (cases ported from Hermex ChatScrollPolicyTests)
+
+final class AidenChatScrollFollowTests: XCTestCase {
+    private typealias Policy = AidenChatScrollPolicy
+    private typealias Latch = AidenChatScrollPolicy.FollowLatch
+    private typealias Geometry = AidenChatScrollPolicy.ScrollGeometry
+
+    private func follow(_ current: Bool, _ event: Policy.FollowEvent) -> Bool {
+        Policy.resolveFollow(current: Latch(isFollowing: current), event: event).isFollowing
+    }
+
+    private func reduce(_ latch: Latch, _ events: Policy.FollowEvent...) -> Latch {
+        events.reduce(latch) { Policy.resolveFollow(current: $0, event: $1) }
+    }
+
+    func testSizeChangesStayBottomAnchoredOnlyWhileFollowing() {
+        XCTAssertEqual(Policy.sizeChangeAnchor(shouldFollowLatest: true), .bottom)
+        XCTAssertNil(Policy.sizeChangeAnchor(shouldFollowLatest: false))
+    }
+
+    func testIsNearBottomUsesIdleThresholdWhenNotStreaming() {
+        XCTAssertTrue(Policy.isNearBottom(distanceFromBottom: 80, isStreaming: false))
+        XCTAssertFalse(Policy.isNearBottom(distanceFromBottom: 81, isStreaming: false))
+    }
+
+    func testIsNearBottomUsesLooserThresholdWhileStreaming() {
+        XCTAssertFalse(Policy.isNearBottom(distanceFromBottom: 120, isStreaming: false))
+        XCTAssertTrue(Policy.isNearBottom(distanceFromBottom: 120, isStreaming: true))
+        XCTAssertTrue(Policy.isNearBottom(distanceFromBottom: 160, isStreaming: true))
+        XCTAssertFalse(Policy.isNearBottom(distanceFromBottom: 161, isStreaming: true))
+    }
+
+    func testJumpButtonHidesAtBottomEvenWhenFollowingIsPaused() {
+        for streaming in [false, true] {
+            let near = Policy.isNearBottom(distanceFromBottom: 0, isStreaming: streaming)
+            XCTAssertFalse(Policy.showsScrollToBottomButton(isNearBottom: near, isStreaming: streaming, isFollowing: false))
+        }
+    }
+
+    func testJumpButtonUsesIdleAndStreamingThresholds() {
+        for (distance, streaming, following, visible) in [
+            (80.0, false, false, false), (81, false, false, true), (81, false, true, true),
+            (120, true, false, false), (161, true, false, true), (161, true, true, false)
+        ] {
+            let near = Policy.isNearBottom(distanceFromBottom: distance, isStreaming: streaming)
+            XCTAssertEqual(
+                Policy.showsScrollToBottomButton(isNearBottom: near, isStreaming: streaming, isFollowing: following),
+                visible,
+                "distance \(distance) streaming \(streaming) following \(following)"
+            )
+        }
+    }
+
+    func testTouchDownTurnsFollowOff() {
+        XCTAssertFalse(follow(true, .userScrollBegin))
+        XCTAssertFalse(follow(false, .userScrollBegin))
+    }
+
+    func testDragEndingAboveBottomKeepsFollowOff() {
+        XCTAssertFalse(reduce(Latch(), .userScrollBegin, .userScrollEnd(isAtBottom: false)).isFollowing)
+    }
+
+    func testExplicitResetSurvivesLateDragSettlement() {
+        let latch = reduce(Latch(), .userScrollBegin, .reset, .userScrollEnd(isAtBottom: false))
+        XCTAssertTrue(latch.isFollowing)
+        XCTAssertFalse(latch.ignoresCoastingGesture)
+    }
+
+    func testExplicitResetSurvivesCoastingMomentum() {
+        let coasting = reduce(Latch(), .userScrollBegin, .reset, .contentScrolled(isAtBottom: false, isUserScrolling: true))
+        XCTAssertTrue(coasting.isFollowing)
+        let settled = reduce(coasting, .userScrollEnd(isAtBottom: false))
+        XCTAssertTrue(settled.isFollowing)
+        XCTAssertFalse(settled.ignoresCoastingGesture)
+        XCTAssertFalse(reduce(settled, .contentScrolled(isAtBottom: false, isUserScrolling: true)).isFollowing)
+    }
+
+    func testExplicitResetSurvivesCoastingMomentumAwayFromBottom() {
+        let latch = reduce(
+            Latch(), .userScrollBegin, .reset,
+            .contentScrolled(isAtBottom: false, isUserScrolling: true, movedAwayFromBottom: true)
+        )
+        XCTAssertTrue(latch.isFollowing)
+    }
+
+    func testNewDragAfterResetTurnsFollowOff() {
+        let latch = reduce(Latch(), .reset, .userScrollBegin)
+        XCTAssertFalse(latch.isFollowing)
+        XCTAssertFalse(latch.ignoresCoastingGesture)
+    }
+
+    func testGestureSettlingAtBottomReArmsFollow() {
+        XCTAssertTrue(follow(false, .userScrollEnd(isAtBottom: true)))
+        XCTAssertFalse(follow(false, .userScrollEnd(isAtBottom: false)))
+    }
+
+    func testStreamingGrowthNeverTurnsFollowBackOn() {
+        var latch = Latch(isFollowing: false)
+        for distance in stride(from: 400.0, through: 2000, by: 200) {
+            latch = Policy.resolveFollow(current: latch, event: .contentScrolled(
+                isAtBottom: Policy.isAtBottom(distanceFromBottom: distance),
+                isUserScrolling: false,
+                wasNearBottom: false
+            ))
+        }
+        XCTAssertFalse(latch.isFollowing)
+    }
+
+    func testStreamingGrowthWhileFollowingStaysOn() {
+        XCTAssertTrue(follow(true, .contentScrolled(isAtBottom: false, isUserScrolling: false)))
+    }
+
+    func testNonGestureScrollLandingAtBottomFromNearbyReArms() {
+        XCTAssertTrue(follow(false, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)))
+    }
+
+    func testTransientBottomFromFarAboveDoesNotReArm() {
+        XCTAssertFalse(follow(false, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: false)))
+    }
+
+    func testScrollAwayWithoutGestureTurnsFollowOff() {
+        XCTAssertFalse(follow(true, .contentScrolled(isAtBottom: false, isUserScrolling: false, movedAwayFromBottom: true)))
+    }
+
+    func testLiveGestureWinsEvenAtBottom() {
+        XCTAssertFalse(follow(true, .contentScrolled(isAtBottom: true, isUserScrolling: true)))
+    }
+
+    func testExplicitActionsBypassTheLatch() {
+        XCTAssertTrue(follow(false, .reset))
+        XCTAssertTrue(follow(true, .reset))
+    }
+
+    func testReArmRequiresStrictBottom() {
+        XCTAssertTrue(Policy.isAtBottom(distanceFromBottom: 12))
+        XCTAssertFalse(Policy.isAtBottom(distanceFromBottom: 13))
+        XCTAssertLessThan(Policy.followReArmThreshold, Policy.bottomDetectionThreshold)
+        XCTAssertLessThan(Policy.momentumSettleDelay, Policy.dragSettleDelay)
+    }
+
+    func testDistanceGrowingPastStreamingThresholdIsAScrollAway() {
+        let atBottom = Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 700)
+        let carriedAway = Geometry(offsetY: 3200, contentHeight: 5200, visibleHeight: 700)
+        XCTAssertTrue(Policy.isScrollingAwayFromBottom(previous: atBottom, current: carriedAway))
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(previous: nil, current: carriedAway))
+    }
+
+    func testJitterViewportAndFollowScrollsAreNotScrollAways() {
+        let atBottom = Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 700)
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: atBottom, current: Geometry(offsetY: 4300, contentHeight: 5150, visibleHeight: 700)))
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: atBottom, current: Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 400)))
+        let farAway = Geometry(offsetY: 1000, contentHeight: 5000, visibleHeight: 700)
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: farAway, current: Geometry(offsetY: 2000, contentHeight: 5000, visibleHeight: 700)))
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: atBottom, current: Geometry(offsetY: 4700, contentHeight: 5400, visibleHeight: 700)))
+    }
+
+    func testContentGrowthAtUnchangedOffsetDoesNotTriggerMovedAway() {
+        // Streaming or reply growth that doesn't move the reader's offset
+        // should not opt out of following. Only actual offset movement upward
+        // counts as a scroll away.
+        let atBottom = Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 700)
+        let grewLargeReplyWithoutScroll = Geometry(offsetY: 4300, contentHeight: 5200, visibleHeight: 700)
+        // Distance grew from 700 to 900, past streaming threshold, but offset unchanged.
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(previous: atBottom, current: grewLargeReplyWithoutScroll))
+        // The same content scrolled up toward older messages is the reader leaving.
+        let scrolledUp = Geometry(offsetY: 3200, contentHeight: 5000, visibleHeight: 700)
+        XCTAssertTrue(Policy.isScrollingAwayFromBottom(previous: atBottom, current: scrolledUp))
+    }
+}
+
+/// Releases `AidenTranscriptFollowController` pauses one at a time.
+@MainActor
+private final class AidenManualPauses {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    var pending: Int { waiters.count }
+
+    func pause() async {
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func releaseAll() {
+        let released = waiters
+        waiters = []
+        released.forEach { $0.resume() }
+    }
+
+    func waitForPending(_ count: Int) async {
+        for _ in 0..<1_000 where waiters.count < count { await Task.yield() }
+    }
+}
+
+@MainActor
+final class AidenTranscriptFollowControllerTests: XCTestCase {
+    private func metrics(_ distance: CGFloat, interacting: Bool = false) -> AidenChatScrollMetrics {
+        AidenChatScrollMetrics(distanceFromBottom: distance, isUserInteracting: interacting, movedAwayFromBottom: false)
+    }
+
+    func testANewerFollowScrollCancelsTheStaleSnap() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed: [String] = []
+        let first = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed.append("first") }
+        let second = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed.append("second") }
+        await pauses.waitForPending(2)
+        pauses.releaseAll()
+        await first?.value
+        await second?.value
+        XCTAssertEqual(performed, ["second"])
+    }
+
+    func testADragDuringThePauseCancelsAnAutomaticFollow() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed = 0
+        let task = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed += 1 }
+        await pauses.waitForPending(1)
+        controller.handle(.userScrollBegin)
+        pauses.releaseAll()
+        await task?.value
+        XCTAssertEqual(performed, 0)
+    }
+
+    func testANewDragInvalidatesPendingFollowAndCorrectionTasks() async {
+        // A user-initiated scroll that is waiting in followPause, or a
+        // corrective snap scheduled after an animated jump, must be cancelled
+        // if the user starts a new drag before the pause releases.
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed: [String] = []
+
+        // Schedule a user-initiated jump (like "Jump to latest").
+        let jumpTask = controller.scheduleFollowScroll(isUserInitiated: true, animated: false) { _ in
+            performed.append("jump")
+        }
+        await pauses.waitForPending(1)
+        // User starts dragging before the jump pause releases.
+        controller.handle(.userScrollBegin)
+        pauses.releaseAll()
+        await jumpTask?.value
+        // The jump must not execute because the new drag invalidated it.
+        XCTAssertEqual(performed, [])
+    }
+
+    func testADragInvalidatesTheCorrectiveSnapEvenAfterFollowReArms() async {
+        let pauses = AidenManualPauses()
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: { await pauses.pause() },
+            jumpButtonDelay: {},
+            animationSettle: { await settles.pause() }
+        )
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            // Estimated row heights: the animation stops 300pt short.
+            if animated { controller.updateMetrics(self.metrics(300)) }
+        }
+        await pauses.waitForPending(1)
+        pauses.releaseAll()
+        await settles.waitForPending(1)
+        XCTAssertEqual(animatedValues, [true])
+
+        // A drag that ends at the bottom re-arms follow while the jump is still
+        // settling, so only the drag itself can retire the stale corrective snap.
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: true))
+        XCTAssertTrue(controller.isFollowing)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true])
+    }
+
+    func testAutomaticFollowDoesNothingWhileTheReaderIsAway() {
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        XCTAssertNil(controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in XCTFail() })
+    }
+
+    func testJumpReArmsFollowAndSnapsWhileStreaming() async {
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        controller.setStreaming(true)
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        XCTAssertFalse(controller.isFollowing)
+
+        var animatedValues: [Bool] = []
+        await controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animatedValues.append($0) }?.value
+        XCTAssertTrue(controller.isFollowing)
+
+        controller.setStreaming(false)
+        await controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animatedValues.append($0) }?.value
+        XCTAssertEqual(animatedValues, [false, true])
+    }
+
+    func testIsNearBottomRecomputesWhenStreamingEnds() {
+        // When streaming ends, the bottom proximity threshold changes from 160pt
+        // to 80pt. A distance that was "near" while streaming (e.g., 120pt) may
+        // become "away" once streaming stops, and isNearBottom must recompute
+        // immediately so the Jump button appears without waiting for the next
+        // geometry report.
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+
+        // Streaming: 120pt is near (within 160pt threshold).
+        controller.setStreaming(true)
+        controller.updateMetrics(metrics(120, interacting: false))
+        XCTAssertTrue(controller.isNearBottom)
+
+        // Streaming ends: 120pt becomes away (exceeds 80pt threshold).
+        controller.setStreaming(false)
+        XCTAssertFalse(controller.isNearBottom)
+    }
+
+    func testIsNearBottomRecomputesWhenStreamingStarts() {
+        // Conversely, when streaming starts, the threshold loosens and a
+        // distance that was "away" (e.g., 120pt) becomes "near".
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+
+        // Not streaming: 120pt is away (exceeds 80pt threshold).
+        controller.setStreaming(false)
+        controller.updateMetrics(metrics(120, interacting: false))
+        XCTAssertFalse(controller.isNearBottom)
+
+        // Streaming starts: 120pt becomes near (within 160pt threshold).
+        controller.setStreaming(true)
+        XCTAssertTrue(controller.isNearBottom)
+    }
+
+    func testJumpButtonAppearsAfterTheDelayAndHidesImmediately() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: { await pauses.pause() })
+        controller.handle(.userScrollBegin)
+        controller.updateMetrics(metrics(400, interacting: true))
+        // Further away-reports must not restart the countdown.
+        controller.updateMetrics(metrics(500, interacting: true))
+        await pauses.waitForPending(1)
+        XCTAssertEqual(pauses.pending, 1)
+        XCTAssertFalse(controller.showsJumpButton)
+        pauses.releaseAll()
+        for _ in 0..<100 where !controller.showsJumpButton { await Task.yield() }
+        XCTAssertTrue(controller.showsJumpButton)
+
+        controller.updateMetrics(metrics(4))
+        XCTAssertFalse(controller.showsJumpButton)
+    }
+
+    func testReturningBeforeTheDelayNeverShowsTheButton() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: { await pauses.pause() })
+        controller.handle(.userScrollBegin)
+        controller.updateMetrics(metrics(400, interacting: true))
+        await pauses.waitForPending(1)
+        controller.updateMetrics(metrics(0, interacting: true))
+        pauses.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(controller.showsJumpButton)
+    }
+
+    /// A reader scrolled away, then a gesture-free scroll (hardware keyboard,
+    /// VoiceOver) carries them from far above to the bottom in one report.
+    private func arriveAtTheBottomWithoutADrag(
+        _ settles: AidenManualPauses
+    ) -> AidenTranscriptFollowController {
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        controller.handle(.userScrollBegin)
+        controller.updateMetrics(metrics(900, interacting: true))
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        controller.updateMetrics(metrics(0))
+        return controller
+    }
+
+    func testAGestureFreeScrollThatStaysAtTheBottomReArmsFollow() async {
+        let settles = AidenManualPauses()
+        let controller = arriveAtTheBottomWithoutADrag(settles)
+        XCTAssertFalse(controller.isFollowing, "one report from far above is not trusted yet")
+        await settles.waitForPending(1)
+        // The reply keeps growing a little while the scroll settles.
+        controller.setStreaming(true)
+        controller.updateMetrics(metrics(40))
+        settles.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(controller.isFollowing)
+    }
+
+    func testAGestureFreeBottomThatScrollsAwayAgainKeepsFollowOff() async {
+        let settles = AidenManualPauses()
+        let controller = arriveAtTheBottomWithoutADrag(settles)
+        await settles.waitForPending(1)
+        controller.updateMetrics(AidenChatScrollMetrics(
+            distanceFromBottom: 900, isUserInteracting: false, movedAwayFromBottom: true
+        ))
+        settles.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(controller.isFollowing)
+    }
+
+    func testADragAfterAGestureFreeArrivalKeepsFollowOff() async {
+        let settles = AidenManualPauses()
+        let controller = arriveAtTheBottomWithoutADrag(settles)
+        await settles.waitForPending(1)
+        controller.handle(.userScrollBegin)
+        settles.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(controller.isFollowing)
+    }
+
+    func testAnIdleJumpThatLandsShortFinishesWithOneSnap() async {
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            // Estimated row heights: the animation stops 300pt short.
+            if animated { controller.updateMetrics(self.metrics(300)) }
+        }
+        await settles.waitForPending(1)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true, false])
+    }
+
+    func testAnIdleJumpThatReachesTheBottomDoesNotSnapAgain() async {
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        controller.updateMetrics(metrics(900))
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            if animated { controller.updateMetrics(self.metrics(4)) }
+        }
+        await settles.waitForPending(1)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true])
+    }
+
+    func testADragWhileAJumpSettlesCancelsTheCorrectiveSnap() async {
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            if animated { controller.updateMetrics(self.metrics(300)) }
+        }
+        await settles.waitForPending(1)
+        controller.handle(.userScrollBegin)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true])
+    }
+
+    func testAFingerRestingOnTheTranscriptKeepsFollowWhileTheReplyGrows() {
+        let scrollView = AidenTouchableScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        scrollView.contentSize = CGSize(width: 320, height: 1_000)
+        scrollView.contentOffset = CGPoint(x: 0, y: 520)
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        let coordinator = AidenChatScrollObserver.Coordinator(
+            onFollowEvent: { controller.handle($0) },
+            onMetrics: { controller.updateMetrics($0) }
+        )
+        let content = UIView()
+        scrollView.addSubview(content)
+        coordinator.attachIfNeeded(from: content)
+        defer { coordinator.detach() }
+        drainMainQueue()
+
+        // A tap or long press: the finger is down, nothing has moved yet, and
+        // streaming growth keeps the reader pinned at the bottom.
+        scrollView.touchIsTracking = true
+        for step in 1...3 {
+            scrollView.contentSize.height = 1_000 + CGFloat(step) * 120
+            scrollView.contentOffset.y = 520 + CGFloat(step) * 120
+            drainMainQueue()
+        }
+        XCTAssertTrue(controller.isFollowing)
+
+        // The same finger now drags the content: that is the reader scrolling.
+        scrollView.touchIsDragging = true
+        scrollView.contentOffset.y -= 200
+        drainMainQueue()
+        XCTAssertFalse(controller.isFollowing)
+    }
+
+    func testATapThatStopsMomentumAtTheBottomReArmsFollowWhenTheFingerLifts() {
+        let scrollView = AidenTouchableScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        scrollView.contentSize = CGSize(width: 320, height: 2_000)
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_000)
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        var ends: [Bool] = []
+        let coordinator = AidenChatScrollObserver.Coordinator(
+            onFollowEvent: { event in
+                if case .userScrollEnd(let isAtBottom) = event { ends.append(isAtBottom) }
+                controller.handle(event)
+            },
+            onMetrics: { controller.updateMetrics($0) }
+        )
+        let content = UIView()
+        scrollView.addSubview(content)
+        coordinator.attachIfNeeded(from: content)
+        defer { coordinator.detach() }
+        drainMainQueue()
+
+        // A fling toward the bottom: the drag starts a session, then momentum carries on.
+        coordinator.panGestureChanged(to: .began)
+        scrollView.touchIsTracking = true
+        scrollView.touchIsDragging = true
+        scrollView.contentOffset.y = 1_200
+        scrollView.touchIsTracking = false
+        scrollView.touchIsDragging = false
+        scrollView.touchIsDecelerating = true
+        coordinator.panGestureChanged(to: .ended)
+        scrollView.contentOffset.y = 1_400
+        XCTAssertFalse(controller.isFollowing)
+
+        // A tap stops the momentum 8pt from the bottom. The finger stays down,
+        // and lifting it sends no pan event at all.
+        scrollView.touchIsDecelerating = false
+        scrollView.touchIsTracking = true
+        scrollView.contentOffset.y = 2_000 - 480 - 8
+        RunLoop.main.run(until: Date().addingTimeInterval(AidenChatScrollPolicy.dragSettleDelay * 2))
+        XCTAssertEqual(ends, [], "the session must not settle while the finger is still down")
+
+        scrollView.touchIsTracking = false
+        XCTAssertTrue(runMainLoop(until: { !ends.isEmpty }, timeout: 1))
+        XCTAssertEqual(ends, [true])
+        XCTAssertTrue(controller.isFollowing)
+    }
+
+    func testFollowTriggerBumpsFireWithoutReRunningTheOwner() {
+        let probe = AidenFollowTriggerProbe()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        window.rootViewController = UIHostingController(rootView: AidenFollowTriggerOwner(probe: probe))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        XCTAssertTrue(runMainLoop(until: { probe.ownerPasses == 1 }))
+
+        for expected in 1...3 {
+            probe.trigger += 1
+            // SwiftUI applies the Observation change on its next update pass;
+            // run the main loop until that pass has fired the leaf.
+            XCTAssertTrue(runMainLoop(until: { probe.fires == expected }), "bump \(expected) never fired")
+        }
+
+        drainMainQueue()
+        XCTAssertEqual(probe.fires, 3)
+        XCTAssertEqual(probe.ownerPasses, 1)
+    }
+
+    /// Runs the main run loop briefly so queued main-queue deliveries and
+    /// SwiftUI update passes happen.
+    private func drainMainQueue() {
+        for _ in 0..<5 { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+    }
+
+    /// Runs the main run loop until `condition` holds or `timeout` passes.
+    private func runMainLoop(until condition: () -> Bool, timeout: TimeInterval = 2) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        return condition()
+    }
+}
+
+/// A scroll view whose touch state a test can set directly.
+private final class AidenTouchableScrollView: UIScrollView {
+    var touchIsTracking = false
+    var touchIsDragging = false
+    override var isTracking: Bool { touchIsTracking }
+    override var isDragging: Bool { touchIsDragging }
+    var touchIsDecelerating = false
+    override var isDecelerating: Bool { touchIsDecelerating }
+}
+
+@Observable
+private final class AidenFollowTriggerProbe {
+    var trigger = 0
+    @ObservationIgnored var ownerPasses = 0
+    @ObservationIgnored var fires = 0
+}
+
+/// Stands in for the chat screen: it hands the leaf a reader, never the value.
+private struct AidenFollowTriggerOwner: View {
+    let probe: AidenFollowTriggerProbe
+
+    var body: some View {
+        probe.ownerPasses += 1
+        return Color.clear.background {
+            AidenStreamingFollowTrigger(trigger: { probe.trigger }) { probe.fires += 1 }
+        }
+    }
+}
+
+/// Reveal ticks the test releases by hand, so a test sees exactly what one
+/// streaming tick shows.
+final class AidenManualRevealTicks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var pending: Int { lock.withLock { waiters.count } }
+
+    func tick() async {
+        await withCheckedContinuation { continuation in
+            lock.withLock { waiters.append(continuation) }
+        }
+    }
+
+    func releaseAll() {
+        let released = lock.withLock {
+            let current = waiters
+            waiters = []
+            return current
+        }
+        released.forEach { $0.resume() }
+    }
+}
+
+/// A Mac with one running stream whose event response stays open, so the
+/// test pushes each frame with `pushEvent`.
+private final class AidenRevealStreamFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let chat: AidenChat
+    private var reads = 0
+    var chatReads: Int { lock.withLock { reads } }
+
+    init(chat: AidenChat) { self.chat = chat }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            let path = request.url!.path
+            if path.hasSuffix("/models") {
+                return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+            }
+            if path.hasSuffix("/chats/" + chat.id) {
+                reads += 1
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                return (200, "application/json", try! encoder.encode(chat))
+            }
+            if path.hasSuffix("/streams/stream-reveal/events") {
+                return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "", Data(": keepalive\n\n".utf8))
+            }
+            if path.hasSuffix("/streams/stream-reveal") {
+                return (200, "application/json", Data("""
+                {"streamId":"stream-reveal","chatId":"\(chat.id)","turnId":"turn-reveal","state":"running","lastSequence":0,"updatedAt":"2026-10-12T00:00:00Z"}
+                """.utf8))
+            }
+            if path.hasSuffix("/turns") { return (503, "application/json", Data()) }
+            return nil
+        }
+    }
+
+    static func frame(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-reveal\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-12T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// A Mac whose chat sits idle until `startRun()` begins a run on the Mac.
+/// `runs/current` answers `run_gone` before then; after it, the scenario
+/// decides whether the run is live, registers late, or has already finished.
+private final class AidenAnnouncedRunFixture: @unchecked Sendable {
+    /// `previousRunEnded`: before the new run starts, the Mac still retains an
+    /// earlier run that has ended; the new run is then live.
+    enum Scenario { case live, registersLate, endedBeforeAttach, previousRunEnded }
+
+    private let lock = NSLock()
+    private let scenario: Scenario
+    private let rosterReadable: Bool
+    private let firstRosterTurnId: String
+    private var started = false
+    private var runRequestsSinceStart = 0
+    private var runRequests = 0
+    private var reads = 0
+    var currentRunRequests: Int { lock.withLock { runRequests } }
+    var chatReads: Int { lock.withLock { reads } }
+
+    init(scenario: Scenario, rosterReadable: Bool = true, firstRosterTurnId: String = "turn-old") {
+        self.scenario = scenario
+        self.rosterReadable = rosterReadable
+        self.firstRosterTurnId = firstRosterTurnId
+    }
+
+    func startRun() { lock.withLock { started = true } }
+
+    static func rosterFrame(turnId: String, revision: Int) -> String {
+        "id: \(revision)\nevent: agents_update\ndata: {\"protocolVersion\":1,\"streamId\":\"chat-progress-lifecycle\",\"sequence\":\(revision),\"timestamp\":\"2026-10-13T10:00:00Z\",\"type\":\"agents_update\",\"terminal\":false,\"payload\":\(roster(turnId: turnId, revision: revision))}\n\n"
+    }
+
+    private static func roster(turnId: String, revision: Int) -> String {
+        #"{"version":1,"chatId":"chat-progress-lifecycle","turnId":""# + turnId
+            + #"","previousTurns":[],"availability":"ready","epoch":"epoch-announced","revision":"# + String(revision)
+            + #","updatedAt":"2026-10-13T10:00:00Z","agents":[]}"#
+    }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            switch request.url!.path {
+            case "/api/aiden/v1/server":
+                let grants = rosterReadable
+                    ? #"["server:read","workspace:read","chat:read","chat:write","agents:read","approval:respond","runs:observe","runs:control"]"#
+                    : #"["server:read","workspace:read","chat:read","chat:write","approval:respond","runs:observe","runs:control"]"#
+                let features = rosterReadable ? #"["phone-run-control-v1","chat-agents-v1"]"# : #"["phone-run-control-v1"]"#
+                return (200, "application/json", Data("""
+                {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":\(features),"connectionMode":"lan","serverTime":"2026-10-13T10:00:00Z"}
+                """.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle":
+                reads += 1
+                // The reply reaches the transcript once the run has finished.
+                let messages = started && scenario == .endedBeforeAttach
+                    ? #"[{"id":"reply-mac","role":"assistant","text":"Hello from the Mac","createdAt":"2026-10-13T10:00:03Z"}]"#
+                    : "[]"
+                return (200, "application/json", Data("""
+                {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":\(messages),"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-\(reads)"}
+                """.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle/turns":
+                // This phone starts the run itself.
+                started = true
+                return (202, "application/json", Data(
+                    #"{"turnId":"turn-own","streamId":"run-mac","status":"queued","message":{"id":"own-message","role":"user","text":"Hello","createdAt":"2026-10-13T10:00:00Z"}}"#.utf8
+                ))
+            case "/api/aiden/v1/streams/run-mac/events":
+                return (200, "text/event-stream", Data(finishedRun.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle/agents":
+                return (200, "application/json", Data(Self.roster(turnId: firstRosterTurnId, revision: 1).utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle/progress/events":
+                return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data(": keepalive\n\n".utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
+                runRequests += 1
+                guard started else {
+                    guard scenario == .previousRunEnded else { return Self.runGone }
+                    return (200, "text/event-stream", Data(previousRun.utf8))
+                }
+                runRequestsSinceStart += 1
+                let running = event(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                    + event(2, "text_delta", #"{"text":"Hello from the Mac"}"#)
+                switch scenario {
+                case .live, .previousRunEnded:
+                    return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data(running.utf8))
+                case .registersLate:
+                    guard runRequestsSinceStart > 1 else { return Self.runGone }
+                    return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data(running.utf8))
+                case .endedBeforeAttach:
+                    return (200, "text/event-stream", Data(finishedRun.utf8))
+                }
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// `run-mac` as this phone's own stream, restored from the stream cache:
+    /// it is still running, and its replay holds the reply, then a tool.
+    func restoredOwnRunResponse(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/streams/run-mac":
+            return (200, "application/json", Data(
+                #"{"streamId":"run-mac","chatId":"chat-progress-lifecycle","turnId":"turn-own","state":"running","lastSequence":2,"updatedAt":"2026-10-13T10:00:02Z"}"#.utf8
+            ))
+        case "/api/aiden/v1/streams/run-mac/events":
+            let replay = event(1, "text_delta", #"{"text":"Hello from the Mac"}"#)
+                + event(2, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#)
+            return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data(replay.utf8))
+        default:
+            return nil
+        }
+    }
+
+    private var finishedRun: String {
+        event(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+            + event(2, "text_delta", #"{"text":"Hello from the Mac"}"#)
+            + event(3, "done", #"{"messageId":"reply-mac"}"#, terminal: true)
+            + event(3, "run.ended", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true)
+    }
+
+    private var previousRun: String {
+        event(1, "run.started", #"{"runId":"run-old","chatId":"chat-progress-lifecycle","origin":"renderer"}"#, streamId: "run-old")
+            + event(2, "done", #"{"messageId":"reply-old"}"#, terminal: true, streamId: "run-old")
+            + event(2, "run.ended", #"{"runId":"run-old","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true, streamId: "run-old")
+    }
+
+    private static let runGone = (404, "application/json", Data(
+        #"{"error":{"code":"run_gone","message":"This run is no longer available on this Aiden host.","requestId":"r","retryable":false}}"#.utf8
+    ))
+
+    private func event(
+        _ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false, streamId: String = "run-mac"
+    ) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"\(streamId)\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-13T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+private final class AidenProbeDelayRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Duration] = []
+    var values: [Duration] { lock.withLock { recorded } }
+    func record(_ delay: Duration) { lock.withLock { recorded.append(delay) } }
+    func reset() { lock.withLock { recorded = [] } }
+}
+
+final class AidenImageGenerationPlaceholderTests: XCTestCase {
+    private func imageStep(
+        _ status: AidenAgentStepStatus,
+        detail: String? = nil,
+        index: Int = 1,
+        startedAt: Double = 1_000,
+        updatedAt: Double = 2_000,
+        toolName: String = "generate_image",
+        target: String? = nil
+    ) -> AidenAgentStep {
+        AidenAgentStep(
+            id: "tool-\(index)",
+            order: index - 1,
+            kind: .tool,
+            toolCallId: "call-\(index)",
+            toolName: toolName,
+            label: "Generate image",
+            status: status,
+            startedAt: startedAt,
+            updatedAt: updatedAt,
+            finishedAt: status == .completed ? updatedAt : nil,
+            contentOffset: 0,
+            durationMs: nil,
+            target: target,
+            detail: detail,
+            lineChanges: nil
+        )
+    }
+
+    private func timeline(
+        _ steps: [AidenAgentStep],
+        status: AidenGenerationTimelineStatus = .running
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3,
+            generationId: "generation-1",
+            status: status,
+            startedAt: 1_000,
+            finishedAt: status == .running ? nil : 9_000,
+            steps: steps
+        )
+    }
+
+    func testRunningCallShowsPlaceholderInItsRequestedShape() {
+        let items = AidenImageGenerationPlaceholderState.items(
+            timeline([imageStep(.running, detail: "16:9", updatedAt: 4_000)])
+        )
+        XCTAssertEqual(items, [
+            AidenImageGenerationPlaceholderItem(
+                id: "call-1",
+                aspectRatio: .landscape16x9,
+                elapsedAtObservation: 3
+            ),
+        ])
+        XCTAssertEqual(items.first.map { Double($0.aspectRatio.value) } ?? 0, 16.0 / 9.0, accuracy: 1e-9)
+    }
+
+    func testMissingOrUnknownShapeFallsBackToSquare() {
+        let items = AidenImageGenerationPlaceholderState.items(timeline([
+            imageStep(.running, detail: nil, index: 1),
+            imageStep(.running, detail: "21:9", index: 2),
+        ]))
+        XCTAssertEqual(items.map(\.aspectRatio), [.square, .square])
+    }
+
+    func testCallsBeforeApprovalOrThatEndedWithoutAnImageShowNoPlaceholder() {
+        for status in [AidenAgentStepStatus.pending, .awaitingApproval, .failed, .blocked, .cancelled] {
+            XCTAssertEqual(
+                AidenImageGenerationPlaceholderState.items(timeline([imageStep(status, detail: "1:1")])),
+                [],
+                "\(status)"
+            )
+        }
+    }
+
+    func testCompletedCallHoldsUntilTheTurnSettlesThenClears() {
+        // The image reaches the phone with the settled message, so a finished
+        // call keeps its placeholder while the turn still streams.
+        XCTAssertEqual(
+            AidenImageGenerationPlaceholderState.items(timeline([imageStep(.completed, detail: "3:4")])).map(\.aspectRatio),
+            [.portrait3x4]
+        )
+        for status in [AidenGenerationTimelineStatus.completed, .failed, .cancelled] {
+            XCTAssertEqual(
+                AidenImageGenerationPlaceholderState.items(timeline([imageStep(.completed)], status: status)),
+                []
+            )
+        }
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.items(nil), [])
+    }
+
+    func testOtherToolsNeverShowAPlaceholder() {
+        let step = AidenAgentStep(
+            id: "tool-1", order: 0, kind: .tool, toolCallId: "call-1", toolName: "display_image",
+            label: "Display image", status: .running, startedAt: 1_000, updatedAt: 1_000, finishedAt: nil,
+            contentOffset: 0, durationMs: nil, target: nil, detail: "16:9", lineChanges: nil
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.items(timeline([step])), [])
+    }
+
+    private func armed(after timelines: [AidenGenerationTimeline]) -> Set<String> {
+        timelines.reduce(into: Set<String>()) { armed, timeline in
+            armed = AidenImageGenerationPlaceholderState.armedArrivalReveals(armed, after: timeline)
+        }
+    }
+
+    func testArrivalRevealIsArmedOnlyWhenAGenerateImageCallCompletes() {
+        XCTAssertEqual(armed(after: [timeline([imageStep(.running)])]), [])
+        XCTAssertEqual(
+            armed(after: [timeline([imageStep(.running)]), timeline([imageStep(.completed)])]),
+            ["generation-1"]
+        )
+        // A phone that joins after the call finished still reveals the image.
+        XCTAssertEqual(armed(after: [timeline([imageStep(.completed)], status: .completed)]), ["generation-1"])
+    }
+
+    func testFailedOrCancelledCallsNeverArmTheReveal() {
+        for status in [AidenAgentStepStatus.failed, .blocked, .cancelled, .awaitingApproval] {
+            XCTAssertEqual(
+                armed(after: [timeline([imageStep(.running)]), timeline([imageStep(status)], status: .failed)]),
+                [],
+                "\(status)"
+            )
+        }
+        // Another generation's armed reveal survives an unrelated failed turn.
+        let other = AidenImageGenerationPlaceholderState.armedArrivalReveals(
+            ["generation-0"],
+            after: timeline([imageStep(.failed)], status: .failed)
+        )
+        XCTAssertEqual(other, ["generation-0"])
+    }
+
+    private func image(_ id: String) -> AidenMessageAttachment {
+        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10)
+    }
+
+    private func settledMessage(
+        steps: [AidenAgentStep],
+        attachments: [AidenMessageAttachment],
+        visuals: [AidenChatVisual]? = nil
+    ) -> AidenChatMessage {
+        AidenChatMessage(
+            id: "assistant-1",
+            role: .assistant,
+            text: "Here it is.",
+            attachments: attachments,
+            visuals: visuals,
+            timeline: timeline(steps, status: .completed),
+            createdAt: Date(timeIntervalSince1970: 9)
+        )
+    }
+
+    func testOnlyTheGeneratedImageRevealsNotVisualSnapshots() {
+        let snapshot = image("visual-snapshot_chart")
+        let namedSnapshot = image("chart-png")
+        let message = settledMessage(
+            steps: [imageStep(.completed)],
+            attachments: [snapshot, namedSnapshot, image("generated")],
+            visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart", snapshotAttachmentId: "chart-png")]
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: message), "generated")
+    }
+
+    func testDisplayImageResultsAndFailedCallsDoNotReveal() {
+        // Attachments carry no tool association, so a turn that also displayed
+        // an image cannot single out the generated one: nothing reveals.
+        let mixed = settledMessage(
+            steps: [imageStep(.completed, index: 1), imageStep(.completed, index: 2, toolName: "display_image")],
+            attachments: [image("shown"), image("generated")]
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: mixed))
+        let displayOnly = settledMessage(
+            steps: [imageStep(.completed, toolName: "display_image")],
+            attachments: [image("shown")]
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: displayOnly))
+        let failed = settledMessage(steps: [imageStep(.failed)], attachments: [image("other")])
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: failed))
+    }
+
+    func testElapsedTimeUsesHostTimestampsNotThePhoneClock() {
+        // Started at 1s host time; the newest host time in the timeline is 13s,
+        // so the call has run 12s whatever the phone's clock says.
+        let items = AidenImageGenerationPlaceholderState.items(timeline([
+            imageStep(.running, index: 1, startedAt: 1_000, updatedAt: 3_000),
+            AidenAgentStep(
+                id: "tool-2", order: 1, kind: .tool, toolCallId: "call-2", toolName: "read_file",
+                label: "Read", status: .running, startedAt: 13_000, updatedAt: 13_000, finishedAt: nil,
+                contentOffset: 0, durationMs: nil, target: nil, detail: nil, lineChanges: nil
+            ),
+        ]))
+        XCTAssertEqual(items.map(\.elapsedAtObservation), [12])
+        // A step stamped after the newest host time never goes negative.
+        let skewed = AidenImageGenerationPlaceholderState.items(
+            timeline([imageStep(.running, startedAt: 5_000, updatedAt: 5_000)])
+        )
+        XCTAssertEqual(skewed.map(\.elapsedAtObservation), [0])
+    }
+
+    func testCaptionNamesTheModelWhenTheHostSendsAValidTarget() {
+        let item = AidenImageGenerationPlaceholderState.items(timeline([
+            imageStep(.running, target: "openrouter/google/gemini-2.5-flash-image"),
+        ])).first
+        XCTAssertEqual(
+            AidenImagePlaceholderSpec.caption(elapsed: 12, model: item?.model),
+            "Generating · 12s · OpenRouter · google/gemini-2.5-flash-image"
+        )
+        XCTAssertEqual(
+            AidenImagePlaceholderSpec.caption(elapsed: 65, model: AidenImageGenerationModelLabel(target: "fal/fal-ai/flux")),
+            "Still generating · 1m 05s · fal · fal-ai/flux"
+        )
+        for target in [nil, "", "no-slash", "/model", "replicate/", String(repeating: "a", count: 200) + "/m", "fal/x\ny"] {
+            XCTAssertNil(AidenImageGenerationModelLabel(target: target), String(describing: target))
+        }
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 12, model: nil), "Generating · 12s")
+    }
+
+    func testLensPhaseStaysContinuousWhenThePassSlowsAtOneMinute() {
+        let before = AidenImagePlaceholderSpec.phase(elapsed: 60 - 1e-6)
+        let after = AidenImagePlaceholderSpec.phase(elapsed: 60 + 1e-6)
+        XCTAssertEqual(before, after, accuracy: 1e-4)
+        // Each regime still completes one pass per its own period.
+        XCTAssertEqual(AidenImagePlaceholderSpec.phase(elapsed: 1.4), 0.5, accuracy: 1e-9)
+        let advance = AidenImagePlaceholderSpec.phase(elapsed: 72.6) - AidenImagePlaceholderSpec.phase(elapsed: 70)
+        XCTAssertEqual(advance - advance.rounded(.down), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(AidenImagePlaceholderSpec.phase(elapsed: -5), 0)
+    }
+
+    func testReduceMotionAndLowPowerHoldTheStillPose() {
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: false, lowPowerMode: false), .animated)
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: true, lowPowerMode: false), .still)
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: false, lowPowerMode: true), .still)
+        // The still lens rests around 40% of the placeholder.
+        let height: CGFloat = 100
+        let lensCenter = AidenImagePlaceholderSpec.stillLensTop(height: height)
+            + height * AidenImagePlaceholderSpec.lensHeightFraction / 2
+        XCTAssertEqual(Double(lensCenter / height), 0.4, accuracy: 0.05)
+    }
+
+    func testLensTravelsTopToBottomThenRests() {
+        let height: CGFloat = 200
+        let lens = height * AidenImagePlaceholderSpec.lensHeightFraction
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensTop(progress: AidenImagePlaceholderSpec.lensProgress(phase: 0), height: height), -lens)
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensTop(progress: AidenImagePlaceholderSpec.lensProgress(phase: 0.78), height: height), height)
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensProgress(phase: 0.9), 1)
+        let early = AidenImagePlaceholderSpec.lensProgress(phase: 0.2)
+        let late = AidenImagePlaceholderSpec.lensProgress(phase: 0.6)
+        XCTAssertLessThan(early, late)
+        // Eases in: the first fifth of the travel covers less than a fifth of the distance.
+        XCTAssertLessThan(AidenImagePlaceholderSpec.lensProgress(phase: 0.78 * 0.2), 0.2)
+    }
+
+    func testLongRunsSlowDownAndSayStillGenerating() {
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 12.7), "Generating · 12s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: -3), "Generating · 0s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 72), "Still generating · 1m 12s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 65), "Still generating · 1m 05s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.period(elapsed: 59), 2.8)
+        XCTAssertEqual(AidenImagePlaceholderSpec.period(elapsed: 60), 5.2)
+    }
+
+    func testGenerateImageActivityLineNamesTheShape() {
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.running, detail: "16:9")), "Generating image 16:9")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.completed)), "Generated image")
     }
 }

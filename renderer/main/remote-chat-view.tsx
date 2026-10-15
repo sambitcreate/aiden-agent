@@ -561,7 +561,7 @@ export function RemoteChatPane({
           showChatMenu ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button iconOnly variant="toolbar" size="large" aria-label="Chat actions">
+                <Button iconOnly variant="bar" size="small" aria-label="Chat actions">
                   <MoreHorizontal />
                 </Button>
               </DropdownMenuTrigger>
@@ -598,6 +598,7 @@ export function RemoteChatPane({
           questions.length,
         ]}
         showScrollToBottomButton
+        streaming={isGenerating}
         footer={
           <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-3">
             {openApproval ? (
@@ -610,6 +611,7 @@ export function RemoteChatPane({
                   refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
                 }
                 pendingCount={approvals.length}
+                computerUseHost="remote"
               />
             ) : null}
             {approvals

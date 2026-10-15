@@ -605,7 +605,7 @@ private val runInputModeOptions = listOf(
  * of the two segments, an announced action label, and a springing mode label.
  */
 @Composable
-private fun AidenRunInputSplitButton(
+internal fun AidenRunInputSplitButton(
     mode: AidenStreamInputMode,
     canSubmit: Boolean,
     canChooseMode: Boolean,
@@ -649,9 +649,10 @@ private fun AidenRunInputSplitButton(
     val primaryInteraction = remember { MutableInteractionSource() }
     val menuInteraction = remember { MutableInteractionSource() }
 
+    // At least a touch target tall, and taller when large text needs it: the label never clips.
     Row(
         horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap),
-        modifier = Modifier.height(height)
+        modifier = Modifier.height(IntrinsicSize.Min).heightIn(min = height)
     ) {
         Surface(
             shape = primaryShape,

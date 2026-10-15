@@ -1,6 +1,10 @@
 import { ipcMain } from "../platform.js";
 import { computerUseStatus } from "../services/computer-use/status.js";
 import { computerUseSettings } from "../services/computer-use/settings.js";
+import { resetComputerUseGrants } from "../services/computer-use/access-gate.js";
+import { chatStore } from "../services/chat-store.js";
+import { configStore } from "../services/config-store.js";
+import { llmClient } from "../services/llm-client.js";
 import {
   computerUseSupported,
   unsupportedComputerUseStatus,
@@ -57,6 +61,16 @@ export function registerComputerUseHandlers(): void {
       await computerUseSettings.setEnabled(enabled, () => !owner.isDestroyed());
       if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
       return computerUseStatus.status({ force: enabled, signal });
+    });
+  });
+
+  // Revoke every chat's grant and Always allow; returns { cleared }.
+  ipcMain.handle("computerUse:resetChatGrants", async (event) => {
+    requestOwner(event);
+    return resetComputerUseGrants({
+      cancelActivatedStreams: () => llmClient.cancelComputerUseGenerations(),
+      clearAlwaysAllow: () => configStore.setSettings({ computerUseAlwaysAllow: false }),
+      clearChatGrants: () => chatStore.clearAllComputerUseAllowed(),
     });
   });
 

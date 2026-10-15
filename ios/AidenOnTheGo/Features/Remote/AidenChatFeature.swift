@@ -501,6 +501,36 @@ enum AidenChatTitleReconciliation {
     static let retryMilliseconds = [400, 800, 1_200, 2_000, 3_000, 3_500, 3_500]
 }
 
+/// The Mac captures visual snapshots only after a reply commits (serially, up
+/// to a few seconds each), so the phone's settling read usually lands first and
+/// nothing pushes the later revision. A just-settled reply still missing a
+/// snapshot is therefore re-read a bounded number of times, then left alone.
+enum AidenVisualSnapshotReconciliation {
+    /// Waits between re-reads: about 4 s, 10 s and 20 s after the reply settled.
+    static let retryDelays: [Duration] = [.seconds(4), .seconds(6), .seconds(10)]
+    /// Only a reply that settled this recently is still worth waiting for.
+    static let recentReplyWindow: TimeInterval = 120
+
+    /// The reply whose snapshots may still be arriving: the newest assistant message.
+    static func awaitedMessage(in messages: [AidenChatMessage]) -> AidenChatMessage? {
+        messages.last { $0.role == .assistant }
+    }
+
+    /// The wait before re-read number `attempt` (from 0), or nil when the
+    /// reply has every snapshot, is no longer recent, or the tries are spent.
+    static func nextDelay(for message: AidenChatMessage?, attempt: Int, now: Date) -> Duration? {
+        guard let message, message.role == .assistant, retryDelays.indices.contains(attempt),
+              let visuals = message.visuals,
+              visuals.contains(where: { AidenChatVisualPresentation.snapshotAttachment(for: $0, in: message) == nil })
+        else { return nil }
+        // A long reply is judged by when it finished. A Mac clock ahead of the
+        // phone reads as recent; the try count still bounds it.
+        let settledAt = message.timeline?.finishedAt.map { Date(timeIntervalSince1970: $0 / 1_000) } ?? message.createdAt
+        guard now.timeIntervalSince(settledAt) <= recentReplyWindow else { return nil }
+        return retryDelays[attempt]
+    }
+}
+
 struct AidenTerminalReplayGate {
     private(set) var hasReplayedTerminalCursor = false
 
@@ -1160,11 +1190,30 @@ final class AidenChatViewModel {
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshID: UUID?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
+    /// Bounded re-reads for a just-settled reply whose visual snapshots the
+    /// Mac is still capturing (they land after the reply commits).
+    @ObservationIgnored private(set) var visualSnapshotRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var visualSnapshotRefreshID: UUID?
+    // Deterministic test seam for the wait between snapshot re-reads.
+    @ObservationIgnored var visualSnapshotRefreshSleep: @MainActor (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
     private var activeStreamID: String? {
         didSet {
-            // An owned stream supersedes observation of a foreign run.
-            if activeStreamID != nil, foreignRunTask != nil || foreignRun != nil {
+            guard let activeStreamID else { return }
+            // This device's own run is accounted for, so the roster announcing
+            // its turn later never re-reads the transcript for it.
+            foreignRunAccountedRunId = activeStreamID
+            // An owned stream supersedes observation of a foreign run. Its
+            // replay rebuilds the reply, so a live run's copy is dropped.
+            if foreignRunTask != nil || foreignRun != nil {
+                let replacesLiveRun = foreignRunIsLive
                 stopForeignRunObservation()
+                if replacesLiveRun {
+                    replaceLiveText("")
+                    reasoning = ""
+                    tools = []
+                }
             }
         }
     }
@@ -1175,7 +1224,38 @@ final class AidenChatViewModel {
     @ObservationIgnored private var foreignRunGeneration: UInt64 = 0
     /// Bounded transcript recovery after a foreign run ended but its re-read failed.
     @ObservationIgnored private var foreignRunReconcileTask: Task<Void, Never>?
-    private var isRestoringStream = false
+    /// The last run this chat showed live or found already finished, so a
+    /// later attach can tell a new run from one the transcript already holds.
+    @ObservationIgnored private var foreignRunAccountedRunId: String?
+    /// How many foreign runs went live; the probe resets its backoff on one.
+    @ObservationIgnored private var foreignRunsShownLive = 0
+    /// The newest turn the agent roster has reported for this chat.
+    @ObservationIgnored private var lastRosterTurnId: String?
+    /// A turn the roster announced while another lookup was in flight, or
+    /// while this phone restored its own stream. That lookup may have been
+    /// answered before the turn's run registered, so the turn is looked up
+    /// once it, or the restoration, ends.
+    @ObservationIgnored private var turnAwaitingLookup: ForeignRunAttachReason?
+    /// The turn this phone last streamed itself. The roster announcing it,
+    /// even after its stream finished, is not another device's run.
+    @ObservationIgnored private var lastLocalTurnId: String?
+    @ObservationIgnored private var foreignRunProbeTask: Task<Void, Never>?
+    @ObservationIgnored private var foreignRunProbeGeneration: UInt64 = 0
+    /// Waits between foreground probes for a foreign run; tests shorten it.
+    @ObservationIgnored var foreignRunProbeSleep: @Sendable (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
+    /// Waits before looking again for an announced run; tests shorten it.
+    @ObservationIgnored var announcedRunRetrySleep: @Sendable (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
+    private var isRestoringStream = false {
+        didSet {
+            // A turn announced while this phone restored its own stream is
+            // looked up now; restoration may have shown it is this phone's.
+            if oldValue, !isRestoringStream { attachToTurnAnnouncedDuringObservation() }
+        }
+    }
     @ObservationIgnored private var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private let networkPath: AidenNetworkPathSource?
@@ -1223,10 +1303,41 @@ final class AidenChatViewModel {
     /// The live stream lost its transport while the device is offline and is
     /// parked until the path returns. No error is shown in this state.
     var isWaitingForNetwork: Bool { networkWaitStreamID != nil && networkWaitStreamID == activeStreamID }
-    private(set) var liveText = ""
-    private(set) var reasoning = ""
-    private(set) var tools: [AidenLiveTool] = []
-    private(set) var activityTimeline: AidenGenerationTimeline?
+    private(set) var liveText = "" {
+        didSet { if liveText != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    private(set) var reasoning = "" {
+        didSet { if reasoning != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    private(set) var tools: [AidenLiveTool] = [] {
+        didSet { if tools != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    private(set) var activityTimeline: AidenGenerationTimeline? {
+        didSet { if activityTimeline != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    /// Bumped at most once per 16ms while the live reply grows. Only the
+    /// transcript's `AidenStreamingFollowTrigger` leaf reads it, so a bump
+    /// re-snaps a following reader without re-running the chat screen.
+    private(set) var streamingScrollTrigger = 0
+    @ObservationIgnored private var pendingStreamingScrollTriggerTask: Task<Void, Never>?
+    /// Bumped when the reader sends, so the transcript jumps to the new turn.
+    private(set) var explicitSendCount = 0
+    /// Reply text received but not yet revealed. Each reveal tick moves it into
+    /// `liveText` through `AidenStreamingRevealGate`, so the transcript grows
+    /// in whole words at most once per tick instead of once per token.
+    @ObservationIgnored private var pendingLiveText = ""
+    /// UTF-8 length of everything received for the live reply, revealed or
+    /// not (`liveText` + `pendingLiveText`). Lets a cumulative update append
+    /// only its new suffix instead of re-reading the whole reply per event.
+    @ObservationIgnored private var receivedLiveTextUTF8Count = 0
+    /// Whether the last reveal tick held a trailing fragment back; the next
+    /// tick releases it even without new whitespace.
+    @ObservationIgnored private var heldStreamingFragmentLastTick = false
+    @ObservationIgnored private var pendingStreamingRevealTask: Task<Void, Never>?
+    @ObservationIgnored private let streamingRevealTick: @Sendable () async throws -> Void
+    /// Generations whose image this phone watched being generated; their
+    /// settled image plays the arrival reveal once.
+    private(set) var imageArrivalRevealGenerationIDs: Set<String> = []
     private var approvalSnapshotGeneration: UInt64 = 0
     private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
@@ -1331,10 +1442,14 @@ final class AidenChatViewModel {
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         networkPath: AidenNetworkPathSource? = nil,
         allowsMutations: Bool = true,
+        streamingRevealTick: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: AidenStreamingRevealGate.tick)
+        },
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
         let preferenceInstanceId = coordinator.activeInstanceId ?? ""
+        self.streamingRevealTick = streamingRevealTick
         runtime = .live(
             coordinator: coordinator,
             instanceId: preferenceInstanceId,
@@ -1380,15 +1495,19 @@ final class AidenChatViewModel {
         hapticScope = UUID()
         onChatUpdated = { _ in }
         onChatActivityChanged = { _, _ in }
+        streamingRevealTick = { try await Task.sleep(for: AidenStreamingRevealGate.tick) }
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
 #endif
 
     deinit {
+        pendingStreamingScrollTriggerTask?.cancel()
+        pendingStreamingRevealTask?.cancel()
         streamTask?.cancel()
         progressTask?.cancel()
         titleRefreshTask?.cancel()
+        visualSnapshotRefreshTask?.cancel()
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
@@ -1418,6 +1537,7 @@ final class AidenChatViewModel {
         streamTask?.cancel()
         terminalReconciliationTask?.cancel()
         titleRefreshTask?.cancel()
+        stopVisualSnapshotRefresh()
         stopProgressObservation()
         clearProgressState()
         let removedForeignRunID = foreignRunIsLive ? foreignRun?.runId : nil
@@ -1427,7 +1547,7 @@ final class AidenChatViewModel {
         }
         let removedStreamID = activeStreamID
         activeStreamID = nil
-        liveText = ""
+        replaceLiveText("")
         reasoning = ""
         tools = []
         activityTimeline = nil
@@ -1438,6 +1558,99 @@ final class AidenChatViewModel {
         if let removedStreamID {
             Task { await liveActivities.updateStatus(instanceID: instanceId, streamID: removedStreamID, state: .cancelled) }
         }
+    }
+
+    private func scheduleStreamingScrollTrigger() {
+        guard pendingStreamingScrollTriggerTask == nil else { return }
+        pendingStreamingScrollTriggerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard let self else { return }
+            self.pendingStreamingScrollTriggerTask = nil
+            self.streamingScrollTrigger &+= 1
+        }
+    }
+
+    /// Buffers received reply text and schedules a reveal tick.
+    private func receiveLiveText(_ text: String) {
+        guard !text.isEmpty else { return }
+        pendingLiveText += text
+        receivedLiveTextUTF8Count += text.utf8.count
+        scheduleStreamingReveal()
+    }
+
+    /// Mirrors a cumulative reply (a foreign run's projection). Growth that
+    /// extends what was already received goes through the reveal gate; any
+    /// other change replaces the visible text at once. Each update costs the
+    /// length of its new text, not of the whole reply.
+    private func receiveCumulativeLiveText(_ text: String) {
+        switch AidenCumulativeReplyText.update(
+            to: text,
+            receivedUTF8Count: receivedLiveTextUTF8Count,
+            receivedTail: receivedLiveTextTail(byteCount:)
+        ) {
+        case .append(let suffix): receiveLiveText(suffix)
+        case .replace: replaceLiveText(text)
+        }
+    }
+
+    /// The last `byteCount` UTF-8 bytes received, which may span the revealed
+    /// text and the buffer.
+    private func receivedLiveTextTail(byteCount: Int) -> [UInt8] {
+        let buffered = pendingLiveText.utf8.suffix(byteCount)
+        guard buffered.count < byteCount else { return Array(buffered) }
+        return Array(liveText.utf8.suffix(byteCount - buffered.count)) + Array(buffered)
+    }
+
+    /// Replaces the visible reply and drops anything still buffered.
+    private func replaceLiveText(_ text: String) {
+        cancelPendingStreamingReveal()
+        pendingLiveText = ""
+        heldStreamingFragmentLastTick = false
+        receivedLiveTextUTF8Count = text.utf8.count
+        liveText = text
+    }
+
+    /// Reveals all buffered reply text now, skipping the gate. Terminal,
+    /// structural and lost-stream paths call this so nothing received is
+    /// ever left hidden.
+    func flushPendingStreamingContent() {
+        cancelPendingStreamingReveal()
+        heldStreamingFragmentLastTick = false
+        guard !pendingLiveText.isEmpty else { return }
+        let text = pendingLiveText
+        pendingLiveText = ""
+        liveText += text
+    }
+
+    private func scheduleStreamingReveal() {
+        guard pendingStreamingRevealTask == nil else { return }
+        let tick = streamingRevealTick
+        pendingStreamingRevealTask = Task { @MainActor [weak self] in
+            try? await tick()
+            // A cancelled tick was already replaced or flushed; it must not
+            // clear the slot a newer tick owns.
+            guard let self, !Task.isCancelled else { return }
+            self.pendingStreamingRevealTask = nil
+            self.revealStreamingTick()
+        }
+    }
+
+    /// One reveal tick: shows buffered text through the gate, then
+    /// reschedules only while a fragment is held.
+    private func revealStreamingTick() {
+        let (shown, held) = AidenStreamingRevealGate.cut(
+            pendingLiveText,
+            heldPreviousTick: heldStreamingFragmentLastTick
+        )
+        pendingLiveText = held
+        heldStreamingFragmentLastTick = !held.isEmpty
+        if !shown.isEmpty { liveText += shown }
+        if heldStreamingFragmentLastTick { scheduleStreamingReveal() }
+    }
+
+    private func cancelPendingStreamingReveal() {
+        pendingStreamingRevealTask?.cancel()
+        pendingStreamingRevealTask = nil
     }
 
     var isConnected: Bool {
@@ -1532,6 +1745,13 @@ final class AidenChatViewModel {
 
     func setChatForegrounded(_ foregrounded: Bool) {
         isChatForegrounded = foregrounded
+        // A full-screen viewer also takes the chat off screen; coming back
+        // re-arms the wait, which the recent-reply window still bounds.
+        if !foregrounded {
+            stopVisualSnapshotRefresh()
+        } else if !isReadOnlyFixture, !isRemoved, let context = try? coordinator.requestContext(for: instanceId) {
+            scheduleVisualSnapshotRefresh(context: context)
+        }
         // Foreground-enter quiets the ambient surface: the Live Activity marks
         // stale (matching Android dismissing its posted notification) and
         // recovers on the next published update.
@@ -1707,6 +1927,11 @@ final class AidenChatViewModel {
         }
         guard !isRemoved, coordinator.isCurrent(context) else { return }
         startForeignRunObservationIfNeeded(context: context)
+        // Progress observation stopped while this load was suspended (the chat
+        // left the foreground) must not have its probe restarted.
+        if observeProgress, observationGeneration == progressObservationGeneration, !Task.isCancelled {
+            startForeignRunProbeIfNeeded()
+        }
         guard observeProgress,
               isCurrentProgressObservation(observationGeneration, context: context) else { return }
         // A running observer already owns a live progress channel whose
@@ -2156,6 +2381,9 @@ final class AidenChatViewModel {
     func startProgressObservation(initialSnapshotLoaded: Bool = false) {
         guard !isReadOnlyFixture else { return }
         guard !isRemoved else { return }
+        // Without the agent roster nothing announces a run started elsewhere,
+        // so the chat checks for one while it is in the foreground.
+        startForeignRunProbeIfNeeded()
         clearProgressStateForLostAccess()
         guard progressTask == nil,
               canReadTaskProgress || canReadAgentRoster else { return }
@@ -2171,6 +2399,7 @@ final class AidenChatViewModel {
     }
 
     func stopProgressObservation() {
+        stopForeignRunProbe()
         progressObservationGeneration &+= 1
         progressTask?.cancel()
         progressTask = nil
@@ -2365,6 +2594,23 @@ final class AidenChatViewModel {
     @discardableResult
     private func acceptAgentRoster(_ snapshot: AidenRemoteChatAgentRoster) -> Bool {
         guard snapshot.chatId == chat.id else { return false }
+        let previousTurnId = lastRosterTurnId
+        let accepted = applyAgentRoster(snapshot)
+        if accepted, let turnId = snapshot.turnId {
+            lastRosterTurnId = turnId
+            // A new turn, live or in a snapshot read on (re)connect, may be a
+            // run started on the Mac, in Telegram or by the scheduler: attach
+            // to it now rather than when the chat is reopened. The first turn
+            // this chat sees is looked up too, because its run may have
+            // registered after the opening lookup was answered.
+            if turnId != previousTurnId, turnId != lastLocalTurnId {
+                attachToAnnouncedTurn(reason: previousTurnId == nil ? .firstRosterTurn : .announcedTurn)
+            }
+        }
+        return accepted
+    }
+
+    private func applyAgentRoster(_ snapshot: AidenRemoteChatAgentRoster) -> Bool {
         guard let current = agentRoster else {
             historicalAgentRosters.removeAll { $0.epoch != snapshot.epoch }
             agentRoster = snapshot
@@ -2577,6 +2823,8 @@ final class AidenChatViewModel {
         titleRefreshTask?.cancel()
         titleRefreshTask = nil
         titleRefreshID = nil
+        stopVisualSnapshotRefresh()
+        explicitSendCount &+= 1
         isStarting = true
         defer {
             isStarting = false
@@ -2674,7 +2922,7 @@ final class AidenChatViewModel {
             turnAttempts.reset()
             chat = acceptedChat
             selectedSkill = nil
-            liveText = ""
+            replaceLiveText("")
             reasoning = ""
             tools = []
             activityTimeline = nil
@@ -2954,6 +3202,10 @@ final class AidenChatViewModel {
               pendingAttachments.contains(where: { $0.id == attachment.id }) else { return }
         await cleanupOwnedAttachment(attachment.id)
         await joinDeferredUploadRevocation()
+    }
+
+    func finishImageArrivalReveal(generationID: String) {
+        imageArrivalRevealGenerationIDs.remove(generationID)
     }
 
     func attachmentImageData(for attachment: AidenMessageAttachment) async -> Data? {
@@ -3614,6 +3866,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask = nil
         streamTask?.cancel()
         activeStreamID = stream.streamId
+        lastLocalTurnId = stream.turnId
         if streamState == nil { streamState = .reconciling }
         streamTask = Task { [weak self] in
             await self?.consume(stream, context: context, feedbackPolicy: feedbackPolicy)
@@ -3657,6 +3910,7 @@ final class AidenChatViewModel {
 
                 // A stream that ended without a terminal frame is a lost stream
                 // too: offline, park before any status probe or reconnect.
+                flushPendingStreamingContent()
                 guard try await recovery.shouldProbeAfterStreamFailure(onWaiting: onWaiting) else { continue }
                 guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
@@ -3679,6 +3933,7 @@ final class AidenChatViewModel {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
+                flushPendingStreamingContent()
                 // Offline: park without a status probe, warning, or backoff and
                 // reopen from the last applied sequence when the path returns.
                 do {
@@ -3758,6 +4013,11 @@ final class AidenChatViewModel {
         guard !isRemoved, coordinator.isCurrent(context),
               activeStreamID == event.streamId,
               event.shouldApply else { return }
+        // Text received before any other event is shown before it lands, so
+        // tools, approvals and terminal states never overtake the reply.
+        if event.type != .textDelta, event.type != .heartbeat {
+            flushPendingStreamingContent()
+        }
         if event.type == .questionRequired {
             // Resolving an approval on the Mac emits the surviving question
             // with no running status in between, so a cached approval may
@@ -3787,7 +4047,7 @@ final class AidenChatViewModel {
                 // A projection reset is followed by a cumulative replacement.
                 // Bot progress is disclosure-only, so discard the old ephemeral
                 // copy before accepting that replacement instead of appending it.
-                liveText = ""
+                replaceLiveText("")
                 reasoning = ""
             }
             await reconcileChat(context: context)
@@ -3809,7 +4069,7 @@ final class AidenChatViewModel {
                 await publishLiveActivityStatus(streamID: event.streamId, state: state)
             }
         case .textDelta:
-            liveText += payload.text ?? ""
+            receiveLiveText(payload.text ?? "")
             streamState = .running
             if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
                 await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
@@ -3834,7 +4094,13 @@ final class AidenChatViewModel {
                 await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
             }
         case .timeline:
-            if let timeline = payload.timeline { activityTimeline = timeline }
+            if let timeline = payload.timeline {
+                activityTimeline = timeline
+                imageArrivalRevealGenerationIDs = AidenImageGenerationPlaceholderState.armedArrivalReveals(
+                    imageArrivalRevealGenerationIDs,
+                    after: timeline
+                )
+            }
         case .approvalRequired:
             await restorePendingApproval(
                 streamID: event.streamId,
@@ -4227,7 +4493,70 @@ final class AidenChatViewModel {
         ) else { return false }
         hasOlderMessages = hasOlder
         hasSettledTranscriptWindow = true
+        scheduleVisualSnapshotRefresh(context: context)
         return true
+    }
+
+    /// Re-read the open chat a few times while its newest reply still lacks a
+    /// visual snapshot the Mac is capturing. One schedule runs at a time; the
+    /// re-reads it makes come back through here and are absorbed by it.
+    private func scheduleVisualSnapshotRefresh(context: AidenRemoteRequestContext) {
+        guard visualSnapshotRefreshTask == nil, nextVisualSnapshotRefreshDelay(attempt: 0) != nil else { return }
+        let refreshID = UUID()
+        visualSnapshotRefreshID = refreshID
+        visualSnapshotRefreshTask = Task { [weak self] in
+            var attempt = 0
+            while true {
+                guard !Task.isCancelled,
+                      let delay = self?.nextVisualSnapshotRefreshDelay(attempt: attempt),
+                      let sleep = self?.visualSnapshotRefreshSleep else { break }
+                attempt += 1
+                // The model is held only for the read, never across the wait.
+                do { try await sleep(delay) } catch { break }
+                guard !Task.isCancelled, let model = self,
+                      await model.rereadForVisualSnapshots(context: context) else { break }
+            }
+            guard let model = self, model.visualSnapshotRefreshID == refreshID else { return }
+            model.visualSnapshotRefreshTask = nil
+            model.visualSnapshotRefreshID = nil
+        }
+    }
+
+    private func nextVisualSnapshotRefreshDelay(attempt: Int) -> Duration? {
+        AidenVisualSnapshotReconciliation.nextDelay(
+            for: AidenVisualSnapshotReconciliation.awaitedMessage(in: chat.messages),
+            attempt: attempt,
+            now: Date()
+        )
+    }
+
+    /// One snapshot re-read through the normal newest-transcript path. False
+    /// stops the schedule: the chat changed, closed, or a turn took over.
+    private func rereadForVisualSnapshots(context: AidenRemoteRequestContext) async -> Bool {
+        guard !isRemoved, coordinator.isCurrent(context), activeStreamID == nil, !isStarting else { return false }
+        let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
+        do {
+            let latest = try await fetchLatestTranscript(context: context)
+            guard !Task.isCancelled, !isRemoved, coordinator.isCurrent(context) else { return false }
+            guard generation == transcriptGeneration, activeStreamID == nil, !isStarting else { return false }
+            await acceptLatestTranscript(latest, context: context, writeToken: writeToken)
+            return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+            // A missed snapshot is cosmetic; the next normal refresh shows it.
+            return !isRemoved && coordinator.isCurrent(context)
+        }
+    }
+
+    /// Stop waiting for late snapshots: the chat left the screen, the app went
+    /// to the background, or a new turn started. The next load re-arms it.
+    func stopVisualSnapshotRefresh() {
+        visualSnapshotRefreshTask?.cancel()
+        visualSnapshotRefreshTask = nil
+        visualSnapshotRefreshID = nil
     }
 
     /// Page back one window from the oldest message on screen. If the Mac no
@@ -4468,7 +4797,7 @@ final class AidenChatViewModel {
         // A failed initial cache write must not keep a reconciled stream alive.
         // Conditional removal still preserves another owner's newer record.
         guard activeStreamID == expectedStreamID else { return }
-        liveText = ""
+        replaceLiveText("")
         reasoning = ""
         tools = []
         activityTimeline = nil
@@ -4679,7 +5008,7 @@ struct AidenChatDetailView: View {
     @State private var workspaceFileReference: String?
     @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
-    @State private var isScrolledAwayFromLatest = false
+    @State private var follow = AidenTranscriptFollowController()
     @State private var attachmentPicker = AidenAttachmentPickerState()
     @State private var isFileImporterPresented = false
     @State private var attachmentButtonCenter: CGPoint?
@@ -4879,6 +5208,8 @@ struct AidenChatDetailView: View {
                 model.startProgressObservation()
             case .suspend:
                 model.stopProgressObservation()
+                // The return to the foreground reloads and re-arms it.
+                model.stopVisualSnapshotRefresh()
             case .none:
                 // `.inactive` is transient; progress keeps streaming.
                 break
@@ -4940,57 +5271,56 @@ struct AidenChatDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 messageList(proxy)
+                    .background {
+                        AidenChatScrollObserver(
+                            onFollowEvent: { follow.handle($0) },
+                            onMetrics: { follow.updateMetrics($0) }
+                        )
+                    }
             }
             .defaultScrollAnchor(
                 AidenChatScrollPolicy.initialTranscriptAnchor,
                 for: .initialOffset
             )
             .defaultScrollAnchor(
-                AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: !isScrolledAwayFromLatest),
+                AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: follow.isFollowing),
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
-            .onScrollGeometryChange(for: AidenScrollFollowGeometry.self) { geometry in
-                AidenScrollFollowGeometry(
-                    isAwayFromLatest: aidenChatIsScrolledAwayFromLatest(
-                        contentOffsetY: geometry.contentOffset.y,
-                        containerHeight: geometry.containerSize.height,
-                        contentHeight: geometry.contentSize.height,
-                        bottomInset: geometry.contentInsets.bottom
-                    ),
-                    contentHeight: geometry.contentSize.height
-                )
-            } action: { previous, next in
-                isScrolledAwayFromLatest = AidenChatScrollPolicy.shouldTreatAsScrolledAway(
-                    wasScrolledAway: isScrolledAwayFromLatest,
-                    isAwayFromLatest: next.isAwayFromLatest,
-                    contentGrew: next.contentHeight > previous.contentHeight
-                )
-            }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
             )
+            .background {
+                // A leaf reads the per-tick trigger, so a reveal tick re-snaps
+                // a following reader without re-running this screen.
+                AidenStreamingFollowTrigger(trigger: { model.streamingScrollTrigger }) {
+                    followLatest(proxy, animated: false)
+                }
+            }
             .overlay(alignment: .bottom) {
-                if isScrolledAwayFromLatest {
+                if follow.showsJumpButton {
                     AidenChatJumpToLatestButton {
-                        isScrolledAwayFromLatest = false
-                        scrollToBottom(proxy)
+                        jumpToLatest(proxy)
                     }
                     .padding(.bottom, composerHeight + 10)
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isScrolledAwayFromLatest)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: follow.showsJumpButton)
+            .onAppear { follow.setStreaming(model.isStreaming) }
+            .onChange(of: model.isStreaming) { _, streaming in
+                follow.setStreaming(streaming)
+            }
+            .onChange(of: model.explicitSendCount) { _, _ in
+                jumpToLatest(proxy)
+            }
             .onChange(of: model.chat.messages.count) { _, _ in
-                guard !isScrolledAwayFromLatest else { return }
-                scrollToBottom(proxy, animated: false)
+                followLatest(proxy, animated: false)
             }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
                 guard approvalID != nil else { return }
                 composerIsFocused = false
-                if !isScrolledAwayFromLatest {
-                    scrollToBottom(proxy)
-                }
+                followLatest(proxy, animated: true)
             }
         }
     }
@@ -5018,6 +5348,7 @@ struct AidenChatDetailView: View {
                 presentationStyle: presentationStyle,
                 readAloudCandidateID: model.readAloudCandidateID,
                 readAloudActiveID: model.readAloud.activeMessageID,
+                imageArrivalRevealIDs: model.imageArrivalRevealGenerationIDs,
                 onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
                     if model.askAbout(selection) { composerIsFocused = true }
                 },
@@ -5376,12 +5707,27 @@ struct AidenChatDetailView: View {
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+    /// Jump to latest or a send: re-arms follow, then snaps (while
+    /// streaming) or animates (when idle) to the bottom sentinel.
+    private func jumpToLatest(_ proxy: ScrollViewProxy) {
+        follow.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            scrollToBottom(proxy, animated: animated)
+        }
+    }
+
+    /// An automatic follow; it does nothing unless follow is latched on.
+    private func followLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        follow.scheduleFollowScroll(isUserInitiated: false, animated: animated) { animated in
+            scrollToBottom(proxy, animated: animated)
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
         let scroll = {
             proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
         }
-        if animated {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2), scroll)
+        if animated, !reduceMotion {
+            withAnimation(.easeOut(duration: 0.2), scroll)
         } else {
             scroll()
         }
@@ -5491,6 +5837,8 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// change re-evaluates the rows even though `model` compares equal.
     let readAloudCandidateID: String?
     let readAloudActiveID: String?
+    /// Generations whose settled image plays the arrival reveal.
+    var imageArrivalRevealIDs: Set<String> = []
     /// Quotes a selection into the composer; nil while the chat is read-only.
     /// Closure identity is excluded from equality like the stable `model`.
     var onAskAbout: ((String) -> Void)? = nil
@@ -5512,7 +5860,8 @@ private struct AidenSettledMessageRows: View, Equatable {
         // body renders — `chat`, the Read Aloud state — and the presentation style.
         lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
             lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
-            lhs.readAloudActiveID == rhs.readAloudActiveID
+            lhs.readAloudActiveID == rhs.readAloudActiveID &&
+            lhs.imageArrivalRevealIDs == rhs.imageArrivalRevealIDs
     }
 
     var body: some View {
@@ -5551,6 +5900,12 @@ private struct AidenSettledMessageRows: View, Equatable {
         // Bot bubbles join into clusters; only the cluster's last bubble
         // carries the footer so the Messages rhythm stays compact.
         let showsFooter = !isBotMessage || next.map { !aidenMessagesJoin(message, $0) } ?? true
+        let revealGenerationID = message.timeline.map(\.generationId).flatMap {
+            imageArrivalRevealIDs.contains($0) ? $0 : nil
+        }
+        let revealAttachmentID = revealGenerationID.flatMap { _ in
+            AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: message)
+        }
 
         return AidenMessageView(
             message: message,
@@ -5563,7 +5918,11 @@ private struct AidenSettledMessageRows: View, Equatable {
             showsFooter: showsFooter,
             onAskAbout: onAskAbout,
             forkActions: onFork == nil ? [] : forkActions,
-            onFork: onFork.map { handler in { (action: AidenChatForkMenuAction) in handler(message.id, action) } }
+            onFork: onFork.map { handler in { (action: AidenChatForkMenuAction) in handler(message.id, action) } },
+            imageArrivalRevealAttachmentID: revealAttachmentID,
+            onImageArrivalRevealed: revealGenerationID.map { generationID in
+                { model.finishImageArrivalReveal(generationID: generationID) }
+            }
         )
         .equatable()
         .padding(.top, topPadding)
@@ -5581,6 +5940,9 @@ private struct AidenMessageView: View, Equatable {
     var onAskAbout: ((String) -> Void)? = nil
     var forkActions: [AidenChatForkMenuAction] = []
     var onFork: ((AidenChatForkMenuAction) -> Void)? = nil
+    /// The generated image that plays the one-shot arrival reveal, if any.
+    var imageArrivalRevealAttachmentID: String? = nil
+    var onImageArrivalRevealed: (() -> Void)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -5593,7 +5955,8 @@ private struct AidenMessageView: View, Equatable {
             lhs.showsFooter == rhs.showsFooter &&
             (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
             lhs.forkActions == rhs.forkActions &&
-            (lhs.onFork == nil) == (rhs.onFork == nil)
+            (lhs.onFork == nil) == (rhs.onFork == nil) &&
+            lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID
     }
 
     private var selectableText: String {
@@ -5720,39 +6083,54 @@ private struct AidenMessageView: View, Equatable {
                let rows = AidenChronologicalProjection.rows(
                    text: message.text,
                    reasoning: message.reasoning ?? "",
-                   timeline: message.timeline
+                   timeline: message.timeline,
+                   visuals: AidenChatVisualPresentation.rowVisuals(in: message)
                ) {
-                AidenChronologicalTranscript(rows: rows, active: false)
+                AidenChronologicalTranscript(rows: rows, active: false) { visual in
+                    AnyView(visualRow(visual))
+                }
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
                 AidenReasoningCard(text: reasoning, label: "Thought", active: false)
             }
-            if message.role == .assistant, let timeline = message.timeline, !timeline.steps.isEmpty {
-                AidenActivityFeed(
-                    timeline: timeline,
-                    active: false,
-                    progressText: botReply?.progressText,
-                    showsRunningRowsWhenCollapsed: presentationStyle != .botMessages
-                )
+            if message.role == .assistant, let timeline = message.timeline {
+                let activitySteps = timeline.steps.filter { !$0.isQuestionnaire }
+                if !activitySteps.isEmpty {
+                    AidenActivityFeed(
+                        timeline: timeline,
+                        active: false,
+                        progressText: botReply?.progressText,
+                        showsRunningRowsWhenCollapsed: presentationStyle != .botMessages,
+                        steps: activitySteps
+                    )
+                }
+                ForEach(AidenAgentActivityPresentation.questionnaireSteps(timeline)) { step in
+                    if let recap = step.questionnaire {
+                        AidenQuestionnaireRecapView(recap: recap)
+                    }
+                }
             }
             if !visibleText.isEmpty {
                 messageText
             }
-            }
-            if let attachments = message.attachments, !attachments.isEmpty {
-                let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
-                let imageAttachments = attachments.filter { attachment in
-                    attachment.kind == .image
-                        && (attachment.mimeType == "image/jpeg" || attachment.mimeType == "image/png")
-                        && attachment.size > 0
-                        && attachment.size <= AidenAttachmentImageValidation.maximumBytes
-                        && identifierCounts[attachment.id] == 1
+            // Without a chronological timeline, visuals follow the reply text.
+            if message.role == .assistant {
+                ForEach(AidenChatVisualPresentation.rowVisuals(in: message)) { visual in
+                    visualRow(visual)
                 }
+            }
+            }
+            // Snapshots appear once, inline at their visual, never in the strip.
+            let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
+            if !attachments.isEmpty {
+                let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
                 if !imageAttachments.isEmpty {
                     AidenMessageImageAttachmentsView(
                         attachments: imageAttachments,
                         edge: AidenMessageMediaEdge.forRole(message.role),
-                        loadData: loadAttachmentImage
+                        loadData: loadAttachmentImage,
+                        revealAttachmentID: imageArrivalRevealAttachmentID,
+                        onArrivalRevealed: onImageArrivalRevealed
                     )
                 }
                 let fallbackAttachments = attachments.filter { attachment in
@@ -5784,8 +6162,9 @@ private struct AidenMessageView: View, Equatable {
                     .accessibilityElement(children: .combine)
                 }
             }
-            if message.role == .assistant, let artifacts = message.htmlArtifacts, !artifacts.isEmpty {
-                ForEach(artifacts, id: \.id) { artifact in
+            if message.role == .assistant {
+                // A visual's snapshot replaces the card for the artifact it shows.
+                ForEach(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: message), id: \.id) { artifact in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(artifact.title)
                             .font(.subheadline.weight(.semibold))
@@ -5805,6 +6184,14 @@ private struct AidenMessageView: View, Equatable {
                 AidenMessageOutcomeView(outcome: outcome)
             }
         }
+    }
+
+    private func visualRow(_ visual: AidenChatVisual) -> some View {
+        AidenVisualRowView(
+            visual: visual,
+            snapshot: AidenChatVisualPresentation.snapshotAttachment(for: visual, in: message),
+            loadData: loadAttachmentImage
+        )
     }
 
     private var messageText: some View {
@@ -6112,6 +6499,9 @@ private struct AidenMessageImageAttachmentsView: View {
     let attachments: [AidenMessageAttachment]
     let edge: AidenMessageMediaEdge
     let loadData: (AidenMessageAttachment) async -> Data?
+    /// Only this attachment plays the arrival reveal; the others draw as usual.
+    var revealAttachmentID: String? = nil
+    var onArrivalRevealed: (() -> Void)? = nil
     @State private var gallerySelection: AidenAttachmentGallerySelection?
     @State private var deckSelection = 0
     @State private var deckDragTranslation: CGFloat = 0
@@ -6126,7 +6516,9 @@ private struct AidenMessageImageAttachmentsView: View {
                     contentMode: .fit,
                     showsBackground: false,
                     imageCornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius,
-                    imageAlignment: edge.alignment
+                    imageAlignment: edge.alignment,
+                    revealsArrival: attachments[0].id == revealAttachmentID,
+                    onArrivalRevealed: onArrivalRevealed
                 )
                 .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
                 .onTapGesture { openGallery(at: 0) }
@@ -6214,7 +6606,9 @@ private struct AidenMessageImageAttachmentsView: View {
             contentMode: .fit,
             showsBackground: false,
             imageCornerRadius: AidenInlineCardDeckLayout.cardCornerRadius,
-            imageAlignment: edge.alignment
+            imageAlignment: edge.alignment,
+            revealsArrival: attachment.id == revealAttachmentID,
+            onArrivalRevealed: onArrivalRevealed
         )
         .frame(width: width)
         .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
@@ -6315,6 +6709,9 @@ private struct AidenAttachmentThumbnailView: View {
     var showsBackground = true
     var imageCornerRadius: CGFloat = 0
     var imageAlignment: Alignment = .center
+    var revealsArrival = false
+    var onArrivalRevealed: (() -> Void)? = nil
+    var onImageLoaded: ((UIImage) -> Void)? = nil
     @State private var state: LoadState = .loading
 
     var body: some View {
@@ -6331,6 +6728,7 @@ private struct AidenAttachmentThumbnailView: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
+                    .aidenImageArrivalReveal(revealsArrival) { onArrivalRevealed?() }
                     .clipShape(RoundedRectangle(
                         cornerRadius: imageCornerRadius,
                         style: .continuous
@@ -6361,6 +6759,7 @@ private struct AidenAttachmentThumbnailView: View {
                 return
             }
             state = .image(image)
+            onImageLoaded?(image)
         }
     }
 }
@@ -6764,11 +7163,12 @@ enum AidenMessageActionContent {
 struct AidenMessageTextView: View {
     let role: AidenChatRole
     let content: String
+    var isStreaming = false
 
     @ViewBuilder
     var body: some View {
         if role == .assistant {
-            AidenMarkdownView(content: content)
+            AidenMarkdownView(content: content, isStreaming: isStreaming)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(verbatim: content)
@@ -6818,9 +7218,23 @@ enum AidenMarkdownDocument {
     }
 }
 
+/// Renders a reply as one view per Markdown chunk: settled chunks reuse their
+/// cached parse and skip re-rendering (`.equatable()`), and only the open tail
+/// sees new text while a reply streams. Settled messages use the same layout,
+/// so a finished reply keeps its exact position when it settles.
 struct AidenMarkdownView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     let content: String
+    /// While true, a chunk whose text was entirely off screen in the previous
+    /// render fades in once. Text already on screen never fades (including a
+    /// line that moves into its own chunk when its block seals), and nothing
+    /// animates under Reduce Motion or Low Power Mode.
+    var isStreaming = false
+    @State private var renderedLength = AidenRenderedMarkdownLength()
+
+    static let chunkFadeDuration: TimeInterval = 0.18
 
     var body: some View {
         Group {
@@ -6831,7 +7245,19 @@ struct AidenMarkdownView: View {
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                MarkdownUI.Markdown(AidenMarkdownContentCache.shared.content(for: content))
+                let chunks = AidenMarkdownContentCache.shared.chunks(for: content)
+                let fading = isStreaming && !reduceMotion && !lowPowerMode
+                    ? AidenMarkdownChunkReveal.newChunkIndices(
+                        chunks,
+                        previouslyRenderedUTF8Count: renderedLength.record(content)
+                    )
+                    : []
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(chunks, id: \.index) { chunk in
+                        AidenMarkdownChunkView(chunk: chunk, fadesIn: fading.contains(chunk.index))
+                            .equatable()
+                    }
+                }
                     .markdownTheme(.aidenChat(colorScheme: colorScheme))
                     .markdownImageProvider(AidenMarkdownNoNetworkImageProvider())
                     .markdownCodeSyntaxHighlighter(.plainText)
@@ -6848,11 +7274,51 @@ struct AidenMarkdownView: View {
                         configuration.label
                             .fixedSize(horizontal: false, vertical: true)
                             .relativeLineSpacing(.em(0.18))
-                            .markdownMargin(top: 0, bottom: 8)
+                            .markdownMargin(top: 0, bottom: AidenMarkdownChunkSpacing.paragraphBottom)
                     }
             }
         }
         .textSelection(.enabled)
+    }
+}
+
+/// How much text the previous render of one markdown view showed. Read and
+/// updated while the body is evaluated; it is not observed, so recording a
+/// render never triggers another one.
+private final class AidenRenderedMarkdownLength {
+    private var utf8Count: Int?
+
+    /// Returns the previous render's length (nil on the first render) and
+    /// records `content` as the latest.
+    func record(_ content: String) -> Int? {
+        defer { utf8Count = content.utf8.count }
+        return utf8Count
+    }
+}
+
+/// One chunk of a rendered reply. Equal chunks skip their body, so a sealed
+/// chunk is not re-laid out while the tail streams.
+private struct AidenMarkdownChunkView: View, Equatable {
+    let chunk: AidenMarkdownChunk
+    @State private var isRevealed: Bool
+
+    init(chunk: AidenMarkdownChunk, fadesIn: Bool) {
+        self.chunk = chunk
+        _isRevealed = State(initialValue: !fadesIn)
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.chunk.leadingGap == rhs.chunk.leadingGap && lhs.chunk.text == rhs.chunk.text
+    }
+
+    var body: some View {
+        MarkdownUI.Markdown(chunk.content)
+            .padding(.top, chunk.leadingGap)
+            .opacity(isRevealed ? 1 : 0)
+            .onAppear {
+                guard !isRevealed else { return }
+                withAnimation(.easeOut(duration: AidenMarkdownView.chunkFadeDuration)) { isRevealed = true }
+            }
     }
 }
 
@@ -6884,7 +7350,6 @@ private extension MarkdownUI.Theme {
 
 private struct AidenLiveResponseView: View {
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.aidenReduceMotion) private var reduceMotion
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
@@ -6994,8 +7459,20 @@ private struct AidenLiveResponseView: View {
                     steps: visibleActivitySteps
                 )
                     .transition(.opacity)
-            } else if chronologicalRows == nil && !model.tools.isEmpty {
+            } else if chronologicalRows == nil && AidenAgentActivityPresentation.showsLiveToolRows(
+                model.tools,
+                timeline: model.activityTimeline,
+                reasoningVisible: !model.reasoning.isEmpty
+            ) {
                 AidenToolActivityCard(tools: model.tools)
+            }
+
+            if chronologicalRows == nil {
+                ForEach(AidenAgentActivityPresentation.questionnaireSteps(model.activityTimeline)) { step in
+                    if let recap = step.questionnaire {
+                        AidenQuestionnaireRecapView(recap: recap)
+                    }
+                }
             }
 
             if let chronologicalRows {
@@ -7016,6 +7493,13 @@ private struct AidenLiveResponseView: View {
                             }
                         }
                     }
+            }
+
+            if model.isStreaming {
+                ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
+                    AidenImageGenerationPlaceholderView(item: item)
+                        .transition(.opacity)
+                }
             }
 
             if let visualizingLabel,
@@ -7044,7 +7528,7 @@ private struct AidenLiveResponseView: View {
             }
 
             if chronologicalRows == nil && !visibleText.isEmpty {
-                AidenMarkdownView(content: visibleText)
+                AidenMarkdownView(content: visibleText, isStreaming: model.isStreaming)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
                         if presentationStyle == .botMessages {
@@ -7071,7 +7555,6 @@ private struct AidenLiveResponseView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.activityTimeline?.steps.last?.id)
     }
 }
 
@@ -7503,13 +7986,15 @@ private struct AidenChronologicalTranscript: View {
     @Environment(\.aidenPalette) private var palette
     let rows: [AidenChronologicalRow]
     let active: Bool
+    /// Draws a committed message's visual rows; the live stream has none.
+    var visualContent: ((AidenChatVisual) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(rows) { row in
                 switch row.kind {
                 case .text:
-                    AidenMessageTextView(role: .assistant, content: row.text)
+                    AidenMessageTextView(role: .assistant, content: row.text, isStreaming: active)
                         .foregroundStyle(palette.foreground)
                 case .reasoning:
                     if let step = row.steps.first {
@@ -7529,7 +8014,204 @@ private struct AidenChronologicalTranscript: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                case .questionnaire:
+                    if let recap = row.steps.first?.questionnaire {
+                        AidenQuestionnaireRecapView(recap: recap)
+                    }
+                case .visual(let visual):
+                    visualContent?(visual)
                 }
+            }
+        }
+    }
+}
+
+/// A settled `ask_user_question` card in the transcript: each question with
+/// the owner's choice beneath it, right-aligned like the owner's own messages.
+struct AidenQuestionnaireRecapView: View {
+    @Environment(\.aidenPalette) private var palette
+    let recap: AidenQuestionnaireRecap
+
+    var body: some View {
+        AidenTrailingFractionLayout(fraction: 0.8) {
+            VStack(alignment: .trailing, spacing: 8) {
+                ForEach(Array(recap.items.enumerated()), id: \.offset) { _, item in
+                    card(for: item)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Your answers")
+    }
+
+    private func card(for item: AidenQuestionnaireRecap.Item) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: item.question)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+            answer(for: item)
+        }
+        .foregroundStyle(palette.foreground)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(palette.raised, in: shape)
+        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func answer(for item: AidenQuestionnaireRecap.Item) -> some View {
+        switch item.answer(for: recap.outcome) {
+        case .chosen(let text):
+            Text(verbatim: text)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(palette.foreground)
+        case .custom(let text):
+            Text(verbatim: text)
+                .font(.subheadline)
+                .foregroundStyle(palette.foreground)
+        case .unanswered(let label):
+            // Tertiary level of the card's foreground, so it follows the theme.
+            Text(verbatim: label)
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// Places its single child against the trailing edge and caps it at a
+/// fraction of the offered width, while letting it shrink to fit its content.
+private struct AidenTrailingFractionLayout: Layout {
+    let fraction: CGFloat
+
+    private func cappedWidth(_ proposal: ProposedViewSize) -> CGFloat? {
+        guard let width = proposal.width, width.isFinite else { return nil }
+        return width * fraction
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let size = child.sizeThatFits(.init(width: cappedWidth(proposal), height: nil))
+        guard let width = proposal.width, width.isFinite else { return size }
+        return CGSize(width: width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        let maximum = bounds.width * fraction
+        let size = child.sizeThatFits(.init(width: maximum, height: nil))
+        child.place(
+            at: CGPoint(x: bounds.maxX, y: bounds.minY),
+            anchor: .topTrailing,
+            proposal: .init(width: min(size.width, maximum), height: size.height)
+        )
+    }
+}
+
+/// One inline visual in a committed reply: the Mac's snapshot image when the
+/// message carries it, then the visual's text description; the description
+/// alone without a snapshot; and the title alone when there is neither.
+private struct AidenVisualRowView: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    let visual: AidenChatVisual
+    let snapshot: AidenMessageAttachment?
+    let loadData: (AidenMessageAttachment) async -> Data?
+    @State private var imageAspectRatio: CGFloat?
+    @State private var gallerySelection: AidenAttachmentGallerySelection?
+    @State private var isDescriptionExpanded = false
+    @State private var limitedDescriptionHeight: CGFloat = 0
+    @State private var fullDescriptionHeight: CGFloat = 0
+
+    private static let collapsedDescriptionLines = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let snapshot {
+                snapshotImage(snapshot)
+            }
+            if let description = visual.fallbackText {
+                descriptionText(description)
+            } else if snapshot == nil {
+                Text(visual.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.foreground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func snapshotImage(_ attachment: AidenMessageAttachment) -> some View {
+        AidenAttachmentThumbnailView(
+            attachment: attachment,
+            loadData: loadData,
+            contentMode: .fit,
+            imageCornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius,
+            imageAlignment: .leading,
+            onImageLoaded: { image in
+                guard image.size.width > 0, image.size.height > 0 else { return }
+                imageAspectRatio = image.size.width / image.size.height
+            }
+        )
+        // Hold a typical landscape frame until the image reports its own shape.
+        .aspectRatio(imageAspectRatio ?? 16 / 9, contentMode: .fit)
+        .frame(maxWidth: visual.layout == .wide ? .infinity : 560, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(visual.title)
+        .accessibilityHint("Double-tap to open the image viewer")
+        .accessibilityAddTraits([.isImage, .isButton])
+        .accessibilityAction { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
+        .fullScreenCover(item: $gallerySelection) { selection in
+            AidenAttachmentGalleryView(
+                attachments: [attachment],
+                initialAttachmentID: selection.id,
+                loadData: loadData
+            )
+        }
+    }
+
+    private func descriptionText(_ description: String) -> some View {
+        let isTruncated = fullDescriptionHeight > limitedDescriptionHeight + 1
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(description)
+                .font(.callout)
+                // Secondary beneath a snapshot; the primary content without one.
+                .foregroundStyle(snapshot == nil ? palette.foreground : palette.secondary)
+                .lineLimit(isDescriptionExpanded ? nil : Self.collapsedDescriptionLines)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { limitedDescriptionHeight = $0 }
+                .background(alignment: .topLeading) {
+                    // Measures the untruncated description at the same width.
+                    Text(description)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .hidden()
+                        .accessibilityHidden(true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullDescriptionHeight = $0 }
+                }
+            if isDescriptionExpanded || isTruncated {
+                Button(isDescriptionExpanded ? "Show less" : "Show more") {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                        isDescriptionExpanded.toggle()
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(palette.accent)
+                .buttonStyle(.plain)
+                .accessibilityLabel(isDescriptionExpanded
+                    ? "Show less of \(visual.title)"
+                    : "Show more of \(visual.title)")
             }
         }
     }
@@ -8464,10 +9146,38 @@ extension AidenChatViewModel {
     static let foreignRunSettleInterval: Duration = .milliseconds(400)
     static let foreignRunMaxReconnects = 3
     static let foreignRunMaxReconcileAttempts = 6
+    /// A run the roster announced may not be registered on the Mac yet when
+    /// the phone first asks for it; one retry after this long covers that.
+    static let announcedRunRetryDelay: Duration = .milliseconds(400)
+
+    /// Why the phone is looking for a run it did not start.
+    enum ForeignRunAttachReason: Sendable {
+        /// The chat opened or reloaded; its transcript was just read.
+        case load
+        /// The agent roster reported a new turn.
+        case announcedTurn
+        /// The first roster this chat received named a turn. It is usually the
+        /// last finished one, so a missing run is not looked for again.
+        case firstRosterTurn
+        /// A foreground check on a device that cannot read the agent roster.
+        case probe
+    }
+
+    /// Delay before the foreground probe's next check, after `idleProbes`
+    /// consecutive checks that found nothing live: 5s, 10s, 20s, then 30s.
+    static func foreignRunProbeDelay(afterIdleProbes idleProbes: Int) -> Duration {
+        .seconds(min(30, 5 << min(max(idleProbes, 0), 3)))
+    }
 
     var isObservingForeignRun: Bool { foreignRun != nil && foreignRunIsLive }
 
-    func startForeignRunObservationIfNeeded(context: AidenRemoteRequestContext) {
+    /// Whether a lookup for, or observation of, a foreign run is in flight.
+    var isLookingForForeignRun: Bool { foreignRunTask != nil }
+
+    func startForeignRunObservationIfNeeded(
+        context: AidenRemoteRequestContext,
+        reason: ForeignRunAttachReason = .load
+    ) {
         guard !isReadOnlyFixture, !isRemoved, foreignRunTask == nil,
               activeStreamID == nil, !isStarting, coordinator.isCurrent(context),
               coordinator.server?.canObserveForeignRuns == true,
@@ -8479,15 +9189,96 @@ extension AidenChatViewModel {
         foreignRunGeneration &+= 1
         let generation = foreignRunGeneration
         foreignRunTask = Task { [weak self] in
-            await self?.observeForeignRun(context: context, generation: generation)
+            await self?.observeForeignRun(context: context, generation: generation, reason: reason)
+            self?.attachToTurnAnnouncedDuringObservation()
         }
     }
 
-    /// `preservingRecovery` keeps a finished run's response, still awaiting its
-    /// transcript, on screen while a later attach finds nothing live.
-    func stopForeignRunObservation(preservingRecovery: Bool = false) {
-        foreignRunGeneration &+= 1
+    /// The roster reported a new turn: attach to its run unless a reply is
+    /// already live here. A lookup still in flight may have been answered
+    /// before this turn's run registered, so the turn waits for it to end and
+    /// is looked up then. A run that lookup already showed or read is
+    /// recognised by `foreignRunAccountedRunId` and not replayed or read again.
+    /// The turn also waits while this phone restores its own stream, which
+    /// may be the announced turn's run.
+    private func attachToAnnouncedTurn(reason: ForeignRunAttachReason) {
+        guard !isReadOnlyFixture, !isRemoved, activeStreamID == nil, !isStarting,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        if foreignRunTask != nil || isRestoringStream {
+            // A newer announced turn keeps the not-found retry.
+            if turnAwaitingLookup != .announcedTurn { turnAwaitingLookup = reason }
+            return
+        }
+        startForeignRunObservationIfNeeded(context: context, reason: reason)
+    }
+
+    private func attachToTurnAnnouncedDuringObservation() {
+        guard let reason = turnAwaitingLookup, foreignRunTask == nil, !Task.isCancelled else { return }
+        turnAwaitingLookup = nil
+        attachToAnnouncedTurn(reason: reason)
+    }
+
+    /// Starts the foreground check for runs started elsewhere on a device
+    /// that cannot read the agent roster. It stops with progress observation,
+    /// which the chat ends when it leaves the screen or the app the foreground.
+    func startForeignRunProbeIfNeeded() {
+        guard !isReadOnlyFixture, !isRemoved, foreignRunProbeTask == nil, !canReadAgentRoster,
+              coordinator.server?.canObserveForeignRuns == true else { return }
+        foreignRunProbeGeneration &+= 1
+        let generation = foreignRunProbeGeneration
+        foreignRunProbeTask = Task { [weak self] in
+            await self?.probeForForeignRuns(generation: generation)
+            guard let self, generation == self.foreignRunProbeGeneration else { return }
+            self.foreignRunProbeTask = nil
+        }
+    }
+
+    func stopForeignRunProbe() {
+        foreignRunProbeGeneration &+= 1
+        foreignRunProbeTask?.cancel()
+        foreignRunProbeTask = nil
+    }
+
+    var isProbingForForeignRuns: Bool { foreignRunProbeTask != nil }
+
+    private func probeForForeignRuns(generation: UInt64) async {
+        var idleProbes = 0
+        while generation == foreignRunProbeGeneration, !Task.isCancelled {
+            do {
+                try await foreignRunProbeSleep(Self.foreignRunProbeDelay(afterIdleProbes: idleProbes))
+            } catch {
+                return
+            }
+            guard generation == foreignRunProbeGeneration, !Task.isCancelled,
+                  !isRemoved, !canReadAgentRoster,
+                  let context = try? coordinator.requestContext(for: instanceId) else { return }
+            if activeStreamID != nil || isStarting || isRestoringStream || foreignRunTask != nil {
+                // A reply is already live here; check again soon after it ends.
+                idleProbes = 0
+                continue
+            }
+            let shownLive = foreignRunsShownLive
+            startForeignRunObservationIfNeeded(context: context, reason: .probe)
+            // The device or Mac no longer allows observing runs.
+            guard let attach = foreignRunTask else { return }
+            await attach.value
+            idleProbes = foreignRunsShownLive == shownLive ? idleProbes + 1 : 0
+        }
+    }
+
+    /// Stops observing, and drops a turn announced during the stopped lookup.
+    func stopForeignRunObservation() {
+        turnAwaitingLookup = nil
         foreignRunTask?.cancel()
+        endForeignRunObservation(preservingRecovery: false)
+    }
+
+    /// Ends observation from within the lookup itself, so a turn announced
+    /// while it ran is still looked up once it returns. `preservingRecovery`
+    /// keeps a finished run's response, still awaiting its transcript, on
+    /// screen while a later attach finds nothing live.
+    private func endForeignRunObservation(preservingRecovery: Bool) {
+        foreignRunGeneration &+= 1
         foreignRunTask = nil
         foreignRunSettleTask?.cancel()
         foreignRunSettleTask = nil
@@ -8501,7 +9292,7 @@ extension AidenChatViewModel {
         foreignRun = nil
         foreignRunIsLive = false
         if wasLive, activeStreamID == nil {
-            liveText = ""
+            replaceLiveText("")
             reasoning = ""
             tools = []
             pendingApproval = nil
@@ -8514,12 +9305,24 @@ extension AidenChatViewModel {
             && coordinator.isCurrent(context) && activeStreamID == nil && !isStarting
     }
 
-    private func observeForeignRun(context: AidenRemoteRequestContext, generation: UInt64) async {
+    private func observeForeignRun(
+        context: AidenRemoteRequestContext,
+        generation: UInt64,
+        reason: ForeignRunAttachReason
+    ) async {
         defer {
             if generation == foreignRunGeneration { foreignRunTask = nil }
         }
         var reconnects = 0
-        while isCurrentForeignRun(generation, context: context) {
+        var retriedAnnouncedRun = false
+        /// Waits once for an announced run the Mac has not registered yet.
+        func retryAnnouncedRun() async -> Bool {
+            guard reason == .announcedTurn, !retriedAnnouncedRun else { return false }
+            retriedAnnouncedRun = true
+            try? await announcedRunRetrySleep(Self.announcedRunRetryDelay)
+            return true
+        }
+        attach: while isCurrentForeignRun(generation, context: context) {
             let client: AidenRemoteClient
             do {
                 client = try coordinator.remoteClient(for: context)
@@ -8532,7 +9335,32 @@ extension AidenChatViewModel {
                 for try await event in events {
                     guard isCurrentForeignRun(generation, context: context) else { return }
                     reconnects = 0
-                    if await applyForeignRunEvent(event, context: context, generation: generation) { return }
+                    switch await applyForeignRunEvent(event, context: context, generation: generation) {
+                    case .keepObserving:
+                        continue
+                    case .stop:
+                        return
+                    case let .endedBeforeAttach(runId):
+                        let isNewRun = runId != foreignRunAccountedRunId
+                        if !isNewRun {
+                            // The newest retained run is one already accounted
+                            // for: an announced run may not be registered yet.
+                            discardUnsettledForeignRun()
+                            if await retryAnnouncedRun() { continue attach }
+                        }
+                        foreignRunAccountedRunId = runId
+                        // The run finished before it could be shown live, so
+                        // its reply is only in the transcript. A load has just
+                        // read it, and a run already accounted for was read or
+                        // shown before; a newly found run reads it once.
+                        if reason != .load, isNewRun,
+                           isCurrentForeignRun(generation, context: context) {
+                            await reconcileChat(context: context)
+                        }
+                        guard generation == foreignRunGeneration else { return }
+                        endForeignRunObservation(preservingRecovery: true)
+                        return
+                    }
                 }
             } catch let error where aidenIsCancellation(error) {
                 return
@@ -8545,6 +9373,14 @@ extension AidenChatViewModel {
                 if case let .server(statusCode, _)? = error as? AidenRemoteClientError,
                    statusCode < 500 {
                     // No retained run (run_gone), or this device may not see it.
+                    let neverFound = foreignRun == nil
+                    if statusCode == 404, neverFound, await retryAnnouncedRun() { continue attach }
+                    if statusCode == 404, neverFound, reason == .announcedTurn {
+                        // The announced run cannot be observed; its outcome
+                        // still reaches the transcript.
+                        await reconcileChat(context: context)
+                        guard generation == foreignRunGeneration else { return }
+                    }
                     await endForeignRunQuietly(context: context, reconcile: foreignRunIsLive)
                     return
                 }
@@ -8560,37 +9396,50 @@ extension AidenChatViewModel {
             await liveActivities.markStale(instanceID: instanceId, streamID: runId)
             await endForeignRunQuietly(context: context, reconcile: true)
         } else {
-            stopForeignRunObservation(preservingRecovery: true)
+            endForeignRunObservation(preservingRecovery: true)
         }
     }
 
-    /// Returns true once the run has ended and observation should stop.
+    private enum ForeignRunStep {
+        case keepObserving
+        case stop
+        /// A finished run replayed on attach: nothing to show live.
+        case endedBeforeAttach(runId: String)
+    }
+
     private func applyForeignRunEvent(
         _ event: AidenRemoteRunEvent,
         context: AidenRemoteRequestContext,
         generation: UInt64
-    ) async -> Bool {
+    ) async -> ForeignRunStep {
         if foreignRun == nil {
             foreignRun = AidenForeignRunProjection(runId: event.runId)
             scheduleForeignRunSettle(context: context, generation: generation)
         }
-        guard var projection = foreignRun else { return true }
+        guard var projection = foreignRun else { return .stop }
         let effects = projection.apply(event)
         foreignRun = projection
         guard foreignRunIsLive else {
-            if projection.isEnded {
-                // A finished run replayed on attach: nothing to show live.
-                stopForeignRunObservation(preservingRecovery: true)
-                return true
-            }
-            return false
+            return projection.isEnded ? .endedBeforeAttach(runId: projection.runId) : .keepObserving
         }
-        publishForeignRun(context: context)
+        var flushesText = true
+        if case let .content(content) = event.kind {
+            flushesText = content.type != .textDelta && content.type != .heartbeat
+        }
+        publishForeignRun(context: context, flushingText: flushesText)
         for effect in effects {
-            guard isCurrentForeignRun(generation, context: context) else { return true }
-            if await performForeignRunEffect(effect, runId: projection.runId, context: context) { return true }
+            guard isCurrentForeignRun(generation, context: context) else { return .stop }
+            if await performForeignRunEffect(effect, runId: projection.runId, context: context) { return .stop }
         }
-        return false
+        return .keepObserving
+    }
+
+    /// Drops a replay that never went live so the next attach starts afresh.
+    private func discardUnsettledForeignRun() {
+        guard !foreignRunIsLive else { return }
+        foreignRunSettleTask?.cancel()
+        foreignRunSettleTask = nil
+        foreignRun = nil
     }
 
     private func scheduleForeignRunSettle(context: AidenRemoteRequestContext, generation: UInt64) {
@@ -8612,7 +9461,13 @@ extension AidenChatViewModel {
         foreignRunReconcileTask?.cancel()
         foreignRunReconcileTask = nil
         foreignRunIsLive = true
-        publishForeignRun(context: context)
+        foreignRunAccountedRunId = projection.runId
+        foreignRunsShownLive += 1
+        // The retained replay lands at once: text it holds before a tool,
+        // approval or other structural state shows before that state.
+        let carriesStructure = !projection.tools.isEmpty || !projection.reasoning.isEmpty
+            || projection.pendingApproval != nil || projection.pendingQuestion != nil
+        publishForeignRun(context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
             chatID: chat.id,
@@ -8626,9 +9481,12 @@ extension AidenChatViewModel {
         }
     }
 
-    private func publishForeignRun(context: AidenRemoteRequestContext) {
+    private func publishForeignRun(context: AidenRemoteRequestContext, flushingText: Bool = false) {
         guard let projection = foreignRun, foreignRunIsLive, activeStreamID == nil else { return }
-        liveText = projection.liveText
+        receiveCumulativeLiveText(projection.liveText)
+        // As on an owned stream, text received before a tool, approval or
+        // other structural event shows before it lands.
+        if flushingText { flushPendingStreamingContent() }
         reasoning = projection.reasoning
         tools = projection.tools
         if streamState != projection.state { streamState = projection.state }
@@ -8753,6 +9611,7 @@ extension AidenChatViewModel {
     }
 
     private func endForeignRunQuietly(context: AidenRemoteRequestContext, reconcile: Bool) async {
+        if foreignRunIsLive, activeStreamID == nil { flushPendingStreamingContent() }
         let generation = foreignRunGeneration
         var reconciled = true
         if reconcile, foreignRunIsLive {
@@ -8781,7 +9640,7 @@ extension AidenChatViewModel {
     }
 
     private func clearForeignLiveOutput() {
-        liveText = ""
+        replaceLiveText("")
         reasoning = ""
         tools = []
     }

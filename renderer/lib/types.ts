@@ -1,3 +1,4 @@
+import type { McpExposure } from "../shared/mcp-exposure";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -49,6 +50,7 @@ export type {
   WebSearchExistingAuthRendererStatus,
 };
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
+import type { ModelPadMetric, ModelPadPlacements } from "../shared/model-pad-preferences";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -535,15 +537,8 @@ export interface Attachment {
   text?: string;
 }
 
-export interface ModelRanking {
-  capabilityPercentile: number;
-  responseTimePercentile: number;
-  source: string;
-  sourceUrl?: string;
-  measuredAt?: string;
-}
-
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+/** One of the benchmark scores (defined with the Pad preferences that persist it). */
+export type ModelBenchmarkMetric = ModelPadMetric;
 
 export interface ModelBenchmarkScores {
   source: "openrouter";
@@ -558,10 +553,17 @@ export interface ModelBenchmarkScores {
   agentic?: number;
 }
 
+/** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
+export interface ModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
-  | "artificial-analysis"
   | "models-dev"
   | "fallback";
 
@@ -584,8 +586,11 @@ export interface ModelInfo {
   inputModalities?: string[];
   knowledge?: string;
   releaseDate?: string;
-  ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
+  cost?: ModelCost;
+  /** models.dev canonical model id for the matched row. Display-only. */
+  canonicalModelId?: string;
   metadataSource: ModelMetadataSource;
   matched: boolean;
 }
@@ -594,6 +599,8 @@ export interface ModelInsightsStatus {
   hasKey: boolean;
   ready: boolean;
   cachedModelCount: number;
+  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
+  skippedAmbiguousCount: number;
   fetchedAt?: string;
   asOf?: string;
   citation?: string;
@@ -623,6 +630,10 @@ export interface ChatMessage {
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
+  htmlArtifactPlacements?: import("../shared/chat-artifacts").HtmlArtifactPlacementV1[];
+  imagePlacements?: import("../shared/chat-artifacts").ChatImagePlacementV1[];
+  uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
+  visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
@@ -648,7 +659,10 @@ export interface ChatMeta {
 }
 
 export interface Chat extends ChatMeta {
-  computerUseEnabled?: boolean;
+  /** The user granted Computer Use for this chat. */
+  computerUseAllowed?: boolean;
+  /** A Computer Use access request is waiting for macOS setup; offer Continue. */
+  computerUsePendingContinue?: boolean;
   /** Main-owned crash stage exists and must be recovered before another chat mutation. */
   imageArtifactRecoveryPending?: boolean;
   /** Main-owned image staging could not be opened or quarantined automatically. */
@@ -777,6 +791,10 @@ export interface McpServer {
   /** Set when this record came from the built-in preset catalog. */
   presetId?: string;
   enabled: boolean;
+  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
+  exposure?: McpExposure;
+  /** Raw remote tool names withheld from every model surface. */
+  hiddenTools?: string[];
 }
 
 export type McpPresetAuth =
@@ -810,6 +828,12 @@ export interface McpPresetState {
   enabled: boolean;
   /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
   ready: boolean;
+  /** OAuth presets: the stored sign-in was rejected and must be renewed. */
+  needsSignIn?: boolean;
+  /** The saved record for this preset is unusable; setup can repair it or it can be removed. */
+  error?: string;
+  /** The saved record failed validation; setup rebuilds it from the preset's official settings. */
+  invalidRecord?: boolean;
 }
 
 export interface Skill {
@@ -894,6 +918,17 @@ export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
+  modelPadPlacements?: ModelPadPlacements;
+  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
+  pinnedModels?: string[];
+  /**
+   * Presentation-only model history: distinct `provider::model` values, newest
+   * first (at most 5). Machine-local; never part of the portable config.
+   */
+  recentModels?: string[];
+  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
+  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
@@ -926,6 +961,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Skip the per-chat Computer Use access card in every chat. */
+  computerUseAlwaysAllow?: boolean;
   /** Aiden Live (voice and on-screen actions). Omitted means enabled. */
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button. Omitted means shown; active sessions always show it. */
@@ -1113,7 +1150,15 @@ export interface EngineStatus {
   error: string | null;
 }
 
-export type { McpStatus } from "../shared/mcp-status";
+export type {
+  McpDependent,
+  McpLiveState,
+  McpLiveStatus,
+  McpServerDependents,
+  McpStatus,
+  McpToolSummary,
+  McpPendingLaunchApproval,
+} from "../shared/mcp-status";
 
 export interface ChatStartParams {
   chatId: string;
@@ -1125,6 +1170,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals for this turn. */
+  inlineVisuals?: import("../shared/appearance").InlineVisualsMode;
 }
 
 export interface ApprovalRequest {

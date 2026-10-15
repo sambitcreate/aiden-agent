@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -627,14 +628,22 @@ test("revoking agent access stops only the agent; revoking streaming stops the h
 
 test("granting agent access installs agent-device and writes the pinned shim", async () => {
   await withService(async ({ baseDir, service, host }) => {
+    const entryPath = path.join(baseDir, "pinned-agent.mjs");
+    await writeFile(entryPath, 'console.log(JSON.stringify({runtime:process.execPath,args:process.argv.slice(2),mode:process.env.ELECTRON_RUN_AS_NODE ?? null}));');
+    const ensureAgent = host.host.ensureAgentReady;
+    host.host.ensureAgentReady = async (...args) => {
+      const ready = await ensureAgent(...args);
+      return { ...ready, nodePath: process.execPath, agentDevice: { ...ready.agentDevice, entryPath } };
+    };
     await service.grantConsent("streaming");
     await service.grantConsent("agentAccess");
     const shimDir = service.agentShimDir();
     assert.equal(shimDir, path.join(baseDir, "bin"));
-    const shim = await readFile(path.join(shimDir!, "agent-device"), "utf8");
-    assert.match(shim, /^#!\/bin\/sh\nELECTRON_RUN_AS_NODE=1 exec '\/Applications\/Aiden Agent\.app/u);
-    const launcher = await readFile(path.join(shimDir!, "agent-device-launcher.mjs"), "utf8");
-    assert.match(launcher, /"\/pinned\/agent-device\/bin\.js"/u);
+    const result = spawnSync(path.join(shimDir!, "agent-device"), ["--version"], {
+      encoding: "utf8", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { runtime: process.execPath, args: ["--version"], mode: null });
 
     const target = await service.agentTarget({ chatId: "chat-1", hostId: "local", deviceId: IPHONE });
     assert.equal(target.command, path.join(shimDir!, "agent-device"));

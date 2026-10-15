@@ -11,6 +11,7 @@ import {
   sameMcpOAuthGrant,
   sessionForFreshMcpAuthorization,
   sessionForMcpAuthorizationAttempt,
+  sessionWithRefreshedMcpTokens,
   sessionWithSavedMcpTokens,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
@@ -538,4 +539,199 @@ test("an SDK token refresh keeps the same grant; re-authorization, revocation an
     sameMcpOAuthGrant(stored, { ...stored, clientInformation: { client_id: "client-2", redirect_uris: ["http://127.0.0.1:49152/callback"] } }),
     false,
   );
+});
+
+/** Minimal interactive-style provider recording what the SDK persists and opens. */
+function recordingProvider(flow: McpOAuthAuthorizationFlow, overrides: Partial<OAuthClientProvider> = {}) {
+  const record: { browser?: URL; client?: unknown } = {};
+  let verifier: string | undefined;
+  const provider: OAuthClientProvider = {
+    redirectUrl: "http://127.0.0.1:49152/callback",
+    clientMetadata: { redirect_uris: ["http://127.0.0.1:49152/callback"], token_endpoint_auth_method: "none" },
+    clientInformation: () => record.client as never,
+    saveClientInformation: (information) => { record.client = information; },
+    state: () => flow.state,
+    tokens: () => undefined,
+    saveTokens: () => {},
+    saveDiscoveryState: (state) => flow.saveDiscovery(state),
+    discoveryState: () => flow.discoveryState(),
+    saveCodeVerifier: (value) => { verifier = value; },
+    codeVerifier: () => verifier!,
+    redirectToAuthorization: (url) => { record.browser = flow.authorizationUrl(url); },
+    ...overrides,
+  };
+  return { provider, record };
+}
+
+async function connectExpectingSignIn(serviceUrl: string, provider: OAuthClientProvider, fetch: typeof globalThis.fetch) {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
+  const transport = createMcpRemoteTransport({ transport: "http", serviceUrl, authProvider: provider, fetch });
+  const client = new Client({ name: "oauth-regression", version: "1" });
+  try {
+    await assert.rejects(client.connect(transport), /Unauthorized/u);
+  } finally {
+    await client.close();
+  }
+}
+
+const rootMetadata = (issuer: string, extra: Record<string, unknown> = {}) => Response.json({
+  issuer, authorization_endpoint: "https://login.example.test/authorize", token_endpoint: "https://login.example.test/token",
+  response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], ...extra,
+});
+
+test("an empty challenge scope falls back to the resource's scopes_supported instead of requesting \"\"", async () => {
+  for (const challenge of ['Bearer scope="", resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp"',
+    'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", scope=" "']) {
+    const flow = new McpOAuthAuthorizationFlow();
+    const { provider, record } = recordingProvider(flow, { clientInformation: () => ({ client_id: "registered" }) });
+    await connectExpectingSignIn("https://mcp.example.test/mcp", provider, async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/mcp") return new Response(null, { status: 401, headers: { "www-authenticate": challenge } });
+      if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: "https://mcp.example.test/mcp", authorization_servers: ["https://login.example.test"], scopes_supported: ["files.read", "files.write"] });
+      return rootMetadata("https://login.example.test");
+    });
+    assert.equal(record.browser?.searchParams.get("scope"), "files.read files.write", challenge);
+  }
+  const flow = new McpOAuthAuthorizationFlow();
+  const url = flow.authorizationUrl(new URL(`https://login.example.test/authorize?state=${flow.state}&scope=%22%22`), "''");
+  assert.equal(url.searchParams.has("scope"), false, "quote-only remnants are never requested as scopes");
+});
+
+test("null and empty optional members in metadata and registration responses do not fail dynamic registration", async () => {
+  const flow = new McpOAuthAuthorizationFlow();
+  const { provider, record } = recordingProvider(flow);
+  let registrations = 0;
+  await connectExpectingSignIn("https://mcp.example.test/mcp", provider, async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/mcp") return new Response(null, { status: 401 });
+    if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: "https://mcp.example.test/mcp", authorization_servers: ["https://login.example.test"] });
+    if (url.pathname === "/register") {
+      registrations += 1;
+      assert.equal(init?.method, "POST");
+      return Response.json({ client_id: "dcr-client", redirect_uris: ["http://127.0.0.1:49152/callback"], client_secret: null,
+        client_secret_expires_at: null, client_uri: "", logo_uri: null, scope: "", software_version: null }, { status: 201 });
+    }
+    return rootMetadata("https://login.example.test", { registration_endpoint: "https://login.example.test/register",
+      scopes_supported: null, service_documentation: "", op_policy_uri: null, revocation_endpoint: "" });
+  });
+  assert.equal(registrations, 1);
+  assert.deepEqual(record.client, { client_id: "dcr-client", redirect_uris: ["http://127.0.0.1:49152/callback"] });
+  assert.ok(record.browser, "registration proceeds to the consent page");
+});
+
+test("required registration and metadata members stay strict when null or empty", async () => {
+  const flow = new McpOAuthAuthorizationFlow();
+  const { provider, record } = recordingProvider(flow);
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
+  const transport = createMcpRemoteTransport({ transport: "http", serviceUrl: "https://mcp.example.test/mcp", authProvider: provider, fetch: async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/mcp") return new Response(null, { status: 401 });
+    if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: "https://mcp.example.test/mcp", authorization_servers: ["https://login.example.test"] });
+    if (url.pathname === "/register") return Response.json({ client_id: null, redirect_uris: ["http://127.0.0.1:49152/callback"] }, { status: 201 });
+    return rootMetadata("https://login.example.test", { registration_endpoint: "https://login.example.test/register" });
+  } });
+  const client = new Client({ name: "oauth-regression", version: "1" });
+  try {
+    await assert.rejects(client.connect(transport), (error: unknown) => !/Unauthorized/u.test(String(error)));
+  } finally { await client.close(); }
+  assert.equal(record.client, undefined);
+  assert.equal(record.browser, undefined);
+});
+
+test("a root issuer without trailing slash matches the SDK's root fallback, and the callback issuer agrees", async () => {
+  const flow = new McpOAuthAuthorizationFlow();
+  const { provider, record } = recordingProvider(flow, { clientInformation: () => ({ client_id: "registered" }) });
+  await connectExpectingSignIn("https://mcp.example.test/mcp", provider, async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/mcp") return new Response(null, { status: 401 });
+    if (url.pathname.includes("oauth-protected-resource")) return new Response(null, { status: 404 });
+    // No protected-resource metadata: the SDK selects new URL("/", serverUrl).
+    return Response.json({ issuer: "https://mcp.example.test", authorization_endpoint: "https://mcp.example.test/authorize",
+      token_endpoint: "https://mcp.example.test/token", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"],
+      authorization_response_iss_parameter_supported: true });
+  });
+  assert.ok(record.browser, "the root issuer was accepted");
+  for (const iss of ["https://mcp.example.test/other", "https://mcp.example.test//"]) {
+    const rejected = new URL(`http://127.0.0.1:49152/callback?state=${flow.state}&code=c`);
+    rejected.searchParams.set("iss", iss);
+    assert.throws(() => flow.callback(rejected), /issuer/u, iss);
+  }
+  const callback = new URL(`http://127.0.0.1:49152/callback?state=${flow.state}&code=accepted`);
+  callback.searchParams.set("iss", "https://mcp.example.test");
+  assert.deepEqual(flow.callback(callback), { code: "accepted" });
+  const tenant = new McpOAuthAuthorizationFlow();
+  assert.throws(() => tenant.saveDiscovery({ authorizationServerUrl: "https://login.example.test/tenant/", authorizationServerMetadata: {
+    issuer: "https://login.example.test/tenant", authorization_endpoint: "https://login.example.test/a", token_endpoint: "https://login.example.test/t", response_types_supported: ["code"],
+  } }), /issuer/u, "path issuers stay exact");
+});
+
+test("a background 403 insufficient_scope challenge is requested by the next interactive authorization", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
+  const { mcpInteractiveAuthorizationScope, clearMcpStepUpScope } = await import("./mcp-oauth-session.js");
+  const serviceUrl = "https://step-up.example.test/mcp";
+  const background: OAuthClientProvider = {
+    redirectUrl: "http://127.0.0.1:49152/callback",
+    clientMetadata: { redirect_uris: ["http://127.0.0.1:49152/callback"] },
+    clientInformation: () => ({ client_id: "registered" }),
+    tokens: () => ({ access_token: "narrow", token_type: "Bearer" }),
+    saveTokens: () => {}, saveCodeVerifier: () => {}, codeVerifier: () => "v",
+    redirectToAuthorization: () => { throw new Error("This MCP server needs sign-in."); },
+  };
+  const transport = createMcpRemoteTransport({ transport: "http", serviceUrl, authProvider: background, fetch: async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: serviceUrl, authorization_servers: ["https://login.example.test"] });
+    if (url.pathname.includes("/.well-known/")) return rootMetadata("https://login.example.test");
+    if (init?.method === "GET") return new Response(null, { status: 405 });
+    const request = JSON.parse(String(init?.body));
+    if (request.method === "tools/call") {
+      return new Response(null, { status: 403, headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="files.read files.write"' } });
+    }
+    if (request.id === undefined) return new Response(null, { status: 202 });
+    return Response.json({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "s", version: "1" } } });
+  } });
+  const client = new Client({ name: "step-up", version: "1" });
+  client.onerror = () => {};
+  try {
+    await client.connect(transport);
+    await assert.rejects(client.callTool({ name: "write", arguments: {} }), /sign-in/u);
+  } finally { await client.close(); }
+  const scope = mcpInteractiveAuthorizationScope(`${serviceUrl}/`, "files.read offline_access");
+  const flow = new McpOAuthAuthorizationFlow();
+  const url = flow.authorizationUrl(new URL(`https://login.example.test/authorize?state=${flow.state}`), scope);
+  assert.deepEqual(url.searchParams.get("scope")?.split(" ").sort(), ["files.read", "files.write", "offline_access"]);
+  clearMcpStepUpScope(serviceUrl);
+  assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "files.read"), "files.read");
+});
+
+test("a late refresh response neither overwrites newer tokens nor restores a signed-out session", () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const presented = { access_token: "access-1", refresh_token: "refresh-1" };
+  const late = { access_token: "access-2", token_type: "Bearer", refresh_token: "refresh-2" };
+  const current = { authorizationBinding: binding, tokens: { ...presented, token_type: "Bearer" } } as McpOAuthSession;
+  assert.equal(sessionWithRefreshedMcpTokens(current, binding, presented, late)?.tokens?.refresh_token, "refresh-2");
+  const rotated = { authorizationBinding: binding, tokens: { access_token: "access-3", token_type: "Bearer", refresh_token: "refresh-3" } } as McpOAuthSession;
+  assert.equal(sessionWithRefreshedMcpTokens(rotated, binding, presented, late), undefined);
+  assert.equal(sessionWithRefreshedMcpTokens({ authorizationBinding: binding }, binding, presented, late), undefined);
+});
+
+test("a 403 insufficient_scope on a legacy SSE message endpoint is remembered for the server", async () => {
+  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
+  const { mcpInteractiveAuthorizationScope, clearMcpStepUpScope } = await import("./mcp-oauth-session.js");
+  const serviceUrl = "https://sse-step-up.example.test/sse";
+  const fetch = createMcpFetchPolicy({ serviceUrl, fetch: async () =>
+    new Response(null, { status: 403, headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="mail.send"' } }) });
+  const response = await fetch("https://sse-step-up.example.test/messages?sessionId=abc", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "send", arguments: {} } }),
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read")?.split(" ").sort(), ["mail.read", "mail.send"]);
+  clearMcpStepUpScope(serviceUrl);
+  // A non-MCP request on the same origin (an OAuth form POST) records nothing.
+  await fetch("https://sse-step-up.example.test/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=refresh_token" });
+  assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read"), "mail.read");
 });

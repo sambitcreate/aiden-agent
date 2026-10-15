@@ -1,22 +1,10 @@
 import * as React from "react";
 import {
-  Files,
-  GitCompareArrows,
-  List,
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  X,
 } from "lucide-react";
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Text,
-  toast,
-} from "./ui";
+import { Button, toast } from "./ui";
 import { ChatContextPanel, type ChatContextDetails } from "./chat-context-panel";
 import { WorkspaceToolLauncher, WORKSPACE_TOOLS, workspaceToolLabel } from "./workspace-tool-launcher";
 import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
@@ -25,22 +13,41 @@ import { acceptBrowserState } from "../lib/browser-ui-state";
 import { cn } from "../lib/ui-utils";
 import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import { useBrowserLinks } from "../lib/use-browser-links";
+import { LinkOpenerProvider, useBrowserSurface } from "../lib/link-opener";
 import {
   FilesPanel,
   type FilesEditorState,
   type FilesEditorStateChangeOptions,
 } from "./files-panel";
-import { EnvironmentOverview } from "./environment-overview";
+import {
+  ChangesRows,
+  EnvironmentRows,
+  QuickViewUnavailable,
+  useChangesSummary,
+  useChangesVisibility,
+  useEnvironmentSummary,
+  useShowWorkspaceFolder,
+} from "./environment-overview";
+import { ContextBreakdown } from "./context-breakdown";
+import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
+import { SubagentStatusGroups } from "./subagent-status-groups";
+import {
+  DEFAULT_QUICK_VIEW_LAYOUT,
+  QUICK_VIEW_LAYOUT_STORAGE_KEY,
+  moveSection,
+  parseQuickViewLayout,
+  quickViewVisibleSections,
+  serializeQuickViewLayout,
+  toggleSectionExpanded,
+  type QuickViewLayout,
+  type QuickViewSectionId,
+} from "../lib/quick-view-layout";
+import { contextPressurePercent, type ChatContextPressureV1 } from "../shared/context-pressure";
+import type { Workspace } from "../lib/types";
 import { ReviewPanel } from "./review-panel";
-import { SubagentMark } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
 import {
-  DEFAULT_PANEL_WIDTH,
-  MAX_PANEL_WIDTH,
-  MIN_PANEL_WIDTH,
   resolveEnvironmentPanelLayout,
-  resolveEnvironmentPanelResizeBounds,
   resolveChatCardInset,
   resolveQuickViewLayout,
 } from "../lib/environment-panel-layout";
@@ -58,11 +65,9 @@ import {
   reconcileSubagentPersistenceHandoff,
   resolveSubagentDetailResult,
   resolveSubagentSelection,
-  summarizeSubagentRunViews,
   type SubagentDetailRequest,
   type SubagentReferenceMessage,
   type SubagentRunView,
-  type SubagentRunViewCounts,
 } from "../lib/subagent-view-state";
 import {
   subagentOverviewSummary,
@@ -76,6 +81,7 @@ import {
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   availableEnvironmentPanelTabs,
+  environmentPanelViewOrder,
   parseEnvironmentOpenTabs,
   normalizeEnvironmentPanelTab,
   parseEnvironmentPanelTab,
@@ -101,11 +107,13 @@ import {
   selectDeviceTab,
 } from "../lib/device-tabs";
 import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-store";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import {
   DeviceTabContextMenu,
   DeviceTabRenameInput,
   useDeviceTabs,
 } from "./device-workspace-tabs";
+import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "./workbench-panel";
 
 // The browser and simulator tabs carry their own heavy dependencies and are
 // rarely opened, so their code loads with the panel instead of at startup.
@@ -142,7 +150,7 @@ interface EnvironmentActiveChat {
   workspaceId: string | null;
 }
 
-interface EnvironmentPanelContextValue {
+export interface EnvironmentPanelContextValue {
   toolsOpen: boolean;
   openTabs: EnvironmentPanelTab[];
   closeTab: (tab: EnvironmentPanelTab) => void;
@@ -163,7 +171,11 @@ interface EnvironmentPanelContextValue {
   closeAll: () => void;
   closeTools: () => void;
   closeQuickView: () => void;
-  reportSurfaceLayout: (layout: { inline: boolean; width: number } | null) => void;
+  /** Tools are open and visible: open, and not hidden behind a stacked Quick View. */
+  toolsPresented: boolean;
+  reportSurfaceLayout: (
+    layout: { inline: boolean; width: number; stacked?: boolean } | null,
+  ) => void;
   setTab: (tab: EnvironmentPanelTab) => void;
   showTools: (tab?: EnvironmentPanelTab) => void;
   showQuickView: () => void;
@@ -174,7 +186,6 @@ interface EnvironmentPanelContextValue {
   openReview: (mode: EnvironmentReviewMode) => void;
   subagents: EnvironmentSubagentContext;
   subagentViews: SubagentRunView[];
-  subagentCounts: SubagentRunViewCounts;
   selectedSubagentRunId: string | null;
   subagentFocusDetailVersion: number;
   subagentDetailLoading: boolean;
@@ -207,7 +218,8 @@ interface EnvironmentPanelContextValue {
   setCreateWorktreeHandler: (handler: ((branchName: string) => Promise<void>) | null) => void;
 }
 
-const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
+/** Exported so component tests can render a single surface against a stub panel. */
+export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
 const TABS_STORAGE_KEY = "aiden-agent.environment.open-tabs-v1";
 const OPEN_STORAGE_KEY = "aiden-agent.environment.open";
 const QUICK_VIEW_OPEN_STORAGE_KEY = "aiden-agent.quick-view.open";
@@ -233,15 +245,6 @@ const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
   handoffSnapshots: [],
   loadedSnapshots: [],
 };
-
-function storedPanelWidth(): number {
-  const stored = localStorage.getItem(WIDTH_STORAGE_KEY);
-  if (stored === null) return DEFAULT_PANEL_WIDTH;
-  const parsed = Number(stored);
-  return Number.isFinite(parsed) && parsed >= MIN_PANEL_WIDTH && parsed <= MAX_PANEL_WIDTH
-    ? parsed
-    : DEFAULT_PANEL_WIDTH;
-}
 
 interface EnvironmentTabCapabilities {
   subagentsEnabled: boolean;
@@ -301,14 +304,17 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const { activeId } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const [contextDetails, setContextDetails] = React.useState<ChatContextDetails | null>(null);
-  useBrowserLinks(activeId);
   const { subagents: subagentsEnabled, devices: devicesEnabled } = useAppCapabilities();
   const [surfaceState, dispatchSurface] = React.useReducer(
     reduceEnvironmentSurfaceState,
     { subagentsEnabled, devicesEnabled },
     initialEnvironmentSurfaceState,
   );
-  const [surfaceLayout, setSurfaceLayout] = React.useState({ inline: false, width: 0 });
+  const [surfaceLayout, setSurfaceLayout] = React.useState({
+    inline: false,
+    width: 0,
+    stacked: false,
+  });
   const tab = normalizeEnvironmentPanelTab(
     surfaceState.toolsTab,
     subagentsEnabled,
@@ -411,10 +417,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentsEnabled,
     ],
   );
-  const subagentCounts = React.useMemo(
-    () => summarizeSubagentRunViews(subagentViews),
-    [subagentViews],
-  );
   const selectedSubagentView = subagentViews.find((entry) => entry.runId === selectedSubagentRunId);
   const selectedSubagentGenerationId = selectedSubagentView?.generationId;
   const selectedSubagentReferenceMessageId = selectedSubagentView?.referenceMessageId;
@@ -430,10 +432,18 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
 
   const reportSurfaceLayout = React.useCallback(
-    (layout: { inline: boolean; width: number } | null) => {
-      const next = layout ?? { inline: false, width: 0 };
+    (layout: { inline: boolean; width: number; stacked?: boolean } | null) => {
+      const next = {
+        inline: layout?.inline ?? false,
+        width: layout?.width ?? 0,
+        stacked: layout?.stacked ?? false,
+      };
       setSurfaceLayout((current) =>
-        current.inline === next.inline && current.width === next.width ? current : next,
+        current.inline === next.inline &&
+        current.width === next.width &&
+        current.stacked === next.stacked
+          ? current
+          : next,
       );
     },
     [],
@@ -467,18 +477,22 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           ).find((element) => element.dataset.subagentChipRunId === returnSubagentRunIdRef.current)
         : null;
     const storedTarget = returnRef.current;
-    const storedTargetAvailable =
-      storedTarget?.isConnected &&
-      !storedTarget.closest("[inert]") &&
-      !storedTarget.closest('[aria-hidden="true"]');
     const fallbackSelector =
       surface === "tools" ? "[data-environment-toggle]" : "[data-quick-view-toggle]";
-    const returnTarget = storedTargetAvailable
-      ? storedTarget
-      : (replacementChip ??
-        document.querySelector<HTMLElement>(fallbackSelector) ??
-        document.querySelector<HTMLElement>("[data-app-focus-root]"));
-    if (returnTarget?.isConnected) requestAnimationFrame(() => returnTarget.focus());
+    // Decide after the close has rendered: a target in a surface this close uncovers (a Quick
+    // View row under stacked tools) is inert now but usable by the next frame.
+    requestAnimationFrame(() => {
+      const storedTargetAvailable =
+        storedTarget?.isConnected &&
+        !storedTarget.closest("[inert]") &&
+        !storedTarget.closest('[aria-hidden="true"]');
+      const returnTarget = storedTargetAvailable
+        ? storedTarget
+        : (replacementChip ??
+          document.querySelector<HTMLElement>(fallbackSelector) ??
+          document.querySelector<HTMLElement>("[data-app-focus-root]"));
+      if (returnTarget?.isConnected) returnTarget.focus();
+    });
   }, []);
 
   const closeTools = React.useCallback(() => {
@@ -1057,10 +1071,13 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   // Floating layouts do not have enough guaranteed room for both the tools
   // surface and Assistant. Let Assistant layer at the normal chat edge there.
   const dockRightInset = surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0;
+  const toolsPresented =
+    surfaceState.toolsOpen && (!surfaceLayout.stacked || surfaceState.frontSurface === "tools");
 
   const value = React.useMemo(
     () => ({
       toolsOpen: surfaceState.toolsOpen,
+      toolsPresented,
       openTabs: surfaceState.openTabs ?? [surfaceState.toolsTab],
       closeTab,
       contextDetails: contextDetails?.chat.id === activeChat.chatId ? contextDetails : null,
@@ -1090,7 +1107,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       openReview,
       subagents,
       subagentViews,
-      subagentCounts,
       selectedSubagentRunId: displayedSubagentSelection.runId,
       subagentFocusDetailVersion,
       subagentDetailLoading: displayedSubagentSelection.loading,
@@ -1175,7 +1191,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentStopPending,
       subagentDetailLoading,
       subagents,
-      subagentCounts,
       subagentViews,
       subagentsEnabled,
       devicesEnabled,
@@ -1183,6 +1198,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       surfaceState.frontSurface,
       surfaceState.quickViewOpen,
       surfaceState.toolsOpen,
+      toolsPresented,
       syncSubagents,
       tab,
       toggleQuickView,
@@ -1191,14 +1207,16 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   return (
     <EnvironmentPanelContext.Provider value={value}>
-      {subagentsEnabled ? (
-        <SubagentLiveAnnouncer
-          ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
-          runs={subagents.liveSnapshots}
-          detailRequest={subagentDetailAnnouncement}
-        />
-      ) : null}
-      {children}
+      <LinkOpenerProvider workspaceId={activeId ?? null}>
+        {subagentsEnabled ? (
+          <SubagentLiveAnnouncer
+            ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
+            runs={subagents.liveSnapshots}
+            detailRequest={subagentDetailAnnouncement}
+          />
+        ) : null}
+        {children}
+      </LinkOpenerProvider>
     </EnvironmentPanelContext.Provider>
   );
 }
@@ -1218,6 +1236,7 @@ function EnvironmentPanelSurface({
   resizing,
   setResizing,
   setWidth,
+  persistWidth,
 }: {
   width: number;
   containerWidth: number;
@@ -1226,10 +1245,10 @@ function EnvironmentPanelSurface({
   resizing: boolean;
   setResizing: (value: boolean) => void;
   setWidth: (value: number) => void;
+  /** Stores an already-clamped width under the workbench width key. */
+  persistWidth: (value: number) => void;
 }) {
   const panel = useEnvironmentPanel();
-  const toggleShortcut = useShortcutLabel("environment.toggle");
-  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const { active } = useActiveWorkspace();
   const fullOpen = panel.toolsOpen;
   const terminal = useWorkspaceTerminal();
@@ -1258,9 +1277,7 @@ function EnvironmentPanelSurface({
     navigationIntentRef.current++;
     setBrowserFocusRequest(null);
   }, [active?.id, fullOpen, panel.tab, panel.frontSurface, presented]);
-  const tabMenuSelectionRef = React.useRef(false);
   const handledSubagentFocusRef = React.useRef(0);
-  const widthRef = React.useRef(width);
   const activeFileRequest =
     panel.fileRequest?.workspaceId === active?.id ? panel.fileRequest : null;
   const availableTabs = availableEnvironmentPanelTabs(panel.subagentsEnabled, panel.devicesEnabled);
@@ -1290,12 +1307,14 @@ function EnvironmentPanelSurface({
       panel.setTab(tool);
     }
   };
-  type StripTab = { id: string; kind: EnvironmentPanelTab; label: string; selected: boolean; deviceKey?: string | null };
+  type StripTab = WorkbenchTab & { kind: EnvironmentPanelTab; deviceKey?: string | null };
+  const toolIcon = (kind: EnvironmentPanelTab) =>
+    WORKSPACE_TOOLS.find((tool) => tool.id === kind)?.icon ?? Plus;
   const stripTabs = panelTabs.flatMap<StripTab>((kind) => kind === "browser" && browser?.tabs.length
-    ? browser.tabs.map((page) => ({ id: page.id, kind, label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
+    ? browser.tabs.map((page) => ({ id: page.id, viewId: kind, kind, icon: toolIcon(kind), label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
     : kind === "devices"
-      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", kind, label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
-      : [{ id: kind, kind, label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
+      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", viewId: kind, kind, icon: toolIcon(kind), label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
+      : [{ id: kind, viewId: kind, kind, icon: toolIcon(kind), label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
   const selectStripTab = (entry: StripTab) => {
     if (entry.deviceKey !== undefined) {
       navigationIntentRef.current++;
@@ -1324,6 +1343,21 @@ function EnvironmentPanelSurface({
       }).catch(() => toast.error("Could not close browser tab."));
     } else panel.closeTab(entry.kind);
   };
+  const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
+  const decoratedTabs = stripTabs.map<StripTab>((entry) => {
+    const deviceKey = entry.deviceKey;
+    if (!deviceKey) return entry;
+    return {
+      ...entry,
+      title: `${entry.label} — double-click to rename`,
+      onRename: () => setRenamingDevice(deviceKey),
+      dataAttributes: { "data-device-tab": deviceKey },
+      editor: renamingDevice === deviceKey
+        ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
+        : undefined,
+      wrap: (tabButton) => <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>,
+    };
+  });
   const openBrowserUrl = async (url: string) => {
     const intent = ++navigationIntentRef.current;
     const result = await runBrowser({ action: "create", url, show: false });
@@ -1334,7 +1368,6 @@ function EnvironmentPanelSurface({
     if (!selected || intent !== navigationIntentRef.current || selected.state.activeTabId !== result.tabId || !selected.state.tabs.some((page) => page.id === result.tabId)) return;
     panel.setTab("browser");
   };
-  widthRef.current = width;
 
   React.useLayoutEffect(() => {
     if (!fullOpen || !presented || panel.frontSurface !== "tools") return;
@@ -1366,265 +1399,443 @@ function EnvironmentPanelSurface({
     }
   }, [browserFocusRequest, browser, panel.tab, presented]);
 
-  const resizeBounds = resolveEnvironmentPanelResizeBounds(containerWidth, inline);
-  const clampToResizeBounds = React.useCallback(
-    (nextWidth: number) => Math.min(resizeBounds.max, Math.max(resizeBounds.min, nextWidth)),
-    [resizeBounds.max, resizeBounds.min],
-  );
-
-  const commitWidth = React.useCallback(
-    (nextWidth: number) => {
-      const clamped = clampToResizeBounds(nextWidth);
-      setWidth(clamped);
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(Math.round(clamped)));
-    },
-    [clampToResizeBounds, setWidth],
-  );
-
-  const beginResize = React.useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || !fullOpen) return;
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      const startX = event.clientX;
-      const startWidth = widthRef.current;
-      setResizing(true);
-      const move = (moveEvent: PointerEvent) => {
-        setWidth(clampToResizeBounds(startWidth + startX - moveEvent.clientX));
-      };
-      const finish = (endEvent: PointerEvent) => {
-        commitWidth(
-          endEvent.type === "pointerup" ? startWidth + startX - endEvent.clientX : widthRef.current,
-        );
-        setResizing(false);
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", finish);
-        window.removeEventListener("pointercancel", finish);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", finish);
-      window.addEventListener("pointercancel", finish);
-    },
-    [clampToResizeBounds, commitWidth, fullOpen, setResizing, setWidth],
-  );
-
-  const resizeWithKeyboard = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const increment = event.shiftKey ? 40 : 16;
-      let next = width;
-      if (event.key === "ArrowLeft") next += increment;
-      else if (event.key === "ArrowRight") next -= increment;
-      else if (event.key === "Home") next = resizeBounds.min;
-      else if (event.key === "End") next = resizeBounds.max;
-      else return;
-      event.preventDefault();
-      commitWidth(next);
-    },
-    [commitWidth, resizeBounds.max, resizeBounds.min, width],
-  );
+  const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
+    "new-tab": () => (
+      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
+    ),
+    context: () => <ChatContextPanel details={panel.contextDetails} />,
+    terminal: () => <TerminalSideTarget presented={presented && panel.tab === "terminal"} />,
+    review: () => (
+      <ReviewPanel
+        workspace={active}
+        chatId={panel.activeChat.chatId ?? undefined}
+        active={presented && panel.tab === "review"}
+        mode={panel.reviewMode}
+        onModeChange={panel.openReview}
+        onOpenFile={panel.openFile}
+      />
+    ),
+    subagents: () => (
+      <SubagentsPanel
+        chatId={panel.subagents.chatId}
+        workspaceId={panel.subagents.workspaceId}
+        runs={panel.subagentViews}
+        handoffSnapshots={panel.subagents.handoffSnapshots}
+        selectedRunId={panel.selectedSubagentRunId}
+        selectedRunSnapshot={
+          panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
+            ?.snapshot
+        }
+        detailLoading={panel.subagentDetailLoading}
+        detailError={panel.subagentDetailError}
+        effectActivity={panel.subagentDetailEffects}
+        onSelectedRunChange={panel.selectSubagent}
+        onRetryDetail={panel.retrySubagentDetail}
+        onStopRun={panel.stopSubagent}
+        stopPendingRunIds={panel.subagentStopPendingRunIds}
+        stopErrorsByRunId={panel.subagentStopErrorsByRunId}
+        onDetailAnnouncement={panel.announceSubagentDetail}
+        detailRequestVersion={panel.subagentFocusDetailVersion}
+        compact={width < 620}
+        active={presented && panel.tab === "subagents"}
+        ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
+      />
+    ),
+    files: () => (
+      <FilesPanel
+        workspace={active}
+        active={presented && panel.tab === "files"}
+        requestedPath={activeFileRequest?.path ?? null}
+        requestedPathKey={activeFileRequest?.id ?? 0}
+        compact={width < 540}
+        interactionBlockedReason={
+          panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
+        }
+        onEditorStateChange={panel.reportEditorState}
+      />
+    ),
+    browser: () =>
+      active && (
+        <React.Suspense fallback={null}>
+          <BrowserPanel
+            workspaceId={active.id}
+            integratedTabs
+            onStateChange={commitBrowserState}
+            active={presented && panel.tab === "browser"}
+            onDock={() => panel.showTools("browser")}
+          />
+        </React.Suspense>
+      ),
+    devices: () =>
+      active && (
+        <React.Suspense fallback={null}>
+          <DevicesPanel
+            workspaceId={active.id}
+            chatId={panel.activeChat.chatId ?? undefined}
+            active={presented && panel.tab === "devices"}
+            compact={width < 540}
+            selected={devices.selected}
+            floating={devices.floating}
+            onOpened={(session) => devices.opened(session)}
+            onClosed={(session) => devices.dismiss(deviceTabKey(session))}
+            onFloat={(session) => {
+              devices.float(deviceTabKey(session));
+              panel.closeTools();
+            }}
+            onDock={(session) => {
+              if (chatId) deviceWorkspace.setFloating(chatId, null);
+              devices.select(deviceTabKey(session));
+            }}
+          />
+        </React.Suspense>
+      ),
+  };
+  const views: WorkbenchView[] = environmentPanelViewOrder(
+    panel.subagentsEnabled,
+    panel.devicesEnabled,
+  ).map((id) => ({ id, render: viewBodies[id] }));
 
   return (
-    <aside
-      ref={surfaceRef}
+    <WorkbenchPanel
       id="environment-panel"
-      data-environment-surface="tools"
-      data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
-      data-state={fullOpen ? (presented ? "open" : "covered") : "closed"}
-      inert={!presented ? true : undefined}
-      aria-hidden={!presented ? true : undefined}
-      aria-label="Environment work surface"
-      onFocusCapture={() => panel.activateSurface("tools")}
-      onPointerDownCapture={() => panel.activateSurface("tools")}
-      className={cn(
-        "environment-panel absolute z-30 flex min-h-0 flex-col overflow-hidden bg-popover text-primary",
-        inline
-          ? "inset-y-0 right-0 border-l border-separator"
-          : "bottom-3 right-3 rounded-sheet shadow-dialog",
-        !inline && (containerWidth - width < 160 ? "top-14" : "top-3"),
-        resizing
-          ? "transition-none"
-          : "transition-[width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-        (!fullOpen || !presented) && !inline && "translate-x-[calc(100%+0.75rem)]",
-      )}
-      style={{
-        width: fullOpen ? width : inline ? 0 : width,
-        opacity: fullOpen && presented ? 1 : 0,
-        pointerEvents: fullOpen && presented ? "auto" : "none",
-      }}
-    >
-      <div
-        role="separator"
-        aria-label="Resize environment panel"
-        aria-orientation="vertical"
-        aria-valuemin={resizeBounds.min}
-        aria-valuemax={resizeBounds.max}
-        aria-valuenow={Math.round(width)}
-        tabIndex={fullOpen ? 0 : -1}
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
-        className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent"
-      />
-
-      <header className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2">
-        <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label="Environment views">
-          {stripTabs.map((entry, index) => {
-            const Icon = WORKSPACE_TOOLS.find((tool) => tool.id === entry.kind)?.icon ?? Plus;
-            const deviceKey = entry.deviceKey;
-            const tabButton = <Button ref={entry.selected ? activeTabRef : undefined} id={entry.selected ? `environment-${entry.kind}-tab` : undefined} variant="transparent" size="small" role="tab" tabIndex={entry.selected ? 0 : -1} aria-selected={entry.selected} aria-controls={`environment-${entry.kind}-panel`} title={deviceKey ? `${entry.label} — double-click to rename` : entry.label} disabled={panel.gitOperationBusy} onClick={() => selectStripTab(entry)} onDoubleClick={deviceKey ? () => setRenamingDevice(deviceKey) : undefined} onKeyDown={(event) => {
-                if (event.key === "Delete") { event.preventDefault(); closeStripTab(entry); return; }
-                if (event.key === "F2" && deviceKey) { event.preventDefault(); setRenamingDevice(deviceKey); return; }
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const next = event.key === "Home" ? 0 : event.key === "End" ? stripTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + stripTabs.length) % stripTabs.length;
-                selectStripTab(stripTabs[next]);
-              }}><Icon className="size-4 shrink-0" /><span className="max-w-32 truncate">{entry.label}</span></Button>;
-            const renaming = deviceKey && renamingDevice === deviceKey;
-            const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
-            return <div key={entry.id} data-device-tab={deviceKey ?? undefined} className={cn("flex min-w-0 shrink-0 items-center rounded-control", entry.selected && "bg-list-selection")}>
-              {renaming
-                ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
-                : deviceKey
-                  ? <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>
-                  : tabButton}
-              <Button variant="transparent" size="small" iconOnly disabled={panel.gitOperationBusy} aria-label={`Close ${entry.label} tab`} onClick={() => closeStripTab(entry)}><X className="size-3" /></Button>
-            </div>;
-          })}
-        </div>
-        <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={panel.gitOperationBusy} aria-label="New workspace tab" onClick={() => openTool("new-tab")}><Plus /></Button>
-        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{stripTabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={panel.gitOperationBusy} onSelect={() => { tabMenuSelectionRef.current = true; selectStripTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
-        <Button variant="transparent" size="small" iconOnly onClick={panel.closeTools} aria-label="Close environment panel" aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`Close workspace panel (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
-      </header>
-
-      <div className="min-h-0 flex-1 @container">
-        <div id="environment-new-tab-panel" role="tabpanel" aria-labelledby="environment-new-tab-tab" hidden={panel.tab !== "new-tab"} className="h-full min-h-0">
-          <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
-        </div>
-        <div id="environment-context-panel" role="tabpanel" aria-labelledby="environment-context-tab" hidden={panel.tab !== "context"} className="h-full min-h-0"><ChatContextPanel details={panel.contextDetails} /></div>
-        <div id="environment-terminal-panel" role="tabpanel" aria-labelledby="environment-terminal-tab" hidden={panel.tab !== "terminal"} className="h-full min-h-0"><TerminalSideTarget presented={presented && panel.tab === "terminal"} /></div>
-        <div
-          id="environment-review-panel"
-          role="tabpanel"
-          aria-labelledby="environment-review-tab"
-          hidden={panel.tab !== "review"}
-          className="h-full min-h-0"
-        >
-          <ReviewPanel
-            workspace={active}
-            chatId={panel.activeChat.chatId ?? undefined}
-            active={presented && panel.tab === "review"}
-            mode={panel.reviewMode}
-            onModeChange={panel.openReview}
-            onOpenFile={panel.openFile}
-          />
-        </div>
-        {panel.subagentsEnabled ? (
-          <div
-            id="environment-subagents-panel"
-            role="tabpanel"
-            aria-labelledby="environment-subagents-tab"
-            hidden={panel.tab !== "subagents"}
-            className="h-full min-h-0"
-          >
-            <SubagentsPanel
-              chatId={panel.subagents.chatId}
-              workspaceId={panel.subagents.workspaceId}
-              runs={panel.subagentViews}
-              handoffSnapshots={panel.subagents.handoffSnapshots}
-              selectedRunId={panel.selectedSubagentRunId}
-              selectedRunSnapshot={
-                panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
-                  ?.snapshot
-              }
-              detailLoading={panel.subagentDetailLoading}
-              detailError={panel.subagentDetailError}
-              effectActivity={panel.subagentDetailEffects}
-              onSelectedRunChange={panel.selectSubagent}
-              onRetryDetail={panel.retrySubagentDetail}
-              onStopRun={panel.stopSubagent}
-              stopPendingRunIds={panel.subagentStopPendingRunIds}
-              stopErrorsByRunId={panel.subagentStopErrorsByRunId}
-              onDetailAnnouncement={panel.announceSubagentDetail}
-              detailRequestVersion={panel.subagentFocusDetailVersion}
-              compact={width < 620}
-              active={presented && panel.tab === "subagents"}
-              ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
-            />
-          </div>
-        ) : null}
-        <div
-          id="environment-files-panel"
-          role="tabpanel"
-          aria-labelledby="environment-files-tab"
-          hidden={panel.tab !== "files"}
-          className="h-full min-h-0"
-        >
-          <FilesPanel
-            workspace={active}
-            active={presented && panel.tab === "files"}
-            requestedPath={activeFileRequest?.path ?? null}
-            requestedPathKey={activeFileRequest?.id ?? 0}
-            compact={width < 540}
-            interactionBlockedReason={
-              panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
-            }
-            onEditorStateChange={panel.reportEditorState}
-          />
-        </div>
-        <div
-          id="environment-browser-panel"
-          role="tabpanel"
-          aria-labelledby="environment-browser-tab"
-          hidden={panel.tab !== "browser"}
-          className="h-full min-h-0"
-        >
-          {active && (
-            <React.Suspense fallback={null}>
-              <BrowserPanel
-                workspaceId={active.id}
-                integratedTabs
-                onStateChange={commitBrowserState}
-                active={presented && panel.tab === "browser"}
-                onDock={() => panel.showTools("browser")}
-              />
-            </React.Suspense>
-          )}
-        </div>
-        {panel.devicesEnabled ? (
-          <div
-            id="environment-devices-panel"
-            role="tabpanel"
-            aria-labelledby="environment-devices-tab"
-            hidden={panel.tab !== "devices"}
-            className="h-full min-h-0"
-          >
-            {active && (
-              <React.Suspense fallback={null}>
-                <DevicesPanel
-                  workspaceId={active.id}
-                  chatId={panel.activeChat.chatId ?? undefined}
-                  active={presented && panel.tab === "devices"}
-                  compact={width < 540}
-                  selected={devices.selected}
-                  floating={devices.floating}
-                  onOpened={(session) => devices.opened(session)}
-                  onClosed={(session) => devices.dismiss(deviceTabKey(session))}
-                  onFloat={(session) => {
-                    devices.float(deviceTabKey(session));
-                    panel.closeTools();
-                  }}
-                  onDock={(session) => {
-                    if (chatId) deviceWorkspace.setFloating(chatId, null);
-                    devices.select(deviceTabKey(session));
-                  }}
-                />
-              </React.Suspense>
-            )}
-          </div>
-        ) : null}
-      </div>
-    </aside>
+      label="Environment work surface"
+      resizeLabel="Resize environment panel"
+      open={fullOpen}
+      presented={presented}
+      inline={inline}
+      width={width}
+      containerWidth={containerWidth}
+      resizing={resizing}
+      onResizingChange={setResizing}
+      onWidthChange={setWidth}
+      onWidthCommit={persistWidth}
+      onActivate={() => panel.activateSurface("tools")}
+      surfaceRef={surfaceRef}
+      activeTabRef={activeTabRef}
+      views={views}
+      selectedViewId={panel.tab}
+      tabs={decoratedTabs}
+      idPrefix="environment"
+      tabListLabel="Environment views"
+      busy={panel.gitOperationBusy}
+      onSelectTab={selectStripTab}
+      onCloseTab={closeStripTab}
+      newTab={{ label: "New workspace tab", onOpen: () => openTool("new-tab") }}
+      closeLabel="Close environment panel"
+      closeTitle="Close workspace panel"
+      onClose={panel.closeTools}
+    />
   );
 }
+
+const QUICK_VIEW_SECTION_TITLES: Record<QuickViewSectionId, string> = {
+  environment: "Environment",
+  changes: "Changes",
+  context: "Context",
+  subagents: "Subagents",
+};
+
+/** Gap between Quick View cards (`gap-2`), added to the dragged card's height when siblings shift. */
+const QUICK_VIEW_CARD_GAP_PX = 8;
+/** Keeps a collapsing body's content until its row transition (`--motion-duration`) has run. */
+const QUICK_VIEW_BODY_UNMOUNT_MS = 300;
+
+function readQuickViewLayout(): QuickViewLayout {
+  try {
+    return parseQuickViewLayout(localStorage.getItem(QUICK_VIEW_LAYOUT_STORAGE_KEY));
+  } catch {
+    return DEFAULT_QUICK_VIEW_LAYOUT;
+  }
+}
+
+function writeQuickViewLayout(layout: QuickViewLayout): void {
+  try {
+    localStorage.setItem(QUICK_VIEW_LAYOUT_STORAGE_KEY, serializeQuickViewLayout(layout));
+  } catch {
+    // Storage can be unavailable; the layout still applies for this session.
+  }
+}
+
+/** True while `open`, and for a moment after it closes so a collapsing body keeps its content. */
+function useMountedWhileOpen(open: boolean): boolean {
+  const [mounted, setMounted] = React.useState(open);
+  React.useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    if (prefersReducedMotion()) {
+      setMounted(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setMounted(false), QUICK_VIEW_BODY_UNMOUNT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [open]);
+  return open || mounted;
+}
+
+function ContextSummaryMeter({
+  pressure,
+  compacting,
+}: {
+  pressure: ChatContextPressureV1;
+  compacting: boolean;
+}) {
+  const percent = contextPressurePercent(pressure);
+  // Same presentation threshold as the composer ContextMeter; a running compaction is emphasized too.
+  const approaching = compacting || pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
+  return (
+    <>
+      <span>{`${percent}%`}</span>
+      <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-control">
+        <span
+          className={cn(
+            "block h-full rounded-full transition-[width] duration-(--motion-large-duration) ease-standard motion-reduce:transition-none",
+            approaching ? "bg-support-warning" : "bg-accent",
+          )}
+          style={{ width: `${Math.min(100, percent)}%` }}
+        />
+      </span>
+    </>
+  );
+}
+
+interface QuickViewDragPreview {
+  id: QuickViewSectionId;
+  to: number;
+  offset: number;
+}
+
+/**
+ * Quick View's cards for a workspace with a readable folder. Environment always shows; the
+ * others appear once they have something to say, and every card starts collapsed.
+ */
+export function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boolean }) {
+  const panel = useEnvironmentPanel();
+  const chatId = panel.activeChat.chatId ?? undefined;
+  const [layout, setLayout] = React.useState(readQuickViewLayout);
+  const [dragPreview, setDragPreview] = React.useState<QuickViewDragPreview | null>(null);
+  const [announcement, setAnnouncement] = React.useState("");
+  const [changesDialogOpen, setChangesDialogOpen] = React.useState(false);
+  const [entering, setEntering] = React.useState<ReadonlySet<QuickViewSectionId>>(() => new Set());
+  const [changesWasShown, setChangesWasShown] = React.useState(false);
+  const cardRefs = React.useRef(new Map<QuickViewSectionId, HTMLDivElement>());
+  const previousVisibleRef = React.useRef<ReadonlySet<QuickViewSectionId> | null>(null);
+  const focusGripRef = React.useRef<QuickViewSectionId | null>(null);
+
+  const changesVisible = useChangesVisibility(workspace.id, chatId, live);
+  const changesSummary = useChangesSummary(workspace.id, live);
+  const environmentSummary = useEnvironmentSummary(workspace);
+  const showFolder = useShowWorkspaceFolder(workspace);
+  const pressure = panel.contextDetails?.pressure ?? null;
+  const compacting = Boolean(panel.contextDetails?.compacting);
+  const subagentSummary = subagentOverviewSummary(panel.subagentViews);
+  const subagentsBodyMounted = useMountedWhileOpen(Boolean(layout.expanded.subagents));
+
+  const visible = quickViewVisibleSections(layout.order, {
+    changesVisible,
+    // An open commit or push dialog, or the Git operation it started, keeps the card that owns it.
+    changesHeld: changesDialogOpen || panel.gitOperationBusy,
+    changesWasShown,
+    hasContextPressure: Boolean(pressure),
+    subagentsEnabled: panel.subagentsEnabled,
+    subagentRunCount: panel.subagentViews.length,
+  });
+  const visibleKey = visible.join(" ");
+
+  React.useLayoutEffect(() => {
+    const previous = previousVisibleRef.current;
+    const ids = visibleKey.split(" ") as QuickViewSectionId[];
+    const current = new Set(ids);
+    previousVisibleRef.current = current;
+    setChangesWasShown(current.has("changes"));
+    // A card that leaves mid-drag takes its drag preview with it.
+    setDragPreview((preview) => (preview && !current.has(preview.id) ? null : preview));
+    if (!previous) return;
+    const removed = [...previous].some((id) => !current.has(id));
+    // A removed card that held focus drops it to the body; hand it to the first remaining card.
+    const focusLost = !document.activeElement || document.activeElement === document.body;
+    if (removed && focusLost && live) {
+      cardRefs.current.get(ids[0])?.querySelector<HTMLElement>("button[aria-expanded]")?.focus();
+    }
+    // Cards present when Quick View opens arrive with the surface; only later ones animate.
+    if (prefersReducedMotion()) return;
+    const added = ids.filter((id) => !previous.has(id));
+    if (added.length > 0) setEntering((animating) => new Set([...animating, ...added]));
+  }, [live, visibleKey]);
+
+  React.useLayoutEffect(() => {
+    const id = focusGripRef.current;
+    if (!id) return;
+    focusGripRef.current = null;
+    document
+      .querySelector<HTMLElement>(`[data-quick-view-section="${id}"] [aria-label^="Move "]`)
+      ?.focus();
+  }, [layout.order]);
+
+  const commitLayout = (next: QuickViewLayout) => {
+    setLayout(next);
+    writeQuickViewLayout(next);
+  };
+
+  const onMove = (id: QuickViewSectionId, toIndex: number) => {
+    const card = cardRefs.current.get(id);
+    // Reordering moves the card's DOM node, which drops focus; put it back on the grip.
+    if (card?.contains(document.activeElement)) focusGripRef.current = id;
+    commitLayout(moveSection(layout, id, toIndex, visible));
+    const position = Math.max(0, Math.min(visible.length - 1, toIndex)) + 1;
+    setAnnouncement(`${QUICK_VIEW_SECTION_TITLES[id]} moved to position ${position} of ${visible.length}`);
+  };
+
+  const onDragPreview = (id: QuickViewSectionId, to: number | null) => {
+    if (to === null) {
+      setDragPreview(null);
+      return;
+    }
+    const height = cardRefs.current.get(id)?.getBoundingClientRect().height ?? 0;
+    setDragPreview({ id, to, offset: height + QUICK_VIEW_CARD_GAP_PX });
+  };
+
+  const measureSiblings = () =>
+    visible.flatMap((id) => {
+      const card = cardRefs.current.get(id);
+      return card ? [card.getBoundingClientRect()] : [];
+    });
+
+  const siblingShift = (index: number): number => {
+    if (!dragPreview) return 0;
+    const from = visible.indexOf(dragPreview.id);
+    if (from < 0 || index === from) return 0;
+    if (from < dragPreview.to && index > from && index <= dragPreview.to) return -dragPreview.offset;
+    if (dragPreview.to < from && index >= dragPreview.to && index < from) return dragPreview.offset;
+    return 0;
+  };
+
+  const toolsBlocked = panel.gitOperationBusy;
+  const sections: Record<
+    QuickViewSectionId,
+    Pick<QuickViewSectionProps, "summary" | "summaryLabel" | "headerAction" | "children">
+  > = {
+    environment: {
+      summary: environmentSummary?.node,
+      summaryLabel: environmentSummary?.label,
+      headerAction: { kind: "external", label: showFolder.label, onSelect: showFolder.show },
+      children: (
+        <EnvironmentRows
+          workspace={workspace}
+          active={live}
+          mutationBlockedReason={panel.gitMutationBlockedReason}
+          onGitOperationBusyChange={panel.setGitOperationBusy}
+          onCreateWorktree={panel.createWorktree}
+          onBrowseFiles={() => panel.showTools("files")}
+          toolsDisabled={toolsBlocked}
+        />
+      ),
+    },
+    changes: {
+      summary: changesSummary?.node,
+      summaryLabel: changesSummary?.label,
+      headerAction: {
+        kind: "sidebar",
+        label: "Open Changes in sidebar",
+        onSelect: () => panel.openReview("changes"),
+        disabled: toolsBlocked,
+      },
+      children: (
+        <ChangesRows
+          workspace={workspace}
+          chatId={chatId}
+          active={live}
+          mutationBlockedReason={panel.gitMutationBlockedReason}
+          onGitOperationBusyChange={panel.setGitOperationBusy}
+          onOpenReview={panel.openReview}
+          toolsDisabled={toolsBlocked}
+          onDialogOpenChange={setChangesDialogOpen}
+        />
+      ),
+    },
+    context: {
+      summary: pressure ? <ContextSummaryMeter pressure={pressure} compacting={compacting} /> : undefined,
+      summaryLabel: pressure ? `${contextPressurePercent(pressure)} percent used` : undefined,
+      headerAction: {
+        kind: "sidebar",
+        label: "Open Context in sidebar",
+        onSelect: () => panel.showTools("context"),
+        disabled: toolsBlocked,
+      },
+      children: pressure ? <ContextBreakdown pressure={pressure} compacting={compacting} /> : null,
+    },
+    subagents: {
+      summary: subagentSummary.secondary,
+      summaryLabel: subagentSummary.ariaLabel,
+      headerAction: {
+        kind: "sidebar",
+        label: "Open Subagents in sidebar",
+        onSelect: () => panel.showTools("subagents"),
+        disabled: toolsBlocked,
+      },
+      // The run list ticks elapsed time, so it only exists while the card is open.
+      children: subagentsBodyMounted ? (
+        <SubagentStatusGroups
+          runs={panel.subagentViews}
+          stopPendingRunIds={panel.subagentStopPendingRunIds}
+          stopErrors={panel.subagentStopErrorsByRunId}
+          onOpen={panel.openSubagent}
+          onStop={panel.stopSubagent}
+        />
+      ) : null,
+    },
+  };
+
+  return (
+    <>
+      {visible.map((id, index) => {
+        const shift = siblingShift(index);
+        return (
+          <div
+            key={id}
+            ref={(element) => {
+              if (element) cardRefs.current.set(id, element);
+              else cardRefs.current.delete(id);
+            }}
+            data-entering={entering.has(id) ? "" : undefined}
+            onAnimationEnd={(event) => {
+              if (event.target !== event.currentTarget) return;
+              setEntering((ids) => {
+                const next = new Set(ids);
+                next.delete(id);
+                return next;
+              });
+            }}
+            className={cn(
+              "quick-view-card-slot shrink-0",
+              dragPreview &&
+                "transition-[translate] duration-(--motion-large-duration) ease-standard motion-reduce:transition-none",
+            )}
+            style={shift ? { translate: `0 ${shift}px` } : undefined}
+          >
+            <QuickViewSection
+              id={id}
+              title={QUICK_VIEW_SECTION_TITLES[id]}
+              collapsed={!layout.expanded[id]}
+              onToggle={() => commitLayout(toggleSectionExpanded(layout, id))}
+              index={index}
+              count={visible.length}
+              onMove={onMove}
+              measureSiblings={measureSiblings}
+              onDragPreview={onDragPreview}
+              {...sections[id]}
+            />
+          </div>
+        );
+      })}
+      <QuickViewMoveStatus message={announcement} />
+    </>
+  );
+}
+
+/** Matches `-m-1.5` on the Quick View stack: how far its padded scroller extends past the cards' old box. */
+const QUICK_VIEW_STACK_BLEED_PX = 6;
 
 function QuickViewCard({
   width,
@@ -1639,13 +1850,8 @@ function QuickViewCard({
   const { active } = useActiveWorkspace();
   const open = panel.quickViewOpen;
   const [present, setPresent] = React.useState(open);
-  const menuButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const menuDestinationRef = React.useRef<EnvironmentReviewMode | "files" | null>(null);
-  const subagentCounts = panel.subagentCounts;
-  const hasSubagents = panel.subagentsEnabled && subagentCounts.active + subagentCounts.done > 0;
-  const representativeSubagent =
-    panel.subagentViews.find((view) => !view.terminal) ?? panel.subagentViews[0];
-  const subagentSummary = subagentOverviewSummary(panel.subagentViews);
+  const stackRef = React.useRef<HTMLElement | null>(null);
+  const available = Boolean(active?.folderPath) && active?.permission !== "none";
 
   React.useLayoutEffect(() => {
     if (open) {
@@ -1653,8 +1859,7 @@ function QuickViewCard({
       return;
     }
     if (!present) return;
-    const reducedMotion = document.documentElement.dataset.reduceMotion === "true";
-    if (reducedMotion) {
+    if (prefersReducedMotion()) {
       setPresent(false);
       return;
     }
@@ -1664,12 +1869,17 @@ function QuickViewCard({
 
   React.useLayoutEffect(() => {
     if (open && present && presented && panel.frontSurface === "quick-view") {
-      menuButtonRef.current?.focus();
+      // Keep focus that is already inside Quick View (a card the user just pressed).
+      if (stackRef.current?.contains(document.activeElement)) return;
+      stackRef.current
+        ?.querySelector<HTMLButtonElement>("[data-quick-view-section] button[aria-expanded]")
+        ?.focus();
     }
   }, [open, panel.frontSurface, present, presented]);
 
   return (
     <aside
+      ref={stackRef}
       id="quick-view-card"
       data-environment-surface="quick-view"
       data-surface-mode="quick-view"
@@ -1681,144 +1891,25 @@ function QuickViewCard({
       onFocusCapture={() => panel.activateSurface("quick-view")}
       onPointerDownCapture={() => panel.activateSurface("quick-view")}
       className={cn(
-        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-sheet bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        "quick-view-card no-drag absolute top-14 z-30 -m-1.5 flex max-h-[calc(100%-3.5rem)] flex-col gap-2 overflow-y-auto p-2 text-primary transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
         (!open || !presented) && "translate-x-[calc(100%+0.75rem)] opacity-0",
       )}
       style={{
-        width,
+        // The scroller pads out beyond the cards so card shadows, a dragged card's lift and
+        // its overshoot aren't clipped; the negative margin keeps the cards where they were.
+        width: width + 2 * QUICK_VIEW_STACK_BLEED_PX,
         right,
         pointerEvents: open && presented ? "auto" : "none",
       }}
     >
       {present ? (
-        <>
-          <header className="drag-region flex h-12 shrink-0 items-center gap-2 px-4">
-            <Text variant="strong" color="tertiary" truncate className="min-w-0 flex-1">
-              Quick View
-            </Text>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  ref={menuButtonRef}
-                  variant="transparent"
-                  size="small"
-                  iconOnly
-                  aria-label="Quick View actions"
-                  title="Quick View actions"
-                  className="no-drag"
-                >
-                  <Plus />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="w-52"
-                onCloseAutoFocus={(event) => {
-                  const destination = menuDestinationRef.current;
-                  menuDestinationRef.current = null;
-                  if (!destination) return;
-                  const trigger = menuButtonRef.current;
-                  const triggerAvailable =
-                    trigger?.isConnected &&
-                    !trigger.closest('[inert], [aria-hidden="true"]');
-                  if (!open || !presented || panel.gitOperationBusy || !triggerAvailable) {
-                    // Keep Radix's normal restoration when the trigger is usable. If
-                    // it disappeared or became inert, preserve newer focus or use the
-                    // application fallback instead of leaving focus in the removed menu.
-                    if (!triggerAvailable) {
-                      event.preventDefault();
-                      const focused = document.activeElement;
-                      if (
-                        !(focused instanceof HTMLElement) ||
-                        focused === document.body ||
-                        !focused.isConnected ||
-                        focused.closest('[inert], [aria-hidden="true"]')
-                      ) {
-                        document.querySelector<HTMLElement>("[data-app-focus-root]")?.focus();
-                      }
-                    }
-                    return;
-                  }
-                  event.preventDefault();
-                  // Finish the menu's focus scope before opening tools. Otherwise its
-                  // return focus reactivates Quick View and covers tools in narrow layouts.
-                  // Remember the durable trigger, not the menu item that just unmounted.
-                  trigger.focus();
-                  if (destination === "files") panel.showTools("files");
-                  else panel.openReview(destination);
-                }}
-              >
-                <DropdownMenuItem
-                  disabled={panel.gitOperationBusy}
-                  onSelect={() => {
-                    menuDestinationRef.current = "changes";
-                  }}
-                >
-                  <GitCompareArrows className="size-4" aria-hidden="true" />
-                  Review changes
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={panel.gitOperationBusy}
-                  onSelect={() => {
-                    menuDestinationRef.current = "files";
-                  }}
-                >
-                  <Files className="size-4" aria-hidden="true" />
-                  Browse files
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={panel.gitOperationBusy}
-                  onSelect={() => {
-                    menuDestinationRef.current = "compare";
-                  }}
-                >
-                  <GitCompareArrows className="size-4" aria-hidden="true" />
-                  Compare branch
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </header>
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1">
-              <EnvironmentOverview
-                workspace={active}
-                chatId={panel.activeChat.chatId ?? undefined}
-                active={open && presented}
-                presentation="card"
-                mutationBlockedReason={panel.gitMutationBlockedReason}
-                onGitOperationBusyChange={panel.setGitOperationBusy}
-                onOpenReview={panel.openReview}
-                onCreateWorktree={panel.createWorktree}
-              />
-            </div>
-            {hasSubagents ? (
-              <div className="shrink-0 border-t border-separator px-3 py-3">
-                <Text as="h2" variant="small-strong" color="tertiary" className="mb-1 px-2">
-                  Subagents
-                </Text>
-                <button
-                  type="button"
-                  onClick={() => panel.showTools("subagents")}
-                  aria-label={`Open Subagents, ${subagentSummary.ariaLabel}`}
-                  className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
-                >
-                  <SubagentMark
-                    role={representativeSubagent?.role}
-                    state={representativeSubagent?.state ?? "finished"}
-                    activity={representativeSubagent?.snapshot?.activity}
-                    size={20}
-                  />
-                  <span className="min-w-0 truncate text-regular text-primary">
-                    {subagentSummary.primary}
-                  </span>
-                  <span className="max-w-44 min-w-0 truncate text-small tabular-nums text-tertiary">
-                    {subagentSummary.secondary}
-                  </span>
-                </button>
-              </div>
-            ) : null}
+        active && available ? (
+          <QuickViewCards workspace={active} live={open && presented} />
+        ) : (
+          <div className="shrink-0 rounded-dialog bg-popover shadow-popover">
+            <QuickViewUnavailable workspace={active} />
           </div>
-        </>
+        )
       ) : null}
     </aside>
   );
@@ -1862,20 +1953,22 @@ export function EnvironmentWorkbench({
 }: React.PropsWithChildren<{
   /**
    * Hides the Environment and Quick View surfaces without changing whether
-   * they are open, for content that is not on this Mac (a paired host's chat).
+   * they are open, for content that is not on this Mac (a paired host's chat)
+   * and for Bots pages, which have their own panel.
    */
   suppressed?: boolean;
 }>) {
   const panel = useEnvironmentPanel();
+  useBrowserSurface(!suppressed);
   const toolsOpen = panel.toolsOpen && !suppressed;
   const quickViewOpen = panel.quickViewOpen && !suppressed;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
-  const [resizing, setResizing] = React.useState(false);
-  const [preferredWidth, setPreferredWidth] = React.useState(storedPanelWidth);
+  const panelWidth = useWorkbenchWidth(WIDTH_STORAGE_KEY);
+  const resizing = panelWidth.resizing;
   const fullOpen = toolsOpen;
   const { width: renderedWidth, inline } = resolveEnvironmentPanelLayout(
-    preferredWidth,
+    panelWidth.preferredWidth,
     containerWidth,
   );
   const quickViewLayout = resolveQuickViewLayout(
@@ -1956,9 +2049,9 @@ export function EnvironmentWorkbench({
 
   const reportSurfaceLayout = panel.reportSurfaceLayout;
   React.useLayoutEffect(() => {
-    reportSurfaceLayout(fullOpen ? { inline, width: renderedWidth } : null);
+    reportSurfaceLayout(fullOpen ? { inline, width: renderedWidth, stacked } : null);
     return () => reportSurfaceLayout(null);
-  }, [fullOpen, inline, renderedWidth, reportSurfaceLayout]);
+  }, [fullOpen, inline, renderedWidth, stacked, reportSurfaceLayout]);
 
   return (
     <div
@@ -2010,8 +2103,9 @@ export function EnvironmentWorkbench({
         inline={inline}
         presented={toolsPresented}
         resizing={resizing}
-        setResizing={setResizing}
-        setWidth={setPreferredWidth}
+        setResizing={panelWidth.setResizing}
+        setWidth={panelWidth.setPreferredWidth}
+        persistWidth={panelWidth.commitPreferredWidth}
       />
     </div>
   );
@@ -2025,8 +2119,8 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
   return (
     <Button
       iconOnly
-      variant="toolbar"
-      size="large"
+      variant="bar"
+      size="small"
       onClick={panel.toggleTools}
       disabled={disabled || panel.gitOperationBusy}
       aria-label={active ? "Hide Environment" : "Show Environment"}
@@ -2066,8 +2160,8 @@ export function QuickViewToggle({ disabled = false }: { disabled?: boolean }) {
   return (
     <Button
       iconOnly
-      variant="toolbar"
-      size="large"
+      variant="bar"
+      size="small"
       onClick={panel.toggleQuickView}
       disabled={disabled || panel.gitOperationBusy}
       aria-label={active ? "Hide Quick View" : "Show Quick View"}

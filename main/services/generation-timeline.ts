@@ -16,11 +16,19 @@ import {
   type GenerationTimelineStatus,
 } from "../../renderer/shared/generation-timeline.js";
 
+import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
+import { isImageGenerationProviderId } from "../../renderer/shared/image-generation/types.js";
 import { parseProducedFile } from "../../renderer/shared/produced-file.js";
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  parseAskUserQuestionRecap,
+} from "../../renderer/shared/ask-user-question.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
 const MAX_DETAIL_LENGTH = 120;
+/** The wire limit native clients and the renderer enforce on a step label (UTF-16 units). */
+const MAX_LABEL_LENGTH = 120;
 const MAX_LINE_CHANGE_COUNT = 100_000_000;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 
@@ -200,6 +208,40 @@ function safeDetail(value: unknown): string | undefined {
   return cleaned || undefined;
 }
 
+const IMAGE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
+
+/**
+ * `<provider>/<model id>` for a generate_image call, from a closed provider set
+ * and a conservative id alphabet; anything else is dropped. Never the prompt.
+ */
+function safeImageModelTarget(provider: unknown, model: unknown): string | undefined {
+  if (!isImageGenerationProviderId(provider) || typeof model !== "string") return undefined;
+  if (!IMAGE_MODEL_ID.test(model) || model.includes("..") || model.includes("//") || model.endsWith("/")) {
+    return undefined;
+  }
+  const target = `${provider}/${model}`;
+  return target.length <= MAX_TARGET_LENGTH ? target : undefined;
+}
+
+/** One printable line within the step-label limit, never splitting a surrogate pair. */
+function safeLabel(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const flat = Array.from(value)
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 32 || (code >= 127 && code < 160) || code === 0x2028 || code === 0x2029 ? " " : character;
+    })
+    .join("")
+    .replace(/\s+/gu, " ")
+    .trim();
+  let label = "";
+  for (const character of flat) {
+    if (label.length + character.length > MAX_LABEL_LENGTH) break;
+    label += character;
+  }
+  return label.trim() || undefined;
+}
+
 function titleCaseToolName(toolName: string): string {
   return safeToolName(toolName)
     .split(/[_:.-]+/u)
@@ -241,10 +283,20 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
         label: "Render artifact",
         detail: safeDetail(values.title),
       };
+    case "render_ui":
+      return { label: "Draw visual", detail: safeDetail(values.title) };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
     case "share_image":
       return { label: "Share image", target: path };
+    case "generate_image":
+      // Only the requested shape, from a closed set: the prompt never leaves the
+      // host. Paired phones size their in-progress placeholder from this detail.
+      return {
+        label: "Generate image",
+        target: safeImageModelTarget(values.provider, values.model),
+        detail: isImageAspectRatio(values.aspectRatio) ? values.aspectRatio : undefined,
+      };
     case "web_search":
       return { label: "Web search", detail: safeDetail(values.query) };
     case "schedule_task":
@@ -298,6 +350,7 @@ export class GenerationTimelineProjector {
   private contentOffset = 0;
   private reasoningOffset = 0;
   private openThinking: { index: number; startedAt: number } | null = null;
+  private toolLabel: (toolName: string) => string | undefined = () => undefined;
 
   constructor(
     generationId: string,
@@ -313,6 +366,21 @@ export class GenerationTimelineProjector {
     };
   }
 
+  /**
+   * Presentation labels for tools the built-in descriptors do not know, such
+   * as an MCP tool's `server/tool` label. Only the step's `label` string
+   * changes; `toolName` and the step shape stay as they are on the wire.
+   */
+  setToolLabels(resolve: (toolName: string) => string | undefined): void {
+    this.toolLabel = resolve;
+  }
+
+  private describeTool(toolName: string, args: unknown): SafeToolDescriptor {
+    const descriptor = safeToolDescriptor(toolName, args);
+    const label = safeLabel(this.toolLabel(toolName));
+    return label ? { ...descriptor, label } : descriptor;
+  }
+
   toolStarted(toolCallId: string, toolName: string, args: unknown): void {
     if (this.timeline.status !== "running") return;
     const existingIndex = this.stepIndex.get(toolCallId);
@@ -321,7 +389,7 @@ export class GenerationTimelineProjector {
       // resolve) adopts the full descriptor once execution supplies real args.
       const step = this.timeline.steps[existingIndex];
       if (step && isToolStep(step) && !isTerminalAgentStep(step.status)) {
-        const descriptor = safeToolDescriptor(toolName, args);
+        const descriptor = this.describeTool(toolName, args);
         const timestamp = this.now();
         step.toolName = safeToolName(toolName);
         step.label = descriptor.label;
@@ -335,7 +403,7 @@ export class GenerationTimelineProjector {
       return;
     }
     const timestamp = this.now();
-    const descriptor = safeToolDescriptor(toolName, args);
+    const descriptor = this.describeTool(toolName, args);
     this.toolSequence += 1;
     const step: AgentToolStep = {
       id: `tool-${this.toolSequence}`,
@@ -706,6 +774,10 @@ export class GenerationTimelineProjector {
         if (step.toolName === "form_fill") {
           const outcome = safeFormFillOutcome(resultDetails);
           if (outcome) step.detail = outcome;
+        }
+        if (step.toolName === ASK_USER_QUESTION_TOOL_NAME) {
+          const questionnaire = parseAskUserQuestionRecap(resultDetails);
+          if (questionnaire) step.questionnaire = questionnaire;
         }
       } else {
         const issue = safeToolIssue(resultDetails);

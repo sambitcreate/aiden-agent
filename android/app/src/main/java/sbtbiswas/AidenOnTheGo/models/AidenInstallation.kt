@@ -148,6 +148,24 @@ data class AidenServer(
     val offersBotCards: Boolean
         get() = supportsBotMemory || supportsBotProactive
 
+    /**
+     * The Mac offers `bot:activity` (revision 30) in its capability list, so this phone asks for
+     * it (FR-m3: the same rule as iOS). A Mac offers it only while it announces `bot-activity-v1`.
+     */
+    val offersBotActivity: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ACTIVITY) == true
+
+    /** Announced and held: show the status line, Steer and Queue, Queued bubbles and Chat activity. */
+    val supportsBotActivity: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE) && capabilities.contains(AidenRemoteCapability.BOT_ACTIVITY)
+
+    /**
+     * Chat messages may carry inline `visuals` (revision 28). Informational:
+     * the transcript renders whatever visuals a message carries.
+     */
+    val supportsChatVisuals: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_VISUALS_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }
@@ -252,9 +270,20 @@ data class AidenInstallation(
     var deviceCapabilities: List<AidenRemoteCapability>,
     var serverCapabilities: List<AidenRemoteCapability>? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
-    @Serializable(with = InstantIso8601Serializer::class) var lastConnectedAt: Instant? = null
+    @Serializable(with = InstantIso8601Serializer::class) var lastConnectedAt: Instant? = null,
+    /**
+     * The feature tokens the Mac's `/server` last announced to this pairing, or null before it
+     * first answered. With the persisted grants they stand in for `/server` while it is still on
+     * its way (R21), so a cold offline start keeps what this pairing could do.
+     */
+    val serverFeatures: List<String>? = null
 ) {
     val id: String get() = instanceId
+
+    /** The Mac last announced `bot-activity-v1` and this pairing holds `bot:activity` (R21). */
+    val cachedBotActivitySupported: Boolean
+        get() = serverFeatures?.contains(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE) == true &&
+            hasNegotiatedAccess(AidenRemoteCapability.BOT_ACTIVITY)
 
     val isBotsEligible: Boolean
         get() = hasNegotiatedAccess(AidenRemoteCapability.BOT_READ)

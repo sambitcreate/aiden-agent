@@ -66,12 +66,17 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift",
   "AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift",
   "AidenOnTheGo/Features/Chat/AidenChatFork.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatScrollObserver.swift",
+  "AidenOnTheGo/Features/Chat/AidenStreamingRevealGate.swift",
   "AidenOnTheGo/Features/Chat/AidenChatScrollPolicy.swift",
+  "AidenOnTheGo/Features/Chat/AidenImageGenerationPlaceholder.swift",
   "AidenOnTheGo/Features/Chat/AidenTranscriptPolish.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
   "AidenOnTheGo/Features/Remote/AidenMarkdownContentCache.swift",
+  "AidenOnTheGo/Features/Remote/AidenOnboardingArtwork.swift",
+  "AidenOnTheGo/Features/Remote/AidenOnboardingVignettes.swift",
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
   "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenProvidersView.swift",
@@ -127,6 +132,7 @@ const testSources = [
   "AidenChatTests.swift",
   "AidenNativeIntegrationTests.swift",
   "AidenNetworkPathTests.swift",
+  "AidenOnboardingArtTests.swift",
   "AidenProductShellTests.swift",
   "AidenRemoteClientTests.swift",
   "AidenRemoteContractFixture.swift",
@@ -323,7 +329,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   }
   // Bot sessions talk only to the bot-session transport; legacy Bot chats in the
   // product shell open the same AidenChatDetailView as every other conversation.
-  assert.match(botSession, /AidenBotSessionModel\(botID: botID, transport: client\)/u);
+  assert.match(botSession, /AidenBotSessionModel\(\s*botID: botID,\s*transport: client\b/u);
   assert.match(
     productShell,
     /AidenChatDetailView\(\s*coordinator: coordinator,\s*chat: presentation\.chat/u,
@@ -627,7 +633,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(pairing, /\.tabViewStyle\(\.page\(indexDisplayMode: \.never\)\)/u);
   assert.match(pairing, /Paste Pairing Payload[\s\S]*?More pairing options/u);
-  assert.match(pairing, /AidenMobileOnboardingPhase\.allCases[\s\S]*?Image\(phase\.imageName\)/u);
   assert.match(pairing, /BOTS AND WORKSPACES/u);
   assert.match(
     pairing,
@@ -746,10 +751,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(
     chat,
     /AidenBotReplyProjection\.resolve\([\s\S]*?isActive: model\.isStreaming[\s\S]*?if (?:chronologicalRows == nil && )?!visibleText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = visibleText/u,
-  );
-  assert.match(
-    chat,
-    /case \.snapshot:[\s\S]*?if chat\.isBotChat \{[\s\S]*?liveText = ""[\s\S]*?reasoning = ""/u,
   );
   assert.match(
     chat,
@@ -964,7 +965,8 @@ test("Bot catalog requests stay scoped through create, advanced settings, chat, 
   assert.doesNotMatch(advanced, /botCapabilityCatalog\(\)/u);
   assert.doesNotMatch(chat, /botCapabilityCatalog\(\)/u);
   assert.match(advanced, /botCapabilityCatalog\(botId: botID\)/u);
-  assert.match(advanced, /botCapabilityCatalog\(botId: attempt\.botID\)/u);
+  // Both the load and the Save path read the catalog scoped to this Bot.
+  assert.ok((advanced.match(/botCapabilityCatalog\(botId: botID\)/gu) ?? []).length >= 2, "Advanced load and Save both scope the catalog to the Bot");
   assert.match(advanced, /cached\.catalog\(forBotID: botID\)/u);
   assert.match(chat, /botCapabilityCatalog\(botId: botID\)/u);
   assert.equal((chat.match(/botCapabilityCatalog\(botId: grant\.botID\)/gu) ?? []).length, 2, "file load and pre-effect revalidation use the grant owner");

@@ -3,12 +3,14 @@ import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { appApi, chatsApi, onNotification } from "../lib/ipc";
+import { appApi, chatsApi, localRunsApi, onNotification } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
+import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
+import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -29,6 +31,7 @@ import {
   pendingDetachedLifecycleChats,
   preferLatestTerminalChat,
   reconcileChatReadUntilAuthoritative,
+  releaseSettledDetachedLifecycleStreams,
   subscribeChatReadReconciliations,
   subscribeChatSettlements,
   subscribeDetachedTerminalChats,
@@ -37,7 +40,7 @@ import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
-import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
+import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
 
@@ -47,9 +50,11 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <CommandSystemProvider>
-            <RootContent />
-          </CommandSystemProvider>
+          <RoutedBotPanelProvider>
+            <CommandSystemProvider>
+              <RootContent />
+            </CommandSystemProvider>
+          </RoutedBotPanelProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
@@ -60,6 +65,7 @@ function RootContent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
+  const botPanel = useBotPanelActions();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
   const { activeId } = useActiveWorkspace();
@@ -137,6 +143,13 @@ function RootContent() {
   useCommandHandler(
     "environment.toggle",
     () => {
+      // In a Bot chat the shortcut is the Bot panel's; the workspace panel stays as it is.
+      const target = environmentToggleTarget(pathname);
+      if (target === "bot-panel") {
+        botPanel.toggle();
+        return;
+      }
+      if (target === "none") return;
       if (environmentPanel.gitOperationBusy) {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
@@ -148,6 +161,8 @@ function RootContent() {
   useCommandHandler(
     "quick-view.toggle",
     () => {
+      // Quick View is suppressed on Bots pages; toggling it there would change hidden state.
+      if (isBotsPath(pathname)) return;
       if (environmentPanel.gitOperationBusy) {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
@@ -295,18 +310,7 @@ function RootContent() {
     });
   }, [queryClient]);
 
-  React.useEffect(() => {
-    return onNotification("bots:changed", () => {
-      invalidateBotCanonicalPhotos();
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
-        queryClient.invalidateQueries({ queryKey: ["bot"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-live-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
-      ]);
-    });
-  }, [queryClient]);
+  useBotNotificationsSync(queryClient);
 
   React.useEffect(
     () =>
@@ -344,8 +348,24 @@ function RootContent() {
     () =>
       subscribeChatSettlements(onNotification, (settlement) => {
         void reconcileDetachedLifecycleChat(settlement);
+        // Main settles each stream on its own. One that ended while the chat
+        // stays busy (a phone's turn right after it) is released now instead
+        // of draining until the whole chat goes idle.
+        void releaseSettledDetachedLifecycleStreams(settlement, {
+          settled: (streamIds) => localRunsApi.settled(streamIds),
+          refreshChat: async (chatId) => {
+            const chatKey = queryKeys.chat(chatId);
+            if (isChatCacheDeleted(chatId)) return;
+            await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+            if (isChatCacheDeleted(chatId)) return;
+            await queryClient.fetchQuery({ queryKey: chatKey, queryFn: () => chatsApi.get(chatId), staleTime: 0 });
+            await queryClient.refetchQueries({ queryKey: queryKeys.chats, type: "all" });
+          },
+        }).catch(() => {
+          // Not proof of settlement; the chat-level idle path still releases it.
+        });
       }),
-    [reconcileDetachedLifecycleChat],
+    [queryClient, reconcileDetachedLifecycleChat],
   );
 
   React.useEffect(() => {
@@ -382,6 +402,8 @@ function RootContent() {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
         queryClient.invalidateQueries({ queryKey: queryKeys.mcpServers }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mcpLaunchApprovals }),
         queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
         queryClient.invalidateQueries({ queryKey: ["skillCatalog"] }),
       ]);

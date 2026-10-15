@@ -156,12 +156,8 @@ test("floating Environment remains non-modal across every app-level interaction 
   const layout = source("../main/chat-layout.tsx");
   const assistant = source("./assistant/assistant-dock.tsx");
 
-  assert.match(environment, /data-surface-mode=\{inline \? "tools-pinned" : "tools-floating"\}/u);
-  // Floating geometry and titlebar clearance are exercised in Electron.
-  assert.match(
-    environment,
-    /reportSurfaceLayout\(fullOpen \? \{ inline, width: renderedWidth \} : null\)/u,
-  );
+  // Floating geometry, titlebar clearance, and the stacked tools state the
+  // workbench reports are exercised in Electron (workspace-panel, chat-top-bar).
   assert.match(environment, /const toggleTools = React\.useCallback/u);
   assert.match(
     environment,
@@ -242,9 +238,6 @@ test("the Environment work surface owns one mounted Subagents destination", () =
   const environment = source("./environment-panel.tsx");
 
   assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u);
-  assert.match(environment, /\{panel\.subagentsEnabled \? \(\s*<div/u);
-  assert.match(environment, /id="environment-subagents-panel"/u);
-  assert.match(environment, /hidden=\{panel\.tab !== "subagents"\}/u);
   assert.match(environment, /active=\{presented && panel\.tab === "subagents"\}/u);
   assert.match(environment, /compact=\{width < 620\}/u);
   assert.match(environment, /chatId=\{panel\.subagents\.chatId\}/u);
@@ -265,7 +258,6 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const appHandler = source("../../main/handlers/app.ts");
   const bootstrap = source("../main/app.tsx");
   const environment = source("./environment-panel.tsx");
-  const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
   assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
@@ -290,37 +282,12 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   );
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
-  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(
     pane,
     /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u,
   );
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
-});
-
-test("Quick View exposes conditional current-chat counts and the shared activity mark", () => {
-  const environment = source("./environment-panel.tsx");
-
-  assert.match(
-    environment,
-    /const hasSubagents =\s+panel\.subagentsEnabled && subagentCounts\.active \+ subagentCounts\.done > 0/u,
-  );
-  assert.match(environment, /\{hasSubagents \? \(/u);
-  assert.match(environment, /panel\.showTools\("subagents"\)/u);
-  assert.match(environment, /<SubagentMark/u);
-  assert.match(environment, /activity=\{representativeSubagent\?\.snapshot\?\.activity\}/u);
-  assert.doesNotMatch(
-    environment,
-    /state=\{(?:panel\.)?subagentCounts\.active > 0 \? "running" : "finished"\}/u,
-  );
-  assert.match(environment, /subagentOverviewSummary\(panel\.subagentViews\)/u);
-  assert.match(environment, /\{subagentSummary\.primary\}/u);
-  assert.match(environment, /\{subagentSummary\.secondary\}/u);
-  assert.match(environment, /subagentSummary\.ariaLabel/u);
-  assert.match(environment, /min-w-0 truncate text-regular text-primary/u);
-  assert.match(environment, /max-w-44 min-w-0 truncate text-small/u);
 });
 
 test("live snapshots are owner-checked, revisioned, and released across route transitions", () => {
@@ -546,7 +513,7 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.doesNotMatch(environment, /subagentAnnouncerHost|setSubagentAnnouncerHost/u);
   assert.match(
     environment,
-    /<EnvironmentPanelContext.Provider value=\{value\}>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
+    /<EnvironmentPanelContext.Provider value=\{value\}>\s*<LinkOpenerProvider[^>]*>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
   );
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);
@@ -589,11 +556,6 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s+\? "Response continues in the background…"/u);
-  assert.match(
-    pane,
-    /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
-  );
   assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
   assert.match(

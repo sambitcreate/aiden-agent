@@ -6,6 +6,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { request as httpsRequest } from "node:https";
 import * as api from "../dist/parity-test-api.js";
 
@@ -69,9 +70,12 @@ test("title generation preserves manual renames and seeds offline sessions", asy
   const dir = temporary(t), harness = extension(api.createSessionParityExtension(dir));
   const manager = api.SessionManager.inMemory(dir);
   const ctx = { sessionManager: manager, model: undefined };
-  await harness.events.get("before_agent_start")({ prompt: "Build my CLI" }, ctx);
+  // pi 1.2 also starts runs from extension custom messages; they carry no prompt and never title the chat.
+  await harness.events.get("before_agent_start")({ messageType: "custom", message: { role: "custom", content: "Reminder" } }, ctx);
+  assert.equal(harness.name(), undefined);
+  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Build my CLI" }, ctx);
   assert.equal(harness.name(), "Build my CLI");
-  await harness.events.get("before_agent_start")({ prompt: "Second message" }, ctx);
+  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Second message" }, ctx);
   assert.equal(harness.name(), "Build my CLI");
 });
 
@@ -100,6 +104,39 @@ test("catalog status and insight reads never fetch, and model metadata fetch is 
   assert.ok(readFileSync(join(dir, "models-dev.json"), "utf8").includes('"schemaVersion": 1'));
 });
 
+test("/models info attaches cached OpenRouter benchmark scores offline and ignores a missing or invalid cache", async (t) => {
+  const dir = temporary(t), originalEntry = process.env.AIDEN_CLI_ENTRY, originalFetch = globalThis.fetch;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  globalThis.fetch = async () => { throw new Error("/models info must not use the network"); };
+  t.after(() => { globalThis.fetch = originalFetch; if (originalEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = originalEntry; });
+  const commands = new Map();
+  api.createProviderParityExtension(dir).factory({ registerProvider: () => {}, on: () => {}, registerCommand: (name, command) => commands.set(name, command) });
+  const model = { provider: "openai", id: "gpt-cli-bench", name: "GPT CLI Bench", baseUrl: "https://api.openai.com/v1", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 4096 };
+  async function info() {
+    const notes = [];
+    await commands.get("models").handler("info openai/gpt-cli-bench", { modelRegistry: { getAll: () => [model] }, ui: { notify: (text) => notes.push(text) } });
+    return JSON.parse(notes.at(-1));
+  }
+  const missing = await info();
+  assert.equal(missing.id, "gpt-cli-bench");
+  assert.equal(missing.metadata.benchmark, undefined);
+  const cache = api.buildOpenRouterBenchmarkCache({
+    data: [{ source: "artificial-analysis", model_permaslug: "openai/gpt-cli-bench", display_name: "GPT CLI Bench", intelligence_index: 61.5, coding_index: 70.2, agentic_index: 55 }],
+    meta: { as_of: "2026-09-30T00:00:00.000Z", version: "v1", source: "artificial-analysis", source_url: "https://artificialanalysis.ai", citation: "Source: Artificial Analysis (artificialanalysis.ai) via OpenRouter (openrouter.ai/rankings).", model_count: 1 },
+  }, "2026-10-01T00:00:00.000Z");
+  api.atomicJson(join(dir, "openrouter-insights.json"), cache);
+  const matched = await info();
+  assert.equal(matched.metadata.benchmark.intelligence, 61.5);
+  assert.equal(matched.metadata.benchmark.coding, 70.2);
+  assert.equal(matched.metadata.benchmark.agentic, 55);
+  assert.equal(matched.metadata.benchmark.asOf, "2026-09-30T00:00:00.000Z");
+  assert.deepEqual({ ...matched.metadata, benchmark: undefined }, { ...missing.metadata, benchmark: undefined });
+  api.atomicJson(join(dir, "openrouter-insights.json"), { ...cache, source: { ...cache.source, endpoint: "https://example.com/benchmarks" } });
+  assert.deepEqual(await info(), missing);
+  writeFileSync(join(dir, "openrouter-insights.json"), "{ not json");
+  assert.deepEqual(await info(), missing);
+});
+
 test("schedule CRUD uses shared validation, preview and persisted state", async (t) => {
   const dir = temporary(t), input = join(dir, "input.json");
   writeFileSync(input, JSON.stringify({ name: "Review", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Review the repository", permission: "read-only", enabled: false }));
@@ -109,16 +146,6 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.equal((await api.scheduleCommand(dir, ["preview", "0 9 * * *", "UTC"])).length, 5);
   await api.scheduleCommand(dir, ["remove", task.id]);
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
-});
-
-test("child process parses actual event records, passes prompt via stdin, and enforces time budgets", async (t) => {
-  const dir = temporary(t), child = join(dir, "child.mjs"), original = process.env.AIDEN_CLI_ENTRY;
-  process.env.AIDEN_CLI_ENTRY = child; t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
-  writeFileSync(child, `let input=""; for await (const chunk of process.stdin) input += chunk; console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:[{type:"text",text:input}],stopReason:"stop"}}));`);
-  const result = await api.runChild({ cwd: dir, prompt: "secret prompt", permission: "read-only" });
-  assert.equal(result.output, "secret prompt");
-  writeFileSync(child, `setInterval(() => {}, 1000);`);
-  await assert.rejects(api.runChild({ cwd: dir, prompt: "x", permission: "read-only", timeoutMs: 30 }), /time budget/);
 });
 
 test("serve routes concurrent CLI commands and releases its lease on shutdown", async (t) => {
@@ -210,32 +237,15 @@ test("serve lifecycle identifies a live daemon by its recorded argv", async (t) 
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
-test("a real child completes through a local compatible provider with no recursive tools", async (t) => {
-  const dir = temporary(t), requests = [];
-  const server = createServer(async (request, response) => {
-    let body = ""; for await (const chunk of request) body += chunk;
-    const parsed = JSON.parse(body); requests.push(parsed);
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Local child succeeded" }, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
-    response.end("data: [DONE]\n\n");
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const original = { AIDEN_CLI_ENTRY: process.env.AIDEN_CLI_ENTRY, AIDEN_CODING_AGENT_DIR: process.env.AIDEN_CODING_AGENT_DIR, PI_OFFLINE: process.env.PI_OFFLINE };
-  Object.assign(process.env, { AIDEN_CLI_ENTRY: join(pkg, "dist/app/cli.js"), AIDEN_CODING_AGENT_DIR: dir, PI_OFFLINE: "1" });
-  t.after(() => { for (const [key, value] of Object.entries(original)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
-  const result = await api.runChild({ cwd: dir, prompt: "Say hello", permission: "read-only", provider: "cli-test", model: "test", timeoutMs: 15000 });
-  assert.equal(result.output, "Local child succeeded"); assert.equal(requests.length, 1);
-  const names = requests[0].tools?.map((tool) => tool.function.name) ?? [];
-  assert.ok(names.includes("read")); assert.ok(!names.includes("bash")); assert.ok(!names.includes("subagent"));
-});
-
 test("MCP validates transports and redacts configured secrets from listing", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "http://example.com", enabled: true }), /HTTPS/);
-  assert.throws(() => api.validateMcpServer({ id: "../remote", name: "Remote", transport: "stdio", command: "node", enabled: true }), /id, name/);
+  assert.throws(() => api.validateMcpServer({ id: "../remote", name: "Remote", transport: "stdio", command: "node", enabled: true }), /server id must/);
+  for (const id of [undefined, 123, null]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /string id/);
+  for (const id of ["+remote", "-remote"]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /cannot begin with/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "-Remote", transport: "stdio", command: "node", enabled: true }), /name cannot begin with/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", enabled: true }), /needs a url/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "not a url", enabled: true }), /not a valid URL/);
   writeFileSync(file, JSON.stringify({ id: "local", name: "Local", transport: "stdio", command: "node", enabled: false, env: { SECRET: "do-not-list" } }));
   await api.mcpCommand(dir, ["add", file]);
   const listed = await api.mcpCommand(dir, ["list"]);
@@ -674,11 +684,217 @@ test("MCP paginates tools, fences schema drift, and terminates its stdio transpo
   assert.deepEqual(tools[1].parameters.properties.count, { type: ["integer", "null"], minimum: 0, maximum: 4_294_967_295 });
   const result = await tools[1].execute("call", { value: "works" });
   assert.match(JSON.stringify(result), /Echo works/);
+  // A tool error's diagnostic JSON need not match the success output schema.
+  await assert.rejects(tools[1].execute("failure", { value: "fail" }), /Diagnostic failure/);
   writeFileSync(revision, "changed");
   await assert.rejects(tools[1].execute("stale", { value: "must not run" }), /changed/);
-  const pid = Number(readFileSync(pidFile, "utf8"));
+  const [pid, ...others] = readFileSync(pidFile, "utf8").trim().split("\n").map(Number);
+  assert.deepEqual(others, [], "one transport per server");
   await pool.close();
   assert.throws(() => process.kill(pid, 0), /ESRCH/);
+});
+
+function fixtureServer(dir, id, mode = "") {
+  return { id, name: id, transport: "stdio", command: process.execPath, args: [join(pkg, "tests/fixtures/mcp-stdio.mjs"), join(dir, `${id}.changed`), join(dir, `${id}.pid`), mode], enabled: true };
+}
+const listRequests = (dir, id) => existsSync(join(dir, `${id}.pid.lists`)) ? readFileSync(join(dir, `${id}.pid.lists`), "utf8").trim().split("\n").length : 0;
+async function captureStderr(run) {
+  const write = process.stderr.write, lines = [];
+  process.stderr.write = function(chunk, ...args) { if (String(chunk).startsWith("aiden: ")) { lines.push(String(chunk)); return true; } return write.call(this, chunk, ...args); };
+  try { return { value: await run(), stderr: lines.join("") }; } finally { process.stderr.write = write; }
+}
+
+test("MCP reuses a live inventory until tools/list_changed, fails closed on drift or config change, and admits large servers", async (t) => {
+  const dir = temporary(t), watched = fixtureServer(dir, "watched", "listChanged"), large = fixtureServer(dir, "large", "many");
+  api.atomicJson(join(dir, "aiden-mcp.json"), [watched, large]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const tools = await pool.agentTools(watched);
+  assert.equal(listRequests(dir, "watched"), 2);
+  assert.match(JSON.stringify(await tools[0].execute("a", { value: "one" })), /Echo one/);
+  assert.match(JSON.stringify(await tools[0].execute("b", { value: "two" })), /Echo two/);
+  assert.equal(listRequests(dir, "watched"), 2, "calls reuse the complete inventory of the live connection");
+  // The server changes its tools and announces it: the next call re-reads and fails closed.
+  await tools[0].execute("c", { value: "notify" });
+  await assert.rejects(tools[0].execute("d", { value: "stale" }), /changed/);
+  assert.ok(listRequests(dir, "watched") > 2);
+  // Over the former 128-tool cap, within the shared 512-tool inventory limit.
+  assert.equal((await pool.inspectTools(large)).length, 300);
+  // A configuration edit fences existing tools without a notification.
+  const fresh = await pool.agentTools(watched);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...watched, description: "Edited" }, large]);
+  await assert.rejects(fresh[0].execute("e", { value: "edited" }), /changed or was disabled/);
+});
+
+test("MCP withholds servers switched off for the model and hidden tools, without renaming the rest", async (t) => {
+  const dir = temporary(t), shown = fixtureServer(dir, "shown"), partly = { ...fixtureServer(dir, "partly"), hiddenTools: ["first"] }, off = { ...fixtureServer(dir, "off"), exposure: "hidden" };
+  assert.throws(() => api.validateMcpServer({ ...shown, exposure: "sometimes" }), /MCP exposure/);
+  assert.throws(() => api.validateMcpServer({ ...shown, hiddenTools: ["first", "first"] }), /Hidden MCP tools/);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [shown, partly, off]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const all = (await pool.agentTools(shown)).map((tool) => tool.name);
+  const visible = (await pool.agentTools(partly)).map((tool) => tool.name);
+  assert.deepEqual(all, ["shown__first", "shown__second"]);
+  assert.deepEqual(visible, ["partly__second"]);
+  assert.deepEqual(await pool.agentTools(off), []);
+  assert.equal(listRequests(dir, "off"), 0, "a server switched off for the model is never contacted");
+});
+
+test("MCP connections survive token refreshes, rebuild on sign-out, and connect once under concurrency", async (t) => {
+  const dir = temporary(t); let initializes = 0; const callAuthorizations = [];
+  const http = createServer(async (request, response) => {
+    if (request.method !== "POST") return response.writeHead(405).end();
+    let body = ""; for await (const chunk of request) body += chunk;
+    const message = JSON.parse(body);
+    if (message.id === undefined) return response.writeHead(202).end();
+    let result = {};
+    if (message.method === "initialize") { initializes++; result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "http", version: "1" } }; }
+    else if (message.method === "tools/list") result = { tools: [{ name: "ping", inputSchema: { type: "object" } }] };
+    else if (message.method === "tools/call") { callAuthorizations.push(request.headers.authorization); result = { content: [{ type: "text", text: "pong" }] }; }
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+  });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
+  const store = (token) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: token, token_type: "Bearer" } }));
+  await store("first");
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const client = await pool.connection(server);
+  const [ping] = await pool.agentTools(server);
+  await ping.execute("before", {});
+  await store("refreshed");
+  assert.equal(await pool.connection(server), client, "a token refresh keeps the live transport");
+  await ping.execute("after", {});
+  assert.equal(initializes, 1);
+  assert.deepEqual(callAuthorizations, ["Bearer first", "Bearer refreshed"], "the retained transport sends the current persisted token");
+  await api.mcpCommand(dir, ["logout", "remote"]);
+  const [first, second] = await Promise.all([pool.connection(server), pool.connection(server)]);
+  assert.equal(first, second);
+  assert.notEqual(first, client);
+  assert.equal(initializes, 2, "concurrent callers share one reconnect");
+});
+
+test("MCP Bot credential signatures ignore token refreshes and display fields but follow sign-in", async (t) => {
+  const dir = temporary(t);
+  const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
+  const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
+  const store = (token, incarnation) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, incarnation, tokens: { access_token: token, refresh_token: `${token}-refresh`, token_type: "Bearer" } }));
+  await store("first", "sign-in-1");
+  const signed = await api.mcpCredentialSignature(dir, server);
+  await store("refreshed", "sign-in-1");
+  assert.equal(await api.mcpCredentialSignature(dir, server), signed, "a token refresh keeps Bot grants");
+  assert.equal(await api.mcpCredentialSignature(dir, { ...server, name: "Renamed", description: "Work tools" }), signed, "renaming keeps Bot grants");
+  await store("other-account", "sign-in-2");
+  assert.notEqual(await api.mcpCredentialSignature(dir, server), signed, "a new sign-in is a new credential");
+  await credentials.delete(id);
+  const signedOut = await api.mcpCredentialSignature(dir, server);
+  assert.notEqual(signedOut, signed);
+  assert.notEqual(await api.mcpCredentialSignature(dir, { ...server, headers: { authorization: "Bearer x" } }), signedOut, "header values stay part of the connection");
+});
+
+test("MCP shutdown during credential resolution starts no connection and sends nothing", async (t) => {
+  const dir = temporary(t); let requests = 0;
+  const http = createServer((request, response) => { requests++; request.resume(); response.writeHead(500).end(); });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  await api.insightCredentials(dir).write(api.mcpCredentialId(server), JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: "secret", token_type: "Bearer" } }));
+  // Pause the second credential-file open: the provider read after incarnation resolution.
+  const fsPromises = createRequire(import.meta.url)("node:fs/promises"), open = fsPromises.open;
+  let opens = 0, reached, release;
+  const paused = new Promise((resolve) => { reached = resolve; }), gate = new Promise((resolve) => { release = resolve; });
+  fsPromises.open = async function (path, ...rest) {
+    if (String(path).endsWith("insights.json") && ++opens === 2) { reached(); await gate; }
+    return open.call(this, path, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.open = open; syncBuiltinESMExports(); });
+  const pool = api.createCliMcpPool(dir);
+  const connecting = pool.connection(server); connecting.catch(() => {});
+  await paused;
+  let closeReturned = false;
+  const closing = pool.close().then(() => { closeReturned = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(requests, 0);
+  release();
+  await closing;
+  assert.ok(closeReturned);
+  await assert.rejects(connecting, /closed/);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(requests, 0, "no request may follow shutdown");
+});
+
+test("MCP rejects an inventory whose pages are each in budget but whose total retained schemas are not", async (t) => {
+  const dir = temporary(t);
+  const http = createServer(async (request, response) => {
+    if (request.method !== "POST") return response.writeHead(405).end();
+    let body = ""; for await (const chunk of request) body += chunk;
+    const message = JSON.parse(body);
+    if (message.id === undefined) return response.writeHead(202).end();
+    let result = {};
+    if (message.method === "initialize") result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "http", version: "1" } };
+    else if (message.method === "tools/list") {
+      const page = Number(message.params?.cursor ?? 0);
+      result = { tools: [{ name: `tool${page}`, description: "x".repeat(450_000), inputSchema: { type: "object" } }], ...(page < 2 ? { nextCursor: String(page + 1) } : {}) };
+    }
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+  });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const large = { id: "large", name: "Large", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [large]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  await assert.rejects(pool.inspectTools(large), /byte budget/);
+  await assert.rejects(pool.agentTools(large), /byte budget/);
+});
+
+test("MCP startup connects servers concurrently within one budget and reports each failure's cause", async (t) => {
+  const dir = temporary(t), good = fixtureServer(dir, "good"), hung = fixtureServer(dir, "hung", "hang");
+  const missing = { id: "missing", name: "Missing", transport: "stdio", command: join(dir, "no-such-mcp-server"), enabled: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [hung, missing, good]);
+  const events = new Map(), tools = new Map();
+  const started = Date.now();
+  const { stderr } = await captureStderr(() => api.createMcpExtension(dir, { startupBudgetMs: 1_500 }).factory({
+    on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.label, tool) }));
+  assert.ok(Date.now() - started < 8_000, "a hung server cannot hold startup for its 10 s connect timeout");
+  assert.deepEqual([...tools.keys()].sort(), ["good: first", "good: second"]);
+  assert.match(stderr, /MCP hung unavailable \(timed out\)/);
+  assert.match(stderr, /MCP missing unavailable \([^)]*ENOENT/);
+  await events.get("session_shutdown")();
+  for (const id of ["good", "hung"]) for (const pid of readFileSync(join(dir, `${id}.pid`), "utf8").trim().split("\n").map(Number)) {
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+  }
+});
+
+test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
+  const dir = temporary(t), file = join(dir, "server.json");
+  const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
+  const credentials = api.insightCredentials(dir);
+  writeFileSync(file, JSON.stringify(server));
+  await api.mcpCommand(dir, ["add", file]);
+  await credentials.write(api.mcpCredentialId(server), "{}");
+  // Renaming keeps the endpoint identity and its sign-in.
+  writeFileSync(file, JSON.stringify({ ...server, name: "Renamed" }));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.equal(await credentials.read(api.mcpCredentialId(server)), "{}");
+  const moved = { ...server, url: "https://two.example/mcp" };
+  writeFileSync(file, JSON.stringify(moved));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.equal(await credentials.read(api.mcpCredentialId(server)), undefined);
+  await credentials.write(api.mcpCredentialId(moved), "{}");
+  await api.mcpCommand(dir, ["remove", "remote"]);
+  assert.equal(await credentials.read(api.mcpCredentialId(moved)), undefined);
+});
+
+test("MCP migration skips a malformed native mcp.json with a warning and leaves it untouched", async (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json");
+  writeFileSync(legacy, "{ not json");
+  const { value, stderr } = await captureStderr(() => api.mcpCommand(dir, ["list"]));
+  assert.deepEqual(value, []);
+  assert.match(stderr, /skipped MCP migration; .* is not valid JSON/);
+  assert.equal(readFileSync(legacy, "utf8"), "{ not json");
 });
 
 test("daemon idle waits include cancelled append work before releasing workspace authority", async (t) => {
@@ -732,7 +948,7 @@ test("MCP migration recovers a completed copy and refuses conflicting or invalid
   api.migrateAidenMcpConfig(dir, api.validateMcpServer);
   assert.equal(existsSync(legacy), false);
   api.atomicJson(legacy, [{ id: "invalid" }]);
-  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs/);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs a non-empty name/);
   assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [{ id: "invalid" }]);
 });
 

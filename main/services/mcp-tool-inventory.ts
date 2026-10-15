@@ -1,17 +1,35 @@
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType, JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { CallToolResultSchema, ListToolsResultSchema, ToolListChangedNotificationSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema, CursorSchema, ListToolsResultSchema, ToolListChangedNotificationSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
 export const MCP_TOOL_INVENTORY_MAX_TOOLS = 512;
 
+/**
+ * Servers end a list with an absent, `null` or empty `nextCursor`; the SDK's
+ * strict page schemas reject the latter two after the request already ran.
+ */
+export const LenientCursorSchema = CursorSchema.nullish();
+
+/** MCP 2026-07-28 permits any JSON value (array, null, primitive) as structured output. */
+const LenientCallToolResultSchema = CallToolResultSchema.omit({ structuredContent: true });
+const LenientListToolsResultSchema = ListToolsResultSchema.extend({ nextCursor: LenientCursorSchema });
+
+/** End of a paginated list: absent, `null`, or the empty string. */
+export function mcpListCursor(value: unknown): string | undefined {
+  return value === undefined || value === null || value === "" ? undefined : value as string;
+}
+
 /** Call only behind the complete-inventory guard below, not SDK per-page schema caches. */
 export function callMcpTool(client: Pick<Client, "request">, params: CallToolRequest["params"], options?: RequestOptions) {
   // The public request path retains envelope validation, progress, timeout and cancellation.
   // Client.callTool additionally validates errors against the last tools/list page's schema.
-  return client.request({ method: "tools/call", params }, CallToolResultSchema, options);
+  // The lenient schema keeps content/isError validation but leaves structuredContent
+  // as received (a loose-object passthrough), so a tool that already ran is not
+  // reported as failed for returning a non-object JSON value.
+  return client.request({ method: "tools/call", params }, LenientCallToolResultSchema, options);
 }
 
 /**
@@ -20,12 +38,22 @@ export function callMcpTool(client: Pick<Client, "request">, params: CallToolReq
  * that dispatch through callMcpTool behind createMcpToolCallGuard skip it.
  */
 export function listMcpToolPage(client: Pick<Client, "request">, cursor: string | undefined, options?: RequestOptions) {
-  return client.request({ method: "tools/list", params: cursor === undefined ? undefined : { cursor } }, ListToolsResultSchema, options);
+  return client.request({ method: "tools/list", params: cursor === undefined ? undefined : { cursor } }, LenientListToolsResultSchema, options);
+}
+
+/**
+ * Page reader for discovery: every page carries its own deadline (and total
+ * cap) instead of the SDK's 60 s default, so one stalled page cannot hold a
+ * whole server's discovery budget.
+ */
+export function boundedMcpToolPageReader(client: Pick<Client, "request">, pageTimeoutMs: number) {
+  return (cursor: string | undefined, signal: AbortSignal) =>
+    listMcpToolPage(client, cursor, { signal, timeout: pageTimeoutMs, maxTotalTimeout: pageTimeoutMs });
 }
 
 /** The SDK returns one tools/list page. Publish only a complete, bounded inventory. */
 export async function listMcpToolInventory<T extends { name: string }>(options: {
-  listPage(cursor: string | undefined, signal: AbortSignal): Promise<{ tools: readonly T[]; nextCursor?: string }>;
+  listPage(cursor: string | undefined, signal: AbortSignal): Promise<{ tools: readonly T[]; nextCursor?: string | null }>;
   signal?: AbortSignal;
   assertCurrent(): void;
 }): Promise<T[]> {
@@ -52,12 +80,13 @@ export async function listMcpToolInventory<T extends { name: string }>(options: 
       names.add(tool.name);
       tools.push(tool);
     }
-    if (result.nextCursor === undefined) return tools;
-    if (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 4096 || cursors.has(result.nextCursor)) {
+    const next = mcpListCursor(result.nextCursor);
+    if (next === undefined) return tools;
+    if (typeof next !== "string" || next.length > 4096 || cursors.has(next)) {
       throw new Error("MCP tool inventory contains an invalid or repeated pagination cursor.");
     }
-    cursors.add(result.nextCursor);
-    cursor = result.nextCursor;
+    cursors.add(next);
+    cursor = next;
   }
   throw new Error("MCP tool inventory exceeds the page limit.");
 }
@@ -76,6 +105,7 @@ function declaresSchemaId(value: unknown): boolean {
  * ids per instance, so unrelated tools reusing an id would otherwise collide.
  */
 export function createMcpToolCallGuard(tools: readonly { name: string; outputSchema?: unknown; execution?: unknown }[]) {
+  const names = new Set(tools.map(({ name }) => name));
   const schemas = new Map<string, JsonSchemaType>();
   const validators = new Map<string, JsonSchemaValidator<unknown>>();
   const requiredTasks = new Set<string>();
@@ -101,6 +131,10 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
     return validator;
   };
   return {
+    /** Whether this inventory offers `name` at all. */
+    has(name: string): boolean {
+      return names.has(name);
+    },
     assertCallable(name: string): void {
       if (requiredTasks.has(name)) throw new Error("This MCP tool requires unsupported task-based execution.");
       // Compile before dispatch so an unusable schema cannot follow a side effect.
@@ -113,10 +147,43 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
       // Tool failures may carry diagnostic JSON instead of the successful output shape.
       // Preserve that failure for the normal tool-result error path.
       if (record.isError === true) return;
-      if (!record.structuredContent) throw new Error("MCP tool has an output schema but did not return structured content.");
-      if (record.structuredContent && !validate(record.structuredContent).valid) throw new Error("MCP structured content does not match the tool's output schema.");
+      if (record.structuredContent === undefined) throw new Error("MCP tool has an output schema but did not return structured content.");
+      if (!validate(record.structuredContent).valid) throw new Error("MCP structured content does not match the tool's output schema.");
     },
   };
+}
+
+export type McpToolCallGuard = ReturnType<typeof createMcpToolCallGuard>;
+
+/** Guarded dispatch: the call must belong to the inventory of the client carrying it. */
+export async function guardedMcpToolCall(
+  guard: McpToolCallGuard,
+  client: Pick<Client, "request">,
+  params: CallToolRequest["params"],
+  options?: RequestOptions,
+) {
+  if (!guard.has(params.name)) throw new Error("This MCP tool is no longer offered by its server.");
+  guard.assertCallable(params.name);
+  const result = await callMcpTool(client, params, options);
+  guard.validateResult(params.name, result);
+  return result;
+}
+
+/**
+ * Call a tool on whichever client is live now. Tools are built from the
+ * inventory of the client they were discovered on; after an idle reconnect
+ * the server may offer different tools or schemas, so the call is checked
+ * against the live client's own inventory instead.
+ */
+export async function callMcpToolOnLiveClient<C extends Pick<Client, "request">>(
+  discovered: { client: C; guard: McpToolCallGuard },
+  live: C,
+  inventoryOf: (client: C) => Promise<{ guard: McpToolCallGuard }>,
+  params: CallToolRequest["params"],
+  options?: RequestOptions,
+) {
+  const guard = live === discovered.client ? discovered.guard : (await inventoryOf(live)).guard;
+  return guardedMcpToolCall(guard, live, params, options);
 }
 
 function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
@@ -132,15 +199,22 @@ function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): 
   });
 }
 
+/** Re-list servers that cannot announce changes at most this often. */
+export const MCP_TOOL_INVENTORY_TTL_MS = 30_000;
+
 /**
- * Reuse one tool inventory per live client, but only when the server promised
- * notifications/tools/list_changed and the client was watched before connect.
- * A change notification drops the entry; failed reads are never retained.
- * Callers still check their own lease and generation after every load.
+ * Reuse one tool inventory per live client. A server that promised
+ * notifications/tools/list_changed (watched before connect) keeps its entry
+ * until it announces a change. With `ttlMs`, a server that cannot announce
+ * changes keeps its entry for that long after the read completed; without it
+ * such servers are re-listed on every load. Failed reads are never retained,
+ * and `forget` drops a closed client's entry. Callers still check their own
+ * lease and generation after every load.
  */
-export function createMcpToolInventoryCache<T>() {
+export function createMcpToolInventoryCache<T>(options: { ttlMs?: number; now?: () => number } = {}) {
+  const now = options.now ?? Date.now;
   const watched = new WeakSet<object>();
-  const entries = new WeakMap<object, Promise<T>>();
+  const entries = new WeakMap<object, { pending: Promise<T>; expiresAt: number }>();
   return {
     /** Register before connect so a change during initialization is not missed. */
     watch(client: Pick<Client, "setNotificationHandler">): void {
@@ -148,15 +222,29 @@ export function createMcpToolInventoryCache<T>() {
       client.setNotificationHandler(ToolListChangedNotificationSchema, async () => { entries.delete(client); });
     },
     load(client: Pick<Client, "getServerCapabilities">, read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-      if (!watched.has(client) || client.getServerCapabilities()?.tools?.listChanged !== true) return untilAborted(read(), signal);
-      let pending = entries.get(client);
-      if (!pending) {
-        const loading = read();
-        pending = loading;
-        entries.set(client, loading);
-        loading.catch(() => { if (entries.get(client) === loading) entries.delete(client); });
+      if (!watched.has(client)) return untilAborted(read(), signal);
+      const announcesChanges = client.getServerCapabilities()?.tools?.listChanged === true;
+      if (!announcesChanges && options.ttlMs === undefined) return untilAborted(read(), signal);
+      let entry = entries.get(client);
+      if (entry && entry.expiresAt <= now()) {
+        entries.delete(client);
+        entry = undefined;
       }
-      return untilAborted(pending, signal);
+      if (!entry) {
+        const loading = read();
+        const created = { pending: loading, expiresAt: Number.POSITIVE_INFINITY };
+        entry = created;
+        entries.set(client, created);
+        loading.then(
+          () => { if (!announcesChanges) created.expiresAt = now() + options.ttlMs!; },
+          () => { if (entries.get(client) === created) entries.delete(client); },
+        );
+      }
+      return untilAborted(entry.pending, signal);
+    },
+    /** Drop a client's entry (it closed or is being replaced). */
+    forget(client: object): void {
+      entries.delete(client);
     },
   };
 }

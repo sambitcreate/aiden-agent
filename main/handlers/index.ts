@@ -12,6 +12,7 @@ import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
 import { registerPullRequestHandlers } from "./pull-requests.js";
 import { registerAttachmentHandlers } from "./attachments.js";
+import { registerChatImageActionHandlers } from "./chat-image-actions.js";
 import { registerPhase2Handlers } from "./phase2.js";
 import { registerLocalVoiceHandlers } from "./local-voice.js";
 import { registerTerminalHandlers } from "./terminal.js";
@@ -21,6 +22,8 @@ import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
 import { registerFormFillHandlers } from "./form-fill.js";
 import { registerModelInsightsHandlers } from "./model-insights.js";
+import { registerImageGenerationHandlers } from "./image-generation.js";
+import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -30,6 +33,7 @@ import { registerSubagentHandlers } from "./subagents.js";
 import { registerAssistantLiveHandlers } from "./assistant-live.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
+import { registerLocalRunIpc } from "./local-runs-main.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
@@ -41,6 +45,7 @@ import { registerDesignHandlers } from "./design/register.js";
 import { registerCreateImagesIpc } from "./create-images/index.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
+import { modelPaceRecorder } from "../services/model-pace-runtime.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -64,6 +69,7 @@ export function registerHandlers(): void {
   registerWorkspaceHandlers();
   registerPullRequestHandlers();
   registerAttachmentHandlers();
+  registerChatImageActionHandlers();
   registerPhase2Handlers();
   registerLocalVoiceHandlers();
   registerTerminalHandlers();
@@ -73,6 +79,11 @@ export function registerHandlers(): void {
   registerComputerUseHandlers();
   registerFormFillHandlers();
   registerModelInsightsHandlers();
+  registerImageGenerationHandlers();
+  registerModelPaceHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    recorder: modelPaceRecorder,
+  });
   registerDictationHandlers();
   registerScheduledTaskHandlers();
   // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
@@ -84,6 +95,7 @@ export function registerHandlers(): void {
   registerAssistantLiveHandlers();
   registerAidenRemoteHandlers();
   registerPeerHostHandlers();
+  registerLocalRunIpc();
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
   registerTtsHandlers();

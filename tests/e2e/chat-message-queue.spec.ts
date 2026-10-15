@@ -468,6 +468,9 @@ test("rejected and unknown Steer receipts keep the draft without replaying it", 
   await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
   await expect(page.getByText(/maximum pending guidance/u)).toBeVisible();
   await expect(composer).toHaveValue("Keep this guidance");
+  // The closing menu hands focus back to its trigger a task later; typing
+  // before then can land on the trigger and reopen the menu instead.
+  await expect(page.getByRole("button", { name: "Choose message action" })).toBeFocused();
   await composer.press("Enter");
   await expect(page.getByText(/couldn't confirm the guidance/u)).toBeVisible();
   await expect(composer).toHaveValue("Keep this guidance");
@@ -498,6 +501,15 @@ test("a response finishing while the queue editor is open waits for the saved ed
   await expect(
     page.getByRole("button", { name: "Stop generating", includeHidden: true }),
   ).toBeHidden();
+  // The response finished and saved its reply; a failed one would pause the
+  // queue instead, which is a different scenario from waiting for the edit.
+  await expect(
+    page.getByRole("button", { name: "Fork from here", includeHidden: true }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("region", { name: "Queued messages", includeHidden: true })
+      .getByRole("status", { includeHidden: true }),
+  ).toHaveText("1 queued");
   expect(
     lmStudio.requests.filter((request) => lastUserText(request) === "Original queued text"),
   ).toHaveLength(0);
@@ -631,31 +643,39 @@ test("Stop pauses queued image and text follow-ups without sending them", async 
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
   await aiden.app.evaluate(({ ipcMain }) => {
-    // Hold only the start receipt: generation can expose Stop before send settles.
+    // Hold the saved first message's receipt, then the start receipt, so each
+    // phase of a send that shows Stop early is observed deterministically.
     const handlers = (ipcMain as unknown as {
       _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
     })._invokeHandlers;
-    const original = handlers.get("chat:start")!;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    (globalThis as unknown as { releaseQueueStartReceipt: () => void }).releaseQueueStartReceipt = release;
-    handlers.set("chat:start", async (event, ...args) => {
-      const receipt = await original(event, ...args);
-      await gate;
-      return receipt;
-    });
+    const hold = (channel: string, name: string) => {
+      const original = handlers.get(channel)!;
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      (globalThis as unknown as Record<string, () => void>)[name] = release;
+      handlers.set(channel, async (event, ...args) => {
+        const receipt = await original(event, ...args);
+        await gate;
+        return receipt;
+      });
+    };
+    hold("chats:createWithFirstMessage", "releaseQueueSaveReceipt");
+    hold("chat:start", "releaseQueueStartReceipt");
   });
+  const release = (name: string) => aiden.app.evaluate((_electron, key) => {
+    (globalThis as unknown as Record<string, () => void>)[key]!();
+  }, name);
   const composer = page.locator("textarea");
   await composer.fill("First response for stop and resume.");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   const attach = page.getByRole("button", { name: "Attach files or images", exact: true });
+  // Until the message is saved, a failed send restores its own payload, so
+  // attachment intake stays closed and cannot merge new files into it.
   await expect(attach).toBeDisabled();
-  await aiden.app.evaluate(() => {
-    (globalThis as unknown as { releaseQueueStartReceipt: () => void }).releaseQueueStartReceipt();
-  });
-  // Stop is visible before the send receipt settles. Paste is admitted only
-  // after the composer reopens attachment intake, while generation continues.
+  await release("releaseQueueSaveReceipt");
+  // Once saved, the send is settled while the response is still starting:
+  // intake reopens alongside Steer and Queue.
   await expect(attach).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   const image = (
@@ -680,6 +700,7 @@ test("Stop pauses queued image and text follow-ups without sending them", async 
   await composer.press("Enter");
   const queue = page.getByRole("region", { name: "Queued messages", exact: true });
   await expect(queue.getByRole("img", { name: "Pasted image.png" })).toBeVisible();
+  await release("releaseQueueStartReceipt");
   await page.getByRole("button", { name: "Stop generating" }).click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
   await expect(queue.getByRole("status")).toContainText("2 queued · Paused");
@@ -704,7 +725,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
   await composer.fill("Create a chat before compaction queue testing.");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(2);
-  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
 
   // Hold compaction open so the queue can be driven while it runs.
   await app.evaluate(({ ipcMain }) => {
@@ -796,7 +817,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
   await expect.poll(sentTexts).toEqual(["During compaction retry"]);
   await expect(queue).toBeHidden();
   await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(4);
-  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(2);
 
   // A completed compaction releases every queued message in order.
   await startCompaction();

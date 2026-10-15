@@ -1,13 +1,16 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, test } from "node:test";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
 import { mountWithBotRouter } from "./test-providers";
+import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
+import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
@@ -20,6 +23,8 @@ function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
     partial: null,
     state: { kind: "idle" },
     question: null,
+    activity: null,
+    queued: [],
     ...overrides,
   };
 }
@@ -33,6 +38,16 @@ const COLOUR_QUESTION = {
     { label: "Red", description: "Loud and warm." },
   ],
 };
+
+/** The chat's status live region, which stays mounted while the line comes and goes. */
+function statusRegion(): Element | undefined {
+  return screen.queryAllByRole("status").find((node) => node.hasAttribute("data-bot-status-announcement"));
+}
+
+/** What a screen reader is told by the status line ("" while no line shows), or null without a region. */
+function announced(): string | null {
+  return statusRegion()?.textContent ?? null;
+}
 
 function userEntry(id: string, text: string): BotTranscriptEntry {
   return { id, type: "user", text, imageCount: 0 };
@@ -52,13 +67,13 @@ async function mountChat(handlers: Record<string, (...args: unknown[]) => unknow
   return calls;
 }
 
-test("a reply still being written is folded under Working and opens to its text", async () => {
+test("a reply still being written shows as its own bubble", async () => {
   await mountChat({
-    "bots:live:subscribe": () => snapshot({ partial: "Checking your calendar now", state: { kind: "running", submissionId: "s1" } }),
+    "bots:live:subscribe": () =>
+      snapshot({ partial: "Checking your calendar now", state: { kind: "running", submissionId: "s1" } }),
   });
-  const working = await screen.findByRole("button", { name: /Working/u });
-  fireEvent.click(working);
   assert.ok(await screen.findByText("Checking your calendar now"));
+  assert.equal(screen.queryByRole("button", { name: /Working|Updates/u }), null);
 });
 
 test("a Bot's A–E question shows its card, and submitting a chosen option answers it by wait id", async () => {
@@ -102,22 +117,22 @@ test("a question leaves the chat when the live view reports it settled, and its 
       }),
   });
   assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "question",
     question: null,
-  });
+  }));
   // Read textContent: a Testing Library query here stalls the test DOM once the composer remounts.
   await waitFor(() => assert.equal(document.body.textContent?.includes("Which colour should the banner use?"), false));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 2,
     type: "entry",
     entry: { id: "qa1", type: "question_answer", text: "Blue" },
-  });
+  }));
   assert.ok(await screen.findByText("Blue"));
   assert.ok(screen.getByPlaceholderText("Ask Planner"), "the composer is back");
 });
@@ -136,13 +151,13 @@ test("a sequence gap re-subscribes and shows the fresh snapshot", async () => {
     },
   });
   assert.ok(await screen.findByText("Plan Lisbon"));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 3,
     type: "entry",
     entry: assistantEntry("a1", "Here is a plan for Lisbon."),
-  });
+  }));
   assert.ok(await screen.findByText("Here is a plan for Lisbon."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
 });
@@ -158,13 +173,13 @@ test("a new epoch from a reopened Bot replaces the view with a fresh snapshot", 
     },
   });
   assert.ok(await screen.findByText("Old session message"));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-2",
     seq: 1,
     type: "partial",
     text: null,
-  });
+  }));
   assert.ok(await screen.findByText("Back after reopening"));
   assert.equal(screen.queryByText("Old session message"), null);
 });
@@ -296,22 +311,27 @@ test("a connect card answered with Not now reads Not connected and stays put", a
   assert.equal(within(card).queryByRole("button", { name: "Connect Gmail" }), null);
 });
 
-test("text before a tool call folds under Updates, and only the final answer is a bubble", async () => {
+test("the Bot's own progress message is a bubble at every level, and Quiet shows no tool rows", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
       snapshot({
         entries: [
           userEntry("u1", "Am I free Friday?"),
-          { id: "a1", type: "assistant", text: "Let me check your calendar.", toolCalls: [{ id: "t1", name: "calendar" }], stopReason: "toolUse" },
-          { id: "r1", type: "tool_result", toolCallId: "t1", toolName: "calendar", isError: false },
+          {
+            id: "a1",
+            type: "assistant",
+            text: "Let me check your calendar.",
+            toolCalls: [{ id: "t1", name: "calendar", kind: "working", label: "Used a tool" }],
+            stopReason: "toolUse",
+          },
+          { id: "r1", type: "tool_result", toolCallId: "t1", toolName: "calendar", isError: false, status: "ok" },
           assistantEntry("a2", "You are free all day Friday."),
         ],
       }),
   });
-  assert.ok(await screen.findByText("You are free all day Friday."));
-  assert.equal(screen.queryByText("Let me check your calendar."), null);
-  fireEvent.click(screen.getByRole("button", { name: "Updates" }));
   assert.ok(await screen.findByText("Let me check your calendar."));
+  assert.ok(screen.getByText("You are free all day Friday."));
+  assert.equal(screen.queryByText(/Used a tool/u), null);
 });
 
 test("a tool call that needs approval asks in the chat and answers by wait id", async () => {
@@ -320,13 +340,13 @@ test("a tool call that needs approval asks in the chat and answers by wait id", 
     "bots:pendingApprovals": () => [],
     "bots:approve": () => ({ decided: true }),
   });
-  emitBotTestNotification("bots:approval", {
+  act(() => emitBotTestNotification("bots:approval", {
     botId: "bot-1",
     waitId: "wait-7",
     toolCallId: "call-7",
     toolName: "send_email",
     summary: "Send the weekly update to the team.",
-  });
+  }));
   const card = await screen.findByRole("group", { name: "Planner needs approval" });
   assert.ok(within(card).getByText("Send the weekly update to the team."));
   fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
@@ -365,13 +385,13 @@ test("an approval whose answer fails to send comes back so it can be answered ag
     "bots:pendingApprovals": () => [],
     "bots:approve": () => Promise.reject(new Error("The approval could not be sent.")),
   });
-  emitBotTestNotification("bots:approval", {
+  act(() => emitBotTestNotification("bots:approval", {
     botId: "bot-1",
     waitId: "wait-8",
     toolCallId: "call-8",
     toolName: "share_image",
     summary: "Share the chart.",
-  });
+  }));
   const card = await screen.findByRole("group", { name: "Planner needs approval" });
   assert.ok(within(card).getByText("Planner wants to use Share image."));
   fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
@@ -383,18 +403,111 @@ test("a Bot open in another Aiden window says so in plain words", async () => {
   await mountChat({
     "bots:live:subscribe": () => snapshot({ state: { kind: "unavailable", reason: "held_by_live_process" } }),
   });
-  assert.ok(await screen.findByPlaceholderText("Bots are open in another Aiden window."));
+  // The reason is said once, in the composer's status line; the field itself only says it can't send.
+  const reason = await screen.findByText("Bots are open in another Aiden window.");
+  assert.ok(reason.closest('[role="status"]'));
+  assert.equal(screen.getAllByText("Bots are open in another Aiden window.").length, 1);
+  assert.ok(screen.getByPlaceholderText("Can’t send yet"));
   assert.equal(screen.queryByText(/held_by_live_process/u), null);
   assert.equal(screen.queryByPlaceholderText(/held_by_live_process/u), null);
 });
 
-test("a just-sent message shows the Bot working before any reply text arrives", async () => {
+test("a just-sent message shows the status line before any reply text arrives", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
-      snapshot({ entries: [userEntry("u1", "Plan Lisbon")], state: { kind: "running", submissionId: "s1" } }),
+      snapshot({
+        entries: [userEntry("u1", "Plan Lisbon")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "preparing", startedAt: Date.now() },
+      }),
   });
   assert.ok(await screen.findByText("Plan Lisbon"));
-  assert.ok(await screen.findByRole("button", { name: /Working/u }));
+  await waitFor(() => assert.equal(announced(), "Getting ready"));
+});
+
+test("the status line follows live activity, and hides while the reply's words stream", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "What's on my list?")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "groceries.md" } },
+      }),
+  });
+  await waitFor(() => assert.equal(announced(), "Reading, groceries.md"));
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "activity",
+    activity: { phase: "writing", startedAt: Date.now() },
+  }));
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 2, type: "partial", text: "Eggs and milk." }));
+  await waitFor(() => assert.equal(screen.queryByText("Reading") === null, true));
+  assert.equal(screen.queryByText("Writing") === null, true, "the words themselves are the signal");
+});
+
+test("one status region stays mounted from an idle chat through streaming, so each new line is announced", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({ entries: [assistantEntry("a1", "Hi there.")] }),
+  });
+  assert.ok(await screen.findByText("Hi there."));
+  const region = statusRegion();
+  assert.ok(region, "the region is there before the Bot does anything");
+  assert.equal(announced(), "");
+
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "state",
+    state: { kind: "running", submissionId: "s1" },
+  }));
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 2,
+    type: "activity",
+    activity: { phase: "writing", startedAt: Date.now() },
+  }));
+  await waitFor(() => assert.equal(announced(), "Writing"));
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 3, type: "partial", text: "Let me check." }));
+  await waitFor(() => assert.equal(announced(), "", "words are streaming, so the region is quiet"));
+
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 4,
+    type: "activity",
+    activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "notes.md" } },
+  }));
+  await waitFor(() => assert.equal(announced(), "Reading, notes.md"), { timeout: 3_000 });
+  assert.equal(statusRegion() === region, true, "the same region announced both stretches");
+});
+
+test("a Bot set to Always Thinking says Thinking while it reads", async () => {
+  await mountChat({
+    "bots:get": () => botFixture({ chatActivity: { level: "quiet", wording: "thinking" } }),
+    "bots:live:subscribe": () =>
+      snapshot({
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "groceries.md" } },
+      }),
+  });
+  await waitFor(() => assert.equal(announced(), "Thinking"));
+});
+
+test("the status line stays through a tool that follows narration, even while that narration is still the partial", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Tidy my notes")],
+        partial: "On it.",
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "notes.md" } },
+      }),
+  });
+  await waitFor(() => assert.equal(announced(), "Reading, notes.md"));
 });
 
 test("a deleted Bot's chat says it was not found instead of loading forever", async () => {
@@ -440,68 +553,23 @@ test("a renderer reload mid-reply shows the partial reply from the fresh snapsho
   // The reloaded document mounts the chat again and subscribes once more.
   await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
   await screen.findByRole("button", { name: "Planner profile" });
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 5,
     type: "partial",
     text: "Once upon a time there was a fox.",
-  });
-  fireEvent.click(await screen.findByRole("button", { name: /Working/u }));
+  }));
   assert.ok(await screen.findByText("Once upon a time there was a fox."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
 });
 
-const FILE_HANDLERS = {
-  "bots:files:list": () => ({
-    entries: [
-      { path: "lists", name: "lists", parentPath: "", depth: 0, kind: "directory" },
-      { path: "lists/groceries.md", name: "groceries.md", parentPath: "lists", depth: 1, kind: "file" },
-    ],
-    truncated: false,
-    skippedDirectories: 0,
-  }),
-  "bots:files:read": (_botId: unknown, path: unknown) => ({
-    path,
-    content: "eggs\nmilk",
-    size: 9,
-    modifiedAt: 1,
-    version: "v1",
-  }),
-};
-
 function toolStep(id: string, text: string): BotTranscriptEntry {
-  return { id, type: "assistant", text, toolCalls: [{ id: `${id}-call`, name: "web_search" }], stopReason: "toolUse" };
+  return { id, type: "assistant", text, toolCalls: [{ id: `${id}-call`, name: "web_search", kind: "searching", label: "Searched the web" }], stopReason: "toolUse" };
 }
 
-test("Files in the ••• menu lists the Bot's folder and opens a file", async () => {
-  const calls = await mountChat({ "bots:live:subscribe": () => snapshot(), ...FILE_HANDLERS });
-  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
-  fireEvent.click(await screen.findByRole("button", { name: "groceries.md" }));
-  const contents = await screen.findByLabelText("Contents of lists/groceries.md");
-  assert.equal(contents.textContent, "eggs\nmilk");
-  assert.deepEqual(calls.find((call) => call.channel === "bots:files:read")?.args, ["bot-1", "lists/groceries.md"]);
-});
-
-test("a file the Bot wrote shows as a chip that opens that file", async () => {
-  await mountChat({
-    "bots:live:subscribe": () =>
-      snapshot({
-        entries: [
-          userEntry("u1", "Write my grocery list"),
-          { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },
-          assistantEntry("a1", "Done."),
-        ],
-      }),
-    ...FILE_HANDLERS,
-  });
-  fireEvent.click(await screen.findByRole("button", { name: "Open groceries.md" }));
-  assert.equal((await screen.findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
-});
-
-test("all tool rounds before an answer fold into one Updates line", async () => {
+test("each round's narration is its own bubble before the answer", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
       snapshot({
@@ -513,10 +581,40 @@ test("all tool rounds before an answer fold into one Updates line", async () => 
         ],
       }),
   });
-  assert.ok(await screen.findByText("TAP on Friday is cheapest."));
-  assert.equal(screen.getAllByRole("button", { name: "Updates" }).length, 1);
-  fireEvent.click(screen.getByRole("button", { name: "Updates" }));
-  assert.ok(await screen.findByText(/Searching airlines\.\s+Comparing prices\./u));
+  assert.ok(await screen.findByText("Searching airlines."));
+  assert.ok(screen.getByText("Comparing prices."));
+  assert.ok(screen.getByText("TAP on Friday is cheapest."));
+});
+
+test("a Summary Bot shows one recap above its answer that opens to the steps", async () => {
+  await mountChat({
+    "bots:get": () => botFixture({ chatActivity: { level: "summary", wording: "follows" } }),
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          { ...userEntry("u1", "Find flights"), at: 1_000 } as BotTranscriptEntry,
+          toolStep("a1", ""),
+          { id: "r1", type: "tool_result", toolCallId: "a1-call", toolName: "web_search", isError: false, status: "ok", at: 5_000 },
+          { ...assistantEntry("a2", "TAP on Friday is cheapest."), at: 19_000 } as BotTranscriptEntry,
+        ],
+      }),
+  });
+  const recap = await screen.findByRole("button", { name: "Worked for 18s · searched the web" });
+  fireEvent.click(recap);
+  assert.ok(await screen.findByText("Searched the web"));
+});
+
+test("a reply the person stopped says so in a quiet centred line", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          userEntry("u1", "Tell me a story"),
+          { id: "a1", type: "assistant", text: "Once upon", toolCalls: [], stopReason: "aborted" },
+        ],
+      }),
+  });
+  assert.ok(await screen.findByText("You stopped this reply."));
 });
 
 test("Reply quotes a message at the start of the composer", async () => {
@@ -619,14 +717,16 @@ test("an interrupted Bot whose access changed opens Advanced, not just the Profi
 function measurableScrollport(scrollHeight: number, clientHeight: number) {
   const viewport = document.querySelector<HTMLElement>("[data-scroll-top]");
   assert.ok(viewport, "the chat scrolls in its own scrollport");
-  let top = 0;
+  // The chat opens pinned to its latest message.
+  let top = scrollHeight - clientHeight;
   Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => scrollHeight });
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: () => clientHeight });
   Object.defineProperty(viewport, "scrollTop", {
     configurable: true,
     get: () => top,
+    // Like a real scrollport, the offset clamps to the scrollable range.
     set: (value: number) => {
-      top = value;
+      top = Math.max(0, Math.min(value, scrollHeight - clientHeight));
     },
   });
   viewport.scrollTo = ((options: ScrollToOptions) => {
@@ -635,7 +735,10 @@ function measurableScrollport(scrollHeight: number, clientHeight: number) {
   return {
     viewport,
     scrollTop: () => top,
+    // A person reading back scrolls with a gesture (here a wheel turn) and the
+    // scrollport then moves; follow-the-bottom yields only to that intent.
     scrollUserTo: (value: number) => {
+      fireEvent.wheel(viewport, { deltaY: value < top ? -120 : 120 });
       top = value;
       fireEvent.scroll(viewport);
     },
@@ -651,15 +754,15 @@ test("a streaming reply doesn't pull the chat down while the person reads earlie
   const port = measurableScrollport(2_000, 400);
   port.scrollUserTo(300);
 
-  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "partial", text: "Once upon" });
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "partial", text: "Once upon" }));
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 2,
     type: "partial",
     text: "Once upon a time there was a fox.",
-  });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  }));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(port.scrollTop(), 300, "the reader keeps their place");
 
   // The way back down is one click away.
@@ -680,7 +783,7 @@ function proposalEntry(status: "pending" | "accepted" | "dismissed", routineId?:
   return { id: "p1", type: "routine_proposal", proposal: CHECK_IN_PROPOSAL, status, ...(routineId ? { routineId } : {}) };
 }
 
-test("Memory updated is a quiet caption, outside Updates, that opens this Bot's Memory page", async () => {
+test("Memory updated is a quiet caption, outside Updates, that opens the panel's Memory tab", async () => {
   installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
@@ -698,10 +801,10 @@ test("Memory updated is a quiet caption, outside Updates, that opens this Bot's 
   await screen.findByText("Noted.");
   const captions = screen.getAllByRole("button", { name: "Memory updated. Open Memory" });
   assert.equal(captions.length, 1, "back-to-back saves read as one line");
-  assert.equal(screen.queryByRole("button", { name: /Updates/u }) === null, true, "never folded into Updates");
   fireEvent.click(captions[0]!);
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
-  assert.equal((router.state.location.search as { page?: string }).page, "memory");
+  const panel = screen.getByRole("complementary", { name: "Bot panel" });
+  assert.equal(within(panel).getByRole("tab", { name: "Memory" }).getAttribute("aria-selected"), "true");
+  assert.equal(router.state.location.pathname, "/bots/bot-1/chat", "the chat stays open beside it");
 });
 
 test("a routine proposal shows its name, schedule and prompt, and Add routine accepts it once", async () => {
@@ -756,12 +859,145 @@ test("a failed answer keeps the proposal answerable, and one answered elsewhere 
   );
   assert.ok(within(card).getByText("Add a routine?"));
 
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "entry",
     entry: proposalEntry("accepted", "task-9"),
-  });
+  }));
   assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM"));
+});
+
+test("a queued message shows faded as Queued, and Remove withdraws that one submission", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Plan dinners")],
+        state: { kind: "running", submissionId: "s1" },
+        queued: [{ submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 }],
+      }),
+    "bots:withdraw": () => "withdrawn",
+  });
+  assert.ok(await screen.findByText("Also add dessert"));
+  assert.ok(screen.getByText("Queued"));
+  fireEvent.click(screen.getByRole("button", { name: "Remove queued message: Also add dessert" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:withdraw")?.args, [{ botId: "bot-1", submissionId: "8" }]),
+  );
+});
+
+const QUEUED_BASE = {
+  entries: [userEntry("u1", "Plan dinners")],
+  state: { kind: "running", submissionId: "s1" } as const,
+};
+
+test("Remove on a message that already started says it stays", async () => {
+  // The test DOM does not mount sonner's viewport, so observe the toast the person would be shown.
+  const shown: string[] = [];
+  const original = toast.info;
+  toast.info = ((message: unknown) => {
+    shown.push(String(message));
+    return "toast";
+  }) as typeof toast.info;
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () =>
+        snapshot({ ...QUEUED_BASE, queued: [{ submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 }] }),
+      "bots:withdraw": () => "started",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Remove queued message: Also add dessert" }));
+    await waitFor(() => assert.deepEqual(shown, ["That message already started, so it stays."]));
+    assert.equal(calls.filter((call) => call.channel === "bots:withdraw").length, 1);
+  } finally {
+    toast.info = original;
+  }
+});
+
+test("a queued message leaves the page when the queue event empties it", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ ...QUEUED_BASE, queued: [{ submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 }] }),
+  });
+  assert.ok(await screen.findByText("Also add dessert"));
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "queued", queued: [] }));
+  await waitFor(() => assert.equal(document.body.textContent?.includes("Also add dessert"), false));
+  assert.equal(screen.queryByText("Queued"), null);
+});
+
+test("each queued message has its own Remove, and removing one moves focus on: the next Remove, else the composer", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        ...QUEUED_BASE,
+        queued: [
+          { submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 },
+          { submissionId: "9", mode: "followUp", text: "And a drinks list", imageCount: 0 },
+        ],
+      }),
+    "bots:withdraw": () => "withdrawn",
+  });
+  const first = await screen.findByRole("button", { name: "Remove queued message: Also add dessert" });
+  const second = screen.getByRole("button", { name: "Remove queued message: And a drinks list" });
+  first.focus();
+  fireEvent.click(first);
+  await waitFor(() => assert.equal(document.activeElement, second));
+  fireEvent.click(second);
+  await waitFor(() => assert.equal((document.activeElement as HTMLElement | null)?.getAttribute("placeholder"), "Ask Planner"));
+});
+
+test("the chat header's face works only while the Bot works, and a photo gets a small activity badge", async () => {
+  await mountChat({
+    "bots:getCanonicalPhoto": () => ({ assetRevision: "a1", dataUrl: "data:image/png;base64,AAAA" }),
+    "bots:live:subscribe": () =>
+      snapshot({ state: { kind: "running", submissionId: "s1" }, activity: { phase: "thinking", startedAt: Date.now() } }),
+  });
+  const pill = await screen.findByRole("button", { name: "Planner profile" });
+  const face = within(pill).getByTitle("Planner");
+  await waitFor(() => {
+    assert.equal(face.hasAttribute("data-working"), true);
+    assert.ok(face.querySelector('[data-aiden-mark="glance"]'));
+  });
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "state",
+    state: { kind: "idle" },
+  }));
+  await waitFor(() => assert.equal(face.hasAttribute("data-working"), false));
+  assert.equal(face.querySelector('[data-aiden-mark="glance"]'), null);
+});
+
+test("an open chat keeps its Bot read: a reply that finishes while it is open is seen, and leaving records the visit", async () => {
+  const stored = () => parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now());
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "Plan Lisbon")] }),
+    "bots:live:unsubscribe": () => undefined,
+    "bots:pendingApprovals": () => [],
+  });
+  const { router } = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
+  await screen.findByText("Plan Lisbon");
+  await waitFor(() => assert.ok((stored().lastViewed["bot-1"] ?? 0) > 0, "opening the chat records the visit"));
+  assert.equal(stored().seenReplyAt["bot-1"], undefined, "no reply to have seen yet");
+  const opened = stored().lastViewed["bot-1"] ?? 0;
+
+  // Main times a reply from when it began streaming.
+  const replyAt = Date.now() - 2_000;
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "entry",
+    entry: { ...assistantEntry("a1", "Here is a plan for Lisbon."), at: replyAt },
+  }));
+  await screen.findByText("Here is a plan for Lisbon.");
+  await waitFor(() => assert.equal(stored().seenReplyAt["bot-1"], replyAt, "the reply that finished while open is seen"));
+
+  await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
+  await act(() => router.navigate({ to: "/scheduled" }));
+  await waitFor(() => assert.equal(screen.queryByText("Plan Lisbon") === null, true, "the chat is gone"));
+  assert.ok((stored().lastViewed["bot-1"] ?? 0) > opened, "leaving records when it was last open");
+  assert.equal(stored().seenReplyAt["bot-1"], replyAt, "leaving never claims a reply the chat didn't show");
 });

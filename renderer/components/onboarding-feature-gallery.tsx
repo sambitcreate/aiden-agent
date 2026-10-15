@@ -4,6 +4,7 @@ import {
   Bot,
   CalendarClock,
   ChartBar,
+  ChartColumn,
   ChartScatter,
   Command,
   Eye,
@@ -67,7 +68,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "computerUse",
     group: "create",
     title: "Computer Use",
-    description: "Inspect and operate Mac apps when you opt in, with approval before every action.",
+    description: "Inspect and operate Mac apps. Aiden asks once in each chat before it uses your computer.",
     icon: MousePointer2,
     size: "tall",
   },
@@ -87,6 +88,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description:
       "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
     icon: Globe2,
+    size: "standard",
+  },
+  {
+    id: "inlineVisuals",
+    group: "create",
+    title: "Inline Visuals",
+    description:
+      "Ask for a chart, dashboard, or checklist and Aiden draws it right in the reply with the app's own components. Tabs, filters, and sliders work without another message, and your phone shows each one as a picture.",
+    icon: ChartColumn,
     size: "standard",
   },
   {

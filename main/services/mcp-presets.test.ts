@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertMcpPresetServer,
-  createNoRedirectFetch,
   mcpOAuthClientNameForServer,
   MCP_PRESETS,
   getMcpPreset,
@@ -179,22 +178,6 @@ test("OAuth presets require OAuth while API-key presets reject it", () => {
     () => assertMcpPresetServer({ ...notionServer, oauth: undefined }),
     /invalid authentication mode/,
   );
-});
-
-test("API-key preset fetches cannot follow credential-bearing redirects", async () => {
-  let observedRedirect: RequestRedirect | undefined;
-  const guardedFetch = createNoRedirectFetch(
-    (async (_input, init) => {
-      observedRedirect = init?.redirect;
-      return new Response(null, { status: 204 });
-    }) as typeof fetch,
-  );
-
-  await guardedFetch("https://connect.composio.dev/mcp", {
-    headers: { "x-consumer-api-key": "secret" },
-    redirect: "follow",
-  });
-  assert.equal(observedRedirect, "error");
 });
 
 

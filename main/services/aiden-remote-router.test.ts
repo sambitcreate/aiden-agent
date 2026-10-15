@@ -22,6 +22,10 @@ import {
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
+import { AidenRemoteBotService } from "./aiden-remote-bots.js";
+import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
+import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import { HostRunRegistry } from "./host-run-registry.js";
@@ -67,6 +71,8 @@ async function fixture(options: {
   /** "plain" forks; "summary" also forks with a summary. */
   forks?: "plain" | "summary";
   platform?: "mac" | "linux" | "windows";
+  /** The Bot service serves and accepts Chat activity (contract revision 30). */
+  chatActivity?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -114,6 +120,10 @@ async function fixture(options: {
     policyEpoch: "bot_policy_epoch_1",
     summary: "Can use your Mac, shell, enabled connections, and skills.",
   };
+  // A Mac wired for Chat activity returns the field on every Bot detail it serves.
+  const detailChatActivity = options.chatActivity
+    ? { chatActivity: { level: "summary" as const, wording: "follows" as const } }
+    : {};
   const botDetail = {
     id: "bot-1",
     name: "Planner",
@@ -210,6 +220,7 @@ async function fixture(options: {
               capability !== "host:events" &&
               capability !== "runs:observe" &&
               capability !== "runs:control" &&
+              capability !== "bot:activity" &&
               capability !== "bot:cards",
           )
         ) {
@@ -503,21 +514,28 @@ async function fixture(options: {
       }),
     },
     bots: {
+      ...(options.chatActivity ? { supportsChatActivity: true } : {}),
       list: async () => {
         calls.push("bots:list");
-        return { bots: [botDetail], maxBots: 256 };
+        const { instructions: _instructions, access: _access, ...summary } = botDetail;
+        return { bots: [summary], maxBots: 256 };
       },
       get: async (botId) => {
         calls.push(`bots:get:${botId}`);
-        return { ...botDetail, id: botId, access: { ...botAccess, botId } };
+        return {
+          ...botDetail,
+          id: botId,
+          access: { ...botAccess, botId },
+          ...detailChatActivity,
+        };
       },
       create: async (deviceId, key) => {
         calls.push(`bots:create:${deviceId}:${key}`);
-        return botDetail;
+        return { ...botDetail, ...detailChatActivity };
       },
       updateIdentity: async (botId, revision) => {
         calls.push(`bots:update:${botId}:${revision}`);
-        return { ...botDetail, id: botId, revision: "bot_revision_2" };
+        return { ...botDetail, id: botId, revision: "bot_revision_2", ...detailChatActivity };
       },
       delete: async (botId, revision) => {
         calls.push(`bots:delete:${botId}:${revision}`);
@@ -575,7 +593,7 @@ async function fixture(options: {
       },
       deleteAvatar: async (botId, revision) => {
         calls.push(`bots:avatar:delete:${botId}:${revision}`);
-        return { ...botDetail, id: botId };
+        return { ...botDetail, id: botId, ...detailChatActivity };
       },
       avatarContent: async (botId, assetRevision) => {
         calls.push(`bots:avatar:content:${botId}:${assetRevision}`);
@@ -4187,7 +4205,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 27,
+      contractRevision: 30,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4542,6 +4560,8 @@ test("the messages window is offered to every device and validates its query", a
     const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
     assert.equal(server.features.includes("chat-messages-window-v1"), true);
     assert.equal(server.features.includes("chat-messages-window-metadata-v1"), true);
+    // Every host that serves chats projects their inline visuals.
+    assert.equal(server.features.includes("chat-visuals-v1"), true);
 
     const page = await fetch(`${phone.base}/chats/chat-1/messages?before=message-9&limit=20`, { headers: HOST_HEADERS });
     assert.equal(page.status, 200);
@@ -5054,5 +5074,282 @@ test("the Bot question answer route needs Bot write access", async () => {
     assert.equal(reached, 0, "a read-only device never reaches the Bot");
   } finally {
     await app.close();
+  }
+});
+
+function recordingActivitySessions(seen: string[], supportsActivity: boolean) {
+  const base = recordingRevision27Sessions([], { memory: false, proactive: false }) as unknown as Record<string, unknown>;
+  return {
+    ...base,
+    supportsActivity,
+    session: async (botId: string, options: { activity?: boolean } = {}) => {
+      seen.push(`session:${options.activity === true ? "activity" : "plain"}`);
+      return { botId, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries: [], hasOlder: false };
+    },
+    openEvents: async (
+      _deviceId: string,
+      _botId: string,
+      response: import("node:http").ServerResponse,
+      admit: () => void,
+      options: { activity?: boolean } = {},
+    ) => {
+      seen.push(`events:${options.activity === true ? "activity" : "plain"}`);
+      admit();
+      response.writeHead(204);
+      response.end();
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+}
+
+test("bot-activity-v1 and bot:activity are offered only while activity frames and chatActivity are both wired", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["bot:activity"] }) };
+  for (const [sessionsActivity, chatActivity, wired] of [
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+  ] as const) {
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "chat:read"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingActivitySessions([], sessionsActivity),
+      chatActivity,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.features.includes("bot-activity-v1"), wired, `${sessionsActivity}/${chatActivity}`);
+      assert.equal(server.serverCapabilities.includes("bot:activity"), wired);
+      const response = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(response.status, wired ? 200 : 404);
+      if (!wired) {
+        assert.equal((await response.json()).error?.code, "not_found", "never the misleading credential_revoked");
+      }
+    } finally {
+      await app.close();
+    }
+
+    // A phone that already holds the grant (paired while this Mac was fully wired) is
+    // served activity on its session and stream only while both halves are wired now.
+    const seen: string[] = [];
+    const holder = await fixture({
+      capabilities: ["server:read", "bot:read", "chat:read", "bot:activity"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingActivitySessions(seen, sessionsActivity),
+      chatActivity,
+    });
+    try {
+      assert.equal((await fetch(`${holder.base}/bots/bot-1/session`, { headers })).status, 200);
+      assert.equal((await fetch(`${holder.base}/bots/bot-1/session/events`, { headers })).status, 204);
+      const served = wired ? "activity" : "plain";
+      assert.deepEqual(seen, [`session:${served}`, `events:${served}`], `${sessionsActivity}/${chatActivity}`);
+    } finally {
+      await holder.close();
+    }
+  }
+});
+
+test("only a device holding bot:activity is served activity frames and a Bot's chatActivity", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const seen: string[] = [];
+  const write = { ...headers, "content-type": "application/json", "if-match": "bot_revision_1" };
+  // Every route that returns a Bot detail, keyed by name.
+  const detailRoutes = (base: string): Array<[string, () => Promise<Response>]> => [
+    ["get", () => fetch(`${base}/bots/bot-1`, { headers })],
+    ["create", () => fetch(`${base}/bots`, {
+      method: "POST",
+      headers: { ...write, "idempotency-key": "bot-create-key-0000001" },
+      body: JSON.stringify({ name: "Planner" }),
+    })],
+    ["patch", () => fetch(`${base}/bots/bot-1`, { method: "PATCH", headers: write, body: JSON.stringify({ name: "Planner" }) })],
+    ["avatar delete", () => fetch(`${base}/bots/bot-1/avatar`, { method: "DELETE", headers: write })],
+  ];
+  const shown: Record<string, string[]> = { plain: [], holder: [] };
+  for (const [label, capabilities] of [
+    ["plain", ["server:read", "bot:read", "bot:write", "chat:read"]],
+    ["holder", ["server:read", "bot:read", "bot:write", "chat:read", "bot:activity"]],
+  ] as Array<[string, AidenRemoteCapability[]]>) {
+    const app = await fixture({
+      capabilities,
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingActivitySessions(seen, true),
+      chatActivity: true,
+    });
+    try {
+      await fetch(`${app.base}/bots/bot-1/session`, { headers });
+      await fetch(`${app.base}/bots/bot-1/session/events`, { headers });
+      for (const [route, call] of detailRoutes(app.base)) {
+        const response = await call();
+        assert.ok(response.status === 200 || response.status === 201, `${label} ${route}: ${response.status}`);
+        const detail = await response.json();
+        shown[label]!.push(`${route}:${"chatActivity" in detail ? "activity" : "plain"}`);
+      }
+    } finally {
+      await app.close();
+    }
+  }
+  assert.deepEqual(seen, ["session:plain", "events:plain", "session:activity", "events:activity"]);
+  assert.deepEqual(shown.plain, ["get:plain", "create:plain", "patch:plain", "avatar delete:plain"]);
+  assert.deepEqual(shown.holder, ["get:activity", "create:activity", "patch:activity", "avatar delete:activity"]);
+});
+
+test("a bubble's submissionId reaches only a device holding bot:activity, on a fetch and on the stream's snapshot", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const placedMessage = {
+    id: 1,
+    kind: "pi.user",
+    model: [{ role: "user", content: [{ type: "text", text: "Plan dinners" }], timestamp: 1_700_000_000_000 }],
+  };
+  const sessions = new AidenRemoteBotSessionService({
+    bots: {
+      supportsChatActivity: true,
+      bot: async (botId) => ({
+        id: botId, revision: "bot_revision_1", name: "Planner", instructions: "Plan.",
+        avatar: { version: 1, shape: "orb", color: "sky" }, createdAt: 1_000, updatedAt: 2_000,
+      }),
+      summaryOf: async () => { throw new Error("not used"); },
+      executeIdempotent: async (_scope, _input, action) => action(),
+    },
+    runtime: async () => ({
+      send: async () => ({ submissionId: "17", deduped: false }),
+      resume: async () => ({ kind: "running", submissionId: "17" }),
+      dismiss: async () => ({ kind: "idle" }),
+      stop: async () => ({ kind: "idle" }),
+      state: async () => ({ kind: "running", submissionId: "17" }),
+      conversation: async () => ({
+        watch: async () => ({
+          value: { entries: [placedMessage], docs: {} },
+          start() {},
+          stop: async () => {},
+          closed: new Promise<void>(() => {}),
+        }),
+      }) as never,
+      quietInputs: async () => new Map(),
+      placedSubmissions: async () => new Map([["1", "17"]]),
+    }),
+    turnIntents: createBotTurnIntents(),
+  });
+  const seen: Record<string, Array<string | null>> = {};
+  try {
+    for (const [label, capabilities] of [
+      ["plain", ["server:read", "bot:read", "chat:read"]],
+      ["holder", ["server:read", "bot:read", "chat:read", "bot:activity"]],
+    ] as Array<[string, AidenRemoteCapability[]]>) {
+      const app = await fixture({ capabilities, acceptsBotCapabilities: true, deviceType: "iphone", botSessions: sessions, chatActivity: true });
+      try {
+        const fetched = await (await fetch(`${app.base}/bots/bot-1/session`, { headers })).json();
+        const controller = new AbortController();
+        const stream = await fetch(`${app.base}/bots/bot-1/session/events`, { headers, signal: controller.signal });
+        const reader = stream.body!.getReader();
+        let text = "";
+        while (!text.includes("\n\n")) text += new TextDecoder().decode((await reader.read()).value);
+        controller.abort();
+        const snapshot = JSON.parse(text.split("\n").find((line) => line.startsWith("data: "))!.slice(6));
+        assert.equal(snapshot.type, "snapshot");
+        seen[label] = [fetched.entries[0].submissionId ?? null, snapshot.payload.session.entries[0].submissionId ?? null];
+        if (label === "plain") assert.equal(JSON.stringify([fetched, snapshot]).includes("submissionId"), false);
+      } finally {
+        await app.close();
+      }
+    }
+  } finally {
+    await sessions.close();
+  }
+  assert.deepEqual(seen, { plain: [null, null], holder: ["17", "17"] });
+});
+
+test("a send the paused Bot refused is not recorded: once resumed, the same key sends, and a real failure still replays", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const post = (key: string, body = "{}") => ({
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", "idempotency-key": key },
+    body,
+  });
+  const planner = {
+    id: "bot-1", revision: "bot_revision_1", name: "Planner", instructions: "Plan.",
+    avatar: { version: 1 as const, shape: "orb" as const, color: "sky" as const }, createdAt: 1_000, updatedAt: 2_000,
+  };
+  let persisted: { entries: unknown[] } | undefined;
+  const bots = new AidenRemoteBotService({
+    application: { get: async (botId: string) => (botId === "bot-1" ? planner : null), list: async () => [planner] } as never,
+    chatStore: { get: async () => null },
+    sessionStates: async () => new Map(),
+    // The durable path: the ledger is written before and after every action.
+    persistIdempotency: async (snapshot) => {
+      persisted = snapshot as { entries: unknown[] };
+    },
+  });
+  let modelBroken = true;
+  let paused = true;
+  const sent: string[] = [];
+  let state: BotSessionState = { kind: "interrupted", submissionId: "16" };
+  const sessions = new AidenRemoteBotSessionService({
+    bots,
+    runtime: async () => ({
+      send: async (_botId, input) => {
+        // The session's own refusals from state, before anything is written.
+        if (modelBroken) throw new BotSessionError("model_error");
+        if (paused) throw new BotSessionError("bot_paused");
+        sent.push(input.requestId);
+        if (input.text === "explode") throw new Error("The input was written, then the session failed.");
+        state = { kind: "running", submissionId: "17" };
+        return { submissionId: "17", deduped: false };
+      },
+      resume: async () => {
+        paused = false;
+        state = { kind: "running", submissionId: "16" };
+        return state;
+      },
+      dismiss: async () => ({ kind: "idle" }),
+      stop: async () => ({ kind: "idle" }),
+      state: async () => state,
+      conversation: async () => { throw new Error("not used"); },
+      quietInputs: async () => new Map(),
+      placedSubmissions: async () => new Map(),
+    }),
+  });
+  const app = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:read", "chat:write"],
+    acceptsBotCapabilities: true,
+    botSessions: sessions,
+  });
+  try {
+    const message = JSON.stringify({ text: "Plan dinners" });
+    // A model that can't run right now is a refusal from state too, not a server failure.
+    const unusable = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.equal(unusable.status, 409);
+    assert.equal((await unusable.json()).error.code, "operation_stale");
+    assert.deepEqual(persisted?.entries, [], "the model refusal left nothing in the durable ledger");
+    modelBroken = false;
+
+    const refused = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.equal(refused.status, 409);
+    assert.equal((await refused.json()).error.code, "operation_stale");
+    assert.deepEqual(persisted?.entries, [], "the refusal left nothing in the durable ledger");
+
+    assert.equal((await fetch(`${app.base}/bots/bot-1/resume`, post("resume-key-0000000001"))).status, 200);
+    const accepted = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.equal(accepted.status, 200);
+    const receipt = await accepted.json();
+    assert.equal(receipt.submissionId, "17");
+    // Once it ran, the key is spent: a repeat replays the receipt without sending again.
+    const replayed = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.deepEqual(await replayed.json(), receipt);
+    assert.equal(sent.length, 1);
+
+    // A failure after the session started work keeps its key: a retry replays it and never runs twice.
+    const exploded = JSON.stringify({ text: "explode" });
+    const failed = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000002", exploded));
+    assert.equal(failed.status, 500);
+    const retried = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000002", exploded));
+    assert.equal(retried.status, 500);
+    assert.equal((await retried.json()).error.code, "internal_error");
+    assert.equal(sent.length, 2, "the failed send ran once");
+    assert.equal(persisted?.entries.length, 3, "resume, the sent message and the failed one are recorded");
+  } finally {
+    await app.close();
+    await sessions.close();
   }
 });

@@ -1,7 +1,7 @@
 import { stopAllPiCacheWarmers } from "../services/pi-cache-warming.js";
-import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
-import { customModelThinkingLevels, parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
+import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
@@ -11,12 +11,7 @@ import { configStore } from "../services/config-store.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
-import {
-  assertOnboardingTailnetBaseUrl,
-  listModels,
-  normalizeProviderBaseUrl,
-  testConnection,
-} from "../services/models.js";
+import { listModels, testConnection } from "../services/models.js";
 import {
   parseProviderAuthProviderId,
   parseProviderAuthResponseRequest,
@@ -27,11 +22,7 @@ import { providerAuthOwner } from "../services/provider-auth-owner.js";
 import { providerRegistry } from "../services/provider-registry.js";
 import { projectPiCatalogRefreshErrors } from "../services/pi-catalog-refresh.js";
 import { isCustomProviderId } from "../services/custom-provider-id.js";
-import {
-  canonicalGoogleProvider,
-  GOOGLE_PROVIDER_ID,
-  parseGoogleThinkingSelection,
-} from "../services/google-provider.js";
+import { GOOGLE_PROVIDER_ID, parseGoogleThinkingSelection } from "../services/google-provider.js";
 import { parseAnthropicThinkingSelection } from "../services/anthropic-provider.js";
 import {
   assertMutableProviderId,
@@ -50,15 +41,12 @@ import {
 import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
+import { providerModelInfo } from "../services/provider-model-info.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
-import type {
-  ProviderDeployment,
-  ProviderKind,
-  ProviderModelMetadata,
-  ProviderModelType,
-  StoredProvider,
-} from "../services/types.js";
-import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "../services/types.js";
+import { registerProviderCatalogHandlers } from "./provider-catalog-handlers.js";
+import { asProviderId, asString, createProviderPayloadParser } from "./provider-payload.js";
+import type { StoredProvider } from "../services/types.js";
+import { MAX_CONFIG_ID_LENGTH } from "../services/types.js";
 import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
@@ -76,119 +64,7 @@ import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../render
 
 const appearancePreview = new AppearancePreviewState();
 
-function asString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Expected non-empty string for "${name}".`);
-  }
-  return value;
-}
-
-function asProviderId(value: unknown): string {
-  const id = asString(value, "id");
-  if (id.length > MAX_CONFIG_ID_LENGTH) {
-    throw new Error(`Expected "id" to be at most ${MAX_CONFIG_ID_LENGTH} characters.`);
-  }
-  return id;
-}
-
-function optionalPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function optionalModelType(value: unknown): ProviderModelType | undefined {
-  return value === "llm" ||
-    value === "embedding" ||
-    value === "reranker" ||
-    value === "image" ||
-    value === "audio" ||
-    value === "video"
-    ? value
-    : undefined;
-}
-
-function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadata> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const entries: Array<[string, ProviderModelMetadata]> = [];
-  for (const [modelId, raw] of Object.entries(value)) {
-    if (!modelId || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-    const metadata = raw as Record<string, unknown>;
-    const source =
-      metadata.source === "lmstudio" ||
-      metadata.source === "ollama" ||
-      metadata.source === "provider"
-        ? metadata.source
-        : "provider";
-    entries.push([
-      modelId,
-      {
-        source,
-        overrides: parseCustomModelOptions(metadata.overrides),
-        manuallyAdded: metadata.manuallyAdded === true ? true : undefined,
-        name: typeof metadata.name === "string" && metadata.name ? metadata.name : undefined,
-        type: optionalModelType(metadata.type),
-        vision: typeof metadata.vision === "boolean" ? metadata.vision : undefined,
-        toolCall: typeof metadata.toolCall === "boolean" ? metadata.toolCall : undefined,
-        reasoning: typeof metadata.reasoning === "boolean" ? metadata.reasoning : undefined,
-        contextLength: optionalPositiveNumber(metadata.contextLength),
-        parameterCount:
-          typeof metadata.parameterCount === "string" && metadata.parameterCount
-            ? metadata.parameterCount
-            : undefined,
-        format:
-          typeof metadata.format === "string" && metadata.format ? metadata.format : undefined,
-      },
-    ]);
-  }
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
-
-function parseProvider(value: unknown): StoredProvider {
-  if (typeof value !== "object" || value === null) {
-    throw new Error("Invalid provider payload.");
-  }
-  const p = value as Record<string, unknown>;
-  const kind = p.kind === "anthropic" ? "anthropic" : ("openai" as ProviderKind);
-  const modelMetadata = parseModelMetadata(p.modelMetadata);
-  const models = Array.isArray(p.models)
-    ? p.models.filter(
-        (model): model is string =>
-          typeof model === "string" &&
-          (modelMetadata?.[model]?.type === undefined || modelMetadata[model]?.type === "llm"),
-      )
-    : [];
-  const defaultModel =
-    typeof p.defaultModel === "string" && models.includes(p.defaultModel)
-      ? p.defaultModel
-      : undefined;
-  const deployment: ProviderDeployment | undefined =
-    p.deployment === "local" || p.deployment === "hosted" ? p.deployment : undefined;
-  const baseUrl = normalizeProviderBaseUrl(asString(p.baseUrl, "baseUrl"));
-  if (baseUrl.length > MAX_PROVIDER_BASE_URL_LENGTH) {
-    throw new Error(`Expected "baseUrl" to be at most ${MAX_PROVIDER_BASE_URL_LENGTH} characters.`);
-  }
-  const provider: StoredProvider = {
-    id: asProviderId(p.id),
-    kind,
-    label: asString(p.label, "label"),
-    artwork: persistableProviderArtwork(p.artwork),
-    baseUrl,
-    models,
-    modelMetadata,
-    defaultModel,
-    needsKey: typeof p.needsKey === "boolean" ? p.needsKey : true,
-    deployment,
-    llamaCppClassifierEnabled: p.llamaCppClassifierEnabled as boolean | undefined,
-    isPreset: typeof p.isPreset === "boolean" ? p.isPreset : false,
-    // Built-in status is derived exclusively from Pi's registry, never from
-    // a renderer payload that could redirect native credentials.
-    isBuiltin: false,
-  };
-  validateLocalClassifierPreference(provider);
-  if (provider.id === "custom:onboarding-tailscale") {
-    assertOnboardingTailnetBaseUrl(provider.baseUrl);
-  }
-  return provider.id === GOOGLE_PROVIDER_ID ? canonicalGoogleProvider(provider) : provider;
-}
+const parseProvider = createProviderPayloadParser({ persistableArtwork: persistableProviderArtwork });
 
 async function connectionKey(
   provider: StoredProvider,
@@ -376,46 +252,13 @@ export function registerProviderHandlers(): void {
     },
   );
 
-  ipcMain.handle("providers:refresh", async (event, providerValue?: unknown) => {
-    // A catalog refresh can renew OAuth credentials inside Pi, so treat it as
-    // a credential-affecting operation rather than accepting stale documents.
-    providerAuthOwner(event);
-    const providerId = providerValue === undefined ? undefined : asProviderId(providerValue);
-    if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
-      throw new Error("Only provider catalogs built into Aiden can be refreshed.");
-    }
-    return refreshProviderCatalogs(providerId === undefined ? undefined : [providerId]);
-  });
-
-  ipcMain.handle("providers:refreshIfStale", async (event) => {
-    providerAuthOwner(event);
-    return refreshProviderCatalogs(undefined, false);
-  });
-
-  ipcMain.handle("providers:catalogStatus", () => modelsDevCacheStatus());
-
-  ipcMain.handle("providers:updateCatalogs", async (event) => {
-    providerAuthOwner(event);
-    const inventory = await refreshProviderCatalogs();
-    let modelsDev;
-    try {
-      const refreshed = await modelsDevCacheRuntime.refresh();
-      modelsDev = { ok: true as const, status: refreshed.status };
-    } catch (error) {
-      modelsDev = {
-        ok: false as const,
-        status: await modelsDevCacheStatus(),
-        message:
-          error instanceof Error
-            ? error.message.slice(0, 240)
-            : "The models.dev catalog could not be updated.",
-      };
-    }
-    return {
-      providers: inventory.providers,
-      inventoryErrors: inventory.errors,
-      modelsDev,
-    };
+  registerProviderCatalogHandlers(ipcMain, {
+    providerAuthOwner,
+    isBuiltinProvider: (providerId) => providerRegistry.isBuiltinProvider(providerId),
+    refreshProviderCatalogs,
+    modelsDev: modelsDevCacheRuntime,
+    modelsDevStatus: modelsDevCacheStatus,
+    modelInfo: providerModelInfo,
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
@@ -558,6 +401,10 @@ export function registerProviderHandlers(): void {
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;
     }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
+    if (p.computerUseAlwaysAllow !== undefined) {
+      if (typeof p.computerUseAlwaysAllow !== "boolean") throw new Error("Invalid Computer Use setting.");
+      next.computerUseAlwaysAllow = p.computerUseAlwaysAllow;
+    }
     for (const key of ["aidenLiveEnabled", "aidenLiveButtonVisible"] as const) {
       if (p[key] === undefined) continue;
       if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
@@ -577,10 +424,16 @@ export function registerProviderHandlers(): void {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
+    Object.assign(next, parseModelPadPreferencesPatch(p));
     const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     if (next.cacheWarmingEnabled === false) stopAllPiCacheWarmers();
+    if (next.computerUseAlwaysAllow === false) {
+      // Live streams drop a cached grant on their next Computer Use call.
+      const { revokeComputerUseGrants } = await import("../services/computer-use/access-gate.js");
+      revokeComputerUseGrants();
+    }
     if (next.aidenLiveEnabled === false) {
       // A disabled feature must not keep an attended session running in any window.
       const { geminiLiveService } = await import("../services/gemini-live/service-main.js");

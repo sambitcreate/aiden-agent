@@ -1,4 +1,5 @@
 import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
+import { HistoryNavButtons } from "./history-nav";
 import { forkedFromLabel } from "../lib/chat-copy-view";
 // Unified workspace/chat sidebar with workspace-grouped, recent, and
 // needs-attention views, route-driven selection, and workspace/chat actions.
@@ -34,6 +35,7 @@ import {
   Text,
   toast,
 } from "./ui";
+import { Progress } from "./ui-primitives";
 import {
   ChevronDown,
   ChevronRight,
@@ -80,6 +82,8 @@ import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { isBotsPath } from "../lib/bot-routes";
+import { BotSidebar } from "../main/bots/bot-sidebar";
 import {
   localSidebarChats,
   localSidebarProjects,
@@ -381,19 +385,11 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
       </div>
       <p className="mt-2 text-small text-secondary">{description}</p>
       {displayedSnapshot.status === "downloading" && displayedSnapshot.percent !== null ? (
-        <div
-          className="mt-2 h-1 overflow-hidden rounded-full bg-control"
-          role="progressbar"
-          aria-label="Update download progress"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.floor(displayedSnapshot.percent)}
-        >
-          <div
-            className="h-full rounded-full bg-accent transition-[width] duration-150"
-            style={{ width: `${displayedSnapshot.percent}%` }}
-          />
-        </div>
+        <Progress
+          className="mt-2"
+          label="Update download progress"
+          value={displayedSnapshot.percent}
+        />
       ) : null}
       <div className="mt-2 flex items-center justify-end gap-1">
         <Button
@@ -464,7 +460,14 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
-export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal }: ChatSidebarProps) {
+/** On any Bots page the sidebar lists only Bots (spec §9); everywhere else it is the workspace outline. */
+export function ChatSidebar(props: ChatSidebarProps) {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const capabilities = useAppCapabilities();
+  return capabilities.bots && isBotsPath(pathname) ? <BotSidebar /> : <WorkspaceChatSidebar {...props} />;
+}
+
+function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal }: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
@@ -1420,7 +1423,11 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
         searchPlaceholder="Search chats…"
         searchValue={search}
         onSearchChange={setSearch}
-        actions={<SplitView.SidebarToggle />}
+        actions={
+          <SplitView.SidebarToggle>
+            <HistoryNavButtons />
+          </SplitView.SidebarToggle>
+        }
         footer={
           <SidebarFooter>
             <UpdateReadyBanner blockedReason={updateRestartBlockedReason} />

@@ -119,7 +119,8 @@ test.describe("Simulator power features", () => {
 
     await page.locator("textarea").fill("Open a simulator for this chat.");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+    // The reply can fork once it has settled into its saved message.
+    await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
     await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toHaveCount(1);
 
     const tools = page.getByRole("complementary", { name: "Environment work surface" });

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveSubagentMcpCredentialBoundary, type SubagentMcpCredentialSources } from "./subagent-mcp-credential-resolve.js";
+import { mcpFieldSecretDestination, resolveMcpFieldSecrets } from "../mcp-field-secrets-core.js";
+import type { McpServer } from "../types.js";
 import {
   createSubagentMcpCredentialBoundary,
   createSubagentMcpOAuthTokenObserver,
@@ -268,5 +271,51 @@ test("opaque endpoint query values are credentials except fixed public selectors
       "https://user:pass@mcp.test/read?key=oneprivate&signature=twoprivate&credential=threeprivate&subscription-key=fourprivate&version=2025&format=json",
     ),
     ["user", "pass", "oneprivate", "twoprivate", "threeprivate", "fourprivate"],
+  );
+});
+
+const markerAuthorization = `aiden-secret:v1:${"a".repeat(32)}`;
+const markerApiKey = `aiden-secret:v1:${"b".repeat(32)}`;
+const markerServer: McpServer = {
+  id: "docs",
+  name: "Docs",
+  transport: "http",
+  url: "https://docs.example.test/mcp",
+  headers: { Authorization: markerAuthorization, "X-Api-Key": markerApiKey },
+  enabled: true,
+};
+const markerValues = { [markerAuthorization]: "Bearer real-bearer-secret", [markerApiKey]: "real-api-key-secret" };
+/** A stored record holding `values` for the marker server's headers, bound to `destination`. */
+function markerRecord(destination: string, values: Record<string, string>) {
+  const fields: Record<string, string> = { [markerAuthorization]: "headers:Authorization", [markerApiKey]: "headers:X-Api-Key" };
+  return { bindings: { [destination]: Object.fromEntries(Object.entries(values).map(([marker, value]) => [marker, { field: fields[marker]!, value }])) } };
+}
+
+function markerSources(destination = mcpFieldSecretDestination(markerServer)): SubagentMcpCredentialSources {
+  return {
+    revisionKey: Buffer.alloc(32, 3),
+    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, markerRecord(destination, markerValues)),
+    presetKey: async () => null,
+    oauthSession: async () => ({}),
+    oauthGeneration: () => 0,
+  };
+}
+
+test("a server echoing its marker-backed headers never shows the real values to a child", async () => {
+  const boundary = await resolveSubagentMcpCredentialBoundary(markerServer, new AbortController().signal, markerSources());
+  const echoed = boundary.redactText(JSON.stringify({ seen: { authorization: "Bearer real-bearer-secret", "x-api-key": "real-api-key-secret" } }));
+  assert.doesNotMatch(echoed, /real-bearer-secret|real-api-key-secret/u);
+  // Rotating a stored value is a new credential revision for the child's authority.
+  const rotated = await resolveSubagentMcpCredentialBoundary(markerServer, new AbortController().signal, {
+    ...markerSources(),
+    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, markerRecord(mcpFieldSecretDestination(markerServer), { ...markerValues, [markerApiKey]: "rotated" })),
+  });
+  assert.notEqual(rotated.revision, boundary.revision);
+});
+
+test("values saved for another address fail closed instead of reaching a child's connection", async () => {
+  await assert.rejects(
+    resolveSubagentMcpCredentialBoundary(markerServer, new AbortController().signal, markerSources("0".repeat(64))),
+    /changed outside Aiden/u,
   );
 });

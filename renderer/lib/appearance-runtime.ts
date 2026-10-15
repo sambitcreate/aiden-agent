@@ -167,6 +167,13 @@ function systemUsesReducedMotion(): boolean {
     && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 }
 
+/** True when Aiden's applied Reduce Motion setting or the system asks for reduced motion. */
+export function prefersReducedMotion(): boolean {
+  return (typeof document !== "undefined"
+    && document.documentElement.dataset.reduceMotion === "true")
+    || systemUsesReducedMotion();
+}
+
 export function effectiveAppearanceScheme(
   config: AppearanceConfig,
   nativeUsesDarkColors = systemUsesDarkColors(),

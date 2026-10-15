@@ -208,11 +208,22 @@ test("describes the scoped, approval-gated project automation capability", () =>
 test("an unattended MCP automation must use approved tools and report only verified results", () => {
   const prompt = buildAssistantSystemPrompt({
     ...base,
-    availableTools: ["Gmail__search_messages", "Gmail__send_message"],
+    availableTools: ["gmail__search_messages", "gmail__send_message"],
+    mcpToolNames: ["gmail__search_messages", "gmail__send_message"],
     unattended: true,
   });
-  assert.match(prompt, /exact MCP tools the user approved/u);
+  // Approval binds servers, not individual tools: the prompt must not promise more.
+  assert.match(prompt, /MCP servers the user approved/u);
+  assert.doesNotMatch(prompt, /exact MCP tools/u);
   assert.match(prompt, /corresponding MCP tool call succeeded/u);
+  // MCP status comes from host identity, not from a double underscore in a name.
+  for (const input of [
+    { availableTools: ["local__helper"] },
+    { availableTools: [], mcpToolNames: ["gmail__send_message"] },
+  ]) {
+    const unrelated = buildAssistantSystemPrompt({ ...base, ...input, unattended: true });
+    assert.doesNotMatch(unrelated, /MCP servers the user approved/u);
+  }
 });
 
 test("an unrecognised settings permission falls back to requiring approval", () => {

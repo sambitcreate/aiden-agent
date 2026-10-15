@@ -2,7 +2,7 @@
  * Adapted from t3code apps/server/src/device/deviceToolMaintenance.ts @ a6ec88f7 (MIT)
  *
  * Reclaims helper versions Aiden no longer pins. The same JavaScript runs in
- * two places: on this Mac through `runToolMaintenance` (under Electron's
+ * two places: on this Mac through `runToolMaintenance` (under standalone
  * Node), and on SSH hosts inside the bootstrap script. Both take one
  * directory lock per tool root, never delete the pinned install, and keep any
  * version a running process was started from.
@@ -14,6 +14,7 @@
  *   other completed install that no running helper uses.
  */
 import { spawn } from "node:child_process";
+import { deviceNodeEnvironment } from "./device-toolchain.js";
 
 /**
  * Defines `withToolMaintenance(root, operation)` and
@@ -160,11 +161,11 @@ export async function runToolMaintenance(
   }
 }
 
-/** Evaluates a script with Electron-as-Node (or plain Node in tests). */
+/** Evaluates a script with the resolved standalone Node runtime. */
 export function runNodeScript(nodePath: string, script: string): Promise<ToolMaintenanceResult> {
   return new Promise((resolve) => {
     const child = spawn(nodePath, ["-e", script], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      env: deviceNodeEnvironment(process.env, nodePath),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

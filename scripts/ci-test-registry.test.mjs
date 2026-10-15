@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   collectSourceTests,
+  discoverTestFiles,
   readPackageManifest,
   readRegistry,
+  readWorkflows,
   validateRegistry,
 } from "./ci-test-registry.mjs";
 
@@ -166,4 +168,57 @@ test("non-file execution modes and native prerequisites cannot disappear behind 
   const unassigned = structuredClone(readRegistry());
   for (const lane of unassigned.lanes) lane.prerequisites = lane.prerequisites.filter((id) => id !== "worktree-file-io-build");
   assert.throws(() => validateRegistry({ registry: unassigned }), /Unassigned build prerequisite/u);
+});
+
+test("every test file on disk runs in CI or is allowlisted as manual", () => {
+  const validation = validateRegistry();
+  const accounted = new Set([...validation.sourceFiles, ...validation.workflowFiles, ...validation.manualFiles]);
+  const discovered = discoverTestFiles();
+  assert.ok(discovered.includes("main/services/concentrate-provider.test.ts"));
+  assert.deepEqual(discovered.filter((file) => !accounted.has(file)), []);
+
+  // Unregistering a script orphans its files even when the serial graph and
+  // lanes stay consistent with each other.
+  const packageManifest = structuredClone(readPackageManifest());
+  packageManifest.scripts["test:serial"] = packageManifest.scripts["test:serial"].replace(" && npm run test:concentrate", "");
+  const registry = structuredClone(readRegistry());
+  for (const lane of registry.lanes) lane.files = lane.files.filter((file) => file !== "main/services/concentrate-provider.test.ts");
+  assert.throws(
+    () => validateRegistry({ registry, packageManifest }),
+    /never run in CI: \["main\/services\/concentrate-provider\.test\.ts"\]/u,
+  );
+
+  assert.throws(
+    () => validateRegistry({ discoveredFiles: [...discovered, "renderer/lib/new-feature.test.ts"] }),
+    /never run in CI: \["renderer\/lib\/new-feature\.test\.ts"\]/u,
+  );
+});
+
+test("manual allowlist entries are required for intentionally manual suites and cannot go stale", () => {
+  const withoutPerf = structuredClone(readRegistry());
+  withoutPerf.manual = withoutPerf.manual.filter((entry) => entry.file !== "main/services/design/store.perf.test.ts");
+  assert.throws(() => validateRegistry({ registry: withoutPerf }), /never run in CI: \["main\/services\/design\/store\.perf\.test\.ts"\]/u);
+
+  const stale = structuredClone(readRegistry());
+  stale.manual.push({ file: "main/services/concentrate-provider.test.ts", reason: "already in a lane" });
+  assert.throws(() => validateRegistry({ registry: stale }), /allowlist names files CI already runs/u);
+
+  const missing = structuredClone(readRegistry());
+  missing.manual.push({ file: "main/services/deleted.perf.test.ts", reason: "gone" });
+  assert.throws(() => validateRegistry({ registry: missing }), /missing or unsupported test file/u);
+});
+
+test("workflow-owned scripts count only while a workflow still invokes them", () => {
+  const workflows = readWorkflows().replaceAll("npm run test:linux-native", "npm run test:linux-native-removed");
+  assert.throws(() => validateRegistry({ workflows }), /not invoked by any workflow: test:linux-native/u);
+});
+
+test("duplicate prerequisite and preserved ids are rejected", () => {
+  const prerequisites = structuredClone(readRegistry());
+  prerequisites.prerequisites.push(structuredClone(prerequisites.prerequisites.find((entry) => entry.id === "vcc-build")));
+  assert.throws(() => validateRegistry({ registry: prerequisites }), /Duplicate prerequisite ids: vcc-build/u);
+
+  const preserved = structuredClone(readRegistry());
+  preserved.preserved.push(structuredClone(preserved.preserved[0]));
+  assert.throws(() => validateRegistry({ registry: preserved }), new RegExp(`Duplicate preserved ids: ${preserved.preserved[0].id}`, "u"));
 });

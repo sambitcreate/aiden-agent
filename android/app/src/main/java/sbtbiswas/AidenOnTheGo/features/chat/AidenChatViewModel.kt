@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -64,7 +66,10 @@ class AidenChatViewModel(
     val initialChat: AidenChat? = null,
     private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable
+    private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
+    private val visualSnapshotRefresh: AidenVisualSnapshotRefreshPolicy = AidenVisualSnapshotRefreshPolicy(),
+    private val clock: () -> Instant = Instant::now,
+    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy()
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -99,8 +104,14 @@ class AidenChatViewModel(
     private val _reasoning = MutableStateFlow("")
     val reasoning: StateFlow<String> = _reasoning.asStateFlow()
 
-    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+    // Reply text passes through the word gate before it is shown, so a word
+    // never appears half-typed; reasoning is shown as it arrives.
+    private val liveReveal = AidenStreamingRevealGate(viewModelScope) { text ->
         _liveText.value = text
+    }
+
+    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+        liveReveal.submit(text)
         _reasoning.value = reasoning
     }
 
@@ -109,6 +120,9 @@ class AidenChatViewModel(
 
     private val _activityTimeline = MutableStateFlow<AidenGenerationTimeline?>(null)
     val activityTimeline: StateFlow<AidenGenerationTimeline?> = _activityTimeline.asStateFlow()
+    private val _imageArrivalRevealGenerationIds = MutableStateFlow<Set<String>>(emptySet())
+    /** Generations whose image this phone watched being generated; their settled image reveals once. */
+    val imageArrivalRevealGenerationIds: StateFlow<Set<String>> = _imageArrivalRevealGenerationIds.asStateFlow()
 
     private val _pendingApproval = MutableStateFlow<AidenPendingApproval?>(null)
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
@@ -193,12 +207,37 @@ class AidenChatViewModel(
             field = value
             _hasActiveStream.value = value != null
         }
+    /**
+     * The persisted reply of a finished stream, until that stream clears. A done
+     * event names it; cancelled and error events do not, so their reply is the
+     * newest message carrying that outcome that was not already in the chat.
+     */
+    private data class EndedReply(
+        val streamId: String,
+        val messageId: String? = null,
+        val outcome: AidenMessageOutcomeStatus? = null,
+        val earlierIds: Set<String> = emptySet()
+    ) {
+        fun isIn(messages: List<AidenChatMessage>): Boolean {
+            if (messageId != null) return messages.any { it.id == messageId }
+            val last = messages.lastOrNull() ?: return false
+            return last.role == AidenChatRole.ASSISTANT && last.outcome?.status == outcome && last.id !in earlierIds
+        }
+    }
+    private fun endedWith(streamId: String, outcome: AidenMessageOutcomeStatus) = EndedReply(
+        streamId, outcome = outcome, earlierIds = streamStartMessageIds)
+    private var endedReply: EndedReply? = null
+    private var streamStartMessageIds: Set<String> = emptySet()
     private var transcriptGeneration = 0L
     private var recoveryWarning: String? = null
     private var streamJob: Job? = null
     private var titleRefreshJob: Job? = null
     private var terminalReconciliationJob: Job? = null
     private var progressObservationJob: Job? = null
+    /** Re-reads the transcript while the newest reply's visual snapshots are still being captured. */
+    private var visualSnapshotRefreshJob: Job? = null
+    private var visualSnapshotRefreshMessageId: String? = null
+    private var visualSnapshotRefreshAttempt = 0
     private var progressForeground = false
     private var progressObservationToken = 0L
     private var taskEpoch: String? = null
@@ -206,6 +245,8 @@ class AidenChatViewModel(
     private var agentEpoch: String? = null
     private var agentRevision = 0L
     private var currentRosterTurnId: String? = null
+    /** The turn this phone started most recently; the roster announcing it is not a foreign run. */
+    private var lastLocalTurnId: String? = null
     private var selectedRosterTurnId: String? = null
     private var agentRosterSelectionTicket = 0L
     private var taskCapabilityDeniedObservationToken: Long? = null
@@ -448,6 +489,10 @@ class AidenChatViewModel(
             it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == createdAt
         }
 
+    fun finishImageArrivalReveal(generationId: String) {
+        _imageArrivalRevealGenerationIds.update { it - generationId }
+    }
+
     fun consumeForkNavigation(forkChatId: String) {
         if (_forkNavigation.value == forkChatId) _forkNavigation.value = null
     }
@@ -636,6 +681,7 @@ class AidenChatViewModel(
         // Contract revision 24: follow a run started elsewhere. It outlives the
         // foreground so the live notification keeps updating until it ends.
         startForeignRunObservation()
+        startForeignRunProbe()
         if (progressObservationJob?.isActive == true) return
         progressObservationToken += 1
         if (coordinator.serverInfo.value != null && !canReadTaskProgress && !canReadAgentRoster) {
@@ -654,6 +700,8 @@ class AidenChatViewModel(
         progressObservationToken += 1
         progressObservationJob?.cancel()
         progressObservationJob = null
+        foreignRunProbeJob?.cancel()
+        foreignRunProbeJob = null
         _progressConnectionState.value = when {
             _taskProgress.value != null || _agentRoster.value != null -> ProgressConnectionState.LAST_KNOWN
             canReadTaskProgress || canReadAgentRoster -> ProgressConnectionState.IDLE
@@ -845,6 +893,8 @@ class AidenChatViewModel(
         agentCapabilityDeniedObservationToken = null
         // Run observation depends on the negotiated run grants, not progress.
         retryForeignRunObservation()
+        // Losing roster access leaves no turn signal, so probe instead.
+        startForeignRunProbe()
         val keepTasks = canReadTaskProgress
         val keepAgents = canReadAgentRoster
         if (!keepTasks && !keepAgents) {
@@ -890,6 +940,7 @@ class AidenChatViewModel(
         val key = AidenProgressFencing.rosterKey(snapshot.epoch, snapshot.turnId)
         if (!historical) {
             if (!AidenProgressFencing.accepts(agentEpoch, agentRevision, snapshot.epoch, snapshot.revision)) return false
+            val hadRoster = agentEpoch != null
             if (agentEpoch != null && agentEpoch != snapshot.epoch) {
                 agentRosterSelectionTicket += 1
                 _agentRosterHistory.value = emptyList()
@@ -902,6 +953,15 @@ class AidenChatViewModel(
             val previousTurnId = currentRosterTurnId
             currentRosterTurnId = snapshot.turnId
             _agentRoster.value = snapshot
+            if (snapshot.turnId != null && snapshot.turnId != previousTurnId &&
+                snapshot.turnId != lastLocalTurnId
+            ) {
+                // A turn started on the Mac: follow it if nothing is attached. This
+                // phone's own turn can be announced after its stream has ended. The
+                // first snapshot may name a run registered after the opening lookup
+                // was answered, so it is looked up once more, without the retry.
+                announceForeignRunTurn(retryNotFound = hadRoster)
+            }
             if (selectedRosterTurnId == null || selectedRosterTurnId == previousTurnId || selectedRosterTurnId == snapshot.turnId) {
                 selectedRosterTurnId = snapshot.turnId
                 _selectedAgentRoster.value = snapshot
@@ -997,10 +1057,12 @@ class AidenChatViewModel(
         progressForeground = false
         progressObservationToken += 1
         progressObservationJob?.cancel()
+        foreignRunProbeJob?.cancel()
         foreignRunJob?.cancel()
         streamJob?.cancel()
         titleRefreshJob?.cancel()
         terminalReconciliationJob?.cancel()
+        visualSnapshotRefreshJob?.cancel()
         forkSummaryPollJob?.cancel()
         forkSourceJob?.cancel()
         // The last keystrokes may still be inside the debounce window.
@@ -1255,6 +1317,7 @@ class AidenChatViewModel(
         transcriptGeneration++
         titleRefreshJob?.cancel()
         titleRefreshJob = null
+        cancelVisualSnapshotRefresh()
         _isStarting.value = true
         _presentedError.value = null
         _draft.value = ""
@@ -1275,6 +1338,7 @@ class AidenChatViewModel(
                 // Clear the stored draft before the turn can reach the server.
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 val response = client.startTurn(chatId, request, idempotencyKey)
+                lastLocalTurnId = response.turnId
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,
                     streamId = response.streamId,
@@ -1493,9 +1557,12 @@ class AidenChatViewModel(
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
         val client = activeClient() ?: return
         activeStreamId = originalStream.streamId
+        streamStartMessageIds = _chat.value?.messages.orEmpty().mapTo(HashSet()) { it.id }
+        endedReply = null
         if (_streamState.value == null) _streamState.value = AidenStreamState.RECONCILING
         terminalReconciliationJob?.cancel()
         terminalReconciliationJob = null
+        cancelVisualSnapshotRefresh()
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             var stream = originalStream
@@ -1585,8 +1652,12 @@ class AidenChatViewModel(
     private suspend fun apply(event: AidenRemoteStreamEvent) {
         if (activeStreamId != event.streamId) return
         val isDelta = event.type == AidenRemoteEventType.TEXT_DELTA || event.type == AidenRemoteEventType.REASONING_DELTA
-        // Timeline offsets and terminal states describe the text received so far.
-        if (!isDelta) liveTranscript.flush()
+        // Timeline offsets and terminal states describe the text received so far,
+        // so everything received is shown first, including a held word.
+        if (!isDelta) {
+            liveTranscript.flush()
+            liveReveal.flush()
+        }
         when (event.type) {
             AidenRemoteEventType.SNAPSHOT -> {
                 _streamState.value = AidenStreamState.RECONCILING
@@ -1636,6 +1707,9 @@ class AidenChatViewModel(
             AidenRemoteEventType.TIMELINE -> {
                 event.payload?.timeline?.let { timeline ->
                     _activityTimeline.value = timeline
+                    _imageArrivalRevealGenerationIds.update {
+                        AidenImageGenerationPlaceholderState.armedArrivalReveals(it, timeline)
+                    }
                 }
             }
             AidenRemoteEventType.APPROVAL_REQUIRED -> {
@@ -1658,18 +1732,21 @@ class AidenChatViewModel(
                 _pendingQuestion.value = null
                 _presentedError.value = null
                 _streamState.value = AidenStreamState.ERROR
+                endedReply = endedWith(event.streamId, AidenMessageOutcomeStatus.FAILED)
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.CANCELLED -> {
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.CANCELLED
+                endedReply = endedWith(event.streamId, AidenMessageOutcomeStatus.CANCELLED)
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.DONE -> {
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.DONE
+                endedReply = event.payload?.messageId?.let { EndedReply(event.streamId, it) }
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.HEARTBEAT -> {}
@@ -2167,12 +2244,21 @@ class AidenChatViewModel(
     private var foreignRunId: String? = null
     private var foreignProjection: AidenForeignRunProjection? = null
     private var foreignRunJob: Job? = null
+    private var foreignRunProbeJob: Job? = null
+    /** Counts runs shown live, so the probe can tell that one was found. */
+    private var foreignRunsPresented = 0
     private var foreignSettleJob: Job? = null
     /** When the attach replay of [foreignSettleRunId] is presented even if it never goes quiet. */
     private var foreignSettleDeadlineNanos: Long? = null
     private var foreignSettleRunId: String? = null
     /** Bounded transcript recovery after a foreign run ended but its re-read failed. */
     private var foreignReconcileJob: Job? = null
+    /** Bumped for each turn the roster announces; a lookup that saw it change looks again. */
+    private var foreignRunTurnSignal = 0L
+    /** Whether the newest announced turn earns a lookup's not-found retry. */
+    private var foreignRunTurnRetry = false
+    /** Transcript reads reserved after this write token were issued once the foreign run had ended. */
+    private var foreignRunEndedWriteToken = 0L
 
     private fun foreignRunAccess(capability: AidenRemoteCapability): Boolean {
         val installation = installationForProgress() ?: return false
@@ -2198,12 +2284,61 @@ class AidenChatViewModel(
         get() = canControlCurrentRun || canControlForeignRun
 
     /** Attaches to the chat's current run when this phone is not running its own. */
-    private fun startForeignRunObservation() {
+    private fun startForeignRunObservation(retryNotFound: Boolean = false) {
         if (foreignRunJob?.isActive == true || activeStreamId != null || _isStarting.value) return
         if (!foreignRunAccess(AidenRemoteCapability.RUNS_OBSERVE)) return
         val client = activeClient() ?: return
         foreignSettleDeadlineNanos = null
-        foreignRunJob = viewModelScope.launch { observeForeignRun(client) }
+        foreignRunJob = viewModelScope.launch {
+            var retry = retryNotFound
+            while (true) {
+                val signal = foreignRunTurnSignal
+                observeForeignRun(client, retry)
+                // A turn announced while this lookup was out may have registered
+                // after it was answered, so look for it again.
+                if (foreignRunTurnSignal == signal || !progressForeground || activeStreamId != null ||
+                    _isStarting.value || activeClient() !== client
+                ) break
+                retry = foreignRunTurnRetry
+                foreignSettleDeadlineNanos = null
+            }
+        }
+    }
+
+    private fun announceForeignRunTurn(retryNotFound: Boolean) {
+        foreignRunTurnSignal += 1
+        foreignRunTurnRetry = retryNotFound
+        if (progressForeground) startForeignRunObservation(retryNotFound)
+    }
+
+    /**
+     * Without roster access nothing announces a new turn, so while the chat is
+     * on screen look for a current run on a backoff. Following a run (this
+     * phone's or another's) restarts the backoff once it ends.
+     */
+    private fun startForeignRunProbe() {
+        if (!progressForeground || canReadAgentRoster || foreignRunProbeJob?.isActive == true) return
+        foreignRunProbeJob = viewModelScope.launch {
+            var attempt = 0
+            while (progressForeground && !canReadAgentRoster) {
+                // Count from the end of any lookup in flight, such as the one made on opening.
+                val presentedBeforeWait = foreignRunsPresented
+                foreignRunJob?.join()
+                if (foreignRunsPresented != presentedBeforeWait) attempt = 0
+                foreignRunAttach.pause(foreignRunAttach.probeDelayMillis(attempt))
+                if (!progressForeground || canReadAgentRoster) break
+                if (activeStreamId != null || _isStarting.value || foreignRunId != null ||
+                    foreignRunJob?.isActive == true
+                ) {
+                    attempt = 0
+                    continue
+                }
+                val presentedBefore = foreignRunsPresented
+                startForeignRunObservation()
+                foreignRunJob?.join()
+                attempt = if (foreignRunsPresented != presentedBefore) 0 else attempt + 1
+            }
+        }
     }
 
     /** The detail is open and run access or the chat just became known: attach if a run is live. */
@@ -2211,9 +2346,10 @@ class AidenChatViewModel(
         if (progressForeground) startForeignRunObservation()
     }
 
-    private suspend fun observeForeignRun(client: AidenRemoteClient) {
+    private suspend fun observeForeignRun(client: AidenRemoteClient, retryNotFound: Boolean) {
         var projection: AidenForeignRunProjection? = null
         var reconnects = 0
+        var notFoundRetries = if (retryNotFound) 1 else 0
         try {
             while (coroutineContext.isActive) {
                 val attached = projection
@@ -2245,6 +2381,12 @@ class AidenChatViewModel(
                         return
                     }
                     val server = error as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server
+                    if (server?.statusCode == 404 && projection == null && notFoundRetries > 0) {
+                        // The turn was announced before its run was registered.
+                        notFoundRetries -= 1
+                        foreignRunAttach.pause(foreignRunAttach.notFoundRetryMillis)
+                        continue
+                    }
                     if (server != null && server.statusCode in setOf(403, 404, 410)) {
                         // No current run, the run is gone, or access was withdrawn.
                         finishForeignRun()
@@ -2296,6 +2438,7 @@ class AidenChatViewModel(
                 foreignReconcileJob?.cancel()
                 foreignReconcileJob = null
                 foreignRunId = projection.runId
+                foreignRunsPresented += 1
                 foreignProjection = projection
                 presentForeignRun(projection)
             }
@@ -2316,7 +2459,7 @@ class AidenChatViewModel(
         val canControl = foreignRunAccess(AidenRemoteCapability.RUNS_CONTROL)
         val capabilities = approvalCapabilities()
         _streamState.value = projection.state
-        _liveText.value = projection.liveText
+        liveReveal.submit(projection.liveText)
         _reasoning.value = projection.reasoning
         _tools.value = projection.tools
         _pendingApproval.value = projection.pendingApproval?.let { approval ->
@@ -2350,9 +2493,12 @@ class AidenChatViewModel(
     private suspend fun finishForeignRun() {
         foreignSettleJob?.cancel()
         val projection = foreignProjection ?: return
+        // The run is over, so a word the gate was holding back is complete.
+        liveReveal.flush()
         foreignRunId = null
         foreignProjection = null
         val client = activeClient()
+        foreignRunEndedWriteToken = chatCache.reserveChatWrite()
         val reconciled = reconcileChat()
         if (activeStreamId != null || _isStarting.value) return
         _pendingApproval.value = null
@@ -2368,7 +2514,7 @@ class AidenChatViewModel(
     }
 
     private fun clearForeignLiveOutput() {
-        _liveText.value = ""
+        liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
     }
@@ -2401,7 +2547,7 @@ class AidenChatViewModel(
         foreignRunId = null
         foreignProjection = null
         if (!wasPresented || activeStreamId != null) return
-        _liveText.value = ""
+        liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
         _pendingApproval.value = null
@@ -2845,12 +2991,86 @@ class AidenChatViewModel(
         if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
         val presented = beforePublishing(admitted)
         _chat.value = presented
+        // Any accepted read that already holds the ended run's reply, such as
+        // a title refresh, retires its live card in this same step.
+        val ended = endedReply
+        if (ended != null && ended.streamId == activeStreamId && ended.isIn(presented.messages)) {
+            clearRecoveryWarning()
+            clearFinishedStream(ended.streamId)
+        }
+        // Likewise a read issued after a foreign run ended holds its reply, so
+        // the recovery keeping that run's response on screen can stand down.
+        val recovery = foreignReconcileJob
+        if (recovery?.isActive == true && writeToken > foreignRunEndedWriteToken &&
+            foreignRunId == null && activeStreamId == null
+        ) {
+            if (recovery !== currentCoroutineContext()[Job]) recovery.cancel()
+            foreignReconcileJob = null
+            clearRecoveryWarning()
+            clearForeignLiveOutput()
+        }
         resolveModelSelection()
         if (scheduleTitleRefresh && presented.isTitlePending) {
             schedulePendingTitleRefresh()
         }
         reportChatViewed(presented)
+        scheduleVisualSnapshotRefresh()
         return true
+    }
+
+    private fun canRefreshForVisualSnapshots(): Boolean =
+        activeStreamId == null && !_isStarting.value && foreignRunId == null
+
+    /**
+     * After a transcript is published, re-read it a few times while the
+     * newest reply still has visuals without a usable snapshot: the Mac
+     * stores snapshots after the reply settles and sends no signal when they
+     * land. Tries are counted per reply, so later reads never extend them.
+     */
+    private fun scheduleVisualSnapshotRefresh() {
+        if (visualSnapshotRefreshJob?.isActive == true || !canRefreshForVisualSnapshots()) return
+        val watched = visualSnapshotRefresh.watchedMessage(_chat.value?.messages.orEmpty()) ?: return
+        if (watched.id != visualSnapshotRefreshMessageId) {
+            visualSnapshotRefreshMessageId = watched.id
+            visualSnapshotRefreshAttempt = 0
+        }
+        if (visualSnapshotRefresh.nextDelayMillis(watched, visualSnapshotRefreshAttempt, clock()) == null) return
+        visualSnapshotRefreshJob = viewModelScope.launch {
+            while (true) {
+                val message = visualSnapshotRefresh.watchedMessage(_chat.value?.messages.orEmpty())
+                if (message?.id != visualSnapshotRefreshMessageId) return@launch
+                val delayMs = visualSnapshotRefresh.nextDelayMillis(message, visualSnapshotRefreshAttempt, clock())
+                    ?: return@launch
+                delay(delayMs)
+                if (!canRefreshForVisualSnapshots()) return@launch
+                visualSnapshotRefreshAttempt++
+                refreshTranscriptQuietly()
+            }
+        }
+    }
+
+    /**
+     * The ordinary newest-transcript read, admitted through the same revision
+     * and generation fences, without surfacing a failure: a missed background
+     * re-read only leaves the fallback on screen.
+     */
+    private suspend fun refreshTranscriptQuietly() {
+        if (_isStarting.value) return
+        val generation = transcriptGeneration
+        val client = activeClient() ?: return
+        try {
+            val writeToken = chatCache.reserveChatWrite()
+            val latest = fetchLatestTranscript(client)
+            if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return
+            acceptLatestTranscript(latest, writeToken)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
+    }
+
+    private fun cancelVisualSnapshotRefresh() {
+        visualSnapshotRefreshJob?.cancel()
+        visualSnapshotRefreshJob = null
     }
 
     /** Last chat revision reported read, so repeated reconciles send one report. */
@@ -2914,6 +3134,8 @@ class AidenChatViewModel(
         if (activeStreamId == expectedStreamId) {
             transcriptGeneration++
             activeStreamId = null
+            endedReply = null
+            streamStartMessageIds = emptySet()
             networkWaitStreamId = null
             _isWaitingForNetwork.value = false
             liveTranscript.reset()
@@ -2923,6 +3145,9 @@ class AidenChatViewModel(
             if (instanceId.isNotEmpty()) {
                 chatCache.removeActiveStream(instanceId, chatId, ifStreamId = expectedStreamId)
             }
+            // The terminal transcript was published while the stream still owned
+            // the chat, so the snapshot refresh could not arm then; arm it now.
+            scheduleVisualSnapshotRefresh()
         }
     }
 

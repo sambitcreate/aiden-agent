@@ -76,7 +76,7 @@ export function ContextMeter({
           title="Projected context for the next request"
         >
           <CircleGauge aria-hidden="true" />
-          <span className="text-mini tabular-nums">{percent}%</span>
+          <span className="context-meter-percent text-mini tabular-nums">{percent}%</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent

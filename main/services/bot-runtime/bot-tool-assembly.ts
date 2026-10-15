@@ -15,7 +15,7 @@
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
-import { withMcpServerInstructions, type McpServerInstructionSnapshot } from "../mcp-server-instructions.js";
+import { renderMcpServersSection } from "../mcp-server-instructions.js";
 import { piRuntimeReplayPolicy } from "../pi-runtime-tool.js";
 import type { SkillRegistrySnapshot } from "../skill-registry.js";
 import type {
@@ -52,8 +52,6 @@ export interface BotToolCandidate {
 
 export interface BotCandidateSet {
   tools: BotToolCandidate[];
-  /** Server instructions captured while discovering connection tools. */
-  guidance?: readonly McpServerInstructionSnapshot[];
   /** The skills offered, filtered to the Bot's exact grants, for the base prompt. */
   skillSnapshot?: SkillRegistrySnapshot;
 }
@@ -76,7 +74,7 @@ export interface BotToolAssemblyPorts {
 export interface BotToolAssembly {
   currentTools(botId: string, turn: BotTurnContext): Promise<BotToolEntry[]>;
   checkPolicy(botId: string, toolName: string, call?: BotToolCallCheck): Promise<BotPolicyDecision>;
-  /** MCP guidance for the tools last offered to the Bot, or "" when there is none. */
+  /** The bounded `mcp_servers` section for the connection tools last offered to the Bot, or "". */
   guidance(botId: string, toolNames: readonly string[]): string;
   /** The skill snapshot last offered to the Bot. */
   skillSnapshot(botId: string): SkillRegistrySnapshot | undefined;
@@ -93,16 +91,28 @@ function accessChangedReason(error: unknown): string {
 }
 
 export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssembly {
-  const offered = new Map<string, { guidance: readonly McpServerInstructionSnapshot[]; skillSnapshot?: SkillRegistrySnapshot }>();
+  const offered = new Map<string, { connectionTools: readonly AgentTool[]; skillSnapshot?: SkillRegistrySnapshot }>();
 
-  /** Run `tool` behind a fresh admission, revalidated immediately before the effect. */
-  function fenced(botId: string, tool: AgentTool): AgentTool {
+  /**
+   * Run `tool` behind a fresh admission, revalidated immediately before the
+   * effect. A connection tool must also still be the exact granted tool in
+   * its server's live inventory: the policy check (and any approval it asked
+   * for) used that grant's effect, so a tool that changed since, such as one
+   * that turned from read-only to mutating, never runs under the old answer.
+   */
+  function fenced(botId: string, tool: AgentTool, mcp: boolean): AgentTool {
     return {
       ...tool,
       async execute(toolCallId, params, signal, onUpdate) {
         const admission = await ports.admit(botId);
         try {
           await admission.revalidateBeforeEffect();
+          if (mcp) {
+            const facts = await ports.sources.facts(botId, admission);
+            if (!(await facts.mcpTools()).has(tool.name)) {
+              throw new Error("This connection tool changed since it was offered. Try again.");
+            }
+          }
           if (admission.signal.aborted) throw admission.signal.reason;
           const effectSignal = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
           return await tool.execute(toolCallId, params, effectSignal, onUpdate);
@@ -124,7 +134,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         for (const candidate of set.tools) {
           if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine })).allowed) continue;
           const bind = candidate.bind;
-          const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool));
+          const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true));
           entries.push({
             tool: guard(candidate.tool),
             replay: replayOf(candidate),
@@ -133,7 +143,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           });
         }
         offered.set(botId, {
-          guidance: set.guidance ?? [],
+          connectionTools: entries.flatMap((entry) => (entry.mcp ? [entry.tool] : [])),
           ...(set.skillSnapshot === undefined ? {} : { skillSnapshot: set.skillSnapshot }),
         });
         return entries;
@@ -173,9 +183,10 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     },
 
     guidance(botId, toolNames) {
-      const snapshots = offered.get(botId)?.guidance ?? [];
-      return withMcpServerInstructions({ systemPrompt: "", tools: toolNames.map((name) => ({ name })) }, snapshots)
-        .systemPrompt.trim();
+      // Bot connection tools are declared directly; only those still offered appear.
+      const names = new Set(toolNames);
+      const tools = (offered.get(botId)?.connectionTools ?? []).filter((tool) => names.has(tool.name));
+      return renderMcpServersSection(tools, { declared: names });
     },
 
     skillSnapshot(botId) {

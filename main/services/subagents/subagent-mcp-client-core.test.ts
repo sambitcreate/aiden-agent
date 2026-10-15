@@ -7,6 +7,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { callMcpTool } from "../mcp-tool-inventory.js";
 import type { McpServer } from "../types.js";
 import {
+  MAX_CHILD_STRUCTURED_BYTES,
   MAX_SUBAGENT_MCP_CLIENT_REDACTORS,
   SUBAGENT_MCP_REQUEST_TIMEOUT_MS,
   withIsolatedSubagentMcpClientCore,
@@ -611,4 +612,33 @@ test("real SDK child calls preserve last-page diagnostics through the public req
       await remote.close();
     }
   }
+});
+
+test("child results redact credential echoes inside structured content, or withhold it when unbounded", async () => {
+  const h = harness();
+  let structuredContent: unknown = { echo: "value echo-secret", nested: [{ "key-echo-secret": ["echo-secret"] }], count: 3 };
+  h.dependencies.createClient = () => ({
+    connect: async () => undefined,
+    close: async () => undefined,
+    listTools: async () => ({ tools: [{ name: "lookup", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }] }),
+    callTool: async () => ({ content: [], structuredContent }),
+  });
+  const call = () => withIsolatedSubagentMcpClientCore({
+    server,
+    signal: new AbortController().signal,
+    configurationLease: h.configurationLease,
+    dependencies: h.dependencies,
+    operation: async (client) => {
+      await client.listTools(new AbortController().signal);
+      return client.callTool("lookup", {}, new AbortController().signal);
+    },
+  }) as Promise<{ structuredContent?: unknown }>;
+  const redacted = await call();
+  assert.deepEqual(JSON.parse(JSON.stringify(redacted.structuredContent)), {
+    echo: "value [REDACTED]", nested: [{ "key-[REDACTED]": ["[REDACTED]"] }], count: 3,
+  });
+  structuredContent = { blob: `echo-secret${"x".repeat(MAX_CHILD_STRUCTURED_BYTES)}` };
+  const withheld = await call();
+  assert.equal(withheld.structuredContent, undefined);
+  assert.equal(JSON.stringify(withheld).includes("echo-secret"), false);
 });

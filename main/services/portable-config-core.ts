@@ -49,6 +49,12 @@ import {
   normalizeHiddenModelsByProvider,
   withProviderPolicyHidden,
 } from "../../renderer/shared/model-visibility.js";
+import {
+  normalizeModelPadPlacements,
+  normalizePinnedModels,
+  normalizeRecentModels,
+  normalizeModelPadMetric,
+} from "../../renderer/shared/model-pad-preferences.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
@@ -562,6 +568,36 @@ function normalizedSettingsVisibility(settings: {
   );
 }
 
+type ModelPadPreferenceFields = {
+  modelPadPlacements?: unknown;
+  pinnedModels?: unknown;
+  recentModels?: unknown;
+  modelPadMetric?: unknown;
+};
+
+/**
+ * Model Pad placements, pins, recent models and the benchmark metric: invalid
+ * entries are dropped, wrong shapes removed. All of them live in machine-local
+ * settings.json, never in the portable config.json.
+ */
+function applyModelPadPreferences(
+  source: ModelPadPreferenceFields,
+  target: ModelPadPreferenceFields,
+): void {
+  const placements = normalizeModelPadPlacements(source.modelPadPlacements);
+  if (placements) target.modelPadPlacements = placements;
+  else delete target.modelPadPlacements;
+  const pins = normalizePinnedModels(source.pinnedModels);
+  if (pins) target.pinnedModels = pins;
+  else delete target.pinnedModels;
+  const recents = normalizeRecentModels(source.recentModels);
+  if (recents) target.recentModels = recents;
+  else delete target.recentModels;
+  const metric = normalizeModelPadMetric(source.modelPadMetric);
+  if (metric) target.modelPadMetric = metric;
+  else delete target.modelPadMetric;
+}
+
 function normalizeSettingsShape(value: unknown): SettingsShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { settings, ...rest } = root;
@@ -607,6 +643,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "memoryEnabled",
     "skillsEnabled",
     "computerUseEnabled",
+    "computerUseAlwaysAllow",
     "aidenLiveEnabled",
     "aidenLiveButtonVisible",
     "scheduledTasksEnabled",
@@ -671,6 +708,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
+  applyModelPadPreferences(settings, normalized);
   return {
     ...rest,
     settings: normalized as AppSettings,
@@ -702,6 +740,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
+  applyModelPadPreferences(settings, runtime);
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
     const value = settings[key];
     if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) {
@@ -1046,7 +1085,7 @@ you.
 | --- | --- |
 | \`providers\` | Custom provider connections: \`id\`, \`kind\`, \`label\`, \`baseUrl\`, \`needsKey\`, \`defaultModel\`, \`deployment\`. |
 | \`providerIdAliases\` | Append-only record of provider IDs Aiden has renamed. Leave it alone unless you know why it exists. |
-| \`mcpServers\` | MCP server definitions. |
+| \`mcpServers\` | MCP server definitions. Environment and header values are not stored here: each name keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Plugins. |
 | \`skills\` | Inline skills: \`name\`, \`description\`, \`instructions\`, \`enabled\`. |
 
 Aiden rewrites this file when you change those settings in the UI, so it round
@@ -1056,9 +1095,10 @@ from the UI.
 
 ## What is deliberately not here
 
-**API keys and OAuth tokens.** They are encrypted against this machine's keychain
-and stay in Aiden's application-support folder. After copying \`config.json\` to a
-new machine your providers appear with no key attached; re-enter them there.
+**API keys and OAuth tokens, plus MCP environment and header values.** They are
+encrypted against this machine's keychain and stay in Aiden's application-support
+folder. After copying \`config.json\` to a new machine your providers appear with no
+key attached and MCP servers ask for their values again; re-enter them there.
 
 **Model lists.** \`providers[].models\` is discovery output rather than
 configuration, so it is cached per machine and refilled when you refresh a

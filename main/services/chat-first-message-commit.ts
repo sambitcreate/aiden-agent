@@ -22,7 +22,6 @@ interface Dependencies {
   clearReconciliation(ownerId: string): void;
   admitWorkspace(workspaceId: string, owner: Owner): WorkspaceOperationAdmission;
   workspaceExists(workspaceId: string): Promise<boolean>;
-  requireComputerUseReady(signal: AbortSignal): Promise<void>;
   resolveSkill(workspaceId: string, invocationId: string): Promise<RegisteredSkill>;
 }
 
@@ -102,7 +101,6 @@ export function createFirstMessageCommitter(deps: Dependencies) {
         if (!(await deps.workspaceExists(input.workspaceId))) {
           throw new Error("The selected workspace is no longer available.");
         }
-        if (input.computerUseEnabled) await deps.requireComputerUseReady(workspace.signal);
         assertCurrent();
         const userMessageId = randomUUID();
         const append = (prepared?: { provenance: SkillProvenanceV1 }) => deps.store.createWithFirstMessage({
@@ -111,7 +109,6 @@ export function createFirstMessageCommitter(deps: Dependencies) {
           workspaceId: input.workspaceId,
           providerId: input.providerId,
           model: input.metaModel,
-          computerUseEnabled: input.computerUseEnabled,
           turnId: input.turnId,
           fingerprint,
           message: {

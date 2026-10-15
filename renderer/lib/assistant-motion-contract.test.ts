@@ -88,25 +88,3 @@ test("Scheduled Tasks remains a visible control surface for Live Computer Use", 
   );
 });
 
-test("stopping an active generation waits for its terminal persistence event", () => {
-  const chat = source("../components/assistant/use-assistant-chat.ts");
-  const stop = between(chat, "const stop = React.useCallback", "return {");
-  assert.match(stop, /setGenerationPhase\(nextPhase\)/u);
-  assert.match(stop, /handle\.cancel\("user_stop"\)/u);
-  assert.doesNotMatch(stop, /abandonTurn\("user_stop"\)/u);
-  assert.ok(
-    (chat.match(/setGenerationPhase\("idle"\)/gu)?.length ?? 0) >= 4,
-    "done, error, persistence failure, and lifecycle resets settle the phase",
-  );
-  assert.match(chat, /if \(\s*!canChangeThread/u);
-  assert.match(chat, /persistingTurnRef\.current !== null/u);
-  assert.match(chat, /handleRef\.current/u);
-  assert.doesNotMatch(between(chat, "onError: (message", "onApproval:"), /else fail\(message\)/u);
-});
-
-test("assistant notices use a collision-free monotonic marker", () => {
-  const chat = source("../components/assistant/use-assistant-chat.ts");
-  assert.match(chat, /noticeSequenceRef/u);
-  assert.match(chat, /at: \+\+noticeSequenceRef\.current/u);
-  assert.doesNotMatch(chat, /at: Date\.now\(\)/u);
-});

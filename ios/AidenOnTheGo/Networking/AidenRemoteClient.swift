@@ -100,6 +100,13 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Contract revision 25: phones may view and control the Mac's shared
     /// iOS Simulators after negotiating `simulators:mobile`.
     static let mobileSimulatorsFeature = "mobile-simulators-v1"
+    /// Contract revision 30: the status line, Steer and Queue, Queued bubbles
+    /// and Chat activity, after negotiating `bot:activity`.
+    static let botActivityFeature = "bot-activity-v1"
+    /// Contract revision 28: assistant messages may carry `visuals`, each
+    /// shown as the Mac's snapshot at its tool step. The field is additive, so
+    /// the transcript renders visuals whenever a message carries them.
+    static let chatVisualsFeature = "chat-visuals-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -292,6 +299,22 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// memory and routine proposal cards.
     var supportsBotCards: Bool {
         serverCapabilities?.contains(.botCards) == true
+    }
+
+    /// The Mac offers `bot:activity` (revision 30), so this device may ask for it.
+    var offersBotActivity: Bool {
+        serverCapabilities?.contains(.botActivity) == true
+    }
+
+    /// The Mac announces `bot-activity-v1`, whatever this device holds.
+    var announcesBotActivity: Bool {
+        features.contains(Self.botActivityFeature)
+    }
+
+    /// The Mac announces `bot-activity-v1` and this device holds `bot:activity`:
+    /// show the status line, Steer and Queue, Queued bubbles and Chat activity.
+    var supportsBotActivity: Bool {
+        announcesBotActivity && capabilities.contains(.botActivity)
     }
 
     /// This device both may and did negotiate foreign-run observation.
@@ -984,7 +1007,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile, .botCards,
+            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,

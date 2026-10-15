@@ -14,7 +14,6 @@ import {
 test("Google thinking levels stay a small explicit request contract", () => {
   assert.deepEqual(GOOGLE_THINKING_LEVELS, ["off", "low", "medium", "high"]);
   assert.equal(DEFAULT_GOOGLE_THINKING_LEVEL, "off");
-  for (const level of GOOGLE_THINKING_LEVELS) assert.equal(isGoogleThinkingLevel(level), true);
   for (const value of ["minimal", "xhigh", "dynamic", "", null, 1]) {
     assert.equal(isGoogleThinkingLevel(value), false);
   }

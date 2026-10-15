@@ -150,6 +150,27 @@ export function sessionWithSavedMcpTokens(
   };
 }
 
+/**
+ * Compare-and-set for tokens a background refresh returned. The refresh
+ * presented the tokens this client last observed; if the stored pair has since
+ * changed (another client rotated, re-authorized or signed out), the response
+ * is older than what is persisted and must not replace it. Returns undefined
+ * when the stored session should be kept as is.
+ */
+export function sessionWithRefreshedMcpTokens(
+  session: McpOAuthSession,
+  binding: string,
+  observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined,
+  tokens: OAuthTokens,
+  requestedScope?: string,
+): McpOAuthSession | undefined {
+  const stored = session.tokens;
+  if (observed && (stored?.access_token !== observed.access_token || stored?.refresh_token !== observed.refresh_token)) {
+    return undefined;
+  }
+  return sessionWithSavedMcpTokens(session, binding, tokens, requestedScope);
+}
+
 function normalizedScope(scope: string | undefined): string | null {
   const scopes = [...new Set((scope ?? "").split(/\s+/u).filter(Boolean))].sort();
   return scopes.length ? scopes.join(" ") : null;
@@ -190,6 +211,89 @@ export function sameMcpOAuthGrant(left: McpOAuthSession, right: McpOAuthSession)
   return JSON.stringify(mcpOAuthGrantIdentity(left)) === JSON.stringify(mcpOAuthGrantIdentity(right));
 }
 
+/** Scope tokens from challenges or saved grants; quote-only remnants such as `""` are not scopes. */
+export function mcpScopeTokens(...scopes: ReadonlyArray<string | null | undefined>): string[] {
+  return [...new Set(scopes.filter(Boolean).join(" ").split(/\s+/u).filter((token) => token && !/^["']*$/u.test(token)))];
+}
+
+/**
+ * Issuer comparison. A root issuer (`https://host` vs `https://host/`) is
+ * compared after removing one trailing slash: without protected-resource
+ * metadata the SDK falls back to `new URL("/", serverUrl)`, which always ends
+ * in `/`. Path issuers (tenants) stay exact, so `/tenant` never equals `/tenant/`.
+ */
+export function sameMcpOAuthIssuer(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined) return false;
+  if (left === right) return true;
+  const root = (value: string) => {
+    try {
+      const url = new URL(value);
+      return (url.pathname === "/" || url.pathname === "") && !url.search && !url.hash ? `${url.protocol}//${url.host}` : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const a = root(left);
+  return a !== undefined && a === root(right) && [left, right].every((value) => value === a || value === `${a}/`);
+}
+
+/**
+ * Step-up scopes a server demanded with `403 insufficient_scope`. Background
+ * connections cannot open a browser, and the SDK keeps the challenge only on
+ * the transport, so the next interactive Settings authorization would start
+ * from the 401 challenge again. Bounded, in memory, keyed by service URL.
+ */
+const MAX_STEP_UP_SERVERS = 64;
+const stepUpScopes = new Map<string, string>();
+
+function stepUpKey(serviceUrl: string): string | undefined {
+  try { return mcpAuthorizationBinding(serviceUrl); } catch { return undefined; }
+}
+
+export function recordMcpStepUpScope(serviceUrl: string, scope: string): void {
+  const key = stepUpKey(serviceUrl);
+  const tokens = mcpScopeTokens(scope);
+  if (!key || tokens.length === 0) return;
+  const merged = mcpScopeTokens(stepUpScopes.get(key), ...tokens).join(" ");
+  stepUpScopes.delete(key);
+  stepUpScopes.set(key, merged);
+  while (stepUpScopes.size > MAX_STEP_UP_SERVERS) stepUpScopes.delete(stepUpScopes.keys().next().value!);
+}
+
+/** Granted scopes plus any recorded step-up challenge, for an interactive authorization. */
+export function mcpInteractiveAuthorizationScope(serviceUrl: string | undefined, grantedScope: string | undefined): string | undefined {
+  const key = serviceUrl === undefined ? undefined : stepUpKey(serviceUrl);
+  return mcpScopeTokens(grantedScope, key ? stepUpScopes.get(key) : undefined).join(" ") || undefined;
+}
+
+/** Forget a step-up challenge once an interactive authorization has committed. */
+export function clearMcpStepUpScope(serviceUrl: string | undefined): void {
+  const key = serviceUrl === undefined ? undefined : stepUpKey(serviceUrl);
+  if (key) stepUpScopes.delete(key);
+}
+
+/**
+ * `invalidateCredentials("tokens")` as compare-and-delete. The SDK invalidates
+ * after `invalid_grant`, but a concurrent client (status check, child agent,
+ * Bot catalog) may already have rotated and saved newer tokens. Delete only
+ * when the stored tokens are the ones this provider last observed; otherwise
+ * the stale caller would sign the user out of a working grant.
+ */
+export function sessionAfterTokenInvalidation(
+  session: McpOAuthSession,
+  observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined,
+): McpOAuthSession | undefined {
+  const stored = session.tokens;
+  if (!stored) return undefined;
+  if (observed && (stored.access_token !== observed.access_token || stored.refresh_token !== observed.refresh_token)) {
+    return undefined;
+  }
+  const next = structuredClone(session);
+  if (stored.scope) next.grantedScope = stored.scope;
+  delete next.tokens;
+  return next;
+}
+
 /** Per-attempt state: never persisted or shared with another server's sign-in. */
 export class McpOAuthAuthorizationFlow {
   readonly state = randomBytes(32).toString("hex");
@@ -210,7 +314,7 @@ export class McpOAuthAuthorizationFlow {
 
   saveDiscovery(state: OAuthDiscoveryState): void {
     const metadata = state.authorizationServerMetadata;
-    if (metadata && metadata.issuer !== state.authorizationServerUrl) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
+    if (metadata && !sameMcpOAuthIssuer(metadata.issuer, state.authorizationServerUrl)) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
     const discovery = structuredClone(state);
     const observed = this.observedMetadata;
     if (metadata && observed?.issuer === metadata.issuer && observed.issuerRequired &&
@@ -232,9 +336,10 @@ export class McpOAuthAuthorizationFlow {
   authorizationUrl(url: URL, grantedScope?: string): URL {
     if (url.searchParams.get("state") !== this.state) throw new Error("MCP OAuth state was not bound to this sign-in.");
     const result = new URL(url);
-    const scopes = [...new Set([grantedScope, result.searchParams.get("scope")].filter(Boolean).join(" ").split(/\s+/u).filter(Boolean))];
+    const scopes = mcpScopeTokens(grantedScope, result.searchParams.get("scope"));
     this.requestedScope = scopes.join(" ") || undefined;
     if (this.requestedScope) result.searchParams.set("scope", this.requestedScope);
+    else result.searchParams.delete("scope");
     if (scopes.includes("offline_access") && !result.searchParams.has("prompt")) result.searchParams.set("prompt", "consent");
     const metadata = this.discovery?.authorizationServerMetadata;
     this.expectedIssuer = metadata?.issuer ?? this.discovery?.authorizationServerUrl;
@@ -250,7 +355,7 @@ export class McpOAuthAuthorizationFlow {
     }
     const issuers = url.searchParams.getAll("iss");
     if (issuers.length > 1 || (this.issuerRequired && issuers.length !== 1) ||
-        (issuers.length === 1 && (!this.expectedIssuer || issuers[0] !== this.expectedIssuer))) {
+        (issuers.length === 1 && !sameMcpOAuthIssuer(issuers[0], this.expectedIssuer))) {
       throw new Error("Invalid OAuth callback issuer.");
     }
     const codes = url.searchParams.getAll("code");

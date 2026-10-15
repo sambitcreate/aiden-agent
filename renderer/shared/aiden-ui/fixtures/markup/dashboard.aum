@@ -1,0 +1,18 @@
+<Visual title="Q3 revenue by region" state={{metric: "revenue"}}>
+  <Row gap={3}>
+    <Stat label="Total" value={$data.totals[$metric]} format={$metric == "revenue" ? "currency" : "percent"} trend={+0.12} />
+    <Stat label="Regions" value={len($data.byRegion)} />
+  </Row>
+  <Segmented bind="metric" label="Metric" options={[{value:"revenue",label:"Revenue"},{value:"margin",label:"Margin"}]} />
+  <Chart kind="bar" data={$data.byRegion} x="region" y={$metric} label="Revenue by region" />
+  <Table rows={sort($data.byRegion, "revenue", "desc")} columns={[{key:"region",label:"Region"},{key:"revenue",label:"Revenue",format:"currency"},{key:"margin",label:"Margin",format:"percent"}]} />
+  <Button variant="accent" action={sendPrompt("Break down EMEA " + $metric + " by month")}>Drill into EMEA</Button>
+  <Data name="data">{
+    "totals": {"revenue": 6930, "margin": 0.31},
+    "byRegion": [
+      {"region": "EMEA", "revenue": 2400, "margin": 0.28},
+      {"region": "AMER", "revenue": 3100, "margin": 0.35},
+      {"region": "APAC", "revenue": 1430, "margin": 0.27}
+    ]
+  }</Data>
+</Visual>

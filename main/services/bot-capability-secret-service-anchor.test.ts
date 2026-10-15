@@ -3,7 +3,7 @@ import test from "node:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { botCapabilityAuthorityAccountForCanonicalRoot, ROLLBACK_SERVICE } from "./bot-capability-authority-item.js";
+import { BOOTSTRAP_SERVICE, botCapabilityAuthorityAccountForCanonicalRoot, ROLLBACK_SERVICE, TELEGRAM_BINDING_BOOTSTRAP_SERVICE, TELEGRAM_BINDING_SERVICE } from "./bot-capability-authority-item.js";
 import { createBotAuthorities } from "./bot-capability-authority.js";
 import { createBotCapabilitySecretServiceAnchor, createBotCapabilitySecretServiceBootstrapMarker, createTelegramBotBindingSecretServiceAnchor, createTelegramBotBindingSecretServiceBootstrapMarker, createSecretServiceAuthorityCommand, resolveSecretServiceAuthorityHelper, secretServiceAuthorityEnvironment, type SecretServiceAuthorityCommand } from "./bot-capability-secret-service-anchor.js";
 const account = botCapabilityAuthorityAccountForCanonicalRoot("/tmp/aiden-test");
@@ -112,4 +112,34 @@ test("native authority helper inherits only validated desktop bus context", asyn
     for (const [key, value] of previous) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+test("macOS and Linux Bot authorities keep the Telegram binding namespaces separate from Bot policy", async () => {
+  // Telegram route authority is its own rollback item, so narrowing a binding
+  // never depends on (or contends with) the Bot capability authority.
+  const queried = async (platform: NodeJS.Platform, notFound: (args: readonly string[]) => boolean) => {
+    const services: Record<string, string[]> = {};
+    let current = "";
+    const command = async (args: readonly string[]) => {
+      (services[current] ??= []).push(platform === "darwin" ? args[args.indexOf("-s") + 1]! : args[1]!);
+      return notFound(args) ? (platform === "darwin" ? result(44) : result(4)) : result(1);
+    };
+    const authorities = createBotAuthorities(
+      { account, command } as Parameters<typeof createBotAuthorities>[0],
+      platform,
+    );
+    for (const [name, item] of Object.entries(authorities)) {
+      current = name;
+      assert.equal(await item.load(), null, `${platform} ${name} reads its own item`);
+    }
+    return services;
+  };
+  const expected = {
+    anchor: [ROLLBACK_SERVICE],
+    bootstrapMarker: [BOOTSTRAP_SERVICE],
+    telegramAnchor: [TELEGRAM_BINDING_SERVICE],
+    telegramBootstrapMarker: [TELEGRAM_BINDING_BOOTSTRAP_SERVICE],
+  };
+  assert.equal(new Set(Object.values(expected).flat()).size, 4);
+  assert.deepEqual(await queried("darwin", (args) => args[0] === "find-generic-password"), expected);
+  assert.deepEqual(await queried("linux", (args) => args[0] === "lookup"), expected);
 });

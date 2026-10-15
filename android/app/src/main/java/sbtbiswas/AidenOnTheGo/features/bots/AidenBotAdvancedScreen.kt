@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -21,7 +24,8 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
-import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
@@ -29,6 +33,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
@@ -147,6 +152,57 @@ data class AidenBotAdvancedDraft(
         try { accessUpdate(catalog); true } catch (_: Exception) { false }
 }
 
+/**
+ * The Bot as it will be once [this] draft saves (R15): the model and access show at once, until
+ * the Mac's own Bot replaces it. A Bot that needed a model doesn't any more.
+ */
+fun AidenBotAdvancedDraft.optimistic(bot: AidenBotDetail, catalog: AidenBotCapabilityCatalog): AidenBotDetail {
+    val update = accessUpdate(catalog)
+    return bot.copy(
+        access = bot.access.copy(accessMode = update.accessMode, custom = update.custom),
+        modelSelection = AidenBotModelSelection(customAccess.providerID, customAccess.modelID),
+        sessionState = if (bot.sessionState == AidenBotSessionState.NEEDS_MODEL) AidenBotSessionState.IDLE else bot.sessionState
+    )
+}
+
+/**
+ * Advanced's Save, applied at once (R15): [show] gets the optimistic Bot now, and the save runs
+ * on [host] (outliving the sheet), waiting for the connection and bounded. The Mac's Bot then
+ * replaces it through [settled]; a failure puts back what was there, unless something newer
+ * replaced it, and says why through [failed]. Only the Mac's Bot is kept on disk: the
+ * optimistic one and a rollback are shown, never written.
+ */
+fun aidenBotSaveAdvancedOptimistically(
+    host: AidenBotSaveHost,
+    bot: AidenBotDetail,
+    draft: AidenBotAdvancedDraft,
+    catalog: AidenBotCapabilityCatalog,
+    show: (AidenBotDetail) -> Unit,
+    settled: (AidenBotDetail) -> Unit,
+    failed: (AidenBotChatActivityFailure) -> Unit
+) {
+    if (!draft.changesAccess(bot, catalog)) {
+        show(bot)
+        return
+    }
+    val optimistic = draft.optimistic(bot, catalog)
+    host.show(optimistic)
+    show(optimistic)
+    host.launch {
+        try {
+            val saved = aidenBotHeldRequest(host.waitForConnection) { aidenBotSaveAdvanced(host.connected(), bot, draft, catalog) }
+            host.cache(saved)
+            settled(saved)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (host.cached(bot.id)?.let { it == optimistic } != false) host.show(bot)
+            settled(bot)
+            failed(aidenBotSaveFailure(error))
+        }
+    }
+}
+
 /** Saves an Advanced draft's access and returns the fresh Bot. */
 suspend fun aidenBotSaveAdvanced(
     client: AidenRemoteClient,
@@ -190,22 +246,48 @@ fun AidenBotAdvancedSheet(
     bot: AidenBotDetail,
     client: AidenRemoteClient?,
     onDismiss: () -> Unit,
-    onSaved: (AidenBotDetail) -> Unit
+    onSaved: (AidenBotDetail) -> Unit,
+    /** Chat activity needs the Mac's `bot-activity-v1` and the phone's grant: see [aidenBotShowsChatActivity]. */
+    chatActivityAvailable: Boolean = false,
+    /** What Chat activity saves with; the row is offered only when this is set too. */
+    chatActivityHost: AidenBotChatActivityHost? = null,
+    /** The newest Bot after Chat activity picks: once when Advanced closes, or at once for a pick that finishes later. */
+    onChatActivitySaved: (AidenBotDetail) -> Unit = {},
+    /**
+     * Where Save runs (R15). With it, Save applies at once: [onSaved] gets the optimistic Bot and
+     * the sheet's caller closes it; the Mac's Bot (or, after a failure, the Bot as it was) follows
+     * through [onSaveSettled], and a failure is said through [onSaveFailed].
+     */
+    saveHost: AidenBotSaveHost? = null,
+    onSaveSettled: (AidenBotDetail) -> Unit = {},
+    onSaveFailed: (String) -> Unit = {}
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    // A Chat activity save moves the Bot's revision; Advanced's own Save uses the newest.
+    var latestBot by remember(bot.id) { mutableStateOf(bot) }
+    var chatActivityController by remember(bot.id) { mutableStateOf<AidenBotChatActivityController?>(null) }
+    var showingChatActivity by remember(bot.id) { mutableStateOf(false) }
+    val currentOnChatActivitySaved by rememberUpdatedState(onChatActivitySaved)
+    val reporter = remember(bot.id) { AidenBotChatActivityReporter { currentOnChatActivitySaved(it) } }
+    // The screens behind hear about picks when Advanced goes away, however it goes.
+    DisposableEffect(reporter) { onDispose { reporter.close() } }
+    val close = {
+        reporter.close()
+        onDismiss()
+    }
+    val showsChatActivityRow = chatActivityAvailable && chatActivityHost != null
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     var draft by remember { mutableStateOf<AidenBotAdvancedDraft?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var saveError by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
 
+    // While the Mac connects, the sections show their placeholders; they fill in once it does (R15).
     LaunchedEffect(bot.id, client) {
-        val cl = client ?: run {
-            loadError = resources.getString(R.string.bot_advanced_connect)
-            return@LaunchedEffect
-        }
+        val cl = client ?: return@LaunchedEffect
+        loadError = null
         try {
             val cat = cl.botCapabilityCatalog(bot.id)
             catalog = cat
@@ -218,14 +300,14 @@ fun AidenBotAdvancedSheet(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Scaffold(
             containerColor = palette.canvas,
             topBar = {
                 TopAppBar(
                     title = { Text(stringResource(R.string.bot_advanced_title), fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
-                        IconButton(onClick = onDismiss) {
+                        IconButton(onClick = close) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                         }
                     },
@@ -236,13 +318,28 @@ fun AidenBotAdvancedSheet(
                             text = if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
                             enabled = !isSaving && cat != null && current != null && current.isSaveable(cat),
                             onClick = {
-                                val cl = client ?: return@AidenPrimaryButton
                                 if (cat == null || current == null) return@AidenPrimaryButton
+                                val host = saveHost
+                                if (host != null) {
+                                    // The screen behind gets this Bot, which already holds any Chat activity pick.
+                                    reporter.settle()
+                                    aidenBotSaveAdvancedOptimistically(
+                                        host, latestBot, current, cat,
+                                        show = onSaved,
+                                        settled = onSaveSettled,
+                                        failed = { onSaveFailed(resources.getString(aidenBotSaveFailureText(it))) }
+                                    )
+                                    return@AidenPrimaryButton
+                                }
+                                val cl = client ?: return@AidenPrimaryButton
                                 scope.launch {
                                     isSaving = true
                                     saveError = null
                                     try {
-                                        onSaved(aidenBotSaveAdvanced(cl, bot, current, cat))
+                                        val saved = aidenBotSaveAdvanced(cl, latestBot, current, cat)
+                                        // The screen behind gets this Bot, which already holds any Chat activity pick.
+                                        reporter.settle()
+                                        onSaved(saved)
                                     } catch (error: CancellationException) {
                                         throw error
                                     } catch (_: Exception) {
@@ -261,13 +358,6 @@ fun AidenBotAdvancedSheet(
         ) { padding ->
             val cat = catalog
             val current = draft
-            if (loadError == null && (cat == null || current == null)) {
-                AidenBotFormSkeleton(
-                    loadingDescription = stringResource(R.string.bot_advanced_loading),
-                    modifier = Modifier.padding(padding).aidenReadableWidth()
-                )
-                return@Scaffold
-            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -279,30 +369,22 @@ fun AidenBotAdvancedSheet(
             ) {
                 when {
                     loadError != null -> Text(loadError.orEmpty(), color = palette.secondary)
-                    cat == null || current == null -> Unit
+                    cat == null || current == null -> AidenBotAdvancedPlaceholder(stringResource(R.string.bot_advanced_loading))
                     else -> {
                         AidenBotAdvancedSection(title = stringResource(R.string.bot_advanced_model)) {
-                            AidenConnectedColumn {
-                                val models = cat.providers.flatMap { provider ->
-                                    provider.models.filter { it.available }.map { provider to it }
+                            AidenModelPickerField(
+                                title = stringResource(R.string.bot_advanced_model),
+                                providers = remember(cat) { aidenBotModelPickerProviders(cat) },
+                                selection = AidenModelRoute(current.customAccess.providerID, current.customAccess.modelID),
+                                onSelect = { entry ->
+                                    draft = current.copy(
+                                        customAccess = current.customAccess.copy(
+                                            providerID = entry.route.providerId,
+                                            modelID = entry.route.modelId
+                                        )
+                                    )
                                 }
-                                models.forEachIndexed { index, (provider, model) ->
-                                    val selected = current.customAccess.providerID == provider.id && current.customAccess.modelID == model.id
-                                    AidenGroupCard(
-                                        index = index,
-                                        count = models.size,
-                                        selected = selected,
-                                        role = Role.RadioButton,
-                                        onClick = {
-                                            draft = current.copy(customAccess = current.customAccess.copy(providerID = provider.id, modelID = model.id))
-                                        }
-                                    ) {
-                                        RadioButton(selected = selected, onClick = null, colors = RadioButtonDefaults.colors(selectedColor = palette.accent))
-                                        AidenProviderIcon(providerId = provider.id, providerLabel = provider.label, size = 20.dp)
-                                        Text(model.label, color = palette.foreground, modifier = Modifier.weight(1f))
-                                    }
-                                }
-                            }
+                            )
                             TextButton(onClick = { draft = current.withRecommendedModel(cat) }) {
                                 Text(stringResource(R.string.bot_advanced_use_recommended), color = palette.accent)
                             }
@@ -327,11 +409,69 @@ fun AidenBotAdvancedSheet(
                                 )
                             }
                         }
-
-                        saveError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
                     }
                 }
+
+                // Chat activity opens from the cached Bot: it doesn't wait for the catalog, a
+                // connection, or a clean Advanced form, so it stays reachable offline.
+                if (showsChatActivityRow) {
+                    AidenConnectedColumn {
+                        AidenGroupCard(
+                            index = 0,
+                            count = 1,
+                            onClick = {
+                                chatActivityController = chatActivityHost?.controller(latestBot) { saved ->
+                                    latestBot = saved
+                                    reporter.saved(saved)
+                                }
+                                showingChatActivity = true
+                            }
+                        ) {
+                            Text(stringResource(R.string.bot_chat_activity_title), color = palette.foreground, modifier = Modifier.weight(1f))
+                            Text(aidenBotChatActivitySummary(latestBot.chatActivity), color = palette.secondary, style = MaterialTheme.typography.bodyMedium)
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
+                saveError?.let { Text(it, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall) }
             }
+        }
+    }
+
+    val controller = chatActivityController
+    if (showsChatActivityRow && showingChatActivity && controller != null && chatActivityHost != null) {
+        // The host lets go of this page's listener when it closes (once a running save has reported).
+        DisposableEffect(controller) { onDispose { chatActivityHost.release(latestBot.id, controller) } }
+        AidenBotChatActivityDialog(
+            botName = latestBot.name,
+            controller = controller,
+            launch = chatActivityHost.launch,
+            onDismiss = { showingChatActivity = false }
+        )
+    }
+}
+
+/**
+ * Model and Access placeholders while the capability catalog arrives, sized like the real
+ * sections (label, picker and its "Use recommended" button; label, the access choice and its
+ * footer) so the page doesn't jump when they land.
+ */
+@Composable
+private fun AidenBotAdvancedPlaceholder(loadingDescription: String) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(AidenUi.SectionGap),
+        modifier = Modifier.clearAndSetSemantics { contentDescription = loadingDescription }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AidenSkeletonBlock(width = 96.dp, height = 12.dp)
+            AidenSkeletonBlock(height = 56.dp, shape = MaterialTheme.shapes.large)
+            AidenSkeletonBlock(width = 160.dp, height = 40.dp, shape = MaterialTheme.shapes.large)
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AidenSkeletonBlock(width = 96.dp, height = 12.dp)
+            AidenSkeletonBlock(height = 48.dp, shape = MaterialTheme.shapes.extraLarge)
+            AidenSkeletonBlock(height = 32.dp)
         }
     }
 }

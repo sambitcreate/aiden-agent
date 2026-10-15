@@ -1,3 +1,4 @@
+import { readCachedAppearance } from "../lib/appearance-runtime";
 import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
@@ -10,10 +11,6 @@ import {
   AlertDialog,
   Button,
   Dialog,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
   Input,
   Textarea,
   Text,
@@ -22,7 +19,6 @@ import {
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
-  ChevronDown,
   FileText,
   Folder,
   ListPlus,
@@ -30,7 +26,6 @@ import {
   Lock,
   Mic,
   Monitor,
-  MousePointer2,
   OctagonAlert,
   Paperclip,
   Plus,
@@ -57,12 +52,7 @@ import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
-import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
-import {
-  dismissComputerUseNotice,
-  shouldShowComputerUseNotice,
-  useComputerUseNoticeDismissed,
-} from "../lib/computer-use-notice";
+import { composerSubmissionAllowed } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
   acceptComposerAttachments,
@@ -71,18 +61,22 @@ import { composerPlaceholder } from "../lib/composer-placeholder";
 import { useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
+  completeSlashCommandToken,
   deriveSlashSession,
   failedSendAttachments,
   failedSendDraft,
   moveSlashSelectionId,
   pageSlashSelectionId,
+  parseSubmittedSlashCommand,
   rankSlashResults,
   slashActionCommitIsCurrent,
   slashActionDraftCommitIsCurrent,
+  slashCommandTakesArgument,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
   type SelectedSkillInvocation,
   type SlashResult,
+  type SlashSession,
   type SlashSessionTracker,
   selectedSkillComposerReducer,
   selectedSkillStatus,
@@ -100,6 +94,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  subscribeStagedComposerText,
   takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
@@ -138,7 +133,8 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
-  readinessSettingsSection?: SettingsSection;
+  /** Offer a Connect provider action beside the readiness message. */
+  readinessSettingsSection?: "providers";
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
@@ -200,15 +196,6 @@ interface ComposerProps {
   contextMeter?: React.ReactNode;
   /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
   onDraftChange?: (text: string, attachments: Attachment[]) => void;
-  /** Global-beta readiness plus this chat's local Computer Use opt-in. */
-  computerUse?: {
-    enabled: boolean;
-    ready: boolean;
-    checking: boolean;
-    saving: boolean;
-    detail: string;
-  };
-  onChangeComputerUse?: (enabled: boolean) => void | Promise<void>;
   currentChatTitle?: string;
   latestAssistantResponse?: string;
   slashNavigationBlockedReason?: string;
@@ -372,8 +359,6 @@ export function Composer({
   gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
   gitMutationBlockedReason,
   visionSupported,
-  computerUse,
-  onChangeComputerUse,
   modelPicker,
   thinkingControl,
   contextMeter,
@@ -441,6 +426,14 @@ export function Composer({
     dispatchDraft({ type: "update", value: text });
     saveComposerDraftText(chatId, text);
   }, [chatId]);
+  React.useEffect(
+    () =>
+      subscribeStagedComposerText(chatId, (staged) => {
+        setText((current) => mergeRestoredGuidance(current, [staged]));
+        toast.info("A visual added a follow-up to your draft.");
+      }),
+    [chatId, setText],
+  );
   React.useEffect(
     () =>
       subscribeGuidanceRestore(chatId, (guidance) => {
@@ -579,19 +572,12 @@ export function Composer({
     [],
   );
   const commandSystem = useCommandSystem();
-  const computerUseDescriptionId = React.useId();
-  const computerUseNoticeDismissed = useComputerUseNoticeDismissed();
-  const showComputerUseNotice = shouldShowComputerUseNotice(
-    computerUse?.enabled === true,
-    computerUseNoticeDismissed,
-  );
   const submissionAllowed =
     composerSubmissionAllowed({
       ready,
       isGenerating: isGenerating && !onQueue,
       sending,
       permissionSaving,
-      computerUseSaving: computerUse?.saving === true,
       gitOperationBusy,
       attaching,
     }) &&
@@ -717,7 +703,7 @@ export function Composer({
       hasLatestAssistantResponse: Boolean(latestAssistantResponse),
       hasAuthenticatedProvider: authenticatedProviders.length > 0,
       hasWorkspace: Boolean(workspace),
-      hasWorkspaceArtifactAccess: workspace?.permission !== "none",
+      inlineVisualsOff: readCachedAppearance()?.inlineVisuals === "off",
       hasManagedWorktreeFlow: Boolean(
         workspace?.folderPath && gitBranch && onCreateGitWorktree && !gitUnborn,
       ),
@@ -1083,20 +1069,22 @@ export function Composer({
   );
 
   const selectSlashResult = React.useCallback(
-    async (result: SlashResult) => {
+    async (result: SlashResult, submittedSession?: SlashSession) => {
+      // A palette pick uses the live slash session; Send passes the command it parsed.
+      const session = submittedSession ?? slashSession;
       if (
         firstSendPendingRef.current ||
         slashActionPendingRef.current ||
-        !slashSession ||
-        result.kind !== slashSession.kind ||
+        !session ||
+        result.kind !== session.kind ||
         !slashResultSelectable(result)
       ) {
         return;
       }
       if (result.kind === "skill") {
         if (!skillScopeId) return;
-        const nextText = consumeSlashToken(text, slashSession);
-        const nextCaret = slashSession.tokenStart;
+        const nextText = consumeSlashToken(text, session);
+        const nextCaret = session.tokenStart;
         dispatchSkillSelection({
           type: "select",
           selected: {
@@ -1121,16 +1109,36 @@ export function Composer({
         });
         return;
       }
-      const argument = validateSlashCommandArgument(result.command, slashSession.argument);
+      const argument = validateSlashCommandArgument(result.command, session.argument);
       if (!argument.valid) {
         toast.info(argument.reason ?? "That command argument is invalid.");
         return;
       }
+      if (
+        !submittedSession &&
+        slashCommandTakesArgument(result.command) &&
+        !session.argument.trim()
+      ) {
+        // Picking a command that reads text after it fills in "/name " and waits;
+        // Send runs it with whatever follows.
+        const completion = completeSlashCommandToken(text, session, result.command);
+        setText(completion.text);
+        setSelection({ start: completion.caret, end: completion.caret });
+        dismissSlash();
+        setActiveSlashId(undefined);
+        requestAnimationFrame(() => {
+          const textarea = inputRef?.current;
+          if (!textarea) return;
+          textarea.focus({ preventScroll: true });
+          textarea.setSelectionRange(completion.caret, completion.caret);
+        });
+        return;
+      }
       const nextText =
         result.command.argument !== "none"
-          ? text.slice(0, slashSession.tokenStart)
-          : consumeSlashToken(text, slashSession);
-      const nextCaret = slashSession.tokenStart;
+          ? text.slice(0, session.tokenStart)
+          : consumeSlashToken(text, session);
+      const nextCaret = session.tokenStart;
       const expectedCommit = {
         draft: text,
         epoch: slashTracker.epoch,
@@ -1162,7 +1170,7 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, session).trim();
           const missingPromptMessage =
             instruction === "btw"
               ? "Add a question after /btw, then send."
@@ -1243,7 +1251,10 @@ export function Composer({
         return;
       }
       if (!attempt.handled) {
-        toast.info("That app action is unavailable right now.");
+        // Composer instructions already explained why they did not send.
+        if (result.command.action.kind !== "composer-instruction") {
+          toast.info("That app action is unavailable right now.");
+        }
         return;
       }
       // Composer instructions own their optimistic clear and guarded rollback.
@@ -1618,6 +1629,25 @@ export function Composer({
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
+    const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text) : null;
+    if (submittedCommand) {
+      const availability = slashCommandAvailability(submittedCommand.command, slashActionContext);
+      if (!availability.available) {
+        blockSend(availability.reason ?? "That command is unavailable right now.");
+        return;
+      }
+      await selectSlashResult(
+        {
+          kind: "command",
+          id: `slash-option-command-${submittedCommand.command.name}`,
+          command: submittedCommand.command,
+          score: 0,
+        },
+        submittedCommand.session,
+      );
+      return;
+    }
     const mode = isGenerating
       ? (busyModeOverride ?? busyMode)
       : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
@@ -1744,11 +1774,6 @@ export function Composer({
   const folderName = workspace?.folderPath
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
-  const computerUseControl = computerUseControlState({
-    enabled: computerUse?.enabled ?? false,
-    ready: computerUse?.ready ?? false,
-    busy: computerUse?.saving === true || isGenerating || sending || gitOperationBusy,
-  });
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
     if (workspaceChangeBlockedReason) {
@@ -1828,46 +1853,6 @@ export function Composer({
               />
             ) : null}
           </ComposerSlashPalettePresence>
-          {computerUse ? (
-            <span id={computerUseDescriptionId} className="sr-only">
-              Computer Use may send screenshots and accessibility text to the selected model. Every
-              input action asks for approval.
-            </span>
-          ) : null}
-          {showComputerUseNotice ? (
-            <aside
-              aria-label="Computer Use privacy notice"
-              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5"
-            >
-              <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
-              <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
-                <span className="font-medium text-primary">Computer Use is on.</span> Screen details
-                may go to your model; actions still ask.
-              </Text>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="transparent"
-                    size="small"
-                    className="h-6 shrink-0 gap-1 px-1.5 text-secondary"
-                    aria-label="Hide Computer Use privacy notice"
-                  >
-                    Hide
-                    <ChevronDown aria-hidden="true" className="size-3" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("session")}>
-                    Hide for this session
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("permanent")}>
-                    Don’t show again
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </aside>
-          ) : null}
           {queuedMessages}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           {surfaces.localContext ? (
@@ -2177,10 +2162,10 @@ export function Composer({
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? CONNECT_PROVIDER_ACTION : "Review permissions"}</Button> : null}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{CONNECT_PROVIDER_ACTION}</Button> : null}
               </Text>
             ) : null}
-            <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
+            <div className="composer-footer-row mt-1.5 flex min-w-0 flex-nowrap items-center justify-between gap-x-1.5 gap-y-1">
               <div className="flex shrink-0 items-center gap-1">
                 {surfaces.attachments ? (
                 <>
@@ -2207,7 +2192,7 @@ export function Composer({
                 ) : null}
                 {surfaces.localContext ? (
                 <div
-                  className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
+                  className="composer-permission-control group/access relative h-8 w-34 shrink-0"
                   data-open={permissionMenuOpen || undefined}
                   onPointerEnter={() => {
                     dismissSlash();
@@ -2241,12 +2226,12 @@ export function Composer({
                       setPermissionMenuOpen(true);
                       requestAnimationFrame(() => permissionControlRef.current?.focus());
                     }}
-                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out max-[520px]:justify-center max-[520px]:px-0"
+                    className="composer-permission-trigger absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out"
                   >
                     <PermissionIcon
                       className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
                     />
-                    <span className="truncate max-[520px]:sr-only">
+                    <span className="composer-permission-label truncate">
                       {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
                     </span>
                   </button>
@@ -2340,51 +2325,8 @@ export function Composer({
                   </div>
                 </div>
                 ) : null}
-                {computerUse && onChangeComputerUse ? (
-                  <Button
-                    variant={computerUse.enabled ? "muted" : "transparent"}
-                    size="small"
-                    className={cn(
-                      "h-7 gap-1.5 px-2 aria-disabled:opacity-45",
-                      computerUse.enabled ? "text-accent" : "text-secondary",
-                    )}
-                    disabled={computerUseControl.disabled}
-                    aria-disabled={computerUseControl.ariaDisabled || undefined}
-                    aria-describedby={computerUseDescriptionId}
-                    onClick={() => {
-                      if (computerUseControl.ariaDisabled) {
-                        toast.info(computerUse.detail);
-                        return;
-                      }
-                      void onChangeComputerUse(!computerUse.enabled);
-                    }}
-                    aria-pressed={computerUse.enabled}
-                    aria-label={
-                      computerUse.enabled
-                        ? "Turn off Computer Use for this chat"
-                        : `Turn on Computer Use for this chat. ${computerUse.detail}`
-                    }
-                    title={
-                      computerUse.ready || computerUse.enabled
-                        ? "Computer Use (Beta) · every input action asks for approval"
-                        : computerUse.detail
-                    }
-                  >
-                    {computerUse.checking || computerUse.saving ? (
-                      <Loader2 className="animate-spin" />
-                    ) : (
-                      <MousePointer2 />
-                    )}
-                    Computer
-                  </Button>
-                ) : null}
               </div>
-              <div
-                className={cn(
-                  "ml-auto flex min-w-0 items-center justify-end gap-1.5",
-                  thinkingControl && "composer-action-row max-[520px]:w-full",
-                )}
-              >
+              <div className="composer-action-row ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5">
                 {voice.recording &&
                 (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
                   <span

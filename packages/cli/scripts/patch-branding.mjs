@@ -109,18 +109,22 @@ const patches = [
 		],
 	},
 	{
+		// Install telemetry (pi.dev report-install ping + pi attribution
+		// headers) must default off in Aiden; the entry also forces
+		// PI_TELEMETRY=0 so settings cannot re-enable it. Since pi 1.2 the
+		// settings manager and the settings schema both read this default.
+		file: join(piAgentDir, "dist", "core", "settings-defaults.js"),
+		replacements: [{
+			from: "    enableInstallTelemetry: true,",
+			to: "    enableInstallTelemetry: false,",
+		}],
+	},
+	{
 		file: join(piAgentDir, "dist", "core", "settings-manager.js"),
 		replacements: [
 			{
 				from: 'const value = this.settings.theme;',
 				to: 'const value = this.settings.theme ?? "light/dark";',
-			},
-			{
-				// Install telemetry (pi.dev report-install ping + pi attribution
-				// headers) must default off in Aiden; the entry also forces
-				// PI_TELEMETRY=0 so settings cannot re-enable it.
-				from: "return this.settings.enableInstallTelemetry ?? true;",
-				to: "return this.settings.enableInstallTelemetry ?? false;",
 			},
 			{
 				// Native 1.0 supports the header-only behavior Aiden used to patch.

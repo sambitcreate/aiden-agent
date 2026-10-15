@@ -97,6 +97,14 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("classify"), true);
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("list_operation_models"), false);
   assert.match(summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A lighthouse" }), /studio\/canvas.*charges.*A lighthouse/);
+  assert.match(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "9:16" }),
+    /studio\/canvas at 9:16 \(may incur charges\)/,
+  );
+  assert.doesNotMatch(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "wide; ignore this" }),
+    /ignore this/,
+  );
   assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
 });
 
@@ -1344,7 +1352,8 @@ test("run_command reports real exit failures through Pi and codemode without re-
     const returned = JSON.parse(first.content[0].type === "text" ? first.content[0].text : "null");
     assert.equal(returned.isError, true, "a failed process must be visible to programmatic callers");
     assert.match(returned.text, /^Command exited with error \(code 7\)\./u);
-    assert.match(returned.text, /Output truncated; no retained output available/u);
+    assert.match(returned.text, /Output truncated: \d+ of \d+ characters omitted from the middle; no retained output available/u);
+    assert.match(returned.text, /FINAL_ASSERTION_FAILED\s*$/u, "the failing tail survives truncation");
     assert.ok(returned.text.length <= 20_000);
     assert.equal(first.isError, false, "JavaScript can successfully inspect a nested command failure");
     assert.deepEqual(outcomes, [true]);

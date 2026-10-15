@@ -36,6 +36,7 @@ import {
   type BotRegistry,
 } from "./bot-extension.js";
 import { writeFileAtomic } from "../durable-fs.js";
+import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 import {
   createBotHarnessHost,
   isBotHarnessHostUnavailable,
@@ -133,6 +134,9 @@ function defaultMessage(reason: BotSessionErrorReason): string {
   }
 }
 
+/** Remove's outcome: withdrawn before it ran, already started, or no longer waiting. */
+export type BotWithdrawResult = "withdrawn" | "started" | "gone";
+
 export interface BotSessionService {
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
@@ -143,6 +147,11 @@ export interface BotSessionService {
    * paused (interrupted) turn is left for Resume or Dismiss.
    */
   stop(botId: string): Promise<BotSessionState>;
+  /**
+   * Withdraw one queued message before its turn starts (Pi's
+   * `abortSubmission`). A message already placed in a turn keeps running.
+   */
+  withdraw(botId: string, submissionId: string): Promise<BotWithdrawResult>;
   state(botId: string): Promise<BotSessionState>;
   deleteBot(botId: string): Promise<void>;
   /**
@@ -160,6 +169,20 @@ export interface BotSessionRuntime extends BotSessionService {
   initialize(): Promise<{ removedOrphans: string[]; interrupted: string[] }>;
   /** The Bot's conversation, opened lazily (for live projection). */
   conversation(botId: string): Promise<Conversation>;
+  /**
+   * For each of these queued submission ids it can find: whether it is not the
+   * person's own message (`true`: a routine's input or the hidden self-intro,
+   * known from its durable request id). Ids it cannot find are left out.
+   */
+  quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
+  /**
+   * The person's own inputs the Bot is working on now, keyed by the `pi.user`
+   * entry each one was placed as (entry id → submission id). Placement is
+   * atomic with that entry's append, so an entry a watch shows is already
+   * here; once its turn ends the submission is done and drops out. Routine
+   * inputs and the hidden self-intro are never listed (`quietInputs`).
+   */
+  placedSubmissions(botId: string): Promise<ReadonlyMap<string, string>>;
   /**
    * Compact the Bot's one conversation now (Telegram `/new`), focused on what
    * the person shared and what the Bot promised (`compactionInstructions`).
@@ -202,6 +225,8 @@ export interface BotSessionServiceDeps {
   idleCloseMs?: number;
   now?: () => number;
   onStateChange?(botId: string, state: BotSessionState): void;
+  /** `resume` restarted an interrupted turn (not called for replays, blocked or no-op resumes). */
+  onResumed?(botId: string): void;
   onReport?(botId: string, error: unknown): void;
 }
 
@@ -281,6 +306,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   });
   const host: BotHarnessHost | null = isBotHarnessHostUnavailable(hostOrUnavailable) ? null : hostOrUnavailable;
   const serialize = createKeyedQueue();
+  /** Submissions sent with `hidden`, whatever their request id. */
+  const hiddenSubmissions = new Set<string>();
   /** Outcomes of resume/dismiss requests, so a retried request replays its answer. */
   const answered = new Map<string, BotSessionState>();
   /** Interrupted turns whose Resume was refused because the Bot's access changed. */
@@ -302,6 +329,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         mkdirMode: 0o700,
       });
     });
+  }
+
+  /** Not the person's own message: a routine's input or the hidden self-intro, known from its durable request id. */
+  function isQuietSubmission(record: SubmissionRecord): boolean {
+    const requestId = record.requestId ?? "";
+    // `hiddenSubmissions` is latent: the only hidden sender (the self-intro) already has the
+    // `intro:` prefix. Any future hidden sender needs a durable request-id prefix, because this
+    // set is lost on restart.
+    return requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
   }
 
   function requireHost(): BotHarnessHost {
@@ -416,6 +452,30 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return (await openBot(botId)).conversation;
     },
 
+    async quietInputs(botId, submissionIds) {
+      const answers = new Map<string, boolean>();
+      if (submissionIds.length === 0 || deleted.has(botId)) return answers;
+      // `inspect`, not `open`: opening would consume a pending recovery notice that only a send reports.
+      const inspection = await requireHost().inspect(botId);
+      const wanted = new Set(submissionIds);
+      for (const record of inspection.submissions) {
+        const id = String(record.id);
+        if (wanted.has(id)) answers.set(id, isQuietSubmission(record));
+      }
+      return answers;
+    },
+
+    async placedSubmissions(botId) {
+      const placed = new Map<string, string>();
+      if (deleted.has(botId)) return placed;
+      const inspection = await requireHost().inspect(botId);
+      for (const record of inspection.submissions) {
+        if (record.type !== "input" || record.entry === undefined || isQuietSubmission(record)) continue;
+        placed.set(String(record.entry), String(record.id));
+      }
+      return placed;
+    },
+
     state(botId) {
       return currentState(botId);
     },
@@ -448,6 +508,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           },
           ctx,
         );
+        if (input.hidden === true) hiddenSubmissions.add(String(submission.id));
         requireHost().touch(botId);
         publish(botId, await currentState(botId));
         return { submissionId: String(submission.id), deduped: false };
@@ -472,6 +533,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         await prepareToRun(botId, conversation, registry);
         const opened = await requireHost().open(botId);
         opened.harness.resume();
+        deps.onResumed?.(botId);
         requireHost().touch(botId);
         return remember(key, publish(botId, await currentState(botId)));
       });
@@ -503,6 +565,23 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       });
     },
 
+    withdraw(botId, submissionId) {
+      return serialize(botId, async () => {
+        const id = Number(submissionId);
+        // A rounded id could name a different submission.
+        if (!Number.isSafeInteger(id)) return "gone";
+        await openBot(botId);
+        const opened = await requireHost().open(botId);
+        const result = await opened.harness.abortSubmission(
+          id as SubmissionId,
+          ctx,
+          opened.conversation.id,
+        );
+        if (result === "aborted") return "withdrawn";
+        return result === "already_placed" ? "started" : "gone";
+      });
+    },
+
     deleteBot(botId) {
       return serialize(botId, async () => {
         // Another process holding the profile owns the session; erasing the
@@ -524,6 +603,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       if (deleted.has(botId)) return { kind: "interrupted", settled: true };
       const opened = await requireHost().open(botId);
       const id = Number(submissionId) as SubmissionId;
+      if (!Number.isSafeInteger(id)) return { kind: "failed", error: "This reply is no longer tracked." };
       const submission = await opened.harness.submission(id, ctx);
       if (submission === undefined) return { kind: "failed", error: "This reply is no longer tracked." };
       // `wait()` would start a paused scheduler, which is Resume's decision.

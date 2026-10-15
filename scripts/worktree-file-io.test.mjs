@@ -65,6 +65,11 @@ async function runEditor(args, input = Buffer.alloc(0), onCheckpoint = async () 
       error => { checkpointError = error; child.kill("SIGKILL"); },
     );
   });
+  // The editor can refuse its path and exit before reading stdin or the
+  // checkpoint pipe; its exit status and stdout are what tests assert, so a
+  // late EPIPE on those writes is contained here.
+  child.stdin.on("error", () => undefined);
+  child.stdio[4].on("error", () => undefined);
   child.stdin.end(input);
   const code = await new Promise((resolve, reject) => {
     child.once("error", reject);

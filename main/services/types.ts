@@ -1,3 +1,4 @@
+import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
@@ -15,12 +16,15 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
-import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -324,6 +328,14 @@ export interface ChatMessage {
   attachments?: Attachment[];
   /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
   htmlArtifacts?: ChatHtmlArtifactV1[];
+  /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
+  htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
+  /** Producing generate_image call per generated image attachment. */
+  imagePlacements?: ChatImagePlacementV1[];
+  /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
+  uiVisuals?: ChatUiVisualV1[];
+  /** Snapshot image (a reserved attachment) per visual, for clients that cannot draw it. */
+  visualSnapshots?: VisualSnapshotRefV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
@@ -334,17 +346,8 @@ export interface ChatMessage {
   subagents?: SubagentMessageReferenceV1;
 }
 
-export interface ModelRanking {
-  /** Fixed-snapshot percentile, where 1 is the most capable model. */
-  capabilityPercentile: number;
-  /** Fixed-snapshot percentile, where 1 is the slowest response profile. */
-  responseTimePercentile: number;
-  source: string;
-  sourceUrl?: string;
-  measuredAt?: string;
-}
-
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+/** One of the benchmark scores (defined with the Pad preferences that persist it). */
+export type ModelBenchmarkMetric = ModelPadMetric;
 
 /** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
 export interface ModelBenchmarkScores {
@@ -360,10 +363,17 @@ export interface ModelBenchmarkScores {
   agentic?: number;
 }
 
+/** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
+export interface ModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
-  | "artificial-analysis"
   | "models-dev"
   | "fallback";
 
@@ -392,8 +402,11 @@ export interface ModelInfo {
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
+  cost?: ModelCost;
+  /** models.dev canonical model id for the matched row. Display-only. */
+  canonicalModelId?: string;
   metadataSource: ModelMetadataSource;
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
@@ -403,6 +416,8 @@ export interface ModelInsightsStatus {
   hasKey: boolean;
   ready: boolean;
   cachedModelCount: number;
+  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
+  skippedAmbiguousCount: number;
   fetchedAt?: string;
   asOf?: string;
   citation?: string;
@@ -455,8 +470,16 @@ export interface ChatMeta {
 export interface Chat extends ChatMeta {
   /** Main-owned receipt for an idempotent first-message commit; never renderer-authored. */
   firstMessageCommit?: { turnId: string; fingerprint: string };
-  /** Per-chat opt-in. The global Computer Use beta setting remains authoritative. */
-  computerUseEnabled?: boolean;
+  /**
+   * The user granted Computer Use for this chat ("Allow for this chat" on the
+   * access card). The global Computer Use beta setting remains authoritative.
+   */
+  computerUseAllowed?: boolean;
+  /**
+   * Set while a Computer Use access request waits on missing macOS
+   * permissions, so the chat can offer Continue after the user restarts Aiden.
+   */
+  computerUsePendingContinue?: boolean;
   messages: ChatMessage[];
 }
 
@@ -599,6 +622,10 @@ export interface McpServer {
   /** Set when this record came from the built-in preset catalog (see mcp-presets.ts). */
   presetId?: string;
   enabled: boolean;
+  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
+  exposure?: McpExposure;
+  /** Raw remote tool names withheld from every model surface. */
+  hiddenTools?: string[];
 }
 
 /** An Agent Skill — instructions exposed to the model as a callable tool. */
@@ -697,6 +724,17 @@ export interface AppSettings {
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
+  modelPadPlacements?: ModelPadPlacements;
+  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
+  pinnedModels?: string[];
+  /**
+   * Presentation-only model history: distinct `provider::model` values, newest
+   * first (at most 5). Machine-local; never part of the portable config.
+   */
+  recentModels?: string[];
+  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
+  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
@@ -754,6 +792,8 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** "Always allow" Computer Use in every chat without the per-chat access card. */
+  computerUseAlwaysAllow?: boolean;
   /** Aiden Live (voice and on-screen actions). Omitted means enabled; false refuses every Live start. */
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */
@@ -929,6 +969,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this attended turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals; automatic when absent. */
+  inlineVisuals?: import("../../renderer/shared/appearance.js").InlineVisualsMode;
   messages: Array<{
     role: ChatRole;
     content: string;

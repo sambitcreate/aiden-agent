@@ -16,6 +16,7 @@ import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
+import { externalUrl } from "./services/browser/core.js";
 import { shutdownDevices } from "./handlers/devices.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
@@ -30,7 +31,8 @@ import {
   disposeShortcut,
   initShortcutBindingsChanged,
 } from "./services/shortcut.js";
-import { mcpManager } from "./services/mcp.js";
+import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
+import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
   foundationModelsConnection,
@@ -50,6 +52,7 @@ import {
 } from "../renderer/shared/appearance.js";
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
+import { modelPaceRecorder } from "./services/model-pace-runtime.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
@@ -99,6 +102,8 @@ import { displayImageArtifactStore } from "./services/display-image-artifact-sto
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
+import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
 import { designProjectStore, designRunService } from "./services/design/main.js";
@@ -155,7 +160,8 @@ import { botSkillContentWatcher } from "./services/bot-capability-services-main.
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
-import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
+import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from "./application-lifecycle-core.js";
+import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 
@@ -327,7 +333,7 @@ function cleanupApplication(): void {
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
   geminiLiveTranscription.dispose();
-  void mcpManager.closeAll();
+  void mcpManager.closeAll({ final: true });
 }
 
 /** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */
@@ -385,6 +391,12 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
+  // Settled generations have recorded their last pace samples; persist the
+  // debounced remainder. Never fatal: it is a regenerable measurement cache.
+  await Promise.race([
+    modelPaceRecorder.flush().catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
+  ]);
   const subagentsSettled = await subagentRuntimeRegistry.shutdown();
   if (!subagentsSettled) {
     logger.warn(
@@ -1131,14 +1143,7 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
 
 function openExternalUrl(value: string): void {
   try {
-    const url = new URL(value);
-    if (
-      url.protocol === "http:" ||
-      url.protocol === "https:" ||
-      url.protocol === "mailto:"
-    ) {
-      void shell.openExternal(url.toString());
-    }
+    void shell.openExternal(externalUrl(value));
   } catch {
     logger.warn("main", "Blocked invalid external URL", { value });
   }
@@ -1706,6 +1711,19 @@ if (!ownsSingleInstanceLock) {
   });
 
   app.on("second-instance", () => showMainWindow());
+  // A hidden snapshot window must not keep a closing app alive.
+  app.on("browser-window-created", (_event, created) => {
+    created.on("closed", () => {
+      if (isAuxiliaryWindow(created)) return;
+      const remaining = BrowserWindow.getAllWindows()
+        .filter((window) => !window.isDestroyed())
+        .map((window) => ({ auxiliary: isAuxiliaryWindow(window) }));
+      if (shouldReleaseAuxiliaryWindows(process.platform, aidenRemoteServiceKeepsApplicationAlive(), remaining)) {
+        disposeVisualSnapshots();
+      }
+    });
+  });
+
   app.on("window-all-closed", () => {
     const backgroundServiceRunning = aidenRemoteServiceKeepsApplicationAlive();
     logger.info("electron-lifecycle", "All application windows closed", {
@@ -1750,6 +1768,7 @@ if (!ownsSingleInstanceLock) {
 
   app.on("will-quit", () => {
     logger.info("electron-lifecycle", "Application will-quit");
+    disposeVisualSnapshots();
     cleanupApplication();
   });
   app.on("quit", (_event, exitCode) => {
@@ -1790,7 +1809,14 @@ if (!ownsSingleInstanceLock) {
     reloadAndReconcilePortableConfig,
     () => {
       skillRegistry.invalidate();
-      ipcMain.broadcast("app:config-externally-changed", {});
+      // Values typed into config.json by hand move into the keychain before
+      // Settings re-reads it, so the renderer never holds (and later re-saves)
+      // the plain-text copy.
+      void sealPlaintextMcpServerFields()
+        .catch((error: unknown) =>
+          logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
+        )
+        .finally(() => ipcMain.broadcast("app:config-externally-changed", {}));
     },
     (error: unknown) =>
       logger.warn(
@@ -1886,6 +1912,13 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      // Phones and other clients that cannot draw a visual get its snapshot.
+      installVisualSnapshotQueue(
+        createMainVisualSnapshotQueue({
+          htmlFor: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
+          addVisualSnapshots: (chatId, messageId, snapshots) => chatStore.addVisualSnapshots(chatId, messageId, snapshots),
+        }),
+      );
       await startStudioAssets({
         enabled: studioAssetsEnabled(),
         store: studioAssetStore,
@@ -2134,6 +2167,13 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      // Env and header values still written in config.json move into the keychain.
+      await sealPlaintextMcpServerFields().catch((error: unknown) =>
+        logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
+      );
+      // Connect enabled MCP servers in the background so the first turn finds
+      // warm connections and cached inventories. Never blocks startup.
+      prewarmMcpServers();
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
       await restoreDockIconPreference(appearance.dockIcon);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageBubble } from "./message-bubble.js";
-import { MessageList, richLinkHandoffDuplicateMessageId } from "./message-list.js";
+import { MessageList } from "./message-list.js";
 import { Markdown } from "./markdown.js";
 import { htmlArtifactTranscriptPlan } from "../lib/html-artifact-transcript.js";
 import {
@@ -97,49 +97,6 @@ test("one message renders at most fifty rich preview triggers", () => {
   const markup = renderToStaticMarkup(<MessageBubble role="assistant" content={content} />);
   assert.equal(markup.match(/data-rich-link-provider="github"/gu)?.length, 50);
   assert.equal(markup.match(/href="https:\/\/github\.com\/openai\/codex\/pull\//gu)?.length, 51);
-});
-
-test("the persisted handoff duplicate yields rich previews to the streaming copy", () => {
-  const messages = [
-    { id: "assistant-old", role: "assistant" as const, content: "Earlier", createdAt: 1 },
-    {
-      id: "assistant-final",
-      role: "assistant" as const,
-      content: "[PR](https://github.com/openai/codex/pull/247)",
-      createdAt: 2,
-    },
-  ];
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, true, "assistant-final"),
-    "assistant-final",
-  );
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, false, "assistant-final"),
-    null,
-  );
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, "Different", true, "assistant-final"),
-    null,
-  );
-
-  const duplicateMarkup = renderToStaticMarkup(
-    <MessageBubble role="assistant" content={messages[1]!.content} richLinks={false} />,
-  );
-  assert.match(duplicateMarkup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247"/u);
-  assert.doesNotMatch(duplicateMarkup, /data-rich-link-provider/u);
-});
-
-test("an unpersisted equal-text partial does not suppress an older assistant preview", () => {
-  const repeated = "[PR](https://github.com/openai/codex/pull/247)";
-  const messages = [
-    { id: "assistant-old", role: "assistant" as const, content: repeated, createdAt: 1 },
-  ];
-
-  assert.equal(richLinkHandoffDuplicateMessageId(messages, repeated, true, null), null);
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, repeated, true, "missing-current-response"),
-    null,
-  );
 });
 
 test("saved reasoning disclosures stay in order around tools and prose", () => {
@@ -537,6 +494,63 @@ test("settled reasoning uses one duration-labelled disclosure without an activit
   assert.equal(markup.match(/reasoning-surface/gu)?.length, 1);
   assert.doesNotMatch(markup, /activity-feed/u);
   assert.doesNotMatch(markup, /agent-thinking-shimmer/u);
+});
+
+test("a placed HTML artifact renders between the prose around its tool call", () => {
+  const renderStep: AgentToolStep = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "render_artifact",
+    label: "Render artifact",
+    status: "completed",
+    startedAt: 1,
+    updatedAt: 2,
+    finishedAt: 2,
+    contentOffset: "Before chart.".length,
+  };
+  const content = "Before chart. After chart.";
+  const message = {
+    id: "assistant-placed",
+    role: "assistant" as const,
+    content,
+    createdAt: 1,
+    timeline: {
+      version: 3 as const,
+      generationId: "generation-1",
+      status: "completed" as const,
+      startedAt: 1,
+      finishedAt: 2,
+      steps: [renderStep],
+    },
+    htmlArtifacts: [htmlArtifact("media-placed", "html-placed")],
+    htmlArtifactPlacements: [{ mediaId: "media-placed", toolCallId: "call-1" }],
+  };
+  const render = (placed: boolean) =>
+    renderToStaticMarkup(
+      <MessageList
+        chatId="chat-html"
+        messages={[placed ? message : { ...message, htmlArtifactPlacements: undefined }]}
+        streamingText={null}
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+      />,
+    );
+  const placedMarkup = render(true);
+  const frameAt = placedMarkup.indexOf('data-html-artifact="media-placed"');
+  assert.ok(frameAt > placedMarkup.indexOf("Before chart."));
+  assert.ok(frameAt < placedMarkup.indexOf("After chart."));
+  assert.equal(placedMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
+
+  const legacyMarkup = render(false);
+  assert.ok(legacyMarkup.indexOf('data-html-artifact="media-placed"') > legacyMarkup.indexOf("After chart."));
+  assert.equal(legacyMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
 });
 
 test("an in-flight render_artifact call stays at its tool row", () => {

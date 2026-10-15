@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SkillCatalogEntry } from "../shared/slash-commands.js";
 import {
+  completeSlashCommandToken,
   consumeSlashToken,
   deriveSlashSession,
   dismissSlashSession,
@@ -9,6 +10,7 @@ import {
   failedSendDraft,
   moveSlashSelection,
   pageSlashSelection,
+  parseSubmittedSlashCommand,
   rankSlashResults,
   selectedSkillComposerReducer,
   selectedSkillStatus,
@@ -401,4 +403,34 @@ test("palette presence closes synchronously and reopens visibly", () => {
     }),
     "visible",
   );
+});
+
+test("a sent draft runs an argument command by name or alias and leaves other text alone", () => {
+  const visualize = parseSubmittedSlashCommand("  /Generative-UI chart sales");
+  assert.equal(visualize?.command.name, "visualize");
+  assert.equal(visualize?.session.tokenStart, 2);
+  assert.equal(visualize?.session.argument, " chart sales");
+  assert.equal(
+    consumeSlashToken("  /Generative-UI chart sales", visualize!.session).trim(),
+    "chart sales",
+  );
+  assert.equal(parseSubmittedSlashCommand("/btw")?.command.name, "btw");
+  assert.equal(parseSubmittedSlashCommand("/btw")?.session.argument, "");
+  // Commands without an argument run only from the palette; Send keeps them as text.
+  assert.equal(parseSubmittedSlashCommand("/new please"), null);
+  assert.equal(parseSubmittedSlashCommand("/visualizer of data"), null);
+  assert.equal(parseSubmittedSlashCommand("$visualize chart"), null);
+  assert.equal(parseSubmittedSlashCommand("Please /visualize this"), null);
+});
+
+test("completing a picked argument command replaces the partial token with its full name", () => {
+  const visualize = parseSubmittedSlashCommand("/visualize")!.command;
+  assert.deepEqual(completeSlashCommandToken("/visua", { tokenStart: 0 }, visualize), {
+    text: "/visualize ",
+    caret: 11,
+  });
+  assert.deepEqual(completeSlashCommandToken("  /gen", { tokenStart: 2 }, visualize), {
+    text: "  /visualize ",
+    caret: 13,
+  });
 });

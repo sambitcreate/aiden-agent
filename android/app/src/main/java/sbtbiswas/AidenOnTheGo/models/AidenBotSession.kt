@@ -2,10 +2,13 @@ package sbtbiswas.AidenOnTheGo.models
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -18,6 +21,7 @@ import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonTransformingSerializer
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
@@ -39,6 +43,17 @@ import java.time.Instant
 // addressed by Bot id rather than chat id. Revision 27 adds the `memory_update` and
 // `routine_proposal` entries (`bot:cards` devices only) and skips entry types this build
 // can't read instead of refusing the whole session.
+
+/**
+ * Refuses an optional key the host sent as the literal null: the host leaves an absent value
+ * out, and TypeScript and iOS refuse `null` (fixture `botActivityPrivacy.rejectedNullLiterals`).
+ * The wire JSON's `explicitNulls = false` would otherwise read it as absent.
+ */
+internal fun JsonElement.refusingNullLiterals(field: String, vararg keys: String): JsonElement {
+    val body = this as? JsonObject ?: return this
+    for (key in keys) if (body[key] is JsonNull) throw AidenBotContractException.InvalidField("$field.$key")
+    return this
+}
 
 /** Strict codec for the revision-25 Bot DTOs: exact keys, no unknown fields, nulls omitted. */
 object AidenBotWireJson {
@@ -164,7 +179,9 @@ private fun validateState(state: AidenBotSessionState, interrupted: Boolean, blo
 sealed class AidenBotSessionEntry {
     abstract val id: String
 
-    @Serializable
+    @OptIn(ExperimentalSerializationApi::class)
+    @KeepGeneratedSerializer
+    @Serializable(with = AidenBotSessionMessageSerializer::class)
     @SerialName("message")
     data class Message(
         override val id: String,
@@ -174,7 +191,12 @@ sealed class AidenBotSessionEntry {
         /** Routine name shown above a routine's user turn. */
         val label: String? = null,
         /** An assistant answer that was cut off. */
-        @Serializable(with = AidenStrictBooleanSerializer::class) val interrupted: Boolean? = null
+        @Serializable(with = AidenStrictBooleanSerializer::class) val interrupted: Boolean? = null,
+        /**
+         * Revision 30 (`bot:activity` devices only): the id the Mac gave this person's own
+         * message when it was sent. It lets a phone settle its optimistic bubble exactly.
+         */
+        val submissionId: String? = null
     ) : AidenBotSessionEntry() {
         init {
             AidenBotWire.validateIdentifier(id, "entry.id")
@@ -183,6 +205,12 @@ sealed class AidenBotSessionEntry {
             // The host only ever marks an assistant answer, and only as `true`.
             if (interrupted != null && (!interrupted || role != AidenBotMessageRole.ASSISTANT)) {
                 throw AidenBotContractException.InvalidField("entry.interrupted")
+            }
+            // Only the person's own message is tagged, and never a routine turn (which has a label).
+            submissionId?.let {
+                if (role != AidenBotMessageRole.USER || label != null || !AidenBotWire.isSubmissionId(it)) {
+                    throw AidenBotContractException.InvalidField("entry.submissionId")
+                }
             }
         }
     }
@@ -293,6 +321,19 @@ sealed class AidenBotSessionEntry {
                 ?: throw AidenBotContractException.InvalidField("entry.type")
             return type.takeUnless { it in KNOWN_TYPES }
         }
+    }
+}
+
+/**
+ * A message entry, decoded strictly: `label` and `submissionId` may be left out but never sent
+ * as null. The discriminator is the sealed class's to read, so it is set aside here.
+ */
+object AidenBotSessionMessageSerializer :
+    JsonTransformingSerializer<AidenBotSessionEntry.Message>(AidenBotSessionEntry.Message.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        element.refusingNullLiterals("entry", "label", "submissionId")
+        val body = element as? JsonObject ?: return element
+        return if ("type" in body) JsonObject(body - "type") else body
     }
 }
 
@@ -434,6 +475,64 @@ data class AidenBotQuestionAnswerReceipt(val waitId: String) {
     }
 }
 
+/**
+ * Contract revision 30 (`bot-activity-v1`, `bot:activity`): what a Bot in a running turn is
+ * doing. Exactly `phase`, `app` and `startedAt` cross the wire; the strict wire JSON refuses
+ * any other key. An unknown phase id still decodes and reads as Working.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotSessionActivitySerializer::class)
+data class AidenBotSessionActivity(
+    val phase: String,
+    val app: String? = null,
+    /** When the turn started: the Mac's clock, milliseconds since 1970. */
+    @Serializable(with = AidenStrictLongSerializer::class) val startedAt: Long
+) {
+    init {
+        if (!PHASE_ID.matches(phase)) throw AidenBotContractException.InvalidField("activity.phase")
+        app?.let { AidenBotWire.validateString(it, "activity.app", MAX_APP_LENGTH) }
+        if (startedAt < 0 || startedAt > AidenRemoteProtocol.MAX_SAFE_INTEGER) {
+            throw AidenBotContractException.InvalidField("activity.startedAt")
+        }
+    }
+
+    companion object {
+        const val MAX_APP_LENGTH = 40
+        private val PHASE_ID = Regex("^[a-z][a-z_]{0,31}$")
+    }
+}
+
+/** `app` is left out for every phase but `app`, never sent as null. */
+object AidenBotSessionActivitySerializer :
+    JsonTransformingSerializer<AidenBotSessionActivity>(AidenBotSessionActivity.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = element.refusingNullLiterals("activity", "app")
+}
+
+/** A message waiting for the running turn: STEER joins it, QUEUE runs after it. */
+@Serializable
+data class AidenBotQueuedMessage(
+    val submissionId: String,
+    val mode: AidenStreamInputMode,
+    val text: String
+) {
+    init {
+        if (!AidenBotWire.isSubmissionId(submissionId)) throw AidenBotContractException.InvalidField("queued.submissionId")
+        AidenBotWire.validateString(text, "queued.text", AidenBotSessionWire.MAX_MESSAGE_LENGTH)
+    }
+
+    companion object {
+        const val MAX_COUNT = 20
+
+        /** At most [MAX_COUNT] messages, each with its own id. */
+        fun validateList(queued: List<AidenBotQueuedMessage>) {
+            if (queued.size > MAX_COUNT || queued.map { it.submissionId }.toSet().size != queued.size) {
+                throw AidenBotContractException.InvalidField("queued")
+            }
+        }
+    }
+}
+
 /** `GET /bots/{botId}/session`: the newest entries plus the in-flight partial. */
 @Serializable(with = AidenBotSessionSerializer::class)
 data class AidenBotSession(
@@ -449,7 +548,11 @@ data class AidenBotSession(
     /** The question the Bot is waiting on, or null. Always on the wire, as `null` when nothing waits. */
     val question: AidenBotQuestion?,
     /** The tool approval the Bot is waiting on, or null. Always on the wire, as `null` when nothing waits. */
-    val approval: AidenBotApproval?
+    val approval: AidenBotApproval?,
+    /** Revision 30 (`bot:activity` devices only): what the running turn is doing. */
+    val activity: AidenBotSessionActivity? = null,
+    /** Revision 30 (`bot:activity` devices only): the person's messages still waiting for the turn. */
+    val queued: List<AidenBotQueuedMessage>? = null
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -460,6 +563,7 @@ data class AidenBotSession(
         if (entries.size > AidenBotSessionWire.MAX_ENTRIES || entries.map { it.id }.toSet().size != entries.size) {
             throw AidenBotContractException.InvalidField("entries")
         }
+        queued?.let { AidenBotQueuedMessage.validateList(it) }
     }
 }
 
@@ -474,7 +578,9 @@ private data class AidenBotSessionFields(
     val blocked: AidenBotSessionBlock? = null,
     val partial: String? = null,
     val entries: List<AidenBotSessionEntry>,
-    @Serializable(with = AidenStrictBooleanSerializer::class) val hasOlder: Boolean
+    @Serializable(with = AidenStrictBooleanSerializer::class) val hasOlder: Boolean,
+    val activity: AidenBotSessionActivity? = null,
+    val queued: List<AidenBotQueuedMessage>? = null
 )
 
 /** Writes `question` and `approval` explicitly (`null` when nothing waits) and requires them on read. */
@@ -485,7 +591,7 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val jsonEncoder = encoder as? JsonEncoder ?: throw SerializationException("Bot sessions are JSON only")
         val fields = AidenBotSessionFields(
             value.botId, value.epoch, value.seq, value.state, value.interrupted,
-            value.blocked, value.partial, value.entries, value.hasOlder
+            value.blocked, value.partial, value.entries, value.hasOlder, value.activity, value.queued
         )
         val body = jsonEncoder.json.encodeToJsonElement(AidenBotSessionFields.serializer(), fields).jsonObject
         jsonEncoder.encodeJsonElement(
@@ -499,6 +605,8 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
     override fun deserialize(decoder: Decoder): AidenBotSession {
         val jsonDecoder = decoder as? JsonDecoder ?: throw SerializationException("Bot sessions are JSON only")
         val body = jsonDecoder.decodeJsonElement() as? JsonObject ?: throw AidenBotContractException.InvalidField("session")
+        // `activity` is null when nothing runs; `queued` is left out, never null.
+        body.refusingNullLiterals("session", "queued")
         val question = body["question"] ?: throw AidenBotContractException.InvalidField("question")
         val approval = body["approval"] ?: throw AidenBotContractException.InvalidField("approval")
         // Revision 27: entry types this build can't read are dropped; known ones stay strict.
@@ -520,7 +628,9 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             entries = fields.entries,
             hasOlder = fields.hasOlder,
             question = if (question is JsonNull) null else AidenBotQuestion.parse(question),
-            approval = if (approval is JsonNull) null else AidenBotApproval.parse(approval)
+            approval = if (approval is JsonNull) null else AidenBotApproval.parse(approval),
+            activity = fields.activity,
+            queued = fields.queued
         )
     }
 }
@@ -538,7 +648,11 @@ data class AidenBotSessionStateView(
 }
 
 @Serializable
-data class AidenBotSessionSendRequest(val text: String) {
+data class AidenBotSessionSendRequest(
+    val text: String,
+    /** Revision 30 (`bot-activity-v1`): Steer joins the running turn, Queue runs after it. */
+    val whenBusy: AidenStreamInputMode? = null
+) {
     init {
         AidenBotWire.validateString(text, "text", AidenBotSessionWire.MAX_MESSAGE_LENGTH)
         if (text.isBlank()) throw AidenBotContractException.InvalidField("text")
@@ -614,6 +728,14 @@ sealed class AidenBotSessionEventPayload {
     data class Question(val question: AidenBotQuestion?) : AidenBotSessionEventPayload()
     /** The waiting tool approval appeared (non-null) or was settled or withdrawn (null). */
     data class Approval(val approval: AidenBotApproval?) : AidenBotSessionEventPayload()
+    /** Revision 30: what the running turn is doing now, or null when none runs. */
+    data class Activity(val activity: AidenBotSessionActivity?) : AidenBotSessionEventPayload()
+    /** Revision 30: the person's messages still waiting for the turn. */
+    data class Queued(val queued: List<AidenBotQueuedMessage>) : AidenBotSessionEventPayload() {
+        init {
+            AidenBotQueuedMessage.validateList(queued)
+        }
+    }
     /** The host closed this Bot's session; reconnect for a new epoch. */
     object Closed : AidenBotSessionEventPayload() {
         override fun toString(): String = "Closed"
@@ -648,6 +770,8 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.State -> "state"
             is AidenBotSessionEventPayload.Question -> "question"
             is AidenBotSessionEventPayload.Approval -> "approval"
+            is AidenBotSessionEventPayload.Activity -> "activity"
+            is AidenBotSessionEventPayload.Queued -> "queued"
             AidenBotSessionEventPayload.Closed -> "closed"
         }
 }
@@ -676,6 +800,12 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             }
             is AidenBotSessionEventPayload.Approval -> buildJsonObject {
                 put("approval", p.approval?.toJson() ?: JsonNull)
+            }
+            is AidenBotSessionEventPayload.Activity -> buildJsonObject {
+                put("activity", p.activity?.let { wire.encodeToJsonElement(AidenBotSessionActivity.serializer(), it) } ?: JsonNull)
+            }
+            is AidenBotSessionEventPayload.Queued -> buildJsonObject {
+                put("queued", wire.encodeToJsonElement(ListSerializer(AidenBotQueuedMessage.serializer()), p.queued))
             }
             AidenBotSessionEventPayload.Closed -> JsonObject(emptyMap())
         }
@@ -742,6 +872,19 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
                 payload.requireKeys(setOf("approval"))
                 val element = payload.getValue("approval")
                 AidenBotSessionEventPayload.Approval(if (element is JsonNull) null else AidenBotApproval.parse(element))
+            }
+            "activity" -> {
+                payload.requireKeys(setOf("activity"))
+                val element = payload.getValue("activity")
+                AidenBotSessionEventPayload.Activity(
+                    if (element is JsonNull) null else wire.decodeFromJsonElement(AidenBotSessionActivity.serializer(), element)
+                )
+            }
+            "queued" -> {
+                payload.requireKeys(setOf("queued"))
+                AidenBotSessionEventPayload.Queued(
+                    wire.decodeFromJsonElement(ListSerializer(AidenBotQueuedMessage.serializer()), payload.getValue("queued"))
+                )
             }
             "closed" -> {
                 payload.requireKeys(emptySet())

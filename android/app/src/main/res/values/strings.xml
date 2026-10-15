@@ -470,9 +470,12 @@
     <string name="bots_row_yesterday">Yesterday</string>
     <string name="bot_menu_profile">Profile</string>
     <string name="bot_menu_files">Files</string>
+    <string name="bot_menu_memory">Memory</string>
+    <string name="bot_menu_advanced">Advanced</string>
     <string name="bot_field_name">Name</string>
     <string name="bot_name_fallback_your_bot">your Bot</string>
     <string name="bot_save_failed">Aiden couldn’t save. Try again.</string>
+    <string name="bot_save_unreachable">Aiden couldn’t reach your Mac to save that. Try again.</string>
     <string name="bot_delete_confirm">Delete Bot</string>
     <string name="bot_delete_connect">Connect to your Mac to delete this Bot.</string>
     <string name="bot_delete_failed">Aiden couldn’t delete this Bot. Try again.</string>
@@ -489,8 +492,6 @@
     <string name="bot_profile_unavailable_failed">Aiden couldn’t load this Bot.</string>
     <string name="bot_profile_instructions">Instructions</string>
     <string name="bot_profile_loading">Loading Bot</string>
-    <string name="bot_profile_connect_to_save">Connect to your Mac to save changes.</string>
-    <string name="bot_profile_character_save_failed">Aiden couldn’t save the new look. Try again.</string>
     <string name="bot_profile_change_photo">Change photo</string>
     <string name="bot_profile_photo_options">Photo options</string>
     <string name="bot_profile_choose_photo">Choose from Gallery</string>
@@ -571,7 +572,6 @@
     <string name="bot_memory_error_failed">Aiden couldn’t save this memory. Try again.</string>
     <string name="bot_memory_delete_failed">Aiden couldn’t delete this memory. Try again.</string>
     <string name="bot_memory_load_failed">Aiden couldn’t load this memory. Make sure your Mac is on and nearby.</string>
-    <string name="bot_memory_connect">Connect to your Mac to see this memory.</string>
     <string name="bot_memory_loading">Loading memory</string>
     <string name="bot_memory_erase">Erase memory</string>
     <string name="bot_memory_erase_title">Erase everything %1$s remembers?</string>
@@ -602,7 +602,6 @@
     <!-- Bots: advanced -->
     <string name="bot_advanced_title">Advanced</string>
     <string name="bot_advanced_loading">Loading settings</string>
-    <string name="bot_advanced_connect">Connect to your Mac to change these settings.</string>
     <string name="bot_advanced_needs_model">Set up an AI model on your Mac first.</string>
     <string name="bot_advanced_load_failed">Aiden couldn’t load these settings. Try again.</string>
     <string name="bot_advanced_model">AI model</string>
@@ -617,11 +616,75 @@
     <string name="bot_advanced_connected_apps">Connected apps</string>
 
     <!-- Bots: chat -->
+    <!-- Bot chat activity (contract revision 30): the status line's words, shared with the Mac and iOS (spec §5). -->
+    <string name="bot_activity_preparing">Getting ready</string>
+    <string name="bot_activity_thinking">Thinking</string>
+    <string name="bot_activity_reading">Reading</string>
+    <string name="bot_activity_photo">Looking at your photo</string>
+    <string name="bot_activity_searching">Searching the web</string>
+    <string name="bot_activity_command">Running a command</string>
+    <string name="bot_activity_editing">Editing files</string>
+    <string name="bot_activity_app">Using an app</string>
+    <string name="bot_activity_app_named">Using %1$s</string>
+    <string name="bot_activity_helper">Asking a helper</string>
+    <string name="bot_activity_computer">Using your Mac</string>
+    <string name="bot_activity_remembering">Remembering</string>
+    <string name="bot_activity_routine">Setting up a routine</string>
+    <string name="bot_activity_working">Working</string>
+    <string name="bot_activity_writing">Writing</string>
+    <string name="bot_activity_waiting">Waiting for you</string>
+    <string name="bot_activity_tidying">Tidying up its notes</string>
+    <string name="bot_activity_stopping">Stopping</string>
+    <string name="bot_activity_resuming">Picking up where it left off</string>
+    <string name="bot_activity_reconnecting">Reconnecting to your Mac</string>
+    <string name="bot_activity_status_elapsed">%1$s · %2$s</string>
+    <!-- Advanced → Chat activity (spec §7). The previews replay what each level shows on the Mac. -->
+    <string name="bot_chat_activity_title">Chat activity</string>
+    <string name="bot_chat_activity_description">What you see in %1$s’s chat on your Mac while it works. Changes save as you pick them.</string>
+    <string name="bot_chat_activity_level_title">How much to show</string>
+    <string name="bot_chat_activity_wording_title">What the status line says</string>
+    <string name="bot_chat_activity_phones_title">On iPhone and Android</string>
+    <string name="bot_chat_activity_phones_description">Always just the line, with the same words.</string>
+    <string name="bot_chat_activity_recommended">Recommended</string>
+    <string name="bot_chat_activity_level_quiet">Quiet</string>
+    <string name="bot_chat_activity_level_quiet_detail">One line that says what it’s doing.</string>
+    <string name="bot_chat_activity_level_summary">Summary</string>
+    <string name="bot_chat_activity_level_summary_detail">Adds a short recap above each reply.</string>
+    <string name="bot_chat_activity_level_detailed">Detailed</string>
+    <string name="bot_chat_activity_level_detailed_detail">Also shows its last few steps while it works.</string>
+    <string name="bot_chat_activity_wording_follows">Follows the work</string>
+    <string name="bot_chat_activity_wording_follows_detail">Says what it’s doing, like Reading or Searching the web.</string>
+    <string name="bot_chat_activity_wording_thinking">Always “Thinking”</string>
+    <string name="bot_chat_activity_wording_thinking_detail">One calm word, whatever it’s doing.</string>
+    <string name="bot_chat_activity_value">%1$s · %2$s</string>
+    <string name="bot_chat_activity_save_failed">Aiden couldn’t save that choice.</string>
+    <string name="bot_chat_activity_save_conflict">This changed on your Mac. Showing what it has now.</string>
+    <string name="bot_chat_activity_save_unreachable">Aiden couldn’t reach your Mac to save that choice.</string>
+    <string name="bot_chat_activity_preview">Preview</string>
+    <string name="bot_chat_activity_preview_prompt">Plan dinners for this week</string>
+    <string name="bot_chat_activity_preview_reply">Here’s a plan for the week.</string>
+    <string name="bot_chat_activity_preview_recap">Worked for 18s · read 1 file, searched the web, edited 1 file</string>
+    <string name="bot_chat_activity_preview_step_read">Read 1 file</string>
+    <string name="bot_chat_activity_preview_step_search">Searched the web</string>
+    <string name="bot_chat_activity_preview_step_edit">Edited 1 file</string>
+    <string name="bot_session_queued">Queued</string>
+    <string name="bot_session_queued_hint">Sends when the current reply finishes</string>
+    <string name="bot_session_sending">Sending…</string>
+    <string name="bot_session_send_failed">Couldn’t send</string>
+    <string name="bot_session_try_again">Try again</string>
+    <!-- Joins "Couldn’t send" and "Try again" into "Couldn’t send · Try again" (copy shared with iOS). -->
+    <string name="bot_session_send_failed_separator">·</string>
+    <string name="bot_session_access_lost">That message wasn’t sent. Please try again.</string>
+    <string name="bot_session_outbox_full">Too many messages are waiting. Send or remove some, then try again.</string>
+    <string name="bot_session_outbox_unrestorable">Some unsent messages couldn’t be restored.</string>
+    <string name="bot_session_remove_message">Remove message</string>
+    <string name="bot_session_connecting">Connecting…</string>
     <string name="bot_chat_open_profile_cd">Open %1$s’s profile</string>
     <string name="bot_chat_open_failed">Aiden couldn’t open this Bot’s chat. Try again.</string>
     <string name="bot_session_connect">Connect to your Mac to open this chat.</string>
     <string name="bot_session_loading">Loading chat</string>
     <string name="bot_session_missing">This Bot is no longer on your Mac.</string>
+    <string name="bot_session_load_no_access">This phone can’t open this chat. Check its access in Aiden on your Mac.</string>
     <string name="bot_session_load_failed">Aiden couldn’t load this chat. Make sure your Mac is on and nearby.</string>
     <string name="bot_session_unreachable">Aiden couldn’t reach your Mac. Try again.</string>
     <string name="bot_session_reset">This chat was restarted.</string>
@@ -650,8 +713,14 @@
     <string name="bot_editor_new_title">New Bot</string>
     <string name="bot_editor_creating">Creating…</string>
     <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
+    <string name="bot_create_failed_title">Couldn’t Create Bot</string>
+    <string name="bot_create_interrupted">Aiden closed before the Bot was ready. Try again to finish making it.</string>
+    <string name="bot_create_may_exist">Aiden closed before your Mac answered, so this Bot may already be there. Check your Bots before you create it again.</string>
+    <string name="bot_create_not_kept">Aiden couldn’t save this Bot on your phone, so it wasn’t sent. Try again.</string>
+    <string name="bot_editor_create_unreachable">Aiden couldn’t reach your Mac to create this Bot. Try again.</string>
     <string name="bot_editor_help_label">What should it help with?</string>
     <string name="bot_editor_help_placeholder">Plan my meals and make a grocery list every week</string>
+    <string name="bot_editor_model_gone">That model isn’t available any more. Choose another one.</string>
     <string name="bot_editor_later_hint">You can change its look, instructions and what it can use later.</string>
     <string name="bot_editor_instructions_load_failed">Aiden couldn’t load the instructions. Try again.</string>
     <string name="bot_editor_name_placeholder">Like Meal Planner or Chief of Staff</string>
@@ -772,6 +841,17 @@
     <string name="chat_reasoning_collapse">Collapse reasoning</string>
     <string name="chat_reasoning_expand">Expand reasoning</string>
     <string name="chat_timeline_file">File %1$s · %2$s</string>
+    <string name="chat_questionnaire_recap_cd">Your answers</string>
+    <string name="chat_questionnaire_custom_answer">“%1$s”</string>
+    <string name="chat_questionnaire_skipped">Skipped</string>
+    <string name="chat_questionnaire_dismissed">Dismissed</string>
+    <string name="chat_questionnaire_no_answer">No answer</string>
+
+    <!-- Chat: inline visuals (contract revision 28) -->
+    <string name="chat_visual_snapshot_description">Snapshot from your Mac</string>
+    <string name="chat_visual_snapshot_open">Open snapshot</string>
+    <string name="chat_visual_show_more">Show more</string>
+    <string name="chat_visual_show_less">Show less</string>
 
     <!-- Chat: message actions -->
     <string name="chat_message_actions">Message actions</string>
@@ -794,6 +874,7 @@
     <string name="chat_images_previous">Previous photo</string>
     <string name="chat_images_open_to_retry">Open to retry</string>
     <string name="chat_images_loading">Loading %1$s</string>
+    <string name="chat_image_generation_placeholder">Generating image, %1$s</string>
     <string name="chat_images_save_failed">Images couldn\'t be saved</string>
     <string name="chat_images_saved_one">Saved to Photos</string>
     <plurals name="chat_images_saved">

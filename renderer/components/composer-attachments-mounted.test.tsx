@@ -21,6 +21,7 @@ import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../lib/hosts/chat-session-control.js";
 import { remoteComposerActions } from "../main/remote-chat-view.js";
 import { hostResourceKey } from "../shared/peer-host.js";
+import { BACKGROUND_RESPONSE_READINESS_MESSAGE } from "../lib/composer-placeholder.js";
 
 // Mount the production Composer and its send/restore/attachment logic. Replace only
 // peripheral UI, device hooks, and IPC; no lifecycle logic is copied into this fixture.
@@ -30,10 +31,10 @@ async function loadComposer() {
   const stubs: Record<string, string> = {
     "./ui": `import React from 'react';
       const primitive = tag => ({children, ...props}) => React.createElement(tag,
-        Object.fromEntries(Object.entries(props).filter(([key]) => /^(aria-|data-|on)/.test(key) || ['ref','value','disabled','readOnly','className','role'].includes(key))), children);
+        Object.fromEntries(Object.entries(props).filter(([key]) => /^(aria-|data-|on)/.test(key) || ['ref','value','disabled','readOnly','className','role','placeholder'].includes(key))), children);
       export const Button=primitive('button'), Textarea=primitive('textarea'), Input=primitive('input'), Text=primitive('span');
       export const Dialog=()=>null, AlertDialog=()=>null, DropdownMenu=()=>null, DropdownMenuContent=()=>null, DropdownMenuItem=()=>null, DropdownMenuTrigger=()=>null;
-      export const toast={info:()=>{},error:()=>{},success:()=>{}};`,
+      export const toast=Object.fromEntries(['info','error','success'].map(level => [level, message => (globalThis.__composerToasts ??= []).push(message)]));`,
     "../lib/use-voice-recorder": "export const useVoiceRecorder=()=>({});",
     "../lib/queries":
       "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
@@ -652,5 +653,182 @@ test("a reopened remote chat's composer gets a message back only when the host r
     await loaded.cleanup();
     mounted.restore();
     Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("a blocked Composer shows its readiness message exactly once", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  // Everything a reader or screen reader is offered: visible text plus the
+  // textarea placeholder.
+  const occurrences = (needle: string) => {
+    const placeholder = mounted.container.getElementsByTagName("textarea")[0]?.getAttribute("placeholder") ?? "";
+    const surface = `${mounted.container.textContent ?? ""}\n${placeholder}`;
+    return surface.split(needle).length - 1;
+  };
+  try {
+    for (const readinessMessage of [BACKGROUND_RESPONSE_READINESS_MESSAGE, "Loading chat…"]) {
+      await React.act(async () =>
+        root.render(
+          <loaded.Composer
+            key={readinessMessage}
+            chatId="blocked-chat"
+            ready={false}
+            readinessMessage={readinessMessage}
+            hasMessages
+            inputRef={React.createRef<HTMLTextAreaElement>()}
+            isGenerating={false}
+            onStop={() => {}}
+            onSend={async () => {}}
+          />,
+        ),
+      );
+      assert.equal(occurrences(readinessMessage), 1, `${readinessMessage} should appear once`);
+      const status = Array.from(mounted.container.getElementsByTagName("span")).find(
+        (element) => element.getAttribute("role") === "status" && element.textContent?.includes(readinessMessage),
+      );
+      assert.ok(status, "the readiness message stays in the status region");
+      assert.ok(mounted.container.getElementsByTagName("textarea")[0]?.getAttribute("placeholder"));
+    }
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("mounted Composer fills in an argument command when picked and runs it from Send", async () => {
+  const mounted = installDom();
+  // The slash palette times its exit animation and scrolls its active option into view.
+  Object.assign(window, { setTimeout, clearTimeout });
+  Object.getPrototypeOf(mounted.container).scrollIntoView = () => {};
+  Object.assign(globalThis, { __composerToasts: [] });
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const sent: Array<{ text: string; options?: { visualize?: boolean; btw?: boolean } }> = [];
+  const toasts = () => ((globalThis as { __composerToasts?: string[] }).__composerToasts ??= []);
+  const textarea = () => mounted.container.getElementsByTagName("textarea")[0];
+  const draft = () => handlers(textarea()).value as unknown as string;
+  const type = (value: string) =>
+    React.act(async () => {
+      handlers(textarea()).onChange({
+        target: { value, selectionStart: value.length, selectionEnd: value.length },
+      });
+    });
+  const pressEnter = () =>
+    React.act(async () => {
+      await handlers(textarea()).onKeyDown({
+        key: "Enter",
+        shiftKey: false,
+        repeat: false,
+        defaultPrevented: false,
+        nativeEvent: { isComposing: false },
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+  try {
+    await React.act(async () =>
+      root.render(
+        <loaded.Composer
+          chatId="slash-chat"
+          ready
+          hasMessages
+          freezeWhileSending={false}
+          sessionChat={
+            { id: "slash-chat", title: "Chat", createdAt: 0, updatedAt: 0, messages: [] } as unknown as React.ComponentProps<
+              typeof Composer
+            >["sessionChat"]
+          }
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          onSend={async (value, _attachments, _skill, options) => {
+            sent.push({ text: value, options });
+          }}
+        />,
+      ),
+    );
+
+    // Picking Visualize from a partial token fills in the command and waits for the prompt.
+    await type("/visua");
+    await pressEnter();
+    assert.equal(draft(), "/visualize ");
+    assert.equal(sent.length, 0);
+    assert.deepEqual(toasts(), []);
+
+    // Send with nothing after the command explains what is missing, once.
+    await pressEnter();
+    assert.equal(sent.length, 0);
+    assert.deepEqual(toasts(), ["Add what to visualize after /visualize, then send."]);
+    toasts().length = 0;
+
+    // Send with a prompt runs the command instead of sending "/visualize …" as chat text.
+    await type("/visualize chart sales by month");
+    await pressEnter();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.text, "chart sales by month");
+    assert.equal(sent[0]?.options?.visualize, true);
+    assert.equal(draft(), "");
+
+    // Text that only looks like a command is still an ordinary message.
+    await type("/visualizer is a word I made up");
+    await pressEnter();
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1]?.text, "/visualizer is a word I made up");
+    assert.equal(sent[1]?.options, undefined);
+
+    // A remote host's chat has no Aiden slash commands, so the text goes to that host as written.
+    await React.act(async () =>
+      root.render(
+        <loaded.Composer
+          key="remote"
+          chatId="host-b/chat-1"
+          ready
+          hasMessages
+          freezeWhileSending={false}
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          surfaces={composerSurfacesFor(new Set<HostChatCapability>(["send", "cancel"]))}
+          onSend={async (value, _attachments, _skill, options) => {
+            sent.push({ text: value, options });
+          }}
+        />,
+      ),
+    );
+    await type("/btw what changed?");
+    await pressEnter();
+    assert.equal(sent.length, 3);
+    assert.equal(sent[2]?.text, "/btw what changed?");
+    assert.equal(sent[2]?.options, undefined);
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerToasts");
   }
 });

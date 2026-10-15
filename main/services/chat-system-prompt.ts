@@ -13,6 +13,19 @@ import type { WorkspacePermission } from "./types.js";
 export type ChatSystemPromptPermission = WorkspacePermission | "read-only";
 
 export async function buildSystemPrompt(
+  ...args: Parameters<typeof buildSystemPromptWithSections>
+): Promise<string> {
+  return (await buildSystemPromptWithSections(...args)).systemPrompt;
+}
+
+/** The chat prompt plus the parts of it the context breakdown reports separately. */
+export interface ChatSystemPromptWithSections {
+  systemPrompt: string;
+  /** The skills listing exactly as appended, when present. */
+  sections: { skills?: string };
+}
+
+export async function buildSystemPromptWithSections(
   folderPath: string | undefined,
   branch: string | undefined,
   permission: ChatSystemPromptPermission,
@@ -20,7 +33,7 @@ export async function buildSystemPrompt(
   skillsAvailable = true,
   skillSnapshot?: SkillRegistrySnapshot,
   availableToolNames?: ReadonlySet<string>,
-): Promise<string> {
+): Promise<ChatSystemPromptWithSections> {
   const base = PI_CHAT_SYSTEM_PROMPT;
   const skillsText =
     skillsAvailable && skillSnapshot
@@ -34,8 +47,12 @@ export async function buildSystemPrompt(
   const computerUseSuffix = availableToolNames?.has("computer_use")
     ? `\n\n${COMPUTER_USE_AGENT_GUIDANCE}`
     : "";
+  const sections = skillsSuffix ? { skills: skillsSuffix } : {};
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}${computerUseSuffix}`;
+    return {
+      systemPrompt: `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}${computerUseSuffix}`,
+      sections,
+    };
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -49,7 +66,7 @@ export async function buildSystemPrompt(
   const delegation = subagentsAvailable
     ? ` Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`
     : "";
-  return (
+  const systemPrompt =
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
     capability +
@@ -63,6 +80,6 @@ export async function buildSystemPrompt(
     skillsSuffix +
     browserSuffix +
     deviceSuffix +
-    computerUseSuffix
-  );
+    computerUseSuffix;
+  return { systemPrompt, sections };
 }

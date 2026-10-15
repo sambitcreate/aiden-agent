@@ -1,7 +1,10 @@
+import type { ChatUiVisualV1 } from "./aiden-ui/types.js";
+import { parseChatUiVisualV1 } from "./aiden-ui/visual.js";
 import { isCanonicalRasterImageMimeType, MAX_INLINE_IMAGE_BYTES } from "./attachment-contract.js";
 import {
   HTML_ARTIFACT_MIME_TYPE,
   MAX_HTML_ARTIFACT_BYTES,
+  generativeUiPreviewTokenFromUrl,
   isHtmlArtifactMediaId,
   isHtmlArtifactTitle,
 } from "./generative-ui.js";
@@ -34,6 +37,34 @@ export interface ChatHtmlArtifactV1 {
   mediaId: string;
 }
 
+/**
+ * Which tool call produced an HTML artifact. Kept on the message beside, not
+ * inside, `htmlArtifacts`: older builds parse artifacts with exact keys and drop
+ * a message's whole list on an unknown key, but ignore unknown message fields.
+ */
+export interface HtmlArtifactPlacementV1 {
+  mediaId: string;
+  toolCallId: string;
+  /** Absent means the reading column; only `wide` is ever stored. */
+  layout?: "wide";
+}
+
+/**
+ * Which generate_image call produced a generated image attachment, so the
+ * image renders at that call's activity row. Lenient like the HTML placements.
+ */
+export interface ChatImagePlacementV1 {
+  attachmentId: string;
+  toolCallId: string;
+}
+
+/** Where a visual sits: the reading column (default) or the full chat pane. */
+export type HtmlArtifactLayout = "column" | "wide";
+
+export function isHtmlArtifactLayout(value: unknown): value is HtmlArtifactLayout {
+  return value === "column" || value === "wide";
+}
+
 /** Versioned union so future Pi extensions can add GUI artifact kinds safely. */
 export type ChatArtifactV1 = ChatImageArtifactV1 | ChatHtmlArtifactV1;
 
@@ -42,10 +73,42 @@ export type ChatArtifactEventV1 =
       version: typeof CHAT_ARTIFACT_EVENT_VERSION;
       operation: "present";
       artifact: ChatArtifactV1;
+      /** The render_artifact call that produced it, for in-row placement. */
+      toolCallId?: string;
+      /** A ready main-built preview, so the final frame mounts without a round trip. */
+      src?: string;
+      layout?: "wide";
     }
   | {
       version: typeof CHAT_ARTIFACT_EVENT_VERSION;
       operation: "reset";
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      /** A render_artifact call is still streaming; `src` is its live draft preview. */
+      operation: "draft";
+      toolCallId: string;
+      title?: string;
+      src: string;
+      layout?: "wide";
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      operation: "draft_end";
+      toolCallId: string;
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      /** A native (render_ui) visual was presented or revised. */
+      operation: "ui";
+      visual: ChatUiVisualV1;
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      /** A render_ui call is still streaming; `visual` is its partial tree. */
+      operation: "ui_draft";
+      toolCallId: string;
+      visual: ChatUiVisualV1;
     };
 
 const IMAGE_ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
@@ -53,6 +116,13 @@ const HTML_ARTIFACT_KEYS = new Set(["version", "kind", "id", "title", "mimeType"
 const IMAGE_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
 const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
+const PRESENT_EVENT_ALLOWED_KEYS = new Set(["version", "operation", "artifact", "toolCallId", "src", "layout"]);
+const DRAFT_EVENT_REQUIRED_KEYS = ["version", "operation", "toolCallId", "src"] as const;
+const UI_EVENT_KEYS = new Set(["version", "operation", "visual"]);
+const UI_DRAFT_EVENT_KEYS = new Set(["version", "operation", "toolCallId", "visual"]);
+const DRAFT_EVENT_ALLOWED_KEYS = new Set(["version", "operation", "toolCallId", "title", "src", "layout"]);
+const DRAFT_END_EVENT_KEYS = new Set(["version", "operation", "toolCallId"]);
+const MAX_PLACEMENTS = 40;
 const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 512;
 const MAX_BASE64_CHARS = Math.ceil(MAX_INLINE_IMAGE_BYTES / 3) * 4;
@@ -207,11 +277,100 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
   if (event.operation === "reset" && hasExactKeys(event, RESET_EVENT_KEYS)) {
     return { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "reset" };
   }
-  if (event.operation !== "present" || !hasExactKeys(event, PRESENT_EVENT_KEYS)) {
+  if (event.operation === "ui") {
+    if (!hasExactKeys(event, UI_EVENT_KEYS)) return undefined;
+    const visual = parseChatUiVisualV1(event.visual);
+    return visual ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui", visual } : undefined;
+  }
+  if (event.operation === "ui_draft") {
+    if (!hasExactKeys(event, UI_DRAFT_EVENT_KEYS) || !isToolCallId(event.toolCallId)) return undefined;
+    const visual = parseChatUiVisualV1(event.visual);
+    return visual
+      ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui_draft", toolCallId: event.toolCallId, visual }
+      : undefined;
+  }
+  if (event.operation === "draft_end") {
+    return hasExactKeys(event, DRAFT_END_EVENT_KEYS) && isToolCallId(event.toolCallId)
+      ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "draft_end", toolCallId: event.toolCallId }
+      : undefined;
+  }
+  if (event.operation === "draft") {
+    if (!Object.keys(event).every((key) => DRAFT_EVENT_ALLOWED_KEYS.has(key))) return undefined;
+    if (!DRAFT_EVENT_REQUIRED_KEYS.every((key) => key in event)) return undefined;
+    if (!isToolCallId(event.toolCallId) || typeof event.src !== "string") return undefined;
+    if (!generativeUiPreviewTokenFromUrl(event.src)) return undefined;
+    const titled = "title" in event;
+    if (titled && !isHtmlArtifactTitle(event.title)) return undefined;
+    return {
+      version: CHAT_ARTIFACT_EVENT_VERSION,
+      operation: "draft",
+      toolCallId: event.toolCallId,
+      ...(titled ? { title: event.title as string } : {}),
+      src: event.src,
+      ...(event.layout === "wide" ? { layout: "wide" as const } : {}),
+    };
+  }
+  if (event.operation !== "present") return undefined;
+  if (!Object.keys(event).every((key) => PRESENT_EVENT_ALLOWED_KEYS.has(key))) return undefined;
+  if (![...PRESENT_EVENT_KEYS].every((key) => key in event)) return undefined;
+  if (event.toolCallId !== undefined && !isToolCallId(event.toolCallId)) return undefined;
+  if (
+    event.src !== undefined &&
+    (typeof event.src !== "string" || !generativeUiPreviewTokenFromUrl(event.src))
+  ) {
     return undefined;
   }
   const artifact = parseChatArtifactV1(event.artifact);
-  return artifact
-    ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "present", artifact }
-    : undefined;
+  if (!artifact) return undefined;
+  return {
+    version: CHAT_ARTIFACT_EVENT_VERSION,
+    operation: "present",
+    artifact,
+    ...(event.toolCallId !== undefined ? { toolCallId: event.toolCallId as string } : {}),
+    ...(event.src !== undefined ? { src: event.src as string } : {}),
+    ...(event.layout === "wide" ? { layout: "wide" as const } : {}),
+  };
+}
+
+function isToolCallId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_CHARS;
+}
+
+/**
+ * Lenient on purpose: one bad placement must never hide the artifacts it
+ * points at, and fields from newer builds are ignored rather than fatal.
+ */
+export function parseHtmlArtifactPlacements(value: unknown): HtmlArtifactPlacementV1[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const placements: HtmlArtifactPlacementV1[] = [];
+  for (const entry of value.slice(0, MAX_PLACEMENTS)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (!isHtmlArtifactMediaId(record.mediaId) || !isToolCallId(record.toolCallId)) continue;
+    if (seen.has(record.mediaId)) continue;
+    seen.add(record.mediaId);
+    placements.push({
+      mediaId: record.mediaId,
+      toolCallId: record.toolCallId,
+      ...(record.layout === "wide" ? { layout: "wide" as const } : {}),
+    });
+  }
+  return placements.length ? placements : undefined;
+}
+
+/** Lenient: unknown fields and bad entries are dropped, never fatal. */
+export function parseChatImagePlacements(value: unknown): ChatImagePlacementV1[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const placements: ChatImagePlacementV1[] = [];
+  for (const entry of value.slice(0, MAX_PLACEMENTS)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (!isToolCallId(record.attachmentId) || !isToolCallId(record.toolCallId)) continue;
+    if (seen.has(record.attachmentId)) continue;
+    seen.add(record.attachmentId);
+    placements.push({ attachmentId: record.attachmentId, toolCallId: record.toolCallId });
+  }
+  return placements.length ? placements : undefined;
 }

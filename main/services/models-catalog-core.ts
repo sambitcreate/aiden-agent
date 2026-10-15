@@ -1,11 +1,11 @@
-import {
-  artificialAnalysisRanking,
-  findArtificialAnalysisModel,
-  type ArtificialAnalysisCatalog,
-} from "./artificial-analysis-catalog-core.js";
 import type { SamplingParamsByThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
-import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
+import {
+  catalogProviderSlug,
+  modelIdLeaf,
+  openRouterAuthor,
+} from "../../renderer/shared/model-catalog-provider.js";
+import type { ModelCost, ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 import {
   openRouterBenchmarkForModel,
   openRouterBenchmarkForModelsDevIdentity,
@@ -26,6 +26,9 @@ interface RawModel {
   last_updated?: string;
   modalities?: { input?: string[]; output?: string[] };
   limit?: { context?: number; output?: number };
+  /** Unvalidated by the catalog parser; normalized by `modelsDevCost`. */
+  cost?: unknown;
+  canonical_model_id?: unknown;
 }
 
 interface RawProvider {
@@ -213,70 +216,64 @@ export function parseModelCatalog(value: unknown): ModelCatalog {
   return value as ModelCatalog;
 }
 
-const PROVIDER_SLUG: Record<string, string> = {
-  openai: "openai",
-  "openai-codex": "openai",
-  anthropic: "anthropic",
-  gemini: "google",
-  google: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  xai: "xai",
-  mistral: "mistral",
-  minimax: "minimax",
-  zai: "zai",
-  nvidia: "nvidia",
-};
-
-const OPENROUTER_DIRECT_AUTHOR: Readonly<Record<string, string>> = {
-  openai: "openai",
-  "openai-codex": "openai",
-  anthropic: "anthropic",
-  google: "google",
-  gemini: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  xai: "x-ai",
-  mistral: "mistralai",
-  minimax: "minimax",
-  zai: "z-ai",
-  nvidia: "nvidia",
-};
-
 const TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER = new Set(["concentrate"]);
 
-const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
-  openai: "OpenAI",
-  "openai-codex": "OpenAI",
-  anthropic: "Anthropic",
-  gemini: "Google",
-  google: "Google",
-  deepseek: "DeepSeek",
-  moonshot: "Moonshot AI",
-};
+export { catalogProviderSlug };
 
-/** Map Aiden's stored provider IDs to the shared Pi/models.dev provider IDs. */
-export function catalogProviderSlug(providerId: string): string | undefined {
-  return PROVIDER_SLUG[providerId];
+interface ModelIdIndex {
+  /** Lowercased full id -> first row with that id in iteration order. */
+  exact: Map<string, RawModel>;
+  /** Lowercased id leaf (after the last slash) -> first row with that leaf. */
+  leaf: Map<string, RawModel>;
 }
 
-function normalizeId(id: string): string {
-  const slash = id.lastIndexOf("/");
-  return (slash >= 0 ? id.slice(slash + 1) : id).toLocaleLowerCase();
+function emptyIndex(): ModelIdIndex {
+  return { exact: new Map(), leaf: new Map() };
 }
 
-function entries(provider: RawProvider | undefined): Array<[string, RawModel]> {
-  return provider?.models ? Object.entries(provider.models) : [];
+/** First occurrence wins, matching the linear scans these maps replace. */
+function addToIndex(index: ModelIdIndex, key: string, model: RawModel): void {
+  const exact = key.toLowerCase();
+  if (!index.exact.has(exact)) index.exact.set(exact, model);
+  const leaf = modelIdLeaf(key);
+  if (!index.leaf.has(leaf)) index.leaf.set(leaf, model);
+}
+
+// Catalog snapshots are parsed once and never mutated, so each object is indexed once.
+const providerIndexes = new WeakMap<RawProvider, ModelIdIndex>();
+const catalogIndexes = new WeakMap<ModelCatalog, ModelIdIndex>();
+
+function providerIndex(provider: RawProvider): ModelIdIndex {
+  let index = providerIndexes.get(provider);
+  if (!index) {
+    index = emptyIndex();
+    for (const [key, model] of Object.entries(provider.models ?? {})) addToIndex(index, key, model);
+    providerIndexes.set(provider, index);
+  }
+  return index;
+}
+
+function catalogIndex(catalog: ModelCatalog): ModelIdIndex {
+  let index = catalogIndexes.get(catalog);
+  if (!index) {
+    index = emptyIndex();
+    for (const provider of Object.values(catalog)) {
+      for (const [key, model] of Object.entries(provider.models ?? {})) {
+        addToIndex(index, key, model);
+      }
+    }
+    catalogIndexes.set(catalog, index);
+  }
+  return index;
+}
+
+/** An exact (case-insensitive) id match wins over a leaf match. */
+function lookupIndex(index: ModelIdIndex, modelId: string): RawModel | null {
+  return index.exact.get(modelId.toLowerCase()) ?? index.leaf.get(modelIdLeaf(modelId)) ?? null;
 }
 
 function findRawInProvider(provider: RawProvider | undefined, modelId: string): RawModel | null {
-  const exact = modelId.toLocaleLowerCase();
-  const normalized = normalizeId(modelId);
-  const exactMatch = entries(provider).find(([key]) => key.toLocaleLowerCase() === exact);
-  if (exactMatch) return exactMatch[1];
-  return entries(provider).find(([key]) => normalizeId(key) === normalized)?.[1] ?? null;
+  return provider ? lookupIndex(providerIndex(provider), modelId) : null;
 }
 
 function findRawForProvider(
@@ -291,24 +288,37 @@ function findRawForProvider(
 
 /** Exact matches across the catalog must win before any lossy normalized match. */
 function findRaw(catalog: ModelCatalog, providerId: string, modelId: string): RawModel | null {
-  const exact = modelId.toLocaleLowerCase();
-  const normalized = normalizeId(modelId);
-  const preferred = catalog[catalogProviderSlug(providerId) ?? ""];
+  const preferred = findRawInProvider(catalog[catalogProviderSlug(providerId) ?? ""], modelId);
+  return preferred ?? lookupIndex(catalogIndex(catalog), modelId);
+}
 
-  const preferredExact = entries(preferred).find(([key]) => key.toLocaleLowerCase() === exact);
-  if (preferredExact) return preferredExact[1];
-  const preferredNormalized = entries(preferred).find(([key]) => normalizeId(key) === normalized);
-  if (preferredNormalized) return preferredNormalized[1];
+const MAX_MODELS_DEV_CANONICAL_ID_LENGTH = 256;
 
-  for (const provider of Object.values(catalog)) {
-    const hit = entries(provider).find(([key]) => key.toLocaleLowerCase() === exact);
-    if (hit) return hit[1];
+const MODELS_DEV_COST_FIELDS = [
+  ["input", "input"],
+  ["output", "output"],
+  ["cache_read", "cacheRead"],
+  ["cache_write", "cacheWrite"],
+] as const;
+
+/** Keep only finite, non-negative USD-per-1M-token prices; omit the object when none remain. */
+function modelsDevCost(value: unknown): ModelCost | undefined {
+  const raw = rawRecord(value);
+  if (!raw) return undefined;
+  const cost: ModelCost = {};
+  for (const [source, target] of MODELS_DEV_COST_FIELDS) {
+    const price = raw[source];
+    if (typeof price === "number" && Number.isFinite(price) && price >= 0) cost[target] = price;
   }
-  for (const provider of Object.values(catalog)) {
-    const hit = entries(provider).find(([key]) => normalizeId(key) === normalized);
-    if (hit) return hit[1];
-  }
-  return null;
+  return Object.keys(cost).length > 0 ? cost : undefined;
+}
+
+function modelsDevCanonicalId(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_MODELS_DEV_CANONICAL_ID_LENGTH
+    ? value
+    : undefined;
 }
 
 function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: string): ModelInfo {
@@ -336,6 +346,9 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
       : /^reranking model\b/iu.test(description)
         ? "reranker"
         : mediaOutputType;
+  // Display-only pricing and identity; runtime limits never read these fields.
+  const cost = modelsDevCost(raw.cost);
+  const canonicalModelId = modelsDevCanonicalId(raw.canonical_model_id);
   return {
     id: modelId,
     name: raw.name,
@@ -354,6 +367,8 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
     inputModalities: inputs.length ? inputs : undefined,
     knowledge: raw.knowledge,
     releaseDate: raw.release_date,
+    ...(cost ? { cost } : {}),
+    ...(canonicalModelId ? { canonicalModelId } : {}),
     metadataSource: "models-dev",
     matched: true,
   };
@@ -365,7 +380,7 @@ function modelsDevBenchmark(
   provider: ModelCatalogProvider,
   modelId: string,
 ): ModelInfo["benchmark"] {
-  const directAuthor = OPENROUTER_DIRECT_AUTHOR[provider.id];
+  const directAuthor = openRouterAuthor(provider.id);
   const providerCatalog = catalog[provider.id] ?? catalog[catalogProviderSlug(provider.id) ?? ""];
   if (
     directAuthor === undefined &&
@@ -386,10 +401,11 @@ function modelsDevBenchmark(
     ...(directAuthor === undefined ? {} : { author: directAuthor }),
     modelId,
     name: raw.name,
+    ...(typeof raw.reasoning === "boolean" ? { reasoning: raw.reasoning } : {}),
   });
 }
 
-/** Backward-compatible models.dev-only lookup used by focused tests. */
+/** models.dev-only capability lookup; production uses it for bundled request admission (`modelsCatalog.bundledInfo`). */
 export function lookupCatalogModelInfo(
   catalog: ModelCatalog,
   providerId: string,
@@ -552,63 +568,26 @@ function localInfo(
     format: metadata.format,
     contextLength: metadata.contextLength ?? fallback.contextLength,
     inputModalities,
-    ranking: undefined,
     metadataSource: "local",
     matched: true,
   };
 }
 
-function hostedInfo(
-  snapshot: ArtificialAnalysisCatalog,
-  provider: ModelCatalogProvider,
-  modelId: string,
-  fallback: ModelInfo,
-): ModelInfo {
-  const match = findArtificialAnalysisModel(
-    snapshot,
-    modelId,
-    ARTIFICIAL_ANALYSIS_CREATOR[provider.id],
-    fallback.name,
-  );
-  if (!match) return fallback;
-  const inputs = match.input_modalities;
-  return {
-    ...fallback,
-    id: modelId,
-    name: match.name ?? fallback.name,
-    vision: inputs ? inputs.includes("image") : fallback.vision,
-    reasoning: match.reasoning ?? fallback.reasoning,
-    openWeights: match.open_weights ?? fallback.openWeights,
-    parameterCount:
-      match.parameter_count_billions === undefined
-        ? fallback.parameterCount
-        : `${match.parameter_count_billions}B`,
-    contextLength: match.context_window_tokens ?? fallback.contextLength,
-    inputModalities: inputs?.length ? inputs : fallback.inputModalities,
-    releaseDate: match.release_date ?? fallback.releaseDate,
-    ranking: artificialAnalysisRanking(snapshot, match),
-    metadataSource: "artificial-analysis",
-    matched: true,
-  };
-}
-
-/** Apply local > Artificial Analysis > models.dev precedence for one model. */
+/** Local metadata wins for local providers; hosted models use models.dev plus benchmark evidence. */
 export function resolveModelInfo(
   catalog: ModelCatalog,
-  artificialAnalysis: ArtificialAnalysisCatalog,
   provider: ModelCatalogProvider,
   modelId: string,
   openRouterBenchmarks?: OpenRouterBenchmarkCache | null,
 ): ModelInfo {
-  const fallback = modelsDevInfo(catalog, provider.id, modelId);
+  const info = modelsDevInfo(catalog, provider.id, modelId);
   if (isLocalProvider(provider)) {
     const metadata = provider.modelMetadata?.[modelId];
-    return metadata ? localInfo(modelId, metadata, fallback) : fallback;
+    return metadata ? localInfo(modelId, metadata, info) : info;
   }
-  const hosted = hostedInfo(artificialAnalysis, provider, modelId, fallback);
   const benchmark = openRouterBenchmarks
     ? (openRouterBenchmarkForModel(openRouterBenchmarks, provider.id, modelId) ??
       modelsDevBenchmark(catalog, openRouterBenchmarks, provider, modelId))
     : undefined;
-  return benchmark ? { ...hosted, benchmark } : hosted;
+  return benchmark ? { ...info, benchmark } : info;
 }

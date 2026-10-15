@@ -1,3 +1,4 @@
+import { mcpServerOffersTools } from "../../../renderer/shared/mcp-exposure.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -22,7 +23,8 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     combined.throwIfAborted(); await assertAuthority();
     const servers = await pool.listServers();
     const selected = (task.mcpServerIds ?? []).map((id) => {
-      const server = servers.find((item) => item.enabled && item.id === id);
+      // A server switched off for the model fails the run instead of running without it.
+      const server = servers.find((item) => item.enabled && mcpServerOffersTools(item) && item.id === id);
       if (!server) throw new Error("An approved scheduled MCP connection is unavailable.");
       return server;
     });

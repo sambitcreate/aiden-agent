@@ -18,9 +18,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SdStorage
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,20 +35,25 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.chat.AidenPowerSaveScope
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
@@ -212,9 +219,32 @@ fun AidenBotsHomeScreen(
     onNavigateToCreateBot: () -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToBotChat: (String) -> Unit = {},
-    botDeleter: AidenBotDeleter? = null
+    botDeleter: AidenBotDeleter? = null,
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
+) {
+    // One battery-saver receiver for every glancing face on the page.
+    AidenPowerSaveScope {
+        AidenBotsHomeContent(
+            coordinator, viewModel, onNavigateToChat, onNavigateToBotProfile, onNavigateToCreateBot,
+            modifier, onNavigateToBotChat, botDeleter, onNavigateToBotMemory
+        )
+    }
+}
+
+@Composable
+private fun AidenBotsHomeContent(
+    coordinator: AidenRemoteCoordinator,
+    viewModel: AidenBotsViewModel,
+    onNavigateToChat: (String) -> Unit,
+    onNavigateToBotProfile: (String) -> Unit,
+    onNavigateToCreateBot: () -> Unit,
+    modifier: Modifier,
+    onNavigateToBotChat: (String) -> Unit,
+    botDeleter: AidenBotDeleter?,
+    onNavigateToBotMemory: (String) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
@@ -231,6 +261,62 @@ fun AidenBotsHomeScreen(
     var isDeleting by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
+    val canOpenMemory = serverInfo?.supportsBotMemory == true
+    // A row's Advanced opens the same sheet as the chat's ••• → Advanced.
+    var advancedBot by remember { mutableStateOf<AidenBotDetail?>(null) }
+    // The client the sheet was opened with; it keeps saving to the Mac the Bot came from.
+    var advancedClient by remember { mutableStateOf<AidenRemoteClient?>(null) }
+    var openingAdvanced by remember { mutableStateOf(false) }
+    fun openAdvanced(botId: String) {
+        // Opens at once from the cached Bot, connected or not (R15); a Bot never seen here is read first.
+        coordinator.botCache.getBotDetail(botId)?.let { cached ->
+            advancedClient = client
+            advancedBot = cached
+            return
+        }
+        val cl = client ?: run {
+            coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+            return
+        }
+        if (openingAdvanced) return
+        openingAdvanced = true
+        scope.launch {
+            // The pairing this read belongs to; a removed or switched pairing never gets it back.
+            val requestInstance = coordinator.activeInstanceId
+            try {
+                val detail = cl.bot(botId)
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
+                coordinator.botCache.putBotDetail(detail)
+                advancedClient = cl
+                advancedBot = detail
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                if (coordinator.holdsReadAuthority(cl, requestInstance)) {
+                    // Offline: Advanced still opens from the cached Bot, so Chat activity stays reachable.
+                    val cached = coordinator.botCache.getBotDetail(botId)
+                    if (cached != null) {
+                        advancedClient = cl
+                        advancedBot = cached
+                    } else {
+                        coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+                    }
+                }
+            } finally {
+                openingAdvanced = false
+            }
+        }
+    }
+    // The sheet belongs to the pairing it was opened in; a switched or revoked client closes it.
+    // Opened before the Mac connected, it takes the pairing's first client.
+    LaunchedEffect(client) {
+        if (advancedBot != null && advancedClient == null && client != null) {
+            advancedClient = client
+        } else if (advancedClient != null && advancedClient !== client) {
+            advancedBot = null
+            advancedClient = null
+        }
+    }
 
     // Revision 27: finished Bot routine runs become local notifications on each refresh.
     val context = LocalContext.current
@@ -265,6 +351,15 @@ fun AidenBotsHomeScreen(
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.loadPresets()
     }
 
+    // New Bot closes at once (R15): the Bot shows here on its way, and its chat opens once the
+    // Mac made it while this list is on screen. A failure offers Try again with the same answers.
+    val createFlow = remember(client) { coordinator.botCreateFlow() }
+    val createHost = remember(client) { coordinator.botSaveHost() }
+    val creating by createFlow.pending.collectAsStateWithLifecycle()
+    val createFailure by createFlow.failure.collectAsStateWithLifecycle()
+    // A New Bot an earlier launch left on its way comes back here, with Try again.
+    LaunchedEffect(createFlow) { createFlow.restore() }
+
     fun openChat(bot: AidenBotSummary) {
         if (serverInfo?.supportsBotDurableSession == true) {
             onNavigateToBotChat(bot.id)
@@ -285,6 +380,17 @@ fun AidenBotsHomeScreen(
                 onNavigateToBotProfile(bot.id)
             }
         }
+    }
+
+    // The Mac's list already shows a Bot that may have been made: nothing is left to try again.
+    LaunchedEffect(createFailure, allBots) {
+        val failed = createFailure ?: return@LaunchedEffect
+        if (aidenBotCreateWasTaken(failed, allBots)) createFlow.settleTaken()
+    }
+
+    val currentOpenChat by rememberUpdatedState(::openChat)
+    LaunchedEffect(createFlow) {
+        createFlow.created.collect { made -> currentOpenChat(made.summary()) }
     }
 
     LazyColumn(
@@ -315,6 +421,9 @@ fun AidenBotsHomeScreen(
                 }
             }
         }
+        creating?.let { pending ->
+            item(key = "creating") { AidenBotPendingCreateRow(pending.name, reduceMotion) }
+        }
         when (contentState) {
             AidenBotsHomeContentState.LOADING -> item(key = "loading") { AidenBotHomeSkeleton(reduceMotion) }
             AidenBotsHomeContentState.ERROR -> item(key = "error") {
@@ -326,7 +435,8 @@ fun AidenBotsHomeScreen(
                     action = { AidenPrimaryButton(text = stringResource(R.string.action_try_again), onClick = { viewModel.loadBots(force = true) }) }
                 )
             }
-            AidenBotsHomeContentState.EMPTY -> item(key = "empty") {
+            // The first Bot on its way is the list for now.
+            AidenBotsHomeContentState.EMPTY -> if (creating == null) item(key = "empty") {
                 val connected = connectionState == AidenConnectionState.CONNECTED
                 if (connected && presets.isNotEmpty()) {
                     AidenMeetYourFirstBot(
@@ -374,10 +484,33 @@ fun AidenBotsHomeScreen(
                     canDelete = canDelete,
                     onOpen = { openChat(row.bot) },
                     onOpenProfile = { onNavigateToBotProfile(row.bot.id) },
+                    onOpenMemory = if (canOpenMemory) ({ onNavigateToBotMemory(row.bot.id) }) else null,
+                    onOpenAdvanced = { openAdvanced(row.bot.id) },
                     onDelete = { pendingDelete = row.bot }
                 )
             }
         }
+    }
+
+    advancedBot?.let { bot ->
+        AidenBotAdvancedSheet(
+            bot = bot,
+            client = advancedClient,
+            onDismiss = {
+                advancedBot = null
+                advancedClient = null
+            },
+            // Save applies at once (R15); the list rereads when the Mac answers.
+            onSaved = {
+                advancedBot = null
+                advancedClient = null
+            },
+            saveHost = remember(advancedClient) { coordinator.botSaveHost() },
+            onSaveSettled = { viewModel.loadBots(force = true) },
+            onSaveFailed = coordinator::presentError,
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
+            chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() }
+        )
     }
 
     pendingDelete?.let { bot ->
@@ -396,6 +529,28 @@ fun AidenBotsHomeScreen(
             }
         )
     }
+    createFailure?.let { failure ->
+        AlertDialog(
+            onDismissRequest = createFlow::dismissFailure,
+            title = { Text(stringResource(R.string.bot_create_failed_title)) },
+            text = { Text(stringResource(failure.message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    // An earlier launch's create goes out again as it was; otherwise New Bot reopens
+                    // with the answers. A flow whose pairing is no longer in use does neither.
+                    val again = createFlow.retry()
+                    when {
+                        again != null -> createHost.launch { createFlow.send(again) }
+                        createFlow.reopening() != null -> onNavigateToCreateBot()
+                    }
+                }) { Text(stringResource(R.string.action_try_again), color = palette.accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = createFlow::dismissFailure) { Text(stringResource(R.string.action_ok), color = palette.accent) }
+            },
+            containerColor = palette.raised
+        )
+    }
     deleteError?.let { message ->
         AlertDialog(
             onDismissRequest = { deleteError = null },
@@ -403,6 +558,39 @@ fun AidenBotsHomeScreen(
             confirmButton = { TextButton(onClick = { deleteError = null }) { Text(stringResource(R.string.action_ok), color = palette.accent) } },
             containerColor = palette.raised
         )
+    }
+}
+
+/** A Bot on its way to the Mac (R15): its name at once, a placeholder face, and "Creating…". */
+@Composable
+private fun AidenBotPendingCreateRow(name: String, reduceMotion: Boolean) {
+    val palette = AidenTheme.palette
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .semantics(mergeDescendants = true) {}
+    ) {
+        AidenBotSkeletonBlock(52.dp, 52.dp, CircleShape, reduceMotion)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.foreground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = stringResource(R.string.bot_editor_creating),
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.secondary,
+                maxLines = 1
+            )
+        }
     }
 }
 
@@ -448,6 +636,8 @@ private fun AidenBotHomeRowView(
     canDelete: Boolean,
     onOpen: () -> Unit,
     onOpenProfile: () -> Unit,
+    onOpenMemory: (() -> Unit)?,
+    onOpenAdvanced: () -> Unit,
     onDelete: () -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -469,27 +659,16 @@ private fun AidenBotHomeRowView(
                 )
                 .padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
-            Box {
+            // A working Bot's face glances (or wears the glance badge); the row says "Working".
+            Box(Modifier.semantics { if (row.isWorking) stateDescription = workingLabel }) {
                 AidenBotCanonicalAvatarView(
                     coordinator = coordinator,
                     botId = row.bot.id,
                     avatar = row.bot.avatar,
                     name = row.bot.name,
-                    size = 52.dp
+                    size = 52.dp,
+                    working = row.isWorking
                 )
-                if (row.isWorking) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(14.dp)
-                            .clip(CircleShape)
-                            .background(palette.canvas)
-                            .padding(2.dp)
-                            .clip(CircleShape)
-                            .background(palette.success)
-                            .semantics { contentDescription = workingLabel }
-                    )
-                }
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -552,9 +731,28 @@ private fun AidenBotHomeRowView(
                     onOpenProfile()
                 }
             )
-            if (canDelete) {
+            if (onOpenMemory != null) {
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
+                    text = { Text(stringResource(R.string.bot_menu_memory)) },
+                    leadingIcon = { Icon(Icons.Default.SdStorage, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenMemory()
+                    }
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.bot_menu_advanced)) },
+                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                onClick = {
+                    menuOpen = false
+                    onOpenAdvanced()
+                }
+            )
+            if (canDelete) {
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.action_delete), color = aidenBotErrorTextColor()) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                     onClick = {
                         menuOpen = false

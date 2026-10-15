@@ -128,6 +128,46 @@ export function restoreUndeliveredGuidance(chatId: string, guidance: readonly st
   write(chatId, { ...record, text: mergeRestoredGuidance(current, guidance) });
 }
 
+type StagedTextListener = (text: string) => void;
+const stagedTextListeners = new Map<string, Set<StagedTextListener>>();
+
+/**
+ * Put text in the chat's draft for the user to review and send, for example a
+ * follow-up an inline visual asked for while a reply was still running. A
+ * mounted composer merges it into its live text; otherwise the saved draft is
+ * extended so the text is there when the chat is reopened.
+ */
+export function stageComposerText(chatId: string, text: string): void {
+  if (!text.trim()) return;
+  const listeners = stagedTextListeners.get(chatId);
+  if (listeners?.size) {
+    for (const listener of [...listeners]) listener(text);
+    return;
+  }
+  const record = read(chatId);
+  const current = record.text || record.unresolvedText || "";
+  write(chatId, { ...record, text: mergeRestoredGuidance(current, [text]) });
+}
+
+export function subscribeStagedComposerText(
+  chatId: string,
+  listener: StagedTextListener,
+): () => void {
+  let listeners = stagedTextListeners.get(chatId);
+  if (!listeners) {
+    listeners = new Set();
+    stagedTextListeners.set(chatId, listeners);
+  }
+  const current = listeners;
+  current.add(listener);
+  return () => {
+    current.delete(listener);
+    if (current.size === 0 && stagedTextListeners.get(chatId) === current) {
+      stagedTextListeners.delete(chatId);
+    }
+  };
+}
+
 export function subscribeGuidanceRestore(
   chatId: string,
   listener: GuidanceRestoreListener,

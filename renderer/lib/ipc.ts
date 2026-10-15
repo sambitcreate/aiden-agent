@@ -1,4 +1,5 @@
 import type { CompactionEngine } from "../shared/compaction";
+import type { ModelPaceSummary } from "../shared/model-pace";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -45,8 +46,12 @@ import type {
   GitWorktree,
   LocalVoiceModel,
   McpServer,
+  McpLiveStatus,
   McpPresetState,
+  McpServerDependents,
   McpStatus,
+  McpToolSummary,
+  McpPendingLaunchApproval,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -156,6 +161,7 @@ import {
   parseChatReadResponse,
   rememberChatReadReconciliation,
   rememberDetachedLifecycleStream,
+  rememberOwnGenerationStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
@@ -166,6 +172,14 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type {
+  ImageGenerationActionResult,
+  ImageGenerationAddCustomModelRequest,
+  ImageGenerationProviderId,
+  ImageGenerationState,
+  ImageModelRef,
+  ImageGenerationSetModelEnabledRequest,
+} from "../shared/image-generation/types";
 import { subscribeGenerationStream } from "./generation-stream";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import type {
@@ -226,6 +240,7 @@ import type {
   PeerRunTarget,
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
+import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -238,6 +253,23 @@ export interface AppInfo {
   capabilities: AppCapabilities;
 }
 
+
+/**
+ * Runs this Mac hosts but this window did not start (a paired phone's turn,
+ * another window's). Frames arrive batched, only for this window's own
+ * observations.
+ */
+export const localRunsApi = {
+  observe: (chatId: string, cursor?: LocalRunCursor) =>
+    invoke<PeerRunSubscription>("runs:observeLocal", chatId, cursor ?? null),
+  unobserve: (subscriptionId: string) => invoke<boolean>("runs:unobserveLocal", subscriptionId),
+  onFrame: (handler: (message: LocalRunFrameMessage) => void) =>
+    onNotification<LocalRunFrameMessage>("runs:local-frame", handler),
+  /** Host-authority Stop for a run this window observes; false when it already finished. */
+  stop: (runId: string) => invoke<boolean>("runs:stopLocal", runId),
+  /** The given runs that have finished for good on this Mac. */
+  settled: (runIds: readonly string[]) => invoke<string[]>("runs:settledLocal", [...runIds]),
+};
 
 export const peerHostsApi = {
   list: () => invoke<PeerHostView[]>("remote:peersList"),
@@ -422,10 +454,41 @@ export const modelInsightsApi = {
   disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
 };
 
+/** Settings → Image Generation. Keys go in only; state is redacted. */
+export const imageGenerationApi = {
+  state: () => invoke<ImageGenerationState>("imageGeneration:state"),
+  setKey: (provider: ImageGenerationProviderId, key: string) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setKey", { provider, key }),
+  removeKey: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeKey", { provider }),
+  setModelEnabled: (provider: ImageGenerationProviderId, id: string, enabled: boolean) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelEnabled", { provider, id, enabled }),
+  /** One write for many enable choices (Settings' bulk actions). */
+  setModelsEnabled: (changes: ImageGenerationSetModelEnabledRequest[]) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelsEnabled", { changes }),
+  setDefaultModel: (model: ImageModelRef | null) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setDefaultModel", model),
+  addCustomModel: (request: ImageGenerationAddCustomModelRequest) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:addCustomModel", request),
+  removeCustomModel: (model: ImageModelRef) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeCustomModel", model),
+  /** User-initiated only: the one network path on this page. */
+  fetchModels: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:fetchModels", { provider }),
+};
+
+/** Device-local measured pace; reads never touch the network. */
+export const modelPaceApi = {
+  summaries: () => invoke<Record<string, ModelPaceSummary>>("modelPace:summaries"),
+  clear: () => invoke<void>("modelPace:clear"),
+};
+
 export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+  /** Clear every chat's Computer Use grant and turn off Always allow. */
+  resetChatGrants: () => invoke<{ cleared: number }>("computerUse:resetChatGrants"),
 };
 
 export const formFillApi = {
@@ -493,12 +556,31 @@ export const mcpApi = {
   /** Save (or clear, with an empty string) a preset's API key. Keys never come back. */
   setPresetKey: (serverId: string, key: string) =>
     invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
-  save: (server: McpServer) => invoke<McpServer>("mcp:save", server),
+  /** Resolves to the stored record (env/header values replaced by markers). `approveLaunch`: the editor, which shows the command, approves a local server to run. `fromEditor`: an editor save (sign-in and provider consent included), so kept values may follow an address it changed. */
+  save: (server: McpServer, options?: { approveLaunch?: boolean; fromEditor?: boolean }) => invoke<McpServer>("mcp:save", server, options),
+  /** Local servers not approved to run on this device (added or changed outside Aiden). */
+  launchApprovals: () => invoke<McpPendingLaunchApproval[]>("mcp:launchApprovals"),
+  approveLaunch: (id: string, fingerprint: string) => invoke<{ approved: true }>("mcp:approveLaunch", id, fingerprint),
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) => invoke<{ authorized: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+  /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
+  cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
+  /** Forget this server's OAuth session and disconnect it. */
+  signOut: (id: string) => invoke<{ authorized: false }>("mcp:signOut", id),
+  /** Connect to an unsaved draft without persisting it. `apiKey` is a pasted, unsaved preset key. */
+  testDraft: (server: McpServer, apiKey?: string) => invoke<McpStatus>("mcp:testDraft", server, apiKey),
+  /** Schedules and Bots that rely on this server. */
+  dependents: (id: string) => invoke<McpServerDependents>("mcp:dependents", id),
+  /** Current per-server live status; changes arrive on `mcp:statusChanged`. */
+  liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
+  /** The server's tools from its last discovery (never connects); null when none yet. */
+  toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
+  onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
+    onNotification<McpLiveStatus>("mcp:statusChanged", handler),
+  oauthStatus: (id: string) =>
+    invoke<{ authorized: boolean; needsSignIn?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
   providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
@@ -829,6 +911,11 @@ export const browserApi = {
     ),
   onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+  linkPreference: () =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:link-preference"),
+  setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
+  openExternal: (url: string) => invoke<void>("browser:open-external", url),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
@@ -1168,7 +1255,6 @@ export const chatsApi = {
     workspaceId?: string;
     providerId?: string;
     model?: string;
-    computerUseEnabled?: boolean;
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
@@ -1196,10 +1282,18 @@ export const chatsApi = {
   cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
   skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
+  /** Save a stored chat image to Downloads under a new name; returns the saved path. */
+  saveImageToDownloads: (chatId: string, attachmentId: string) =>
+    invoke<{ path: string }>("chats:saveImageToDownloads", { chatId, attachmentId }),
+  copyImage: (chatId: string, attachmentId: string) =>
+    invoke<boolean>("chats:copyImage", { chatId, attachmentId }),
+  /** Reveal a file saved by saveImageToDownloads in Finder. */
+  showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
-  setComputerUse: (id: string, enabled: boolean) =>
-    invoke<Chat>("chats:setComputerUse", id, enabled),
+  /** Clear the post-restart "continue Computer Use" callout without resuming. */
+  dismissComputerUseContinue: (chatId: string) =>
+    invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
@@ -1211,6 +1305,8 @@ export const chatsApi = {
       foreground?: string;
       secondary?: string;
       accent?: string;
+      /** Allowlisted semantic tokens; main sanitizes them again. */
+      vars?: Record<string, string>;
     },
   ) =>
     invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
@@ -1218,6 +1314,9 @@ export const chatsApi = {
       mediaId,
       theme,
     }),
+  /** Remember a native visual's local state (tabs, filters, sliders) on its message. */
+  updateUiVisualState: (chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) =>
+    invoke<boolean>("chats:updateUiVisualState", { chatId, messageId, visualId, state }),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,
@@ -1298,6 +1397,12 @@ export const botsApi = {
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
   stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Remove a queued message before its turn starts. */
+  withdraw: (botId: string, submissionId: string) =>
+    invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>("bots:withdraw", {
+      botId,
+      submissionId,
+    }),
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
   approve: (waitId: string, decision: "allow" | "deny") =>
     invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
@@ -1516,6 +1621,7 @@ export function startGeneration(
   messageTurnId: string,
 ): GenerationHandle {
   const streamId = messageTurnId;
+  rememberOwnGenerationStream(streamId);
   const stream = subscribeGenerationStream(
     streamId,
     { chatId: params.chatId, workspaceId: params.workspaceId },

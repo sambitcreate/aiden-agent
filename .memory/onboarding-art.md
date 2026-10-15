@@ -42,9 +42,25 @@ light, dark, and every preset. The mascot was not carried over.
 - The feature-copy assertions now read the rendered text, not grepped source.
 
 ## Native clients
-- iOS onboarding still ships its own three PNGs (`OnboardingBuild`/`Extend`/`Control` imagesets). The
-  byte-for-byte check against the Mac art was removed, so those images are now iOS-owned and still show
-  the old clay style. Redrawing them natively is an open follow-up.
+- iOS matches (2026-10-09). The three onboarding pages draw native SwiftUI vignettes in the same Snapshot
+  style, and the `OnboardingBuild`/`Extend`/`Control` imagesets are gone.
+  - `ios/AidenOnTheGo/Features/Remote/AidenOnboardingArtwork.swift` holds `AidenMobileOnboardingPhase.artTint`
+    (build lilac, extend periwinkle, control mint, matching the desktop `workspace`, `models`, and
+    `schedules` tiles), `AidenOnboardingArtColors` (the `--oa-*` mixes over `AidenPalette.raisedHex` via the
+    now-internal `Color.mixHex`), `AidenOnboardingArtMotion`, the `AidenOnboardingArtwork` tile, and the
+    `OnboardingArt*` kit.
+  - `AidenOnboardingVignettes.swift` has one view per page. Build shows the workspace chat with the
+    Workspaces/Bots switcher menu and a file tree. Extend shows the composer's model menu by provider with a
+    thinking-level submenu and a pending image. Control shows Scheduled Tasks with real
+    `AidenScheduledTaskPresentation.cadence` labels and a Run Now/Pause/Edit card.
+  - Each vignette is drawn on a fixed 300 × 220 pt canvas and scaled by
+    `AidenMobileOnboardingLayout.artworkSize(for:)`, which caps the width at 320 pt. Only the visible page
+    animates, on a `TimelineView` that is paused under system or in-app Reduce Motion and Low Power Mode.
+    A page joins the loop at `AidenOnboardingArtMotion.entry`, its hold, so swiping in never collapses the
+    art before it retypes.
+  - `AidenOnboardingArtTests` covers distinct tints, 3:1 ink contrast and theme-following tiles in every
+    preset, Reduce Motion and Low Power gating, the loop resting on the still pose, and an `ImageRenderer`
+    pixel check of the tinted tile in light and dark.
 - Android never used these images.
 
 ## Dev harness

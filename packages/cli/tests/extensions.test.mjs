@@ -34,6 +34,7 @@ test("every Aiden extension registers and contributes its tools in a real sessio
 		"aiden-advisor",
 		"aiden-ask-user-question",
 		"aiden-btw",
+		"aiden-slash-arguments",
 		"aiden-startup",
 		"aiden-context-capture",
 		"aiden-display-image",
@@ -60,6 +61,7 @@ test("every Aiden extension registers and contributes its tools in a real sessio
 		"recall_memory",
 		"remember_fact",
 		"render_artifact",
+		"render_ui",
 		"schedule_task",
 		"subagent",
 		"todo",
@@ -276,3 +278,65 @@ try {
 	assert.match(out, /settings-ok/);
 });
 
+
+const slashEditorUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "slash-argument-editor.ts")).href);
+
+test("Enter on an argument command fills it in and waits; other commands still run on Enter", () => {
+	const out = evalModule(`
+import { CombinedAutocompleteProvider, getKeybindings } from "@earendil-works/pi-tui";
+import { ArgumentAwareEditor, createArgumentCommandMatcher } from ${slashEditorUrl};
+
+const templates = {
+	"/prompts/review.md": "Review $ARGUMENTS carefully.",
+	"/prompts/target.md": "Review \${ARGUMENTS:-the current diff} carefully.",
+	"/prompts/standup.md": "Summarize today.",
+};
+const commands = [
+	{ name: "review", source: "prompt", sourceInfo: { path: "/prompts/review.md" } },
+	{ name: "target", source: "prompt", sourceInfo: { path: "/prompts/target.md" } },
+	{ name: "standup", source: "prompt", sourceInfo: { path: "/prompts/standup.md" } },
+];
+const waitsForArgument = createArgumentCommandMatcher(() => commands, (file) => templates[file]);
+const tui = { requestRender() {}, terminal: { rows: 40, columns: 100 } };
+const theme = { borderColor: (text) => text, selectList: { selectedPrefix: (t) => t, selectedText: (t) => t, description: (t) => t, scrollInfo: (t) => t, noMatch: (t) => t } };
+
+async function run(typed) {
+	const editor = new ArgumentAwareEditor(tui, theme, getKeybindings());
+	editor.waitsForArgument = waitsForArgument;
+	editor.setAutocompleteProvider(new CombinedAutocompleteProvider(
+		[{ name: "btw" }, { name: "new" }, { name: "review" }, { name: "target" }, { name: "standup" }], process.cwd(),
+	));
+	const submitted = [];
+	editor.onSubmit = (text) => submitted.push(text);
+	for (const character of typed) editor.handleInput(character);
+	for (let i = 0; i < 100 && !editor.isShowingAutocomplete(); i++) await new Promise((r) => setTimeout(r, 10));
+	if (!editor.isShowingAutocomplete()) throw new Error("autocomplete never opened for " + typed);
+	editor.handleInput("\\r");
+	return { editor, submitted };
+}
+
+// Aiden's /btw needs a question: Enter fills it in and waits, then sends with the question.
+const btw = await run("/bt");
+if (btw.editor.getText() !== "/btw " || btw.submitted.length !== 0) {
+	throw new Error("btw should wait: " + JSON.stringify([btw.editor.getText(), btw.submitted]));
+}
+for (const character of "why?") btw.editor.handleInput(character);
+btw.editor.handleInput("\\r");
+if (JSON.stringify(btw.submitted) !== JSON.stringify(["/btw why?"])) throw new Error("btw send: " + JSON.stringify(btw.submitted));
+
+// A template that reads $ARGUMENTS waits; one without placeholders runs right away.
+const review = await run("/rev");
+if (review.editor.getText() !== "/review " || review.submitted.length !== 0) throw new Error("review should wait");
+// pi also reads a braced default, \${ARGUMENTS:-…}.
+const target = await run("/tar");
+if (target.editor.getText() !== "/target " || target.submitted.length !== 0) throw new Error("target should wait");
+const standup = await run("/stand");
+if (JSON.stringify(standup.submitted) !== JSON.stringify(["/standup"])) throw new Error("standup: " + JSON.stringify(standup.submitted));
+
+// A command with no argument keeps pi's Enter-runs-now behavior.
+const fresh = await run("/ne");
+if (JSON.stringify(fresh.submitted) !== JSON.stringify(["/new"])) throw new Error("new: " + JSON.stringify(fresh.submitted));
+console.log("slash-arguments-ok");
+`);
+	assert.match(out, /slash-arguments-ok/);
+});
