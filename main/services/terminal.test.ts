@@ -126,6 +126,36 @@ test("renderer destruction at the synchronous spawn boundary kills the new PTY",
   );
   assert.equal(child.killed(), true);
   assert.throws(() => service.workspaceId("missing", owner.owner), /unavailable/u);
+  child.emitExit(0);
+  await service.closeForWorkspaceAndWait("workspace-1", 10);
+});
+
+test("synchronous owner invalidation during terminal subscription still permits a later drain", async () => {
+  const stableOwner = ownerState();
+  const child = fakePty();
+  const owner: RendererDocumentOwner = {
+    ...stableOwner.owner,
+    onInvalidated: (listener) => {
+      listener();
+      return () => undefined;
+    },
+  };
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+  });
+
+  await assert.rejects(
+    service.create("workspace-1", "/tmp", owner),
+    /renderer document changed before the terminal could start/u,
+  );
+  assert.equal(child.killed(), true);
+  await assert.rejects(
+    service.closeForWorkspaceAndWait("workspace-1", 10),
+    /terminal process is still exiting/u,
+  );
+  child.emitExit(0);
+  await service.closeForWorkspaceAndWait("workspace-1", 10);
 });
 
 test("renderer reload invalidates a pending terminal before helper preparation can spawn", async () => {

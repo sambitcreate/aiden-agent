@@ -324,10 +324,7 @@ export class TerminalService {
         env: { ...agentCommandEnvironment(), TERM: "xterm-256color" } as Record<string, string>,
       },
     );
-    if (ownerInvalidated()) {
-      this.terminatePty(pty);
-      throw new Error("The workspace changed before the terminal could start.");
-    }
+    const invalidatedAtSpawnBoundary = ownerInvalidated();
     let settleExit: () => void = () => undefined;
     const exited = new Promise<void>((resolve) => { settleExit = resolve; });
     const session: TerminalSession = {
@@ -349,20 +346,24 @@ export class TerminalService {
       pendingOutput: "",
     };
     this.sessions.set(id, session);
-    const removeOwnerInvalidation = owner.onInvalidated(() => {
+    // Observe exit before any owner callback can synchronously terminate the
+    // session. A retained pending exit must always have a way to settle.
+    pty.onExit(({ exitCode, signal }) => {
+      session.settleExit();
       const current = this.sessions.get(id);
-      if (current === session) this.terminate(id, session);
+      if (current !== session) return;
+      // Deliver the final output before the exit notification.
+      this.flushOutput(id, current);
+      this.sessions.delete(id);
+      current.removeOwnerInvalidation();
+      // Flush the final chunk before the session goes away.
+      void this.historyStore?.flush(workspaceId);
+      try {
+        owner.send("terminal:exit", { sessionId: id, exitCode, signal });
+      } catch {
+        // The exact renderer document already disappeared.
+      }
     });
-    session.removeOwnerInvalidation = removeOwnerInvalidation;
-    if (!this.sessions.has(id)) {
-      removeOwnerInvalidation();
-      throw new Error("The renderer document changed before the terminal could start.");
-    }
-    if (ownerInvalidated()) {
-      this.terminate(id, session);
-      throw new Error("The renderer document changed before the terminal could start.");
-    }
-
     pty.onData((data) => {
       const current = this.sessions.get(id);
       if (!current) return;
@@ -385,22 +386,23 @@ export class TerminalService {
         current.outputTimer.unref?.();
       }
     });
-    pty.onExit(({ exitCode, signal }) => {
-      session.settleExit();
+
+    let invalidatedDuringSubscription = false;
+    const removeOwnerInvalidation = owner.onInvalidated(() => {
+      invalidatedDuringSubscription = true;
       const current = this.sessions.get(id);
-      if (current !== session) return;
-      // Deliver the final output before the exit notification.
-      this.flushOutput(id, current);
-      this.sessions.delete(id);
-      current.removeOwnerInvalidation();
-      // Flush the final chunk before the session goes away.
-      void this.historyStore?.flush(workspaceId);
-      try {
-        owner.send("terminal:exit", { sessionId: id, exitCode, signal });
-      } catch {
-        // The exact renderer document already disappeared.
-      }
+      if (current === session) this.terminate(id, session);
     });
+    session.removeOwnerInvalidation = removeOwnerInvalidation;
+    if (invalidatedDuringSubscription || ownerInvalidated()) {
+      if (this.sessions.get(id) === session) this.terminate(id, session);
+      removeOwnerInvalidation();
+      throw new Error(invalidatedAtSpawnBoundary
+        ? "The workspace changed before the terminal could start."
+        : "The renderer document changed before the terminal could start.");
+    }
+    // A shell can exit while the owner subscription is being installed.
+    if (this.sessions.get(id) !== session) removeOwnerInvalidation();
 
     return { id, workspaceId, cwd, resolvedShell, preferredShellSkipped };
   }

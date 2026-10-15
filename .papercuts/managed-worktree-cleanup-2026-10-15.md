@@ -4,3 +4,4 @@
 - A shell glob for `main/services/shell*.ts` failed under zsh's `nomatch`; use `rg --files` for optional paths.
 - A fresh worktree has no root `node_modules` or built native helpers. Typecheck and focused worktree tests fail with missing `tsc`, `node-pty`, and `aiden-worktree-file-io` until the standard dependencies and helpers are installed/built.
 - Root `npm run type-check` did not compile the self-contained `packages/cli`; the Linux container gate caught its stale synchronous terminal adapter. Run CLI build/typecheck locally whenever a shared application-service dependency changes.
+- Review exposed a synchronous callback gap: `owner.onInvalidated()` can call back before returning, so a PTY exit listener installed after that subscription leaves a retained exit promise unresolved. Register exit observation before subscribing.

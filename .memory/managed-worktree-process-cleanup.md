@@ -14,6 +14,10 @@ Android already surface Remote errors without a wire-shape change.
 The standalone CLI has no owned PTYs; its shared-service adapter implements an
 async no-op to satisfy the drain contract. Root typecheck does not compile this
 package, so its separate build/typecheck is required.
+Review found that synchronous renderer invalidation during terminal creation
+could terminate the session before PTY exit observation was installed. Exit is
+now observed before owner subscription and any post-spawn invalidation teardown.
+A behavioral test covers rejection, pending exit, then successful drain.
 
 This is one bounded phase. No automatic retention sweep or new owner metadata is
 enabled. Future eligibility must default old worktrees to manual, keep manual
