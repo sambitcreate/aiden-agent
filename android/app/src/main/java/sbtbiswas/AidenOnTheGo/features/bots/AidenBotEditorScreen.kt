@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -96,7 +97,9 @@ data class AidenBotCreateDraft(
 class AidenBotCreateAttempt internal constructor(
     val draft: AidenBotCreateDraft,
     val request: AidenBotCreateRequest,
-    val key: UUID
+    val key: UUID,
+    /** When it first went out: the Mac keeps an idempotency key for a day. */
+    val createdAtMs: Long
 )
 
 /**
@@ -107,8 +110,14 @@ class AidenBotCreateAttempt internal constructor(
  * with a new key: the Mac keeps a refused key, replays its refusal for the same body and
  * answers a different body with `idempotency_conflict`.
  */
-class AidenBotCreateAttempts(private val makeKey: () -> UUID = UUID::randomUUID) {
+class AidenBotCreateAttempts(
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val makeKey: () -> UUID = UUID::randomUUID
+) {
     private var uncertain: AidenBotCreateAttempt? = null
+
+    /** True while an attempt that may have reached the Mac waits to be replayed. */
+    val holdsUncertain: Boolean get() = uncertain != null
 
     /** True when the last Create failed uncertainly and [draft] is unchanged, so Create replays it. */
     fun replays(draft: AidenBotCreateDraft): Boolean = uncertain?.draft == draft
@@ -121,7 +130,17 @@ class AidenBotCreateAttempts(private val makeKey: () -> UUID = UUID::randomUUID)
         uncertain?.takeIf { it.draft == draft }?.let { return it }
         uncertain = null
         val request = draft.request(catalog) ?: return null
-        return AidenBotCreateAttempt(draft, request, makeKey())
+        return AidenBotCreateAttempt(draft, request, makeKey(), nowMs())
+    }
+
+    /** An earlier launch's attempt that may have reached the Mac: the same answers replay it. */
+    fun adopt(attempt: AidenBotCreateAttempt) {
+        uncertain = attempt
+    }
+
+    /** Nothing to replay any more: access ended, or the Mac's list shows the Bot. */
+    fun forget() {
+        uncertain = null
     }
 
     /**
@@ -140,6 +159,13 @@ class AidenBotCreateAttempts(private val makeKey: () -> UUID = UUID::randomUUID)
     }
 }
 
+/** Where one pairing's New Bot on its way is kept across launches (beside its chats' outboxes). */
+class AidenBotCreateStore(
+    val load: suspend () -> AidenBotPendingCreate?,
+    val save: (AidenBotPendingCreate) -> Unit,
+    val remove: () -> Unit
+)
+
 /**
  * Bot creation that never waits on New Bot (R15, as on iOS). Create closes the form at once and
  * Bots home shows the Bot as on its way ([pending]); it goes out once the Mac is connected (up
@@ -147,21 +173,39 @@ class AidenBotCreateAttempts(private val makeKey: () -> UUID = UUID::randomUUID)
  * [failure] whose Try again ([retry]) reopens New Bot with the same answers. The same answers
  * replay the frozen attempt, request and Idempotency-Key alike, even after the Mac's catalog
  * moved on, so a retry never makes two Bots. One Bot is made at a time.
+ *
+ * The ask is in [store] before anything goes out and until the Bot is made, the person lets it
+ * go, or access ends, so a process death mid-create comes back ([restore]) as not made. Its Try
+ * again sends the same request on the same key while the Mac still keeps that key (a day);
+ * after that, or when nothing could have reached the Mac, it reopens New Bot as it was.
  */
 class AidenBotCreateFlow(
     private val waitForConnection: (suspend () -> Boolean)?,
     private val create: suspend (AidenBotCreateRequest, UUID) -> AidenBotDetail,
     /** The Mac's new Bot, kept for every screen. */
     private val cache: (AidenBotDetail) -> Unit,
-    private val attempts: AidenBotCreateAttempts = AidenBotCreateAttempts(),
+    private val store: AidenBotCreateStore? = null,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val attempts: AidenBotCreateAttempts = AidenBotCreateAttempts(nowMs),
     private val holdMillis: Long = AIDEN_BOT_SAVE_HOLD_MILLIS,
     private val limitMillis: Long = AIDEN_BOT_SAVE_LIMIT_MILLIS
 ) {
     /** A Bot on its way to the Mac: Bots home shows its name and "Creating…". */
     data class Pending(val name: String)
 
-    /** Why the last Create didn't make a Bot, and the answers Try again brings back. */
-    data class Failure(@StringRes val message: Int, val draft: AidenBotCreateDraft)
+    /**
+     * Why the last Create didn't make a Bot, and the answers Try again brings back. [replays]:
+     * an earlier launch's create that may have reached the Mac, which Try again sends again as
+     * it was. [request] and [sentAtMs] are set when the Mac may hold the Bot, so Bots home can
+     * let the failure go once the Mac's list shows it ([aidenBotCreateWasTaken]).
+     */
+    data class Failure(
+        @StringRes val message: Int,
+        val draft: AidenBotCreateDraft,
+        val replays: Boolean = false,
+        val request: AidenBotCreateRequest? = null,
+        val sentAtMs: Long? = null
+    )
 
     private val _pending = MutableStateFlow<Pending?>(null)
     val pending: StateFlow<Pending?> = _pending.asStateFlow()
@@ -174,6 +218,7 @@ class AidenBotCreateFlow(
     val created: SharedFlow<AidenBotDetail> = _created.asSharedFlow()
 
     private var prefill: AidenBotCreateDraft? = null
+    private var restored = false
 
     /** True when [draft] would replay a try that may have reached the Mac. */
     fun replays(draft: AidenBotCreateDraft): Boolean = attempts.replays(draft)
@@ -181,11 +226,13 @@ class AidenBotCreateFlow(
     /**
      * Shows [draft]'s Bot as on its way and returns the attempt for [send], or null when another
      * Create is still on its way or no request can be built. [catalog] is the form's; it only
-     * shapes a new request, never a replayed one.
+     * shapes a new request, never a replayed one. The ask is kept before anything goes out.
      */
     fun start(draft: AidenBotCreateDraft, catalog: AidenBotCapabilityCatalog?): AidenBotCreateAttempt? {
         if (_pending.value != null) return null
         val attempt = attempts.begin(draft, catalog) ?: return null
+        store?.save(AidenBotPendingCreate(draft, attempt.request, attempt.key, attempt.createdAtMs))
+        prefill = null
         _failure.value = null
         _pending.value = Pending(attempt.request.name)
         return attempt
@@ -196,45 +243,147 @@ class AidenBotCreateFlow(
         try {
             val made = aidenBotHeldRequest(waitForConnection, holdMillis, limitMillis) { create(attempt.request, attempt.key) }
             attempts.succeeded(attempt)
+            store?.remove()
             cache(made)
             _pending.value = null
             _created.tryEmit(made)
         } catch (error: CancellationException) {
+            // Cut off (a process going away, another pairing): the ask stays kept as it was.
             throw error
         } catch (error: Exception) {
-            attempts.failed(attempt, error)
             _pending.value = null
             val message = if (aidenBotChatActivityMacUnreachable(error)) R.string.bot_editor_create_unreachable else R.string.bot_editor_create_failed
-            _failure.value = Failure(message, attempt.draft)
+            if (aidenBotLostAccess(error)) {
+                // This phone can't make Bots on this Mac any more: nothing of the ask is kept.
+                attempts.forget()
+                store?.remove()
+                _failure.value = Failure(R.string.bot_editor_create_failed, attempt.draft)
+                return
+            }
+            attempts.failed(attempt, error)
+            val mayHaveArrived = attempts.replays(attempt.draft)
+            // Refused outright: a retry is a new request. The answers stay kept.
+            if (!mayHaveArrived && error !is AidenBotChatActivityUnreachable) {
+                store?.save(AidenBotPendingCreate(attempt.draft, createdAtMs = nowMs()))
+            }
+            _failure.value = Failure(
+                message,
+                attempt.draft,
+                request = attempt.request.takeIf { mayHaveArrived },
+                sentAtMs = attempt.createdAtMs.takeIf { mayHaveArrived }
+            )
         } finally {
             // A pairing change cancels it: nothing is on its way any more.
             _pending.value = null
         }
     }
 
-    /** Try again: New Bot opens with the failed answers ([takePrefill]). */
-    fun retry() {
-        prefill = _failure.value?.draft
-        _failure.value = null
+    /**
+     * Brings back the New Bot an earlier launch left on its way: Bots home shows it as not made,
+     * with Try again. It looks once, and never over a create or failure of this launch.
+     */
+    suspend fun restore() {
+        val store = store ?: return
+        if (restored || !isFree()) return
+        restored = true
+        val saved = try {
+            store.load()
+        } catch (error: CancellationException) {
+            restored = false
+            throw error
+        } catch (_: Exception) {
+            null
+        } ?: return
+        if (!isFree()) return
+        val request = saved.request
+        val key = saved.key
+        // The Mac keeps a key for a day; past that the same key could make a second Bot.
+        val replays = request != null && key != null && nowMs() - saved.createdAtMs < AidenBotSessionStore.LIFETIME_MS
+        if (replays) attempts.adopt(AidenBotCreateAttempt(saved.draft, request!!, key!!, saved.createdAtMs))
+        _failure.value = Failure(
+            R.string.bot_create_interrupted,
+            saved.draft,
+            replays = replays,
+            request = request,
+            sentAtMs = saved.createdAtMs.takeIf { request != null }
+        )
     }
 
-    /** OK: the failure is gone, and New Bot opens empty next time. */
+    private fun isFree(): Boolean = _pending.value == null && _failure.value == null && !attempts.holdsUncertain
+
+    /**
+     * Try again. An earlier launch's create that may have reached the Mac goes out again as it
+     * was: the attempt to [send] comes back. Otherwise New Bot opens with the answers
+     * ([reopening]) and this returns null.
+     */
+    fun retry(): AidenBotCreateAttempt? {
+        val failed = _failure.value ?: return null
+        if (failed.replays) return start(failed.draft, null)
+        prefill = failed.draft
+        _failure.value = null
+        return null
+    }
+
+    /** OK: the failure is gone and its answers no longer wait. In memory its key stays for the same answers. */
     fun dismissFailure() {
         prefill = null
         _failure.value = null
+        if (_pending.value == null) store?.remove()
     }
 
-    /** What New Bot opens with, once. */
-    fun takePrefill(): AidenBotCreateDraft? = prefill.also { prefill = null }
+    /** The Mac's list shows the Bot: the failure goes quietly, and nothing is left to replay. */
+    fun settleTaken() {
+        prefill = null
+        _failure.value = null
+        attempts.forget()
+        if (_pending.value == null) store?.remove()
+    }
+
+    /** What New Bot opens with after Try again; it stays until Create or the form is closed. */
+    fun reopening(): AidenBotCreateDraft? = prefill
+
+    /** New Bot, reopened by Try again, closed without Create: that Bot is let go. */
+    fun closeReopened() {
+        if (prefill == null) return
+        prefill = null
+        if (_pending.value == null) store?.remove()
+    }
 }
 
-/** The Bot create flow for the pairing in use: its Bots are made on, and kept for, that pairing only. */
+/**
+ * True when the Mac's list already shows the Bot [failure] may have made: the same name and
+ * subtitle, made since the attempt went out (allowing for [skewMs] between the two clocks).
+ */
+fun aidenBotCreateWasTaken(
+    failure: AidenBotCreateFlow.Failure,
+    bots: List<AidenBotSummary>,
+    skewMs: Long = 2 * 60_000L
+): Boolean {
+    val request = failure.request ?: return false
+    val since = failure.sentAtMs ?: return false
+    return bots.any { it.name == request.name && it.purpose == request.purpose && it.createdAt.toEpochMilli() >= since - skewMs }
+}
+
+/**
+ * The Bot create flow for the pairing in use: its Bots are made on, and kept for, that pairing
+ * only. Its ask waits beside the pairing's chat outboxes, so an unpair purges it with them.
+ */
 fun AidenRemoteCoordinator.botCreateFlow(): AidenBotCreateFlow = pairingMemo("bot-create-flow") {
     val host = botSaveHost()
+    val store = installationStore.activeInstallation?.let { installation ->
+        val instanceId = installation.instanceId
+        val deviceId = installation.deviceId
+        AidenBotCreateStore(
+            load = { botSessionStore.pendingCreate(instanceId, deviceId) },
+            save = { botSessionStore.savePendingCreate(instanceId, deviceId, it) },
+            remove = { botSessionStore.removePendingCreate(instanceId, deviceId) }
+        )
+    }
     AidenBotCreateFlow(
         waitForConnection = host.waitForConnection,
         create = { request, key -> host.connected().createBot(request, key) },
-        cache = host.cache
+        cache = host.cache,
+        store = store
     )
 }
 
@@ -314,7 +463,13 @@ private fun AidenBotCreateScreen(
     // the save host outlive the form, so a retry keeps its answers and its idempotency key.
     val flow = remember(client) { coordinator.botCreateFlow() }
     val saveHost = remember(client) { coordinator.botSaveHost() }
-    var draft by remember { mutableStateOf(flow.takePrefill() ?: AidenBotCreateDraft()) }
+    var draft by remember { mutableStateOf(flow.reopening() ?: AidenBotCreateDraft()) }
+    // Closed without Create after Try again: that Bot is let go.
+    val close = {
+        flow.closeReopened()
+        onNavigateBack()
+    }
+    BackHandler(onBack = close)
     val pending by flow.pending.collectAsStateWithLifecycle()
     // The Mac's models; if they don't load the field is absent and Create sends no access.
     // Until the Mac answers (or while it connects) the field is a placeholder, never a spinner.
@@ -338,7 +493,7 @@ private fun AidenBotCreateScreen(
         // Another Bot still on its way holds this one until it lands.
         actionLabel = if (pending != null) stringResource(R.string.bot_editor_creating) else stringResource(R.string.action_create),
         actionEnabled = pending == null && (flow.replays(draft) || draft.request(catalog) != null),
-        onNavigateBack = onNavigateBack,
+        onNavigateBack = close,
         onAction = {
             val attempt = flow.start(draft, catalog) ?: return@AidenBotEditorScaffold
             saveHost.launch { flow.send(attempt) }

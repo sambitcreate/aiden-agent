@@ -6,7 +6,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import sbtbiswas.AidenOnTheGo.models.AidenBotCreateRequest
 import sbtbiswas.AidenOnTheGo.models.AidenBotSessionEntry
+import sbtbiswas.AidenOnTheGo.models.AidenBotWireJson
 import sbtbiswas.AidenOnTheGo.models.AidenBotSessionWire
 import sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode
 import java.io.File
@@ -114,6 +116,18 @@ data class AidenBotOutgoingMessage(
 /** A chat's unsent messages read back from disk, and whether some of them couldn't be (FR-I2). */
 data class AidenBotOutboxRestore(val messages: List<AidenBotOutgoingMessage>, val unreadable: Boolean)
 
+/**
+ * A New Bot on its way for one pairing (R15), kept on disk so a process death mid-create
+ * brings it back: the person's [draft], the [request] exactly as it went out and its
+ * idempotency [key] (null when nothing that could reach the Mac was sent), and when it began.
+ */
+data class AidenBotPendingCreate(
+    val draft: AidenBotCreateDraft,
+    val request: AidenBotCreateRequest? = null,
+    val key: UUID? = null,
+    val createdAtMs: Long
+)
+
 /** How the chat draws an outgoing message (R14). */
 sealed class AidenBotOutgoingLook {
     /** Faded, "Sending…". */
@@ -152,6 +166,10 @@ class AidenBotSessionStore(
     private val owners = HashMap<AidenBotSessionKey, Any>()
     /** Chats whose unreadable file couldn't be moved aside: it is never written over. */
     private val stuck = HashSet<AidenBotSessionKey>()
+    /** Pairings (instance, device) whose New Bot on its way this run of the app has touched. */
+    private val createPairings = HashSet<Pair<String, String>>()
+    /** Pairings an unpair purged: no New Bot is kept for them again. */
+    private val revokedCreates = HashSet<Pair<String, String>>()
 
     @Synchronized
     fun transcript(key: AidenBotSessionKey): List<AidenBotSessionEntry>? = transcripts[key]
@@ -255,8 +273,127 @@ class AidenBotSessionStore(
         outboxes.keys.removeAll { it.instanceId == instanceId }
         owners.keys.removeAll { it.instanceId == instanceId }
         stuck.removeAll { it.instanceId == instanceId }
+        revokedCreates += createPairings.filter { it.first == instanceId }
         val dir = root?.let { File(it, digest(instanceId)) }
         io.execute { dir?.deleteRecursively() }
+    }
+
+    // --- A New Bot on its way (R15) ---
+
+    /**
+     * The New Bot an earlier launch left on its way for this pairing, read on [io] (after any
+     * write or purge queued before it), or null. A file this build can't read is set aside as
+     * `.unreadable`, never deleted. Its age is the caller's to judge (see [AidenBotCreateFlow]).
+     */
+    suspend fun pendingCreate(instanceId: String, deviceId: String): AidenBotPendingCreate? =
+        suspendCancellableCoroutine { continuation ->
+            synchronized(this) { createPairings += instanceId to deviceId }
+            val task = Runnable { continuation.resumeWith(runCatching { loadCreate(instanceId, deviceId) }) }
+            try {
+                io.execute(task)
+            } catch (error: RejectedExecutionException) {
+                continuation.resumeWith(Result.failure(error))
+            }
+        }
+
+    /** Keeps the pairing's New Bot on its way, before anything of it goes out; never for a pairing an unpair purged. */
+    fun savePendingCreate(instanceId: String, deviceId: String, create: AidenBotPendingCreate) {
+        val pairing = instanceId to deviceId
+        synchronized(this) {
+            createPairings += pairing
+            if (pairing in revokedCreates) return
+        }
+        val record = CreateRecord.of(instanceId, deviceId, create)
+        io.execute { writeCreate(instanceId, deviceId, record) }
+    }
+
+    /** The New Bot was made, let go of, or this phone lost access: nothing of it is kept. */
+    fun removePendingCreate(instanceId: String, deviceId: String) {
+        io.execute { createFileFor(instanceId, deviceId)?.let { AtomicFile(it).delete() } }
+    }
+
+    @Serializable
+    private data class CreateRecord(
+        val version: Int,
+        val instanceId: String,
+        val deviceId: String,
+        val name: String,
+        val help: String,
+        val providerId: String? = null,
+        val modelId: String? = null,
+        /** The request body exactly as it went out, in the wire's own JSON. */
+        val body: String? = null,
+        val key: String? = null,
+        val createdAt: Long
+    ) {
+        fun create(): AidenBotPendingCreate {
+            val route = if (providerId != null && modelId != null) {
+                sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute(providerId, modelId)
+            } else {
+                null
+            }
+            val request = body?.let { AidenBotWireJson.json.decodeFromString(AidenBotCreateRequest.serializer(), it) }
+            val idempotencyKey = key?.let(UUID::fromString)
+            require((request == null) == (idempotencyKey == null))
+            return AidenBotPendingCreate(AidenBotCreateDraft(name, help, route), request, idempotencyKey, createdAt)
+        }
+
+        companion object {
+            fun of(instanceId: String, deviceId: String, create: AidenBotPendingCreate) = CreateRecord(
+                version = 1,
+                instanceId = instanceId,
+                deviceId = deviceId,
+                name = create.draft.name,
+                help = create.draft.help,
+                providerId = create.draft.model?.providerId,
+                modelId = create.draft.model?.modelId,
+                body = create.request?.let { AidenBotWireJson.json.encodeToString(AidenBotCreateRequest.serializer(), it) },
+                key = create.key?.toString(),
+                createdAt = create.createdAtMs
+            )
+        }
+    }
+
+    private fun loadCreate(instanceId: String, deviceId: String): AidenBotPendingCreate? {
+        val file = createFileFor(instanceId, deviceId) ?: return null
+        if (!file.exists() && !File(file.path + ".bak").exists()) return null
+        val create = try {
+            val bytes = AtomicFile(file).readFully()
+            if (bytes.size > MAX_CREATE_BYTES) throw IllegalStateException("too large")
+            json.decodeFromString(CreateRecord.serializer(), String(bytes, Charsets.UTF_8))
+                .takeIf { it.version == 1 && it.instanceId == instanceId && it.deviceId == deviceId }
+                ?.create()
+        } catch (_: Exception) {
+            null
+        }
+        if (create == null) {
+            report("event=bot_create_unreadable outcome=set_aside")
+            val aside = File(file.parentFile, "create.${UUID.randomUUID()}.unreadable")
+            if (!file.renameTo(aside)) report("event=bot_create_set_aside outcome=failed")
+        }
+        return create
+    }
+
+    private fun writeCreate(instanceId: String, deviceId: String, record: CreateRecord) {
+        val file = createFileFor(instanceId, deviceId) ?: return
+        if (synchronized(this) { (instanceId to deviceId) in revokedCreates }) return
+        val atomic = AtomicFile(file)
+        var stream: java.io.FileOutputStream? = null
+        try {
+            val data = json.encodeToString(CreateRecord.serializer(), record).toByteArray(Charsets.UTF_8)
+            file.parentFile?.mkdirs()
+            stream = atomic.startWrite()
+            stream.write(data)
+            atomic.finishWrite(stream)
+        } catch (_: Exception) {
+            stream?.let { atomic.failWrite(it) }
+            report("event=bot_create_write outcome=failed")
+        }
+    }
+
+    /** Beside the pairing's chat outboxes (named by 64-character digests, so never this name), and purged with them. */
+    internal fun createFileFor(instanceId: String, deviceId: String): File? = root?.let {
+        File(File(File(it, digest(instanceId)), digest(deviceId)), "create.json")
     }
 
     // --- Disk ---
@@ -449,6 +586,8 @@ class AidenBotSessionStore(
         const val MAX_MESSAGES = 20
         const val CAPACITY = 16
         const val MAX_BYTES = 4_000_000
+        /** A New Bot's answers and request are far smaller; anything past this is damage. */
+        private const val MAX_CREATE_BYTES = 1_000_000
         private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
         private val defaultIo: Executor by lazy {
             Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "aiden-bot-outbox").apply { isDaemon = true } }

@@ -78,7 +78,7 @@ class AidenBotCreatePendingUiTest {
 
         compose.runOnIdle {
             assertEquals(1, reopened)
-            assertEquals("New Bot opens with the same answers", draft, flow.takePrefill())
+            assertEquals("New Bot opens with the same answers", draft, flow.reopening())
         }
         compose.onNodeWithText("Couldn’t Create Bot").assertDoesNotExist()
     }

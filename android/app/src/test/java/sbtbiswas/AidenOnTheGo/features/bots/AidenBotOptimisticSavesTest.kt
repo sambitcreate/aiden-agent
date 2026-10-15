@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -318,7 +319,7 @@ class AidenBotOptimisticSavesTest {
     @Test
     fun aCreateThatTimedOutReplaysItsKey() {
         val keys = ArrayDeque(List(2) { UUID.randomUUID() })
-        val attempts = AidenBotCreateAttempts { keys.removeFirst() }
+        val attempts = AidenBotCreateAttempts(makeKey = { keys.removeFirst() })
         val draft = AidenBotCreateDraft(name = "Chef", help = "Plans meals")
         val first = attempts.begin(draft, catalog)!!
         attempts.failed(first, AidenBotChatActivityTimeout())
@@ -419,12 +420,14 @@ class AidenBotOptimisticSavesTest {
         /** The next create lands but its answer never comes. */
         var losesAnswer = false
         var refuses = false
+        var revoked = false
 
         suspend fun create(request: AidenBotCreateRequest, key: UUID): AidenBotDetail {
             requests += request to key
             gate?.await()
             if (refuses) throw refused()
-            val created = made.getOrPut(key) { bot.copy(name = request.name, revision = "bot_made_${made.size + 1}") }
+            if (revoked) throw AidenRemoteClientException.UnexpectedStatus(401)
+            val created = made.getOrPut(key) { bot.copy(name = request.name, purpose = request.purpose, revision = "bot_made_${made.size + 1}") }
             if (losesAnswer) {
                 losesAnswer = false
                 awaitCancellation()
@@ -481,14 +484,14 @@ class AidenBotOptimisticSavesTest {
         assertEquals(sbtbiswas.AidenOnTheGo.R.string.bot_editor_create_unreachable, failure.message)
 
         // Try again reopens New Bot as it was. The Mac's catalog moved on meanwhile.
-        flow.retry()
+        assertNull("this launch's failure reopens New Bot", flow.retry())
         assertNull(flow.failure.value)
-        val reopened = flow.takePrefill()
+        val reopened = flow.reopening()
         assertEquals(draft, reopened)
-        assertNull("the form takes it once", flow.takePrefill())
         assertTrue("Create stays enabled for the same answers", flow.replays(reopened!!))
         val moved = catalog.copy(revision = "catalog_revision_moved")
         val second = flow.start(reopened, moved)!!
+        assertNull("Create takes the reopened answers", flow.reopening())
         assertEquals("the same Idempotency-Key", first.key, second.key)
         assertEquals("the frozen request, not one rebuilt on the new catalog", first.request, second.request)
         flow.send(second)
@@ -540,5 +543,133 @@ class AidenBotOptimisticSavesTest {
         // Another Bot with the same answers is another Bot.
         val another = flow.start(draft, catalog)!!
         assertFalse(another.key == made.key)
+    }
+
+    // --- A New Bot cut off by a process death comes back (as iOS 9685204a9) ---
+
+    private fun body(request: AidenBotCreateRequest) = json.encodeToString(AidenBotCreateRequest.serializer(), request)
+
+    /** One launch of the app: a flow whose ask waits in a session store over [root]. */
+    private fun TestScope.launchWith(root: java.io.File, mac: CreatingMac, clock: () -> Long = { currentTime }): AidenBotCreateFlow {
+        val sessions = AidenBotSessionStore(root, io = { it.run() }, nowMs = clock)
+        return AidenBotCreateFlow(
+            waitForConnection = { true },
+            create = mac::create,
+            cache = {},
+            store = AidenBotCreateStore(
+                load = { sessions.pendingCreate(pairing.instanceId, pairing.deviceId) },
+                save = { sessions.savePendingCreate(pairing.instanceId, pairing.deviceId, it) },
+                remove = { sessions.removePendingCreate(pairing.instanceId, pairing.deviceId) }
+            ),
+            nowMs = clock
+        )
+    }
+
+    @Test
+    fun aCreateCutOffByAProcessDeathComesBackAndTryAgainReplaysTheSameKeyAndBody() = runTest {
+        val root = tempFolder.newFolder("outbox")
+        // The Mac makes the Bot, but the process dies before its answer comes.
+        val mac = CreatingMac().apply { losesAnswer = true }
+        val draft = AidenBotCreateDraft(name = "Chef", help = "Plans meals", model = aidenBotRecommendedModel(catalog))
+        val before = launchWith(root, mac)
+        val first = before.start(draft, catalog)!!
+        val sending = launch { before.send(first) }
+        runCurrent()
+        sending.cancel()
+
+        val after = launchWith(root, mac)
+        after.restore()
+        val failure = after.failure.value!!
+        assertEquals("the answers come back", draft, failure.draft)
+        assertEquals(sbtbiswas.AidenOnTheGo.R.string.bot_create_interrupted, failure.message)
+        assertTrue("it may have reached the Mac, so Try again sends it again", failure.replays)
+
+        val again = after.retry()!!
+        assertEquals("the row shows again", "Chef", after.pending.value?.name)
+        assertEquals("the same Idempotency-Key", first.key, again.key)
+        assertEquals("the same body", body(first.request), body(again.request))
+        after.send(again)
+        assertEquals(listOf(first.key, first.key), mac.requests.map { it.second })
+        assertEquals(1, mac.requests.map { body(it.first) }.toSet().size)
+        assertEquals("one Bot, however many launches", 1, mac.made.size)
+
+        // Made: nothing waits for the next launch.
+        val later = launchWith(root, mac)
+        later.restore()
+        assertNull(later.failure.value)
+    }
+
+    @Test
+    fun aCutOffCreateWhoseKeyTheMacNoLongerKeepsReopensNewBotInstead() = runTest {
+        val root = tempFolder.newFolder("outbox")
+        val mac = CreatingMac().apply { losesAnswer = true }
+        val draft = AidenBotCreateDraft(name = "Chef")
+        var now = 0L
+        val before = launchWith(root, mac) { now }
+        val first = before.start(draft, catalog)!!
+        launch { before.send(first) }.also { runCurrent() }.cancel()
+
+        now = AidenBotSessionStore.LIFETIME_MS + 1
+        val after = launchWith(root, mac) { now }
+        after.restore()
+        assertFalse("a day on, the same key could make a second Bot", after.failure.value!!.replays)
+        assertNull(after.retry())
+        assertEquals("New Bot opens as it was", draft, after.reopening())
+        assertFalse(after.start(draft, catalog)!!.key == first.key)
+    }
+
+    @Test
+    fun aCutOffCreateTheMacsListShowsGoesQuietlyAndOKLetsItGo() = runTest {
+        val root = tempFolder.newFolder("outbox")
+        val mac = CreatingMac().apply { losesAnswer = true }
+        val before = launchWith(root, mac)
+        val first = before.start(AidenBotCreateDraft(name = "Chef", help = "Plans meals"), catalog)!!
+        launch { before.send(first) }.also { runCurrent() }.cancel()
+
+        val after = launchWith(root, mac)
+        after.restore()
+        val failure = after.failure.value!!
+        val made = mac.made.values.single().summary().copy(createdAt = java.time.Instant.ofEpochMilli(first.createdAtMs))
+        assertFalse("another Bot isn't it", aidenBotCreateWasTaken(failure, listOf(made.copy(name = "Other"))))
+        assertFalse("nor one made before it went out", aidenBotCreateWasTaken(failure, listOf(made.copy(createdAt = java.time.Instant.ofEpochMilli(first.createdAtMs - 3_600_000)))))
+        assertTrue(aidenBotCreateWasTaken(failure, listOf(made)))
+        after.settleTaken()
+        assertNull(after.failure.value)
+        assertFalse(after.replays(failure.draft))
+        val later = launchWith(root, mac)
+        later.restore()
+        assertNull("nothing waits any more", later.failure.value)
+
+        // OK lets a cut-off create go too.
+        val other = launchWith(root, mac)
+        other.start(AidenBotCreateDraft(name = "Scout"), catalog)!!
+        val next = launchWith(root, mac)
+        next.restore()
+        next.dismissFailure()
+        val last = launchWith(root, mac)
+        last.restore()
+        assertNull(last.failure.value)
+    }
+
+    @Test
+    fun aCreateOnItsWayIsKeptPerPairingAndGoesWithAccessLossOrAnUnpair() = runTest {
+        // Access lost on the create itself: nothing of it is kept.
+        val root = tempFolder.newFolder("outbox")
+        val mac = CreatingMac().apply { revoked = true }
+        val flow = launchWith(root, mac)
+        flow.send(flow.start(AidenBotCreateDraft(name = "Chef"), catalog)!!)
+        val after = launchWith(root, mac)
+        after.restore()
+        assertNull(after.failure.value)
+
+        // The coordinator keeps it per pairing, beside the chat outboxes, and an unpair purges it.
+        val phone = pairedPhone()
+        phone.botCreateFlow().start(AidenBotCreateDraft(name = "Chef"), catalog)!!
+        assertEquals("Chef", phone.botSessionStore.pendingCreate(pairing.instanceId, pairing.deviceId)?.draft?.name)
+        assertNull("another pairing has none", phone.botSessionStore.pendingCreate(pairing.instanceId, "device-other"))
+        phone.removeInstallation(phone.installationStore.installations.value.single().id)
+        assertNull(phone.botSessionStore.pendingCreate(pairing.instanceId, pairing.deviceId))
+        phone.botSessionStore.savePendingCreate(pairing.instanceId, pairing.deviceId, AidenBotPendingCreate(AidenBotCreateDraft(name = "Late"), createdAtMs = 0))
+        assertNull("never written again after the unpair", phone.botSessionStore.pendingCreate(pairing.instanceId, pairing.deviceId))
     }
 }

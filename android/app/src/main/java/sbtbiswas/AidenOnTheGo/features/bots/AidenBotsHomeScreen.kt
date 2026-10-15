@@ -354,8 +354,11 @@ private fun AidenBotsHomeContent(
     // New Bot closes at once (R15): the Bot shows here on its way, and its chat opens once the
     // Mac made it while this list is on screen. A failure offers Try again with the same answers.
     val createFlow = remember(client) { coordinator.botCreateFlow() }
+    val createHost = remember(client) { coordinator.botSaveHost() }
     val creating by createFlow.pending.collectAsStateWithLifecycle()
     val createFailure by createFlow.failure.collectAsStateWithLifecycle()
+    // A New Bot an earlier launch left on its way comes back here, with Try again.
+    LaunchedEffect(createFlow) { createFlow.restore() }
 
     fun openChat(bot: AidenBotSummary) {
         if (serverInfo?.supportsBotDurableSession == true) {
@@ -377,6 +380,12 @@ private fun AidenBotsHomeContent(
                 onNavigateToBotProfile(bot.id)
             }
         }
+    }
+
+    // The Mac's list already shows a Bot that may have been made: nothing is left to try again.
+    LaunchedEffect(createFailure, allBots) {
+        val failed = createFailure ?: return@LaunchedEffect
+        if (aidenBotCreateWasTaken(failed, allBots)) createFlow.settleTaken()
     }
 
     val currentOpenChat by rememberUpdatedState(::openChat)
@@ -527,8 +536,9 @@ private fun AidenBotsHomeContent(
             text = { Text(stringResource(failure.message)) },
             confirmButton = {
                 TextButton(onClick = {
-                    createFlow.retry()
-                    onNavigateToCreateBot()
+                    // An earlier launch's create goes out again as it was; otherwise New Bot reopens.
+                    val again = createFlow.retry()
+                    if (again != null) createHost.launch { createFlow.send(again) } else onNavigateToCreateBot()
                 }) { Text(stringResource(R.string.action_try_again), color = palette.accent) }
             },
             dismissButton = {
