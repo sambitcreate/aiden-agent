@@ -1,11 +1,12 @@
-// The renderer's chat mutations: rename, a model-titled rename, delete, append,
-// and dismissing a Computer Use continue callout.
+// The renderer's chat mutations: Assistant chat creation, rename, a model-titled
+// rename, delete, append, and dismissing a Computer Use continue callout.
 // Each asks its service to refuse a chat another Aiden feature owns (a Design
 // project's hidden chat). The handlers live here, apart from chats.ts, so they
 // load without Electron and the refusal is pinned by invoking them; chats.ts
 // registers them under the same channels.
 import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import {
@@ -13,7 +14,10 @@ import {
   isAppendReconciliationRequiredError,
 } from "../services/chat-append-commit.js";
 import type { createChatApplicationService } from "../services/chat-application-service.js";
-import type { createChatStore } from "../services/chat-store-core.js";
+import {
+  isChatCreateReconciliationRequiredError,
+  type createChatStore,
+} from "../services/chat-store-core.js";
 import type { ChatTurnLease } from "../services/chat-turn-admission.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
@@ -23,6 +27,7 @@ import {
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import type { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { parseChatAppend } from "./chat-append-params.js";
+import { parseAssistantChatCreate } from "./chat-create-params.js";
 
 export function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -35,7 +40,7 @@ export function asString(value: unknown, name: string): string {
 export interface RendererChatMutationDeps {
   chatStore: Pick<
     ReturnType<typeof createChatStore>,
-    "get" | "appendMessage" | "setComputerUsePendingContinue"
+    "get" | "create" | "appendMessage" | "setComputerUsePendingContinue"
   >;
   chatApplicationService: Pick<ReturnType<typeof createChatApplicationService>, "rename" | "remove">;
   chatTitleService: {
@@ -75,6 +80,43 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     skillRegistry,
   } = deps;
   return {
+    createAssistant: async (event: IpcMainInvokeEvent, input: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () =>
+          new Error("Assistant chats require the active application document."),
+      );
+      if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+        throw new Error(appendReconciliationFailureMessage("blocked"));
+      }
+      const parsed = parseAssistantChatCreate(input);
+      const assertCurrent = () => {
+        if (owner.isDestroyed())
+          throw new Error("The renderer document is no longer active.");
+        if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+          throw new Error(appendReconciliationFailureMessage("blocked"));
+        }
+      };
+      try {
+        return chatForRenderer(
+          await chatStore.create({
+            ...parsed,
+            workspaceId: ASSISTANT_WORKSPACE_ID,
+            assertCurrent,
+          }),
+        );
+      } catch (error) {
+        if (isChatCreateReconciliationRequiredError(error)) {
+          llmClient.markAppendReconciliationRequired(owner.documentId);
+          owner.onInvalidated(() => {
+            llmClient.clearAppendReconciliationRequired(owner.documentId);
+          });
+          throw new Error(appendReconciliationFailureMessage("blocked"));
+        }
+        throw error;
+      }
+    },
+
     rename: async (_event: IpcMainInvokeEvent, id: unknown, title: unknown) => {
       await chatApplicationService.rename(asString(id, "id"), asString(title, "title"), {
         rejectFeatureOwned: true,
