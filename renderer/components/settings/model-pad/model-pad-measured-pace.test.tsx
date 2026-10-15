@@ -89,6 +89,15 @@ function marker(pad: HTMLElement, value: string): HTMLElement {
   return element;
 }
 
+/**
+ * Let a save the click may have started reach IPC. The save path is promise-only
+ * (no timers), so one event-loop turn drains it: an enabled action has recorded
+ * its write by then.
+ */
+function settleSave(): Promise<void> {
+  return act(() => new Promise<void>((resolve) => setImmediate(resolve)));
+}
+
 /** Open Arrange and return its "Pace from my chats" item. */
 async function openPaceAction(): Promise<HTMLElement> {
   fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
@@ -165,7 +174,7 @@ test("Pace from my chats saves measured X for well-sampled models and can be und
   await waitFor(() => assert.match(unavailableReason(again), /Pace is already up to date/u));
   toast.dismiss();
   fireEvent.click(again);
-  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  await settleSave();
   assert.equal(server.writes(), 1);
   fireEvent.keyDown(again, { key: "Escape" });
 
@@ -204,7 +213,7 @@ test("without three samples for any placed model the action explains itself and 
   );
 
   fireEvent.click(action);
-  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  await settleSave();
   assert.equal(server.writes(), 0);
 });
 
@@ -222,7 +231,7 @@ test("when measured speeds can't be read the action says so", async () => {
   const action = await openPaceAction();
   await waitFor(() => assert.match(unavailableReason(action), /Couldn’t read measured speeds/u));
   fireEvent.click(action);
-  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  await settleSave();
   assert.ok(!calls.some((call) => call.channel === "settings:set"));
 });
 

@@ -95,9 +95,9 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 
 ### 9. Exposure controls (config, runtime, Settings) — [#468](https://github.com/sambitcreate/aiden-agent/pull/468)
 
-- [ ] `exposure` (`auto` / `direct` / `hidden`) and per-tool hidden list on `McpServer`, validated in parse and portable config.
-- [ ] Foreground, Assistant, Bot and child paths honour it.
-- [ ] Settings row control and per-tool list.
+- [x] `exposure` (`auto` / `direct` / `hidden`) and per-tool hidden list on `McpServer`, validated in parse and portable config.
+- [x] Foreground, Assistant, Bot and child paths honour it.
+- [x] Settings row control and per-tool list.
 
 ### 10. Cleanup and catalog — [#469](https://github.com/sambitcreate/aiden-agent/pull/469)
 

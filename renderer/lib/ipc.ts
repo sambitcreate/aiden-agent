@@ -50,6 +50,7 @@ import type {
   McpPresetState,
   McpServerDependents,
   McpStatus,
+  McpToolSummary,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -568,6 +569,8 @@ export const mcpApi = {
   dependents: (id: string) => invoke<McpServerDependents>("mcp:dependents", id),
   /** Current per-server live status; changes arrive on `mcp:statusChanged`. */
   liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
+  /** The server's tools from its last discovery (never connects); null when none yet. */
+  toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>

@@ -36,6 +36,7 @@ import {
 import { buildAgentTools } from "./tools.js";
 import { ambientRuntimeToolEstimate } from "./context-pressure-tools.js";
 import { mcpManager } from "./mcp.js";
+import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 
 const generationProfiles = new Map<string, GenerationContextProfile>();
@@ -140,12 +141,13 @@ async function ambientContextOptions(
     await currentInstructionScope(chat.workspaceId);
   const instructionFingerprint = await agentsInstructionFingerprint(instructionRoots);
   const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}`;
-  // Codemode turns declare codemode/tool_search instead of MCP tools; other
-  // turns declare the MCP tools this process already built (never connecting).
+  // Codemode turns declare codemode/tool_search instead of MCP tools (except
+  // "Always visible" servers); other turns declare the MCP tools this process
+  // already built (never connecting).
   const codemode = Boolean(workspaceId && folderPath) && permission !== "none";
   const withRuntimeTools = async (options: GenerationContextOptions): Promise<GenerationContextOptions> => {
-    const mcpTools = codemode ? [] : await configStore.listMcpServers()
-      .then((servers) => mcpManager.peekBuiltTools(servers.filter((server) => server.enabled).map((server) => server.id)))
+    const mcpTools = await configStore.listMcpServers()
+      .then((servers) => mcpManager.peekBuiltTools(servers.filter((server) => server.enabled && mcpServerOffersTools(server)).map((server) => server.id)))
       .catch(() => []);
     const extra = ambientRuntimeToolEstimate({ codemode, mcpTools });
     if (!extra.length) return options;

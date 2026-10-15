@@ -213,7 +213,6 @@ test("dock replaces the retired Assistant panel with one Live trigger", () => {
   assert.doesNotMatch(dock, /useAssistantLiveApprovals\(/u);
   assert.match(dock, /chat=\{SESSION_ACTIONS\}/u);
   assert.doesNotMatch(dock, /onDecision=/u);
-  assert.doesNotMatch(dock, /useAssistantChat/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
 });
 

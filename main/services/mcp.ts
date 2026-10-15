@@ -25,6 +25,8 @@ import {
 } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
+import { mcpServerExposure, mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
+import { markMcpToolExposure, planMcpServerExposure } from "./mcp-exposure.js";
 import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
 import { configStore } from "./config-store.js";
@@ -244,7 +246,8 @@ export const productionSubagentMcpReadHost: SubagentMcpReadHost = Object.freeze(
         ({ id }) => id === serverId,
       );
       if (signal.aborted) throw subagentMcpAbortReason(signal);
-      return server === undefined ? undefined : structuredClone(server);
+      // A server switched off for the model is as unavailable to children as a removed one.
+      return server === undefined || !mcpServerOffersTools(server) ? undefined : structuredClone(server);
     },
     withClient: withIsolatedSubagentMcpClient,
   },
@@ -628,11 +631,15 @@ class McpManager {
     }));
     assertGeneration();
     lease.assertCurrent();
-    mcpLiveStatus.inventory(server.id, { toolCount: metadata.inventory.tools.length, resources: metadata.resources });
+    mcpLiveStatus.inventory(server.id, { toolCount: metadata.inventory.tools.length, resources: metadata.resources, tools: metadata.inventory.tools });
     // Tool names depend on the configured servers only through this prefix.
     const toolPrefix = mcpServerToolPrefix(server, configured);
-    const key = JSON.stringify([server.id, server.name, server.description ?? null, toolPrefix]);
+    const key = JSON.stringify([server.id, server.name, server.description ?? null, toolPrefix, mcpServerExposure(server), server.hiddenTools ?? []]);
     const { tools, guard: callGuard } = metadata.inventory;
+    // Hidden tools are never built; a server whose every tool is hidden (or
+    // that is switched off for the model) offers nothing, resources included.
+    const exposure = planMcpServerExposure(server, tools);
+    if (!exposure) return { tools: [] };
     const client: Parameters<typeof createMcpResourceTool>[1] & {
       callTool(params: Parameters<typeof callMcpTool>[1], options?: McpToolCallOptions): ReturnType<typeof callMcpTool>;
     } = cachedClient ? {
@@ -656,7 +663,7 @@ class McpManager {
     // The resource tool keeps a per-turn resource listing, so it is always new.
     const resourceTool = metadata.resources ? createMcpResourceTool(server, client, lease) : undefined;
     const withResources = (built: BuiltMcpTools): McpAgentContext => {
-      if (resourceTool) Object.assign(resourceTool, { codemode: true, discovery: built.discovery });
+      if (resourceTool) markMcpToolExposure(resourceTool, built.discovery, exposure);
       return { tools: resourceTool ? [...built.tools, resourceTool] : built.tools };
     };
     // Same client, same inventory, same server identity and a still-current
@@ -665,6 +672,7 @@ class McpManager {
     const dependencies = [cachedClient, metadata.inventory, key, Boolean(resourceTool)];
     const reused = cachedClient ? this.built.get(server.id, dependencies) : undefined;
     if (reused) return withResources(reused);
+    // Named against the full inventory, so hiding one tool never renames another.
     const toolNames = mcpAgentToolNames(server, configured, tools.map(({ name }) => name));
     const presentation = (t: McpToolInfo) => {
       const { outputSchema, ...shown } = mcpAgentToolPresentation(server.name, t);
@@ -672,7 +680,7 @@ class McpManager {
     };
     // Each tool carries its MCP identity (for grant joins) and the exact
     // tools/list entry it was built from (for live schema/effect checks).
-    const agentTools = tools.map((t): AgentTool => tagMcpAgentTool(markMcpAgentTool(markToolOutputSource({
+    const agentTools = exposure.tools.map((t): AgentTool => tagMcpAgentTool(markMcpAgentTool(markToolOutputSource({
       name: toolNames.get(t.name)!,
       // Bounded description (title fallback), `server/tool` label, structured-content schema.
       ...presentation(t),
@@ -706,7 +714,7 @@ class McpManager {
       alias: toolPrefix,
       ...(instructions ? { instructions: instructions.instructions } : {}),
     });
-    for (const tool of agentTools) Object.assign(tool, { codemode: true, discovery });
+    for (const tool of agentTools) markMcpToolExposure(tool, discovery, exposure);
     const built: BuiltMcpTools = Object.freeze({ tools: Object.freeze(agentTools), discovery });
     if (cachedClient) this.built.set(server.id, dependencies, () => leaseIsCurrent(lease), built);
     return withResources(built);
@@ -831,7 +839,7 @@ export function prewarmMcpServers(servers?: readonly McpServer[]): void {
   void (async () => {
     const configured = await configuredMcpToolNamingServers(servers ?? []);
     const candidates = (servers ?? configured)
-      .filter((server) => server.enabled && !server.authProvider);
+      .filter((server) => server.enabled && !server.authProvider && mcpServerOffersTools(server));
     for (const server of candidates) {
       if (mcpManager.recentFailure(server.id)) continue;
       const generations = new Map<string, number>();
@@ -867,7 +875,9 @@ export async function collectMcpAgentTools(
     deferral?: { windowMs?: number; onLate(late: McpLateDiscovery): void };
   } = {},
 ): Promise<AgentTool[]> {
-  const enabled = admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true).filter((server) => server.enabled);
+  // Servers switched off for the model are never discovered, strict runs included.
+  const enabled = admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true)
+    .filter((server) => server.enabled && mcpServerOffersTools(server));
   const generations = new Map<string, number>();
   const configured = await configuredMcpToolNamingServers(servers);
   const discover = (server: McpServer) => discoverMcpServer(server, { ...options, configured }, generations);
@@ -876,6 +886,8 @@ export async function collectMcpAgentTools(
     const { tools, late } = await admitMcpServerDiscovery(enabled, discover, {
       budgetMs: mcpServerDiscoveryBudgetMs(),
       windowMs: options.deferral.windowMs ?? MCP_DEFERRED_ADMISSION_WINDOW_MS,
+      // "Always visible" servers are declared at turn start, so the turn waits for them.
+      awaitServer: (server) => mcpServerExposure(server) === "direct",
       onUnavailable,
     });
     options.deferral.onLate(late);

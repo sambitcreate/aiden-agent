@@ -315,3 +315,31 @@ test("Bots are never offered agent-backed providers", async () => {
   const providers = await ports.listProviders(new AbortController().signal);
   assert.deepEqual(providers.map(({ sourceId }) => sourceId), ["hosted"]);
 });
+
+test("a server switched off for the model is listed for Bots as unavailable, with no tools", async () => {
+  const ports = createBotCapabilityInventoryPorts({
+    loadOpaqueSelectionKey: async () => new Uint8Array(32),
+    loadNoticeStatus: async () => ({ version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true }),
+    listProviders: async () => [],
+    providerCredentialSignature: async () => HASH,
+    listMcpServers: async () => [
+      { id: "off", name: "Off", transport: "http", url: "https://mcp.invalid", enabled: true, exposure: "hidden" },
+    ],
+    // Even a stale scope for it cannot make it available.
+    inspectMcpScopes: async () => [
+      { serverId: "off", connectionFingerprint: HASH, tools: [{ toolName: "read", schemaHash: HASH, effect: "read" }] },
+    ],
+    listSkills: async () => [],
+    listApprovedLocations: async () => [],
+    incarnations: { reconcileNamespace: async () => [] },
+    getSettings: async () => ({}),
+    webSearchAvailability: async () => ({ ready: false }),
+    subagentsAvailable: () => false,
+    computerUseSupported: () => false,
+  });
+  const [connection] = await ports.inspectConnections(new AbortController().signal);
+  assert.equal(connection?.available, false);
+  assert.deepEqual(connection?.tools, []);
+  assert.equal(connection?.description, "Turned off for the model in Aiden");
+  assert.notEqual(connection?.connectionFingerprint, HASH);
+});
