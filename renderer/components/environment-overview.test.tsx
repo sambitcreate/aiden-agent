@@ -216,16 +216,19 @@ test("the Pull request row appears once the chat has a PR and opens it on GitHub
   }
 });
 
-test("a merged PR without a title is named by its branch", async () => {
-  installRepoIpc({}, {
-    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({
-      pullRequest: { ...PR_VIEW, title: undefined, state: "merged" },
-      reason: "recent-linked",
-    }),
-  });
-  renderChangesRows({ chatId: "chat-1" });
-  const row = await screen.findByRole("button", { name: "Pull request #42, Merged. Opens on GitHub" });
-  assert.ok(row.textContent?.includes("#42 feature/x"));
+test("a merged PR without a title, or with an empty one, is named by its branch", async () => {
+  for (const title of [undefined, ""]) {
+    installRepoIpc({}, {
+      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({
+        pullRequest: { ...PR_VIEW, title, state: "merged" },
+        reason: "recent-linked",
+      }),
+    });
+    const { unmount } = renderChangesRows({ chatId: "chat-1" });
+    const row = await screen.findByRole("button", { name: "Pull request #42, Merged. Opens on GitHub" });
+    assert.equal(row.textContent?.includes("#42 feature/x"), true, `title ${JSON.stringify(title)}`);
+    unmount();
+  }
 });
 
 test("no Pull request row until the chat has a PR, and never one without a chat", async () => {
@@ -430,6 +433,28 @@ test("the folder row hides the editor action when no editor is installed", async
   assert.ok(await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` }));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === EDITOR_CHANNELS.list)));
   assert.equal(screen.queryAllByRole("button", { name: /^Open in / }).length, 0);
+});
+
+test("the folder row leaves editor discovery failures to the toolbar picker", async () => {
+  const toastError = mock.method(toast, "error", () => "toast-id");
+  try {
+    const calls = installRepoIpc({}, {
+      [EDITOR_CHANNELS.list]: () => {
+        throw new Error("Couldn't list editors");
+      },
+    });
+    renderEnvironmentRows();
+    assert.ok(await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` }));
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === EDITOR_CHANNELS.list)));
+    // Let the rejected discovery settle before checking that it stayed quiet.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.equal(toastError.mock.callCount(), 0);
+    assert.equal(screen.queryAllByRole("button", { name: /^Open in / }).length, 0);
+  } finally {
+    toastError.mock.restore();
+  }
 });
 
 test("the folder row is absent for a workspace without a folder and disabled without access", async () => {

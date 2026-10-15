@@ -109,7 +109,9 @@ function FolderRow({
   onBrowseFiles: () => void;
   browseDisabled: boolean;
 }) {
-  const { preferredEditor, openPreferredEditor } = usePreferredEditor(workspace.id, workspace.folderPath);
+  const { preferredEditor, openPreferredEditor } = usePreferredEditor(workspace.id, workspace.folderPath, {
+    silentDiscoveryErrors: true,
+  });
   if (!workspace.folderPath) return null;
   const disabled = workspace.permission === "none";
   return (
@@ -337,7 +339,7 @@ function PullRequestRow({ view }: { view: ChatPullRequestView }) {
         <ChatPullRequestStateIcon view={view} />
       </span>
       <span className="min-w-0 truncate">
-        #{view.number} {view.title ?? view.headBranch}
+        #{view.number} {view.title || view.headBranch}
       </span>
       <span className="text-small text-tertiary">{state}</span>
     </button>

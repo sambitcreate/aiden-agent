@@ -110,8 +110,9 @@ function LegendRow({
       </span>
       <span className="text-right text-small text-tertiary tabular-nums">{formatContextTokenCount(tokens)}</span>
       {notCounted ? (
-        <span aria-label="not counted" className="text-right tabular-nums">
-          —
+        <span className="text-right tabular-nums">
+          <span aria-hidden="true">—</span>
+          <span className="sr-only">not counted</span>
         </span>
       ) : (
         <span className="text-right tabular-nums">{percent}</span>

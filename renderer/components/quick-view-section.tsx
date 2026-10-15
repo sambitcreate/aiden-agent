@@ -277,7 +277,8 @@ export function QuickViewSection({
         )}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className="px-1 pb-1">{children}</div>
+          {/* pt-0.5 leaves room for the first row's focus ring inside the clipping wrapper. */}
+          <div className="px-1 pt-0.5 pb-1">{children}</div>
         </div>
       </div>
     </section>

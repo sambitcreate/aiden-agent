@@ -86,8 +86,9 @@ test("the deferred row shows its tokens and is not counted toward the window", (
     .find((item) => item.textContent?.startsWith("MCP tools (deferred)"));
   assert.ok(deferred);
   assert.ok(within(deferred).getByText("61.4K"));
-  const notCounted = within(deferred).getByText("—");
-  assert.equal(notCounted.getAttribute("aria-label"), "not counted");
+  // The dash is visual only; assistive tech reads "not counted" instead.
+  assert.equal(within(deferred).getByText("—").getAttribute("aria-hidden"), "true");
+  assert.ok(within(deferred).getByText("not counted"));
   assert.match(screen.getByRole("note").textContent ?? "", /Deferred tools load through tool search and aren't counted until used\./u);
 });
 
