@@ -542,7 +542,9 @@ export class BrowserService {
     const publish = () => {
       if (tab.closing || wc.isDestroyed()) return;
       Object.assign(tab.state, {
-        url: browserDisplayUrl(wc.getURL() || "about:blank"),
+        // Before the first navigation commits `getURL()` is empty; keep the requested URL so a
+        // repeat link click during that load still finds and reuses this tab.
+        url: wc.getURL() ? browserDisplayUrl(wc.getURL()) : tab.state.url,
         title: wc.getTitle() || "New tab",
         loading: wc.isLoading(),
         canGoBack: wc.navigationHistory.canGoBack(),
