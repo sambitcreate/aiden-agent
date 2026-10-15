@@ -3,6 +3,7 @@
 import {
   existsSync,
   globSync,
+  readdirSync,
   readFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -11,7 +12,11 @@ import { fileURLToPath } from "node:url";
 export const PROJECT_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_JSON_PATH = path.join(PROJECT_ROOT, "package.json");
 const REGISTRY_JSON_PATH = path.join(PROJECT_ROOT, "scripts/ci-test-registry.json");
+const WORKFLOWS_PATH = path.join(PROJECT_ROOT, ".github/workflows");
 const TEST_FILE_PATTERN = /\.test\.(?:cjs|mjs|js|ts|tsx)$/u;
+// Every test file under these roots must run in CI or be allowlisted as manual.
+// packages/ owns its own suites, and tests/ holds Playwright specs.
+const DISCOVERY_ROOTS = ["main", "renderer", "scripts"];
 // `npm test` runs the registry through scripts/run-ci-tests.mjs. The serial
 // npm graph stays the place new test files are registered, and the registry
 // must assign every file it reaches.
@@ -41,6 +46,30 @@ export function readPackageManifest() {
 
 export function readRegistry() {
   return readJson(REGISTRY_JSON_PATH);
+}
+
+export function readWorkflows() {
+  return readdirSync(WORKFLOWS_PATH)
+    .filter((name) => /\.ya?ml$/u.test(name))
+    .sort()
+    .map((name) => readFileSync(path.join(WORKFLOWS_PATH, name), "utf8"))
+    .join("\n");
+}
+
+/** Lists repository-relative test files on disk under the discovery roots. */
+export function discoverTestFiles(root = PROJECT_ROOT) {
+  const files = [];
+  for (const directory of DISCOVERY_ROOTS) {
+    const absolute = path.join(root, directory);
+    if (!existsSync(absolute)) continue;
+    for (const entry of readdirSync(absolute, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !TEST_FILE_PATTERN.test(entry.name)) continue;
+      const file = path.relative(root, path.join(entry.parentPath, entry.name)).replaceAll(path.sep, "/");
+      if (file.split("/").includes("node_modules")) continue;
+      files.push(file);
+    }
+  }
+  return files.sort();
 }
 
 function tokenizeScript(command, scriptName) {
@@ -235,6 +264,9 @@ function collectDirectTestFiles(segment, scriptName) {
       "node scripts/build-subagent-shell-runner.mjs --test",
       "node scripts/build-bot-inbox-writer.mjs",
       "node scripts/build-bot-inbox-writer.mjs --test",
+      // Linux-only helpers built by test:linux-native, which a workflow runs.
+      "node scripts/build-global-shortcuts-portal.mjs",
+      "node scripts/build-secret-service-authority.mjs",
     ]);
     if (allowedBuildCommands.has(buildCommand)) return [];
     throw new Error(`${scriptName} uses an unregistered non-test Node command: ${buildCommand}`);
@@ -364,11 +396,68 @@ export function registryPreservedFiles(registry, packageManifest = readPackageMa
   return files;
 }
 
+function assertUniqueIds(entries, label) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const entry of entries ?? []) {
+    if (seen.has(entry?.id)) duplicates.add(entry.id);
+    seen.add(entry?.id);
+  }
+  if (duplicates.size > 0) {
+    throw new Error(`Duplicate ${label} ids: ${[...duplicates].sort().join(", ")}`);
+  }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * Files run by npm scripts that workflows invoke directly, outside the
+ * registry runner. Each script must still appear as `npm run <script>` in a
+ * workflow so removing that step cannot silently orphan its tests.
+ */
+function collectWorkflowScriptTests(registry, packageManifest, workflows) {
+  const entries = registry.workflowScripts ?? [];
+  for (const entry of entries) {
+    if (!entry || typeof entry.script !== "string" || typeof entry.reason !== "string") {
+      throw new Error("Every workflow script entry needs a script and reason");
+    }
+    if (!new RegExp(`npm run ${escapeRegExp(entry.script)}(?![\\w:-])`, "u").test(workflows)) {
+      throw new Error(`Workflow script is not invoked by any workflow: ${entry.script}`);
+    }
+  }
+  if (entries.length === 0) return new Set();
+  const source = collectSourceTests({ packageManifest, sourceScripts: entries.map((entry) => entry.script) });
+  return new Set(source.files.keys());
+}
+
+function manualTestFiles(registry) {
+  const files = new Set();
+  for (const entry of registry.manual ?? []) {
+    if (!entry || typeof entry.file !== "string" || typeof entry.reason !== "string") {
+      throw new Error("Every manual test entry needs a file and reason");
+    }
+    if (files.has(entry.file)) throw new Error(`Duplicate manual test file: ${entry.file}`);
+    if (!TEST_FILE_PATTERN.test(entry.file) || !existsSync(path.join(PROJECT_ROOT, entry.file))) {
+      throw new Error(`Manual test allowlist references a missing or unsupported test file: ${entry.file}`);
+    }
+    files.add(entry.file);
+  }
+  return files;
+}
+
 export function validateRegistry({
   registry = readRegistry(),
   packageManifest = readPackageManifest(),
+  workflows = readWorkflows(),
+  discoveredFiles = discoverTestFiles(),
 } = {}) {
   if (registry.version !== 1) throw new Error(`Unsupported CI registry version: ${registry.version}`);
+  // Sets and Maps below would silently collapse a repeated id, while the
+  // runner would still schedule every copy.
+  assertUniqueIds(registry.prerequisites, "prerequisite");
+  assertUniqueIds(registry.preserved, "preserved");
   for (const hook of RUNNER_LIFECYCLE_HOOKS) {
     if (typeof packageManifest.scripts?.[hook] === "string") {
       throw new Error(`${hook} would bypass the CI registry; register its tests in pretest:serial or test:serial`);
@@ -452,8 +541,27 @@ export function validateRegistry({
   if (!source.files.has("main/services/telegram/telegram-profile-mutation-fence.test.ts")) {
     throw new Error("test:telegram files are not reachable from the serial test graph");
   }
+
+  // The serial graph only proves the files it reaches; a test file that no
+  // script names would otherwise never run. Compare the files on disk instead.
+  const workflowFiles = collectWorkflowScriptTests(registry, packageManifest, workflows);
+  const manualFiles = manualTestFiles(registry);
+  const staleManual = [...manualFiles].filter((file) => sourceFiles.has(file) || workflowFiles.has(file)).sort();
+  if (staleManual.length > 0) {
+    throw new Error(`Manual test allowlist names files CI already runs: ${JSON.stringify(staleManual)}`);
+  }
+  const unrun = discoveredFiles
+    .filter((file) => !sourceFiles.has(file) && !workflowFiles.has(file) && !manualFiles.has(file))
+    .sort();
+  if (unrun.length > 0) {
+    throw new Error(
+      `Test files on disk never run in CI: ${JSON.stringify(unrun)}; register them in test:serial and a lane, or allowlist them under "manual" with a reason`,
+    );
+  }
   return {
     sourceFiles: [...sourceFiles].sort(),
+    workflowFiles: [...workflowFiles].sort(),
+    manualFiles: [...manualFiles].sort(),
     unitFiles: [...unitFiles.keys()].sort(),
     preservedFiles: [...preservedFiles.keys()].sort(),
     visitedScripts: source.visited,
