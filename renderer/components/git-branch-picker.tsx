@@ -38,6 +38,8 @@ interface GitBranchPickerProps {
   openWorktreeOnMount?: boolean;
   /** Restores focus to the slash-command origin instead of the untouched trigger. */
   programmaticReturnFocusRef?: React.RefObject<HTMLElement | null>;
+  /** Uncommitted changes from the workspace's Git status, shown on the compact trigger before the menu loads its own read. */
+  uncommitted?: number;
 }
 
 type CreateMode = "branch" | "worktree" | null;
@@ -69,6 +71,7 @@ export function GitBranchPicker({
   unborn: unbornProp = false,
   openWorktreeOnMount = false,
   programmaticReturnFocusRef,
+  uncommitted: uncommittedProp = 0,
 }: GitBranchPickerProps) {
   const qc = useQueryClient();
   const searchRef = React.useRef<HTMLInputElement>(null);
@@ -90,7 +93,7 @@ export function GitBranchPicker({
   const unborn = branches.data?.unborn ?? unbornProp;
   const currentRef = branches.data?.current ?? branch;
   const current = detached ? "Detached HEAD" : currentRef;
-  const uncommitted = branches.data?.uncommitted ?? 0;
+  const uncommitted = branches.data?.uncommitted ?? uncommittedProp;
   const ahead = branches.data?.ahead ?? 0;
   const behind = branches.data?.behind ?? 0;
   const upstream = branches.data?.upstream;
@@ -246,10 +249,24 @@ export function GitBranchPicker({
             size="small"
             disabled={disabled}
             className="composer-branch-trigger h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]"
+            aria-label={
+              uncommitted > 0
+                ? `${current}, ${uncommitted} uncommitted change${uncommitted === 1 ? "" : "s"}`
+                : undefined
+            }
             title={disabledReason ?? (currentSummary ? `${current} · ${currentSummary}` : current)}
           >
             <GitBranch className="size-4 shrink-0" />
             <span className="min-w-0 truncate text-small">{current}</span>
+            {uncommitted > 0 ? (
+              <span
+                data-changes-badge
+                aria-hidden="true"
+                className="inline-flex h-4 shrink-0 items-center rounded-full bg-status-warning-surface px-1.5 text-mini font-medium tabular-nums text-status-warning"
+              >
+                {uncommitted}
+              </span>
+            ) : null}
           </Button>
         )}
       </CustomDropdownMenuTrigger>

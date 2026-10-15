@@ -594,6 +594,11 @@ body {
   transition: none;
 }
 
+/* A context chip that appears mid-chat (the pull request chip) uses the shared popup entry. */
+:root[data-reduce-motion="false"] .composer-context-chip-enter {
+  animation: aiden-pill-enter 200ms cubic-bezier(0.19, 1, 0.22, 1);
+}
+
 .composer-shell {
   /* Electron supports native squircles; keep overflow visible for composer menus. */
   border-radius: var(--radius-composer);
@@ -1635,7 +1640,6 @@ textarea {
 }
 
 @container composer (max-width: 460px) {
-  .composer-local-label,
   .context-meter-percent {
     display: none;
   }

@@ -44,7 +44,10 @@ async function loadComposer() {
       "export const attachmentsApi=globalThis.__composerAttachmentFixture.api; export const browserApi={onEvent: callback => { globalThis.__composerAttachmentFixture.browserEvent=callback; return ()=>{}; }};",
     "./git-branch-picker": "export const GitBranchPicker=()=>null;",
     "./workspace-picker": "export const WorkspacePicker=()=>null;",
-    "./composer-context-bar": "export const ComposerContextBar=()=>null;",
+    "./composer-context-bar":
+      "export const ComposerContextBar=()=>null; export const useAutoHideComposerContext=()=>true;",
+    "./use-composer-context-chips":
+      "export const useComposerContextChips=()=>({workspace:true,machine:false,branch:false,changesBadge:0,pullRequest:false,barMode:'full'});",
     "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
   };

@@ -25,7 +25,6 @@ import {
   Loader2,
   Lock,
   Mic,
-  Monitor,
   OctagonAlert,
   Paperclip,
   Plus,
@@ -35,7 +34,8 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
-import { ComposerContextBar } from "./composer-context-bar";
+import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
+import { useComposerContextChips } from "./use-composer-context-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
@@ -51,7 +51,7 @@ import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
-import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
+import type { Attachment, Chat, GitInfo, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
@@ -174,6 +174,8 @@ interface ComposerProps {
   gitBranch?: string;
   gitDetached?: boolean;
   gitUnborn?: boolean;
+  /** The workspace's Git status read: change count, upstream and remote for the context-bar chips. */
+  gitStatus?: GitInfo;
   onOpenFolder?: () => void;
   onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
   workspacePickerEnabled?: boolean;
@@ -244,7 +246,7 @@ interface ComposerProps {
    * catalog instead of this Mac's, even while the slash palette is off.
    */
   hostSkills?: ComposerSkillCatalog;
-  /** Replaces the "Local" label: which Mac a new chat will run on. */
+  /** Which Mac a new chat will run on; omitted when no paired Mac can run it. */
   machinePicker?: React.ReactNode;
   /** The context bar for a chat whose project lives on another Mac. */
   remoteContext?: React.ReactNode;
@@ -346,6 +348,7 @@ export function Composer({
   gitBranch,
   gitDetached,
   gitUnborn,
+  gitStatus,
   onOpenFolder,
   onChangePermission,
   workspacePickerEnabled,
@@ -1774,6 +1777,25 @@ export function Composer({
   const folderName = workspace?.folderPath
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
+  const hasUserMessages =
+    sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
+  const contextChips = useComposerContextChips({
+    chatId,
+    started: hasUserMessages,
+    workspace,
+    gitBranch,
+    gitStatus,
+    machinePicker: Boolean(machinePicker),
+  });
+  const contextChipsKey = [
+    contextChips.workspace && "workspace",
+    contextChips.machine && "machine",
+    contextChips.branch && "branch",
+    contextChips.pullRequest && "pull-request",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const autoHideContext = useAutoHideComposerContext();
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
     if (workspaceChangeBlockedReason) {
@@ -1856,9 +1878,14 @@ export function Composer({
           {queuedMessages}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           {surfaces.localContext ? (
-          <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
-          <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
-            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+          <ComposerContextBar mode={contextChips.barMode} chipsKey={contextChipsKey} inputRef={inputRef}>
+          <div
+            className={cn(
+              "relative z-0 mx-3 flex min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 backdrop-blur-md transition-[padding,min-height] duration-200 ease-out",
+              contextChips.barMode === "summary" ? "min-h-7 pb-1.5 pt-0.5" : "min-h-8 pb-2 pt-1",
+            )}
+          >
+            {!contextChips.workspace ? null : workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
                 key={workspaceChangeBlockedReason ? "blocked" : "available"}
                 workspaces={workspaces}
@@ -1901,17 +1928,9 @@ export function Composer({
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
-            {/* Execution location — Pi runs locally on this host, unless a new chat picks another Mac. */}
-            {machinePicker ?? (
-              <span
-                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-                title="The agent runs locally on this device"
-              >
-                <Monitor className="size-4 shrink-0" />
-                Local
-              </span>
-            )}
-            {gitBranch && workspace?.folderPath ? (
+            {/* Execution location: shown only when a paired Mac could run this new chat. */}
+            {contextChips.machine ? machinePicker : null}
+            {contextChips.branch && gitBranch && workspace?.folderPath ? (
               <GitBranchPicker
                 key={`git-branch-picker-${worktreeRequest}`}
                 workspaceId={workspace.id}
@@ -1931,13 +1950,22 @@ export function Composer({
                 worktreeDescription={gitWorktreeDescription}
                 openWorktreeOnMount={worktreeRequest > 0}
                 programmaticReturnFocusRef={inputRef}
+                uncommitted={contextChips.changesBadge}
               />
             ) : null}
-            <ChatPullRequestsChip chatId={chatId} />
+            {contextChips.pullRequest ? (
+              <span className="composer-context-chip-enter flex shrink-0">
+                <ChatPullRequestsChip chatId={chatId} />
+              </span>
+            ) : null}
+            {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
+            <span role="status" className="sr-only">
+              {contextChips.pullRequest && hasUserMessages ? "Pull request available" : ""}
+            </span>
           </div>
           </ComposerContextBar>
           ) : remoteContext ? (
-            <ComposerContextBar hasUserMessages={hasMessages} inputRef={inputRef}>
+            <ComposerContextBar mode={autoHideContext && hasMessages ? "hidden" : "full"} inputRef={inputRef}>
               <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
                 {remoteContext}
               </div>

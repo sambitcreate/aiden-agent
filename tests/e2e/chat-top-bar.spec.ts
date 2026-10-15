@@ -4,8 +4,17 @@ import path from "node:path";
 import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
 
-async function startPersistedChat(page: Page): Promise<void> {
+function contextBar(page: Page) {
+  return page.locator('[role="group"][aria-label="Composer workspace bar"]');
+}
+
+function pullRequestChip(page: Page) {
+  return contextBar(page).getByRole("button", { name: /^Pull requests for this chat/u });
+}
+
+async function startPersistedChat(page: Page, beforeSend?: () => Promise<void>): Promise<void> {
   await finishLmStudioOnboarding(page);
+  await beforeSend?.();
   await page.locator("textarea").fill("Top bar check");
   await page.locator("textarea").press("Enter");
   await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
@@ -30,7 +39,15 @@ test.describe("folder workspaces", () => {
   test("a plain folder gets folder actions but no Git-only ones", async ({ aiden }) => {
     const { page } = aiden;
     await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
-    await startPersistedChat(page);
+    await startPersistedChat(page, async () => {
+      // A plain-folder draft offers the workspace, with no "Local" label or PR chip.
+      await expect(contextBar(page)).toHaveAttribute("data-mode", "full");
+      await expect(contextBar(page).getByRole("button", { name: "Choose a workspace" })).toBeVisible();
+      await expect(contextBar(page).getByText("Local", { exact: true })).toHaveCount(0);
+      await expect(pullRequestChip(page)).toHaveCount(0);
+    });
+    // After the first message the header names the workspace; the bar hides.
+    await expect(contextBar(page)).toHaveAttribute("data-mode", "hidden");
 
     await expect(page.locator("[data-workspace-chip]")).toHaveAccessibleName(
       "Workspace Aiden E2E workspace",
@@ -82,7 +99,14 @@ test.describe("folder workspaces", () => {
       "remote", "add", "origin", "https://github.com/example-owner/example-repo.git",
     ]);
     await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
-    await startPersistedChat(page);
+    await startPersistedChat(page, async () => {
+      await expect(pullRequestChip(page)).toHaveCount(0);
+    });
+    // The bar collapses to the branch; nothing is ready to open as a PR yet.
+    await expect(contextBar(page)).toHaveAttribute("data-mode", "summary");
+    await expect(contextBar(page).getByRole("button", { name: "main", exact: true })).toBeVisible();
+    await expect(contextBar(page).getByRole("button", { name: "Choose a workspace" })).toHaveCount(0);
+    await expect(pullRequestChip(page)).toHaveCount(0);
 
     const menu = await openChipMenu(page);
     await expect(menu.locator("[data-workspace-chip-status]")).toHaveText("main");

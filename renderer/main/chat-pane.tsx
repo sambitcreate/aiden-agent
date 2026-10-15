@@ -2869,6 +2869,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 gitBranch={git.data?.isRepo ? git.data.branch : undefined}
                 gitDetached={git.data?.detached}
                 gitUnborn={git.data?.unborn}
+                gitStatus={git.data?.isRepo ? git.data : undefined}
                 onOpenFolder={openFolder}
                 onChangePermission={changePermission}
                 workspacePickerEnabled={isNewChat}
