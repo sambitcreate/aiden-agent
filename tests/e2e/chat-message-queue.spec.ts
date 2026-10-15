@@ -643,31 +643,39 @@ test("Stop pauses queued image and text follow-ups without sending them", async 
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
   await aiden.app.evaluate(({ ipcMain }) => {
-    // Hold only the start receipt: generation can expose Stop before send settles.
+    // Hold the saved first message's receipt, then the start receipt, so each
+    // phase of a send that shows Stop early is observed deterministically.
     const handlers = (ipcMain as unknown as {
       _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
     })._invokeHandlers;
-    const original = handlers.get("chat:start")!;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    (globalThis as unknown as { releaseQueueStartReceipt: () => void }).releaseQueueStartReceipt = release;
-    handlers.set("chat:start", async (event, ...args) => {
-      const receipt = await original(event, ...args);
-      await gate;
-      return receipt;
-    });
+    const hold = (channel: string, name: string) => {
+      const original = handlers.get(channel)!;
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      (globalThis as unknown as Record<string, () => void>)[name] = release;
+      handlers.set(channel, async (event, ...args) => {
+        const receipt = await original(event, ...args);
+        await gate;
+        return receipt;
+      });
+    };
+    hold("chats:createWithFirstMessage", "releaseQueueSaveReceipt");
+    hold("chat:start", "releaseQueueStartReceipt");
   });
+  const release = (name: string) => aiden.app.evaluate((_electron, key) => {
+    (globalThis as unknown as Record<string, () => void>)[key]!();
+  }, name);
   const composer = page.locator("textarea");
   await composer.fill("First response for stop and resume.");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   const attach = page.getByRole("button", { name: "Attach files or images", exact: true });
+  // Until the message is saved, a failed send restores its own payload, so
+  // attachment intake stays closed and cannot merge new files into it.
   await expect(attach).toBeDisabled();
-  await aiden.app.evaluate(() => {
-    (globalThis as unknown as { releaseQueueStartReceipt: () => void }).releaseQueueStartReceipt();
-  });
-  // Stop is visible before the send receipt settles. Paste is admitted only
-  // after the composer reopens attachment intake, while generation continues.
+  await release("releaseQueueSaveReceipt");
+  // Once saved, the send is settled while the response is still starting:
+  // intake reopens alongside Steer and Queue.
   await expect(attach).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   const image = (
@@ -692,6 +700,7 @@ test("Stop pauses queued image and text follow-ups without sending them", async 
   await composer.press("Enter");
   const queue = page.getByRole("region", { name: "Queued messages", exact: true });
   await expect(queue.getByRole("img", { name: "Pasted image.png" })).toBeVisible();
+  await release("releaseQueueStartReceipt");
   await page.getByRole("button", { name: "Stop generating" }).click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
   await expect(queue.getByRole("status")).toContainText("2 queued · Paused");
