@@ -8,4 +8,34 @@ export interface McpStatus {
   serverCapabilities: Record<string, unknown> | null;
   /** For OAuth servers: whether valid tokens are stored. */
   authorized?: boolean;
+  /** For OAuth servers: the stored sign-in was rejected and must be renewed. */
+  needsSignIn?: boolean;
+}
+
+export type McpLiveState = "connecting" | "connected" | "failed" | "closed";
+
+/** Pushed by main on `mcp:statusChanged`; one small record per server. */
+export interface McpLiveStatus {
+  serverId: string;
+  state: McpLiveState;
+  error?: string;
+  /** Tools listed by the last successful discovery. */
+  toolCount?: number;
+  /** The server advertises resources. */
+  resources?: boolean;
+  /** The last token refresh or background connect needed a new sign-in. */
+  needsSignIn?: boolean;
+  /** Set on the last event for a server that was removed. */
+  removed?: boolean;
+}
+
+export interface McpDependent {
+  id: string;
+  name: string;
+}
+
+/** Schedules and Bots that stop working when a server is renamed away, disabled or removed. */
+export interface McpServerDependents {
+  schedules: McpDependent[];
+  bots: McpDependent[];
 }

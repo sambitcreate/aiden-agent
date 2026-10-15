@@ -1,6 +1,7 @@
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
+import { mcpLiveStatus, recordMcpConnectionLifecycle } from "./mcp-status-events.js";
 import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
@@ -335,7 +336,7 @@ function leaseIsCurrent(lease: ReturnType<typeof mcpConfigurationLeases.acquire>
 
 class McpManager {
   // Bound the whole attempt (transport start included), not just initialize.
-  private readonly clients = new GenerationBoundConnectionCache<Client>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs });
+  private readonly clients = new GenerationBoundConnectionCache<Client>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs, onLifecycle: recordMcpConnectionLifecycle });
   private readonly statusClients =
     new GenerationBoundConnectionAttempts<Client>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs });
   private closed = false;
@@ -532,6 +533,7 @@ class McpManager {
     if (projectDiagnosticError(error).code === "cancelled") return;
     if (generation !== this.connectionGeneration(id)) return;
     this.failures.record(id, generation, error);
+    mcpLiveStatus.failed(id, error);
   }
 
   clearFailure(id: string): void {
@@ -548,6 +550,8 @@ class McpManager {
     server: McpServer,
     isCurrent: () => boolean = () => true,
     expectedGeneration: number = this.statusGeneration(server.id),
+    /** Settings drafts resolve credentials without binding or persisting them. */
+    resolve: (server: McpServer, isCurrent: () => boolean) => Promise<McpServer> = resolveAuth,
   ): Promise<McpStatus> {
     try {
       return await this.statusClients.run(
@@ -561,7 +565,7 @@ class McpManager {
         async (client, connectionIsCurrent) => {
           const active = () => isCurrent() && connectionIsCurrent();
           await client.connect(
-            makeTransport(await resolveAuth(server, active), active) as never,
+            makeTransport(await resolve(server, active), active) as never,
             mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
           );
         },
@@ -624,6 +628,7 @@ class McpManager {
     }));
     assertGeneration();
     lease.assertCurrent();
+    mcpLiveStatus.inventory(server.id, { toolCount: metadata.inventory.tools.length, resources: metadata.resources });
     // Tool names depend on the configured servers only through this prefix.
     const toolPrefix = mcpServerToolPrefix(server, configured);
     const key = JSON.stringify([server.id, server.name, server.description ?? null, toolPrefix]);

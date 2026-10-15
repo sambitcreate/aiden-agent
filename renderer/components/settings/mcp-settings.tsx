@@ -26,15 +26,26 @@ import {
   Textarea,
   toast,
 } from "../ui";
-import { Plus, RefreshCw, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
 import {
+  mcpConnectionChanged,
+  mcpDependentsSummary,
+  mcpLiveStatusView,
   mcpPresetConnectionBadge,
   mcpServerDraftForEditor,
   mcpServerEditorKind,
+  type McpLiveTone,
 } from "../../lib/mcp-preset-state";
-import { queryKeys, useMcpPresets, useMcpServers, useProviders } from "../../lib/queries";
-import type { McpPresetState, McpServer, McpTransport } from "../../lib/types";
+import {
+  queryKeys,
+  useMcpDependents,
+  useMcpLiveStatus,
+  useMcpPresets,
+  useMcpServers,
+  useProviders,
+} from "../../lib/queries";
+import type { McpLiveStatus, McpPresetState, McpServer, McpServerDependents, McpTransport } from "../../lib/types";
 import {
   filterPluginCatalog,
   isConnectablePlugin,
@@ -46,6 +57,7 @@ import {
 } from "../../shared/plugin-catalog";
 import { McpPresetIcon } from "./mcp-preset-icons";
 import { PresetSetupDialog } from "./mcp-preset-setup";
+import { McpSignInControls } from "./mcp-sign-in-controls";
 
 const COMPATIBILITY_FILTERS: ReadonlyArray<{ id: PluginCompatibilityFilter; label: string }> = [
   { id: "all", label: "All" },
@@ -89,6 +101,47 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const LIVE_DOT: Record<McpLiveTone, string> = {
+  green: "bg-status-green",
+  red: "bg-status-red",
+  warning: "bg-status-warning",
+  neutral: "bg-tertiary",
+};
+
+/** Row status: a soft semantic dot and label, then the last discovery's inventory. */
+function McpLiveIndicator({ server, status }: { server: McpServer; status: McpLiveStatus | undefined }) {
+  const view = mcpLiveStatusView(status, server.enabled);
+  if (!view) return null;
+  return (
+    <>
+      <span className="flex items-center gap-1.5 text-small text-secondary">
+        <span aria-hidden className={`size-2 shrink-0 rounded-full ${LIVE_DOT[view.tone]}`} />
+        {view.label}
+      </span>
+      {status?.toolCount !== undefined ? <Badge>Tools {status.toolCount}</Badge> : null}
+      {status?.resources ? <Badge>Resources</Badge> : null}
+    </>
+  );
+}
+
+/** “Scheduled task … and Bot … use this server.” plus what the action does to them. */
+function McpDependentsNote({
+  dependents,
+  consequence,
+}: {
+  dependents: McpServerDependents | undefined;
+  consequence: string;
+}) {
+  const summary = mcpDependentsSummary(dependents);
+  if (!summary) return null;
+  return (
+    <Text as="p" variant="small" className="mt-2 block" role="note">
+      {summary} {dependents!.schedules.length + dependents!.bots.length === 1 ? "uses" : "use"} this server.{" "}
+      {consequence}
+    </Text>
+  );
+}
+
 export function McpSettings() {
   const qc = useQueryClient();
   const servers = useMcpServers();
@@ -96,6 +149,9 @@ export function McpSettings() {
   const [editing, setEditing] = React.useState<McpServer | null>(null);
   const [setup, setSetup] = React.useState<{ state: McpPresetState; server?: McpServer } | null>(null);
   const [removing, setRemoving] = React.useState<McpServer | null>(null);
+  const [disabling, setDisabling] = React.useState<{ server: McpServer; dependents: McpServerDependents } | null>(null);
+  const live = useMcpLiveStatus();
+  const removingDependents = useMcpDependents(removing?.id);
   const [pluginSearch, setPluginSearch] = React.useState("");
   const [pluginCategory, setPluginCategory] = React.useState<string | "all">("all");
   const [pluginFilter, setPluginFilter] = React.useState<PluginCompatibilityFilter>("all");
@@ -112,9 +168,24 @@ export function McpSettings() {
     ]);
   };
 
-  const toggle = async (server: McpServer, enabled: boolean) => {
+  const toggle = async (server: McpServer, enabled: boolean, confirmed = false) => {
     if (toggling.has(server.id)) return;
     setToggling((current) => new Set(current).add(server.id));
+    if (!enabled && !confirmed) {
+      // Disabling breaks schedules and Bots that rely on this server: confirm first.
+      const dependents = await qc
+        .fetchQuery({ queryKey: queryKeys.mcpDependents(server.id), queryFn: () => mcpApi.dependents(server.id), staleTime: 0 })
+        .catch(() => null);
+      if (dependents && mcpDependentsSummary(dependents)) {
+        setToggling((current) => {
+          const next = new Set(current);
+          next.delete(server.id);
+          return next;
+        });
+        setDisabling({ server, dependents });
+        return;
+      }
+    }
     try {
       await mcpApi.save({ ...server, enabled });
     } catch (error) {
@@ -280,6 +351,18 @@ export function McpSettings() {
                     <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
                       {s.transport === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command" : s.url || "No URL"}
                     </Text>
+                    <div
+                      className="mt-1 flex flex-wrap items-center gap-2"
+                      aria-label={`${s.name || "MCP server"} status`}
+                      aria-live="polite"
+                    >
+                      <McpLiveIndicator server={s} status={live.get(s.id)} />
+                    </div>
+                    {s.enabled && live.get(s.id)?.state === "failed" && live.get(s.id)?.error ? (
+                      <Text variant="small" color="red" className="mt-0.5 block break-words">
+                        {live.get(s.id)!.error}
+                      </Text>
+                    ) : null}
                   </div>
                   <Button
                     variant="filled"
@@ -414,6 +497,7 @@ export function McpSettings() {
       {editing ? (
         <McpEditor
           server={editing}
+          isNew={!list.some((s) => s.id === editing.id)}
           open={editing !== null}
           onOpenChange={(open) => !open && setEditing(null)}
           onSaved={invalidate}
@@ -485,6 +569,10 @@ export function McpSettings() {
           removing ? (
             <>
               “{removing.name || "Untitled server"}” will be disconnected and removed.
+              <McpDependentsNote
+                dependents={removingDependents.data}
+                consequence="They will stop running with it until you choose another server."
+              />
               {removeError ? (
                 <Text as="p" variant="small" color="red" role="alert" className="mt-2">
                   Couldn’t remove it: {removeError}
@@ -498,6 +586,31 @@ export function McpSettings() {
         busy={removeBusy}
         keepOpenOnConfirm
         onConfirm={confirmRemove}
+      />
+
+      <AlertDialog
+        open={disabling !== null}
+        onOpenChange={(open) => !open && setDisabling(null)}
+        title="Disable this MCP server?"
+        description={
+          disabling ? (
+            <>
+              The assistant stops using “{disabling.server.name || "Untitled server"}” until you enable it again.
+              <McpDependentsNote
+                dependents={disabling.dependents}
+                consequence="They cannot use it while it is disabled."
+              />
+            </>
+          ) : null
+        }
+        confirmLabel="Disable"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          if (!disabling) return;
+          const { server } = disabling;
+          setDisabling(null);
+          void toggle(server, false, true);
+        }}
       />
     </div>
   );
@@ -562,11 +675,14 @@ function PluginCard({
 
 function McpEditor({
   server,
+  isNew,
   open,
   onOpenChange,
   onSaved,
 }: {
   server: McpServer;
+  /** Not saved yet: a sign-in may store it, and cancelling removes it again. */
+  isNew: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => Promise<void> | void;
@@ -592,8 +708,19 @@ function McpEditor({
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
   const [authorized, setAuthorized] = React.useState(false);
+  const [needsSignIn, setNeedsSignIn] = React.useState(false);
+  const [signingOut, setSigningOut] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
+  // A new server stored only so it could sign in; removed if the dialog is cancelled.
+  const storedForSignIn = React.useRef(false);
+  const savedByUser = React.useRef(false);
+  const cancelledSignIn = React.useRef(false);
+  // Closing while the sign-in save is still in flight must not authorize, and
+  // the provisional record is removed once that save settles.
+  const closed = React.useRef(false);
+  const signInSavePending = React.useRef(false);
+  const dependents = useMcpDependents(isNew ? undefined : server.id);
 
   React.useEffect(() => {
     if (open) {
@@ -612,11 +739,21 @@ function McpEditor({
       setOauth(Boolean(server.oauth));
       setAuthServerMetadataUrl(server.authServerMetadataUrl ?? "");
       setAuthorized(false);
+      setNeedsSignIn(false);
+      storedForSignIn.current = false;
+      savedByUser.current = false;
+      closed.current = false;
       if (server.authProvider) {
         void mcpApi.oauthStatus(server.id).then((status) => setApprovedProviderConnection(status.providerAuthorized ? JSON.stringify([server.authProvider ?? "", server.url?.trim() ?? "", server.transport]) : undefined)).catch(() => setApprovedProviderConnection(undefined));
       }
       if (server.oauth) {
-        void mcpApi.oauthStatus(server.id).then((status) => setAuthorized(status.authorized)).catch(() => setAuthorized(false));
+        void mcpApi
+          .oauthStatus(server.id)
+          .then((status) => {
+            setAuthorized(status.authorized && !status.needsSignIn);
+            setNeedsSignIn(Boolean(status.needsSignIn));
+          })
+          .catch(() => setAuthorized(false));
       }
     }
   }, [open, server]);
@@ -657,28 +794,97 @@ function McpEditor({
       return;
     }
     setAuthorizing(true);
+    cancelledSignIn.current = false;
     try {
-      const server = { ...build(), oauth: true };
-      await mcpApi.save(server); // authorization may only target the durable endpoint
-      await mcpApi.authorize(server);
+      const draft = { ...build(), oauth: true };
+      // Tokens are stored against a saved endpoint. A new server is saved so it
+      // can sign in (and removed again if the dialog is cancelled); an existing
+      // one only takes the connection edits sign-in needs, never its other edits.
+      const record: McpServer =
+        isNew || storedForSignIn.current
+          ? draft
+          : {
+              ...server,
+              transport: draft.transport,
+              url: draft.url,
+              headers: draft.headers,
+              oauth: true,
+              authProvider: undefined,
+              authServerMetadataUrl: draft.authServerMetadataUrl,
+              oauthClientName: draft.oauthClientName,
+            };
+      if (isNew || storedForSignIn.current || mcpConnectionChanged(server, record)) {
+        signInSavePending.current = isNew;
+        try {
+          await mcpApi.save(record);
+        } finally {
+          signInSavePending.current = false;
+        }
+        if (isNew) storedForSignIn.current = true;
+      }
+      if (closed.current || cancelledSignIn.current) return;
+      await mcpApi.authorize(record);
       setOauth(true);
       setAuthorized(true);
+      setNeedsSignIn(false);
       onSaved();
       toast.success("Authorized — you're signed in.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      if (!cancelledSignIn.current && !closed.current)
+        toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setAuthorizing(false);
+      if (closed.current) discardSignInRecord();
     }
+  };
+
+  /** Removes a new server that was stored only so it could sign in. */
+  const discardSignInRecord = () => {
+    if (!storedForSignIn.current || savedByUser.current || signInSavePending.current) return;
+    storedForSignIn.current = false;
+    void mcpApi
+      .remove(server.id)
+      .catch(() => undefined)
+      .then(() => onSaved());
+  };
+
+  const cancelSignIn = async () => {
+    cancelledSignIn.current = true;
+    await mcpApi.cancelAuthorize(server.id).catch(() => undefined);
+  };
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await mcpApi.signOut(server.id);
+      setAuthorized(false);
+      setNeedsSignIn(false);
+      onSaved();
+      toast.success("Signed out.");
+    } catch (error) {
+      toast.error(`Couldn’t sign out: ${errorMessage(error)}`);
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const closeEditor = (next: boolean) => {
+    if (!next) {
+      closed.current = true;
+      if (authorizing) void cancelSignIn();
+      // Cancelling a new server that was stored only to sign in removes it again.
+      discardSignInRecord();
+    }
+    onOpenChange(next);
   };
 
   const handleTest = async () => {
     setTesting(true);
     try {
-      const record = build();
-      await mcpApi.save(record);
-      const status = await mcpApi.status(record);
-      if (oauth) setAuthorized(Boolean(status.authorized));
+      // Tests the draft as typed; nothing is saved until Save.
+      const status = await mcpApi.testDraft(build());
+      if (oauth && status.authorized !== undefined) setAuthorized(status.authorized && !status.needsSignIn);
+      if (status.needsSignIn) setNeedsSignIn(true);
       if (status.connected) toast.success(`Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`);
       else toast.error(`Connection failed: ${status.error ?? "unknown error"}`);
     } catch (error) {
@@ -691,7 +897,7 @@ function McpEditor({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={closeEditor}
       title={server.name ? `Edit ${server.name}` : "Add MCP server"}
       description="Configure how Aiden connects to this tool server."
       size="large"
@@ -703,6 +909,7 @@ function McpEditor({
         setSaveError(null);
         try {
           await mcpApi.save(build());
+          savedByUser.current = true;
         } catch (error) {
           const message = errorMessage(error);
           setSaveError(message);
@@ -715,6 +922,14 @@ function McpEditor({
         onOpenChange(false);
       }}
     >
+      {!isNew && mcpConnectionChanged(server, build()) && mcpDependentsSummary(dependents.data) ? (
+        <Callout color="warning" className="mb-3">
+          <Text variant="small">
+            {mcpDependentsSummary(dependents.data)} {dependents.data!.schedules.length + dependents.data!.bots.length === 1 ? "uses" : "use"} this
+            server. Changing how Aiden connects to it asks for their approval again after you save.
+          </Text>
+        </Callout>
+      ) : null}
       <FieldSet>
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My MCP server" autoFocus />
@@ -797,18 +1012,28 @@ function McpEditor({
                 <Input aria-label="OAuth client name" maxLength={128} value={oauthClientName} onChange={(event) => { setOauthClientName(event.target.value); setAuthorized(false); }} placeholder="Aiden Agent" />
               </Field>
               <McpOAuthMetadataField value={authServerMetadataUrl} onChange={(value) => { setAuthServerMetadataUrl(value); setAuthorized(false); }} />
-              <Field label="Authorize" description={authorized ? "Signed in. Re-run to refresh access." : "Opens your browser to sign in."}>
-                <div className="flex items-center gap-2">
-                  <Button size="small" variant="filled" onClick={handleAuthorize} disabled={authorizing || !url.trim() || Boolean(metadataError)}>
-                    {authorizing ? "Waiting for browser…" : authorized ? "Re-authorize" : "Authorize"}
-                  </Button>
-                  {authorized ? (
-                    <span className="flex items-center gap-1 text-small text-support-green">
-                      <ShieldCheck className="size-4" />
-                      Authorized
-                    </span>
-                  ) : null}
-                </div>
+              <Field
+                label="Authorize"
+                description={
+                  authorizing
+                    ? "Finish signing in in your browser, or cancel."
+                    : needsSignIn
+                      ? "Your sign-in expired or was revoked. Sign in again to reconnect."
+                      : authorized
+                        ? "Signed in. Re-run to refresh access."
+                        : "Opens your browser to sign in."
+                }
+              >
+                <McpSignInControls
+                  authorizing={authorizing}
+                  authorized={authorized}
+                  needsSignIn={needsSignIn}
+                  signingOut={signingOut}
+                  disabled={!url.trim() || Boolean(metadataError)}
+                  onAuthorize={() => void handleAuthorize()}
+                  onCancel={() => void cancelSignIn()}
+                  onSignOut={() => void handleSignOut()}
+                />
               </Field>
               </>
             ) : null}
@@ -829,3 +1054,4 @@ function McpEditor({
     </Dialog>
   );
 }
+

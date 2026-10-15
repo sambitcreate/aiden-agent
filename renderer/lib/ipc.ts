@@ -46,7 +46,9 @@ import type {
   GitWorktree,
   LocalVoiceModel,
   McpServer,
+  McpLiveStatus,
   McpPresetState,
+  McpServerDependents,
   McpStatus,
   ModelInfo,
   ModelInsightsActionResult,
@@ -556,7 +558,20 @@ export const mcpApi = {
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) => invoke<{ authorized: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+  /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
+  cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
+  /** Forget this server's OAuth session and disconnect it. */
+  signOut: (id: string) => invoke<{ authorized: false }>("mcp:signOut", id),
+  /** Connect to an unsaved draft without persisting it. `apiKey` is a pasted, unsaved preset key. */
+  testDraft: (server: McpServer, apiKey?: string) => invoke<McpStatus>("mcp:testDraft", server, apiKey),
+  /** Schedules and Bots that rely on this server. */
+  dependents: (id: string) => invoke<McpServerDependents>("mcp:dependents", id),
+  /** Current per-server live status; changes arrive on `mcp:statusChanged`. */
+  liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
+  onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
+    onNotification<McpLiveStatus>("mcp:statusChanged", handler),
+  oauthStatus: (id: string) =>
+    invoke<{ authorized: boolean; needsSignIn?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
   providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),

@@ -8,6 +8,8 @@ export interface McpPresetStateRecord<Preset> {
   configured: boolean;
   enabled: boolean;
   ready: boolean;
+  /** Stored sign-in stopped working (refresh rejected); shown instead of signed in. */
+  needsSignIn?: boolean;
   /** Why the saved record for this preset is unusable; the user can repair or remove it. */
   error?: string;
   /**
@@ -26,6 +28,7 @@ export async function buildMcpPresetStates<
   serverIdFor,
   validate,
   isReady,
+  needsSignIn,
 }: {
   presets: readonly Preset[];
   servers: readonly Server[];
@@ -33,6 +36,7 @@ export async function buildMcpPresetStates<
   /** Throws when a saved record cannot be used as this preset. */
   validate: (server: Server) => void;
   isReady: (preset: Preset, serverId: string, existing: Server | undefined) => Promise<boolean>;
+  needsSignIn?: (preset: Preset, serverId: string) => boolean;
 }): Promise<McpPresetStateRecord<Preset>[]> {
   return Promise.all(
     presets.map(async (preset) => {
@@ -56,7 +60,10 @@ export async function buildMcpPresetStates<
         return failed(error, true);
       }
       try {
-        return { ...base, ready: await isReady(preset, serverId, existing) };
+        const ready = await isReady(preset, serverId, existing);
+        return existing && needsSignIn?.(preset, serverId)
+          ? { ...base, ready, needsSignIn: true }
+          : { ...base, ready };
       } catch (error) {
         return failed(error, false);
       }

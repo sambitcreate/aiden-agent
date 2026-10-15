@@ -823,6 +823,8 @@ export interface McpPresetState {
   enabled: boolean;
   /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
   ready: boolean;
+  /** OAuth presets: the stored sign-in was rejected and must be renewed. */
+  needsSignIn?: boolean;
   /** The saved record for this preset is unusable; setup can repair it or it can be removed. */
   error?: string;
   /** The saved record failed validation; setup rebuilds it from the preset's official settings. */
@@ -1143,7 +1145,13 @@ export interface EngineStatus {
   error: string | null;
 }
 
-export type { McpStatus } from "../shared/mcp-status";
+export type {
+  McpDependent,
+  McpLiveState,
+  McpLiveStatus,
+  McpServerDependents,
+  McpStatus,
+} from "../shared/mcp-status";
 
 export interface ChatStartParams {
   chatId: string;

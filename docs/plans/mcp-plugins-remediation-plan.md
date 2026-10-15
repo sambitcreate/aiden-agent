@@ -77,21 +77,21 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 
 ### 7. Model-facing MCP surface (`pi-codemode.ts`, `pi-tool-discovery.ts`, `mcp-tool-identity.ts`, `mcp-tool-result.ts`, `mcp-server-instructions.ts`, `mcp-resources.ts`, system prompt) — [#466](https://github.com/sambitcreate/aiden-agent/pull/466)
 
-- [ ] Codemode-nested MCP calls get a large script budget; the 32K cap applies only to model-facing text; omitted `structuredContent` is marked.
-- [ ] New tool naming (see Decisions); `describeTool` accepts identifier forms.
-- [ ] Ranked tool search (tokenised, stop words, OR scoring) and server-name namespace aliases.
-- [ ] Bounded `mcp_servers` system prompt section with one line per server, appended as a section patch on change; full instructions move behind `describeNamespace`; no tool-name arrays in the prompt.
-- [ ] Codemode declarations carry an MCP result `outputSchema` (`content`, `structuredContent`, `isError`).
-- [ ] Head-and-tail truncation; no duplicate structured JSON when a text block already carries it; resource reads truncate instead of failing; resource listing pages instead of failing above 128; tool-count overflow degrades instead of disabling codemode.
-- [ ] Direct declarations cap descriptions and fall back to `title`; activity labels read `server/tool`.
-- [ ] Child read lane keeps `structuredContent` with credential redaction.
+- [x] Codemode-nested MCP calls get a large script budget; the 32K cap applies only to model-facing text; omitted `structuredContent` is marked.
+- [x] New tool naming (see Decisions); `describeTool` accepts identifier forms.
+- [x] Ranked tool search (tokenised, stop words, OR scoring) and server-name namespace aliases.
+- [x] Bounded `mcp_servers` system prompt section with one line per server, appended as a section patch on change; full instructions move behind `describeNamespace`; no tool-name arrays in the prompt.
+- [x] Codemode declarations carry an MCP result `outputSchema` (`content`, `structuredContent`, `isError`).
+- [x] Head-and-tail truncation; no duplicate structured JSON when a text block already carries it; resource reads truncate instead of failing; resource listing pages instead of failing above 128; tool-count overflow degrades instead of disabling codemode.
+- [x] Direct declarations cap descriptions and fall back to `title`; activity labels read `server/tool`.
+- [x] Child read lane keeps `structuredContent` with credential redaction.
 
 ### 8. OAuth controls and live status (`main/handlers/phase2*.ts`, `mcp-oauth*.ts`, preload, Settings) — [#467](https://github.com/sambitcreate/aiden-agent/pull/467)
 
-- [ ] Test connection and Authorize no longer persist an unsaved server.
-- [ ] `mcp:cancelAuthorize` and `mcp:signOut`; Cancel button; real authorization status.
-- [ ] Remove, Disable and Rename list dependent schedules and Bots.
-- [ ] Live per-server status (`mcp:statusChanged` push), tool/resource badges.
+- [x] Test connection and Authorize no longer persist an unsaved server.
+- [x] `mcp:cancelAuthorize` and `mcp:signOut`; Cancel button; real authorization status.
+- [x] Remove, Disable and Rename list dependent schedules and Bots.
+- [x] Live per-server status (`mcp:statusChanged` push), tool/resource badges.
 
 ### 9. Exposure controls (config, runtime, Settings) — [#468](https://github.com/sambitcreate/aiden-agent/pull/468)
 
