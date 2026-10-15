@@ -1,7 +1,7 @@
 /* global Buffer, process, setTimeout */
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
@@ -20,10 +20,25 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const binary = path.join(repositoryRoot, "build", "native", "aiden-worktree-remover-test");
 const productionBinary = path.join(repositoryRoot, "build", "native", "aiden-worktree-remover");
+const execFileAsync = promisify(execFile);
+
+test("native session audit sees a surviving member and clears after exit", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const child = spawn("/bin/sleep", ["10"], { detached: true, stdio: "ignore" });
+  t.after(() => { try { child.kill("SIGKILL"); } catch { /* Already reaped. */ } });
+  assert.ok(Number.isSafeInteger(child.pid) && child.pid > 0);
+  const active = await execFileAsync(binary, ["audit-session", String(child.pid)], { encoding: "utf8" });
+  assert.equal(active.stdout, "active\n");
+  child.kill("SIGKILL");
+  await new Promise((resolve) => child.once("exit", resolve));
+  const empty = await execFileAsync(binary, ["audit-session", String(child.pid)], { encoding: "utf8" });
+  assert.equal(empty.stdout, "empty\n");
+});
 
 async function fixture(t, name) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-remover-test-"));

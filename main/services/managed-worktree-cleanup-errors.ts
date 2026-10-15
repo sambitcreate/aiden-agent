@@ -2,8 +2,8 @@
 export class ManagedWorktreeProcessActiveError extends Error {
   readonly reason = "terminal_process_active";
 
-  constructor() {
-    super("A terminal process is still exiting. Wait for it to stop, then retry worktree removal.");
+  constructor(message = "A terminal process is still exiting. Wait for it to stop, then retry worktree removal.") {
+    super(message);
     this.name = "ManagedWorktreeProcessActiveError";
   }
 }

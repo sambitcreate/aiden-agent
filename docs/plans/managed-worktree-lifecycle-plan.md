@@ -52,13 +52,18 @@ P0 (phases 1–9) merged in PR #185. Release acceptance and the explicit product
 
 Explicit managed-worktree removal now requests shutdown of Aiden-owned terminal
 sessions and waits for their PTY exit events before inspecting or deleting the
-checkout. A terminal that does not exit within five seconds blocks removal with
-an actionable retry message. Its pending exit remains tracked across attempts;
-an immediate retry cannot bypass the wait. The existing cancellation of workspace
+checkout. It then checks native POSIX session membership for surviving jobs,
+including background jobs in separate process groups that have lost their
+controlling PTY. A terminal that does not
+exit within five seconds, a surviving job, or an unavailable inventory blocks
+removal with an actionable retry message. Session identities and pending
+exits remain tracked across attempts; an immediate retry cannot bypass the wait.
+The existing cancellation of workspace
 operations, generations, and schedules and the Git ownership/quarantine checks
 remain in place. Remote callers receive the same reason via the existing
-`git_capability_denied` response. This phase does not claim control over independently detached
-or externally launched processes.
+`git_capability_denied` response, and a pre-delete refusal permits a same-key
+Remote retry. This phase does not claim control over independently detached or
+externally launched processes.
 
 ## Remaining phases
 

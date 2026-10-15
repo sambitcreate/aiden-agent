@@ -847,6 +847,38 @@ test("managed worktree removal waits for owned terminal exit and reports a stuck
   await stuckService.closeForWorkspaceAndWait("managed-workspace", 10);
 });
 
+test("managed worktree removal refuses a surviving job in the PTY session after shell exit", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  let sessionHasSurvivor = true;
+  let inventoryAvailable = false;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    // The job has a different PID and process group but retains the shell's
+    // POSIX session ID after the shell and controlling PTY disappear.
+    sessionHasMembers: async (sessionId) => {
+      assert.equal(sessionId, child.pty.pid);
+      if (!inventoryAvailable) throw new Error("process inventory unavailable");
+      return sessionHasSurvivor;
+    },
+  });
+  await service.create("managed-workspace", "/tmp", owner.owner);
+  child.emitExit(0);
+
+  await assert.rejects(
+    service.closeForWorkspaceAndWait("managed-workspace", 10),
+    /could not verify terminal jobs/u,
+  );
+  inventoryAvailable = true;
+  await assert.rejects(
+    service.closeForWorkspaceAndWait("managed-workspace", 10),
+    /terminal job is still running/u,
+  );
+  sessionHasSurvivor = false;
+  await service.closeForWorkspaceAndWait("managed-workspace", 10);
+});
+
 test("terminal enforces the per-document session cap and history initialization order", async () => {
   const owner = ownerState();
   const service = new TerminalService({

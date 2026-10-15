@@ -18,6 +18,15 @@ Review found that synchronous renderer invalidation during terminal creation
 could terminate the session before PTY exit observation was installed. Exit is
 now observed before owner subscription and any post-spawn invalidation teardown.
 A behavioral test covers rejection, pending exit, then successful drain.
+The process boundary audits actual POSIX session membership with the packaged
+native remover after shell exit. Job-control background groups can survive the
+shell and lose their controlling PTY while retaining its session ID; they block
+deletion until gone. Missing or invalid inventory fails closed. The Remote idempotency
+ledger forgets this pre-Git refusal, allowing a same-key retry after the job
+exits. The scoped unit test covers a surviving background member and replay.
+The existing iOS and Android clients surface the Remote error message without
+a protocol revision. Focused iOS simulator XCTest (12 tests) and Android JVM
+tests (934 tests) passed for this PR head locally.
 
 This is one bounded phase. No automatic retention sweep or new owner metadata is
 enabled. Future eligibility must default old worktrees to manual, keep manual

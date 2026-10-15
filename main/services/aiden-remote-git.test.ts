@@ -299,10 +299,17 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
       "device-1",
       managedWorkspace.id,
       workspaceRevision(managedWorkspace),
-      "worktree-delete-key-0002",
+      "worktree-delete-key-busy-0001",
       { confirmedForeground: true },
     );
     assert.equal(deleted.result?.kind, "mutation");
+    assert.deepEqual(await service.deleteManagedWorktree(
+      "device-1",
+      managedWorkspace.id,
+      workspaceRevision(managedWorkspace),
+      "worktree-delete-key-busy-0001",
+      { confirmedForeground: true },
+    ), deleted);
     assert.equal(deleteWorktreeCount, 1);
 
     const worktrees = await service.worktrees("device-1", workspace.id);

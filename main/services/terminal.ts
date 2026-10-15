@@ -11,6 +11,7 @@ import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
+import { managedWorktreeSessionHasMembers } from "./managed-worktree-remover.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -81,6 +82,8 @@ export interface TerminalServiceOptions {
    * app restart. Defaults to none (in-memory only) for tests and legacy paths.
    */
   historyStore?: TerminalHistoryStoreLike;
+  /** POSIX session liveness seam for deletion tests. */
+  sessionHasMembers?: (sessionId: number) => Promise<boolean>;
 }
 
 /**
@@ -235,6 +238,8 @@ export class TerminalService {
   }
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly pendingWorkspaceExits = new Map<string, Set<Promise<void>>>();
+  private readonly workspaceSessionIds = new Map<string, Set<number>>();
+  private readonly unverifiableWorkspaces = new Set<string>();
   private readonly webContentsEpochs = new Map<number, number>();
   private spawnHelperReady: Promise<void> | undefined;
   private historyStore: TerminalHistoryStoreLike | undefined;
@@ -324,6 +329,19 @@ export class TerminalService {
         env: { ...agentCommandEnvironment(), TERM: "xterm-256color" } as Record<string, string>,
       },
     );
+    if (!Number.isSafeInteger(pty.pid) || pty.pid <= 0) {
+      this.unverifiableWorkspaces.add(workspaceId);
+      this.terminatePty(pty);
+      throw new Error("The terminal process identity could not be verified.");
+    }
+    let sessionIds = this.workspaceSessionIds.get(workspaceId);
+    if (!sessionIds) {
+      sessionIds = new Set();
+      this.workspaceSessionIds.set(workspaceId, sessionIds);
+    }
+    // forkpty makes its shell the POSIX session leader. Job-control background
+    // groups retain that session ID even when the shell and PTY have exited.
+    sessionIds.add(pty.pid);
     const invalidatedAtSpawnBoundary = ownerInvalidated();
     let settleExit: () => void = () => undefined;
     const exited = new Promise<void>((resolve) => { settleExit = resolve; });
@@ -457,18 +475,48 @@ export class TerminalService {
     const sessions = [...this.sessions].filter(([, session]) => session.workspaceId === workspaceId);
     for (const [id, session] of sessions) this.terminate(id, session);
     const pending = [...(this.pendingWorkspaceExits.get(workspaceId) ?? [])];
-    if (pending.length === 0) return;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        Promise.all(pending),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new ManagedWorktreeProcessActiveError()), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timeout) clearTimeout(timeout);
+    if (this.unverifiableWorkspaces.has(workspaceId)) {
+      throw new ManagedWorktreeProcessActiveError(
+        "Aiden could not verify a terminal process. Keep this worktree and inspect its jobs before retrying.",
+      );
     }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    if (pending.length > 0) {
+      try {
+        await Promise.race([
+          Promise.all(pending),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new ManagedWorktreeProcessActiveError()), timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }
+    const sessionIds = [...(this.workspaceSessionIds.get(workspaceId) ?? [])];
+    if (sessionIds.length === 0) return;
+    for (const sessionId of sessionIds) {
+      let active: boolean;
+      try {
+        active = await (this.options.sessionHasMembers ?? managedWorktreeSessionHasMembers)(sessionId);
+      } catch {
+        throw new ManagedWorktreeProcessActiveError(
+          "Aiden could not verify terminal jobs. Keep this worktree and try again after checking its processes.",
+        );
+      }
+      if (active) {
+        throw new ManagedWorktreeProcessActiveError(
+          "A terminal job is still running. Stop it, then retry worktree removal.",
+        );
+      }
+    }
+    const currentIds = this.workspaceSessionIds.get(workspaceId);
+    if (currentIds && (currentIds.size !== sessionIds.length || sessionIds.some((id) => !currentIds.has(id)))) {
+      throw new ManagedWorktreeProcessActiveError(
+        "Terminal processes changed during cleanup. Retry worktree removal.",
+      );
+    }
+    this.workspaceSessionIds.delete(workspaceId);
   }
 
   workspaceId(id: string, owner: RendererDocumentOwner): string {

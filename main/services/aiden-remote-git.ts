@@ -6,6 +6,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
   AidenOperationContractError,
+  AidenOperationNotExecutedError,
   assertRevision,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
@@ -780,7 +781,16 @@ export class AidenRemoteGitService {
               workspaceId,
             },
           };
-        } catch (error) { mapGitError(error); }
+        } catch (error) {
+          if (error instanceof ManagedWorktreeProcessActiveError) {
+            // The terminal drain refused before Git or workspace metadata changed.
+            // Forget this admission so the same key can retry after process exit.
+            throw new AidenOperationNotExecutedError(
+              new AidenRemoteServiceError("git_capability_denied", error.message, 409),
+            );
+          }
+          mapGitError(error);
+        }
       },
     );
   }
