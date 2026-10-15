@@ -358,6 +358,7 @@ import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import {
   PiAgentRuntimeHarness,
+  isPiManagedCancellationError,
   piAgentRuntimeExtensions,
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
@@ -2643,6 +2644,7 @@ export const llmClient = {
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
+    let piJournalStopNoted = false;
     let piJournalless = false;
     let piUpgradeCompactionEnabled = false;
     let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
@@ -3273,7 +3275,19 @@ export const llmClient = {
               }
             : {}),
           onJournalError: (error) => {
+            // A Stop-interrupted write may still land, so the turn is recovered
+            // from the visible chat either way. Only a real failure is an error.
             piJournalHealthy = false;
+            if (isPiManagedCancellationError(error)) {
+              if (!piJournalStopNoted) {
+                piJournalStopNoted = true;
+                logger.info(
+                  "pi",
+                  `Stop interrupted Pi session writes for stream ${streamId}; the visible turn will be recovered.`,
+                );
+              }
+              return;
+            }
             logger.error(
               "pi",
               `Could not append Pi session messages for stream ${streamId}.`,
