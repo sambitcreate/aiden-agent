@@ -18,7 +18,6 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
-import { mcpApiKeyHeaderValue } from "./mcp-oauth-client-metadata.js";
 import {
   assertMcpPresetServer,
   presetSecretId,
@@ -26,14 +25,14 @@ import {
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 import { mcpServerExposure, mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
+import { resolveMcpConnectionCredentials } from "./mcp-connection-credentials.js";
+import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
+import { McpStdioApprovalRequiredError } from "./mcp-stdio-approvals.js";
 import { markMcpToolExposure, planMcpServerExposure } from "./mcp-exposure.js";
 import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
 import { configStore } from "./config-store.js";
-import {
-  mcpCredentialConnectionSnapshot,
-  mcpRuntimeConnectionSnapshot,
-} from "./mcp-credential-cleanup-core.js";
+import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
 import {
   reconcilePendingMcpCredentialCleanup,
   withConfiguredMcp,
@@ -98,28 +97,19 @@ async function resolveAuth(
   server: McpServer,
   isCurrent: () => boolean = () => true,
 ): Promise<McpServer> {
-  if (!isCurrent())
-    throw new Error("The renderer document is no longer active.");
-  const preset = assertMcpPresetServer(server);
-  if (!preset || preset.auth.kind !== "apiKey") return server;
-  await reconcilePendingMcpCredentialCleanup();
-  const key = await secrets.getOrBindLegacyProviderKey(
-    presetSecretId(server.id),
-    JSON.stringify(mcpCredentialConnectionSnapshot(server)),
-  );
-  if (!isCurrent())
-    throw new Error("The renderer document is no longer active.");
-  if (!key)
-    throw new Error(
-      `${preset.name} needs an API key — add one in Settings → Plugins.`,
-    );
-  return {
-    ...server,
-    headers: {
-      ...server.headers,
-      [preset.auth.headerName]: mcpApiKeyHeaderValue(key, preset.auth.headerValuePrefix),
+  return resolveMcpConnectionCredentials(server, {
+    isLaunchApproved: (configured) => mcpStdioApprovals.isApproved(configured),
+    resolveFieldSecrets: async (configured) => {
+      await reconcilePendingMcpCredentialCleanup();
+      return resolveStoredMcpFieldSecrets(configured);
     },
-  };
+    presetKey: async (configured, binding) => {
+      await reconcilePendingMcpCredentialCleanup();
+      return secrets.getOrBindLegacyProviderKey(presetSecretId(configured.id), binding);
+    },
+    isCurrent,
+    missingKey: (name) => `${name} needs an API key — add one in Settings → Plugins.`,
+  });
 }
 
 function makeTransport(
@@ -748,7 +738,9 @@ class McpRecentFailureError extends Error {
   }
 }
 
-function writeMcpDegraded(error: unknown, failurePhase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm", extra: Record<string, number> = {}): void {
+function writeMcpDegraded(error: unknown, phase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm", extra: Record<string, number> = {}): void {
+  // An unapproved local command is a distinct, expected state, not a failure to connect.
+  const failurePhase = error instanceof McpStdioApprovalRequiredError ? "mcp-stdio-approval" : phase;
   const projected = projectDiagnosticError(error);
   writeDiagnosticEvent({
     level: "warn",

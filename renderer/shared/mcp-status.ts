@@ -35,6 +35,20 @@ export interface McpToolSummary {
   title?: string;
 }
 
+/** A local (stdio) server not approved to run on this device, with exactly what it would run. */
+export interface McpPendingLaunchApproval {
+  serverId: string;
+  fingerprint: string;
+  command: string;
+  args: string[];
+  /**
+   * Each variable's value as written in config.json; omitted for one already
+   * in the keychain. `unavailable`: its keychain value was saved for another
+   * variable (or is gone), so it will not be used and must be entered again.
+   */
+  env: { name: string; value?: string; unavailable?: true }[];
+}
+
 export interface McpDependent {
   id: string;
   name: string;

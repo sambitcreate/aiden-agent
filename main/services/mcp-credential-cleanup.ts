@@ -5,11 +5,11 @@ import { randomUUID } from "node:crypto";
 import { app, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import {
+  externalMcpCredentialCleanupKind,
   mcpCredentialCleanupAfterConfig,
-  mcpCredentialConnectionSnapshot,
+  mcpCredentialCleanupSnapshot,
   mcpRuntimeConnectionSnapshot,
   parsePendingMcpCredentialCleanup,
-  sameMcpCredentialConnection,
   sameMcpRuntimeConnection,
   type McpRuntimeConnectionSnapshot,
   type PendingMcpCredentialCleanupV1,
@@ -17,6 +17,8 @@ import {
 import { clearOAuth, invalidateMcpOAuthOperation, suspendMcpOAuthOperations } from "./mcp-oauth.js";
 import { presetSecretId } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
+import { pruneStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
+import { mcpFieldSecretReferencesChanged } from "./mcp-field-secrets-core.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
@@ -130,6 +132,9 @@ async function reconcileNow(
     if (cleanup.clearPresetKey) {
       await secrets.deleteKey(presetSecretId(pending.serverId), isCurrent);
     }
+    // Env/header values the configured record no longer references (all of
+    // them once the server is gone) leave the secrets store.
+    await pruneStoredMcpFieldSecrets(pending.serverId, current, isCurrent);
     assertCurrent(isCurrent);
     await clearPending();
   } finally {
@@ -250,9 +255,10 @@ export function reconcileExternalMcpCredentialChanges(
       const previousRuntime = mcpRuntimeConnectionSnapshot(before);
       const targetRuntime = after ? mcpRuntimeConnectionSnapshot(after) : null;
       if (sameMcpRuntimeConnection(previousRuntime, targetRuntime)) continue;
-      const previousSnapshot = mcpCredentialConnectionSnapshot(before);
-      const targetSnapshot = after ? mcpCredentialConnectionSnapshot(after) : null;
-      const credentialChanged = !sameMcpCredentialConnection(previousSnapshot, targetSnapshot);
+      const previousSnapshot = mcpCredentialCleanupSnapshot(before);
+      const targetSnapshot = after ? mcpCredentialCleanupSnapshot(after) : null;
+      // Aiden's own move of unchanged values into the keychain is no credential change.
+      const cleanupKind = externalMcpCredentialCleanupKind(before, after);
       // The DataStore cache-publication hook invalidates before the new
       // snapshot becomes visible. Repeat at reconciliation admission so a
       // lease acquired during the publication/reconciliation gap is fenced.
@@ -260,20 +266,23 @@ export function reconcileExternalMcpCredentialChanges(
       const release = suspendMcpOAuthOperations(before.id);
       try {
         await disconnect(before.id);
-        if (credentialChanged) {
-          const kind = !after
-            ? "remove"
-            : before.oauth && !after.oauth
-              ? "disable-oauth"
-              : "replace";
+        if (cleanupKind) {
           await writePending({
             version: 1,
-            kind,
+            kind: cleanupKind,
             serverId: before.id,
             previous: previousSnapshot,
             target: targetSnapshot,
           });
           await reconcileNow(() => true, false);
+        }
+        // Independently of sign-in cleanup: an edit that drops or renames a
+        // stored env/header field (or removes the server) prunes its values
+        // against this authoritative config, so restoring the old marker later
+        // finds nothing. A failed prune rejects reconciliation, which keeps this
+        // transition pending so the next reload retries it.
+        if (mcpFieldSecretReferencesChanged(before, after)) {
+          await pruneStoredMcpFieldSecrets(before.id, after);
         }
       } finally {
         release();

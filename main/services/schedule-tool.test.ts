@@ -1638,3 +1638,21 @@ test("generic automation tools never list or change a Bot's routines", async () 
     ["task-1"],
   );
 });
+
+test("schedule_task cannot choose a server switched off for the model", async () => {
+  const fake = fakeDependencies();
+  fake.dependencies.listMcpServers = async () => [{ ...GMAIL_SERVER, exposure: "hidden" }];
+  const proposal = prepareAssistantScheduleProposal(
+    { action: "create", name: "Brief", cron: "0 9 * * *", timezone: "UTC", prompt: "Summarize.", mcpServerIds: ["gmail"] },
+    new Date("2026-07-30T12:00:00.000Z"),
+  );
+  await assert.rejects(resolveAssistantScheduleMcpServers(proposal, fake.dependencies.listMcpServers), /off for the model/u);
+  await assert.rejects(
+    prepareStandardScheduleApproval(
+      { action: "create", name: "Brief", cron: "0 9 * * *", prompt: "Summarize.", permission: "full", mcpServerIds: ["gmail"] },
+      ASSISTANT_MODEL_SELECTION,
+      fake.dependencies,
+    ),
+    /off for the model/u,
+  );
+});
