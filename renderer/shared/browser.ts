@@ -316,7 +316,8 @@ export type BrowserEvent =
       tabId: string;
       shortcut: "annotate" | "focus_address" | "reload" | "hard_reload";
     }
-  | { type: "annotation"; workspaceId: string; tabId: string; annotation: BrowserAnnotation };
+  | { type: "annotation"; workspaceId: string; tabId: string; annotation: BrowserAnnotation }
+  | { type: "link-preference"; linkOpening: BrowserLinkOpening };
 
 export const DEFAULT_BROWSER_SETTINGS: BrowserDefaults = {
   profileId: "default",

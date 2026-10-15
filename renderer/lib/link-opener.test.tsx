@@ -2,7 +2,7 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { installBotTestIpc } from "../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
 import { LinkOpenerProvider, useBrowserSurface, useBrowserSurfaceBlocker, useLinkOpener } from "./link-opener";
 
 afterEach(cleanup);
@@ -113,6 +113,20 @@ test("app routes and modified clicks are left alone", async () => {
   await flush();
   assert.equal(route.defaultPrevented, false);
   assert.deepEqual(sent(calls), []);
+});
+
+test("a link-preference event updates how the next click routes, without relaunch", async () => {
+  // This is the broadcast setLinkOpening() sends to every window directly
+  // (not through browser:get-state's per-workspace owner), so it must reach
+  // the provider even for a window that owns no workspace yet.
+  const calls = ipc("ask");
+  render(app({ surface: false }));
+  await flush();
+  emitBotTestNotification("browser:event", { type: "link-preference", linkOpening: "external" });
+  fireEvent.click(screen.getByText("link"));
+  await flush();
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
 });
 
 test("right-click offers both destinations and copy", async () => {

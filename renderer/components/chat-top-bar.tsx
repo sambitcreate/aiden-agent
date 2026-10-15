@@ -37,7 +37,7 @@ import {
 } from "./ui";
 import { WORKSPACE_TOOLS } from "./workspace-tool-launcher";
 
-export const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
+const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
 /**
  * Header menu triggers fill their heading's box, which clips overflow for the

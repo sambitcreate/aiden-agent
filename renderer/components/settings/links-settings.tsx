@@ -1,7 +1,7 @@
 import * as React from "react";
 import { browserApi } from "../../lib/ipc";
 import type { BrowserLinkOpening } from "../../shared/browser";
-import { IS_MAC } from "../chat-top-bar";
+import { isMacPlatform } from "../../lib/ghostty-terminal/host-platform";
 import { Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, toast } from "../ui";
 
 const LABELS: Record<BrowserLinkOpening, string> = {
@@ -9,7 +9,7 @@ const LABELS: Record<BrowserLinkOpening, string> = {
   browser: "Aiden browser",
   external: "System browser",
 };
-const MOD = IS_MAC ? "⌘" : "Ctrl";
+const MOD = isMacPlatform() ? "⌘" : "Ctrl";
 
 export function LinksSettings() {
   const [value, setValue] = React.useState<BrowserLinkOpening | null>(null);
@@ -22,6 +22,7 @@ export function LinksSettings() {
       .catch(() => live && setValue("ask"));
     const off = browserApi.onEvent((event) => {
       if (event.type === "state" && event.state.defaults) setValue(event.state.defaults.linkOpening);
+      else if (event.type === "link-preference") setValue(event.linkOpening);
     });
     return () => {
       live = false;

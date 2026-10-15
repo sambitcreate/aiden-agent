@@ -319,7 +319,25 @@ export class BrowserService {
     this.defaults = { ...this.defaults, linkOpening: value };
     this.save();
     this.emitAll();
+    // emitAll() only reaches windows whose workspace already has an owner
+    // (attachOwner has run). A window that owns no workspace yet — e.g. a
+    // bare Settings window, or any window before its first browser-surface
+    // mount — would otherwise miss this change until it next re-reads or
+    // relaunches. Broadcast directly to every live window so all of them
+    // learn the new preference immediately, regardless of workspace state.
+    this.broadcastLinkOpening(value);
     return value;
+  }
+  private broadcastLinkOpening(linkOpening: BrowserLinkOpening): void {
+    const event: BrowserEvent = { type: "link-preference", linkOpening };
+    for (const window of BrowserWindow.getAllWindows()) {
+      try {
+        if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+        window.webContents.send("browser:event", redactBrowserData(event));
+      } catch {
+        /* Document invalidation revokes delivery. */
+      }
+    }
   }
   getState(workspaceId: string): BrowserState {
     const workspace = this.workspace(workspaceId);

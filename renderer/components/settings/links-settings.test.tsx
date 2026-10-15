@@ -2,7 +2,7 @@ import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { installBotTestIpc } from "../../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { LinksSettings } from "./links-settings";
 
 afterEach(cleanup);
@@ -25,6 +25,18 @@ test("shows the saved preference and saves a new one", async () => {
   await flush();
   assert.deepEqual(last(calls), { channel: "browser:set-link-preference", args: ["ask"] });
   assert.match(screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "", /Ask each time/);
+});
+
+test("a link-preference broadcast updates the shown choice without a reload", async () => {
+  installBotTestIpc({
+    "browser:link-preference": () => "ask",
+    "browser:set-link-preference": (value) => value,
+  });
+  render(<LinksSettings />);
+  await flush();
+  emitBotTestNotification("browser:event", { type: "link-preference", linkOpening: "external" });
+  await flush();
+  assert.match(screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "", /System browser/);
 });
 
 test("a failed save restores the previous choice", async () => {

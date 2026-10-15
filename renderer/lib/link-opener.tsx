@@ -107,6 +107,7 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
       });
     const off = browserApi.onEvent((event) => {
       if (event.type === "state" && event.state.defaults) setPreference(event.state.defaults.linkOpening);
+      else if (event.type === "link-preference") setPreference(event.linkOpening);
     });
     return () => {
       live = false;
