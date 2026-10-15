@@ -1085,7 +1085,7 @@ you.
 | --- | --- |
 | \`providers\` | Custom provider connections: \`id\`, \`kind\`, \`label\`, \`baseUrl\`, \`needsKey\`, \`defaultModel\`, \`deployment\`. |
 | \`providerIdAliases\` | Append-only record of provider IDs Aiden has renamed. Leave it alone unless you know why it exists. |
-| \`mcpServers\` | MCP server definitions. |
+| \`mcpServers\` | MCP server definitions. Environment and header values are not stored here: each name keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Plugins. |
 | \`skills\` | Inline skills: \`name\`, \`description\`, \`instructions\`, \`enabled\`. |
 
 Aiden rewrites this file when you change those settings in the UI, so it round
@@ -1095,9 +1095,10 @@ from the UI.
 
 ## What is deliberately not here
 
-**API keys and OAuth tokens.** They are encrypted against this machine's keychain
-and stay in Aiden's application-support folder. After copying \`config.json\` to a
-new machine your providers appear with no key attached; re-enter them there.
+**API keys and OAuth tokens, plus MCP environment and header values.** They are
+encrypted against this machine's keychain and stay in Aiden's application-support
+folder. After copying \`config.json\` to a new machine your providers appear with no
+key attached and MCP servers ask for their values again; re-enter them there.
 
 **Model lists.** \`providers[].models\` is discovery output rather than
 configuration, so it is cached per machine and refilled when you refresh a

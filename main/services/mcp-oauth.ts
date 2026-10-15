@@ -17,7 +17,7 @@ import type {
   OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { shell, logger } from "../platform.js";
+import { app, shell, logger } from "../platform.js";
 import { McpOAuthCredentialStorageError, mcpOAuthStore } from "./mcp-oauth-store.js";
 import {
   clearMcpStepUpScope,
@@ -52,6 +52,11 @@ import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { startMcpOAuthLoopback, type McpOAuthLoopback } from "./mcp-oauth-loopback.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
+
+/** MCP `clientInfo` for sign-in connections: the running Aiden release, not a hard-coded build. */
+function oauthClientInfo(): { name: string; version: string } {
+  return { name: "aiden-agent", version: app.getVersion() };
+}
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
 // sessions (dynamic client registration records it once).
@@ -521,7 +526,7 @@ export async function authorizeMcpServer(
     ]);
     const transport = makeOAuthTransport(server, provider, transportSignal);
     const client = new Client(
-      { name: "aiden-agent", version: "0.27.0" },
+      oauthClientInfo(),
       { capabilities: {} },
     );
     try {
@@ -562,7 +567,7 @@ export async function authorizeMcpServer(
     // Verify the freshly minted tokens actually authorize a connection.
     const verifyTransport = makeOAuthTransport(server, provider, transportSignal);
     const verifyClient = new Client(
-      { name: "aiden-agent", version: "0.27.0" },
+      oauthClientInfo(),
       { capabilities: {} },
     );
     try {

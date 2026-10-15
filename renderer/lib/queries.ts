@@ -89,6 +89,7 @@ export const queryKeys = {
   mcpPresets: ["mcpPresets"] as const,
   mcpLiveStatus: ["mcpLiveStatus"] as const,
   mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
+  mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
   mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
@@ -804,6 +805,15 @@ export function useMcpToolList(serverId: string, toolsRevision: string | undefin
     queryFn: () => mcpApi.toolList(serverId),
     staleTime: Infinity,
   });
+}
+
+/** Local servers waiting for approval to run, keyed by server id. */
+export function useMcpLaunchApprovals() {
+  const query = useQuery({ queryKey: queryKeys.mcpLaunchApprovals, queryFn: mcpApi.launchApprovals, staleTime: 0 });
+  return useMemo(
+    () => new Map((query.data ?? []).map((approval) => [approval.serverId, approval] as const)),
+    [query.data],
+  );
 }
 
 /** Schedules and Bots that depend on a server; fetched when a confirmation needs them. */

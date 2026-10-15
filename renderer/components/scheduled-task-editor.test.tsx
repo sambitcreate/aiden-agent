@@ -129,3 +129,22 @@ test("a selected MCP server that no longer exists is listed by its id, not a gen
     ],
   );
 });
+
+test("a selected server switched off for the model is shown as unavailable with that reason, and unselected ones are not offered", () => {
+  const { unavailableMcpIds, visibleMcpServers } = scheduledTaskMcpServerChoices(
+    [
+      { id: "gmail", name: "Gmail", enabled: true },
+      { id: "drive", name: "Drive", enabled: true, exposure: "hidden" },
+      { id: "notes", name: "Notes", enabled: true, exposure: "hidden" },
+    ],
+    ["drive"],
+  );
+  assert.deepEqual(unavailableMcpIds, ["drive"]);
+  assert.deepEqual(
+    visibleMcpServers.map(({ id, enabled, unavailableReason }) => [id, enabled, unavailableReason]),
+    [
+      ["gmail", true, undefined],
+      ["drive", false, "Off for the model in Settings → Plugins"],
+    ],
+  );
+});

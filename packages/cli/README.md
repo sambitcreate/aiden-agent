@@ -2,7 +2,7 @@
 
 A headless Aiden Agent: the full pi coding agent TUI, rebranded and themed as Aiden, deployable on macOS and Linux with Node.js ≥ 22.19, including servers with no display.
 
-Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.0.3` — the same line the Aiden desktop app uses). The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
+Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.2.0` — the same line the Aiden desktop app uses). The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
 
 ## Build and run
 
@@ -80,7 +80,7 @@ npm run themes   # in packages/cli — a fidelity test fails if committed files 
 
 ## How the rebrand works
 
-pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }` — that is the entire rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals (`chord`, `jiti`, `photon-node`) resolve from this package's `node_modules`.
+pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }` — that is the entire rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals (`jiti`, `photon-node`) resolve from this package's `node_modules`.
 
 The entry (`src/cli.ts`) disables pi.dev's version feed (`PI_SKIP_VERSION_CHECK=1`, overridable) because this CLI versions independently, registers the bundled theme presets through pi's public `--theme` flag, and defaults the TUI to pi's fullscreen alt-screen renderer — an explicit `--tui-mode` flag or any `tuiMode` saved in settings (e.g. via `/config`) always wins over that default.
 
