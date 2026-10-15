@@ -135,7 +135,7 @@ export function adaptAidenTool(tool: AgentTool, opts: AdaptOptions): DurableTool
         const result = await target.execute(api.callId, args, signal, createUpdateForwarder(api, context));
         const details = toJson(result.details);
         return {
-          content: result.content,
+          output: result.content,
           ...(details === undefined ? {} : { details }),
           ...(result.isError ? { isError: true } : {}),
           ...(result.usage === undefined ? {} : { usage: result.usage }),

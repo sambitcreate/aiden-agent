@@ -11,6 +11,8 @@ export function createSessionParityExtension(agentDir: string): InlineExtension 
   return { name: "aiden-sessions", factory(pi) {
     let titleTask: Promise<void> | undefined;
     pi.on("before_agent_start", async (event, ctx) => {
+      // Only a person's prompt seeds the title; extension-triggered custom runs carry none.
+      if (event.messageType !== "user") return;
       if (process.env.AIDEN_CHILD === "1" || pi.getSessionName() || titleTask) return;
       const id = ctx.sessionManager.getSessionId();
       const seed = deriveChatTitleSeed({ content: event.prompt });
@@ -67,7 +69,9 @@ export function createSessionParityExtension(agentDir: string): InlineExtension 
         const attachments = await readPickedAttachments(paths.map((path) => resolve(ctx.cwd, path)));
         pi.sendUserMessage(attachments.map((attachment) => attachment.kind === "image"
           ? { type: "image" as const, data: attachment.data!, mimeType: attachment.mimeType }
-          : { type: "text" as const, text: `File: ${attachment.name}\n${attachment.text}` }));
+          : { type: "text" as const, text: `File: ${attachment.name}\n${attachment.text}` }),
+          // A run may be starting or streaming; queue behind it instead of throwing.
+          { deliverAs: "followUp" });
       },
     });
   } };

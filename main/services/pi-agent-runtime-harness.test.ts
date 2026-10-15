@@ -3578,7 +3578,7 @@ test("deferred MCP schemas stay outside provider requests while discovery and ap
   assert.equal(dispatches, 1);
   const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
   if (result?.role !== "toolResult") throw new Error("Missing codemode result");
-  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text.replace(/^==> text \d+\/\d+ <==\n/u, "")));
   assert.equal(outputs[0].tools[0].name, "remote_docs");
   assert.deepEqual(outputs[0].tools[0].inputSchema.required, ["query"]);
   assert.equal(outputs[1].isError, false);
@@ -3635,7 +3635,7 @@ test("an MCP server that finished discovery after the turn started is searchable
   assert.deepEqual(approved, ["codemode", "late_docs"]);
   const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
   if (result?.role !== "toolResult") throw new Error("Missing codemode result");
-  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text.replace(/^==> text \d+\/\d+ <==\n/u, "")));
   assert.deepEqual(outputs[0].tools.map((entry: { name: string }) => entry.name), ["late_docs"]);
   assert.equal(outputs[1].isError, false);
   assert.match(JSON.stringify(outputs[1]), /late document/u);

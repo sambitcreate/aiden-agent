@@ -876,17 +876,20 @@ for (const cleanup of ["delete", "empty-fallback", "fallback-fsync-error"] as co
       assert.equal(deletions, 1);
       assert.deepEqual((await owned.modelsStore.read("radius"))?.models ?? [], newer ? fresh.models : []);
       const restartedDisk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
-      const restarted = createModels({ modelsStore: {
+      // Startup hydration reads through the owned store, as production does.
+      const restarted = createModels({ modelsStore: createOwnedPiModelsStore({
         read: async () => (await restartedDisk.load()).entry,
         write: async () => { throw new Error("offline write"); },
         delete: async () => { throw new Error("offline delete"); },
-      } });
+      }).modelsStore });
       restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
       await restarted.refresh({ providers: ["radius"], allowNetwork: false });
-      assert.deepEqual(restarted.getModels("radius").map((model) => model.id), [
-        ...builtinModels().getModels("radius").map((model) => model.id),
-        ...(newer ? ["new-account-model"] : []),
-      ]);
+      // Since pi-ai 1.1 a hydrated Radius account catalog replaces the shipped baseline
+      // (org owners can disable models); the baseline applies only while none exists.
+      assert.deepEqual(
+        restarted.getModels("radius").map((model) => model.id),
+        newer ? ["new-account-model"] : builtinModels().getModels("radius").map((model) => model.id),
+      );
     });
   }
 }
@@ -1015,10 +1018,13 @@ for (const mode of ["scoped", "full"] as const) {
         });
         restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
         await restarted.refresh({ providers: ["radius"], allowNetwork: false });
-        assert.deepEqual(restarted.getModels("radius").map((model) => model.id), [
-          ...builtinModels().getModels("radius").map((model) => model.id),
-          ...(newer === "none" ? [] : [newer === "identical" ? "old-account-model" : "new-account-model"]),
-        ]);
+        // The retired write leaves the baseline; a surviving newer catalog replaces it.
+        assert.deepEqual(
+          restarted.getModels("radius").map((model) => model.id),
+          newer === "none"
+            ? builtinModels().getModels("radius").map((model) => model.id)
+            : [newer === "identical" ? "old-account-model" : "new-account-model"],
+        );
       });
     }
   }

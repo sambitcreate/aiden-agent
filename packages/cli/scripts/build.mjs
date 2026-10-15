@@ -51,12 +51,9 @@ await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
+// pi-coding-agent 1.2 dropped its chord dependency, so the CLI no longer
+// ships chord; a reintroduced import fails to resolve at build time.
 const allowedExternalPackages = new Set([
-	"@earendil-works/chord",
-	"@earendil-works/chord/bundler",
-	"@earendil-works/chord/context",
-	"@earendil-works/chord/delta",
-	"@earendil-works/chord/node",
 	"@silvia-odwyer/photon-node",
 	"jiti",
 	// Optional native accelerators. Their callers fall back to JavaScript when absent.
@@ -267,7 +264,7 @@ function commonBuildOptions() {
 		banner,
 		bundle: true,
 		define: { PI_BUNDLED_NODE: "true" },
-		external: ["@earendil-works/chord", "@silvia-odwyer/photon-node"],
+		external: ["@silvia-odwyer/photon-node"],
 		format: "esm",
 		charset: "utf8",
 		legalComments: "none",
@@ -424,11 +421,11 @@ validateExternalImports([mainResult.metafile]);
 assertNoDuplicatePackages(mainResult.metafile);
 
 // Bundle externals resolve at runtime from the app root's node_modules
-// ancestry. Tree-shaking usually eliminates unreferenced ones (chord,
-// photon-node today); verify every specifier that survived so a future pi
+// ancestry. Tree-shaking usually eliminates unreferenced ones (photon-node
+// today); verify every specifier that survived so a future pi
 // change fails the build here instead of crashing on a headless machine.
 const emittedFiles = Object.keys(mainResult.metafile.outputs).filter((path) => path.endsWith(".js"));
-const externalPattern = /(?:from\s*|import\s*\()\s*["'](@earendil-works\/chord(?:\/[a-z]+)?|@silvia-odwyer\/photon-node|jiti(?:\/static)?)["']/g;
+const externalPattern = /(?:from\s*|import\s*\()\s*["'](@silvia-odwyer\/photon-node|jiti(?:\/static)?)["']/g;
 const referencedExternals = new Set();
 for (const output of emittedFiles) {
 	const contents = readFileSync(resolve(pkgDir, output), "utf-8");
@@ -440,8 +437,7 @@ const { createRequire } = await import("node:module");
 const runtimeRequire = createRequire(join(appDir, "cli.js"));
 const { execFileSync } = await import("node:child_process");
 function resolvesAsEsm(specifier) {
-	// Packages such as chord (pi 0.87+) export subpaths under the "import"
-	// condition only, which require.resolve cannot see. Resolve them the way the
+	// Some packages export subpaths under the "import" condition only, which require.resolve cannot see. Resolve them the way the
 	// bundle's own `import` will, from the app directory.
 	try {
 		execFileSync(process.execPath, ["--input-type=module", "-e", `import.meta.resolve(${JSON.stringify(specifier)})`], {
