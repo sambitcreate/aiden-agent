@@ -12,6 +12,7 @@ import {
   chatContextPressureFromProjection,
   compactGenerationContext,
   createGenerationContextTransform,
+  estimateContextBreakdown,
   estimateStaticContextTokens,
   limitComputerUseImages,
   limitBrowserSnapshotImages,
@@ -20,6 +21,7 @@ import {
   projectMessagesForModel,
 } from "./generation-context.js";
 import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
+import { parseChatContextPressure } from "../../renderer/shared/context-pressure.js";
 
 const options = {
   contextWindow: 128_000,
@@ -716,6 +718,9 @@ test("the composer DTO mirrors the runtime projection and limits", () => {
     pressure.compressibleHistoryMessages,
     projection.compressibleHistoryMessages,
   );
+  // The per-category breakdown rides along and survives the renderer's strict parser.
+  assert.deepEqual(pressure.breakdown, estimateContextBreakdown(options));
+  assert.deepEqual(parseChatContextPressure(structuredClone(pressure)), pressure);
 });
 
 test("unanchored projections read as estimates and still trip compaction", () => {
@@ -1009,4 +1014,129 @@ test("static context estimates follow tool edits and match a fresh tool set", ()
   const long = estimate([tool]);
   assert.ok(long > short + 500);
   assert.equal(long, estimate([{ ...tool }]));
+});
+
+type BreakdownOptions = Parameters<typeof estimateContextBreakdown>[0];
+
+function fixtureTool(name: string, description: string, extra: Record<string, unknown> = {}) {
+  return {
+    name,
+    label: name,
+    description,
+    parameters: Type.Object({ path: Type.String(), query: Type.Optional(Type.String()) }),
+    execute: async () => ({ content: [], details: undefined }),
+    ...extra,
+  };
+}
+
+const figma = Object.freeze({ namespace: "mcp:figma0000000000000000", label: "figma" });
+const BASE_PROMPT = "You are a coding agent working in a repository. ".repeat(40);
+const SKILLS_SUFFIX = "\n\n<available_skills>" + "skill: summarize long documents. ".repeat(30) + "</available_skills>";
+const AGENTS_BLOCK =
+  "\n\n<agents-instructions-0b4f6c1e-2f43-4d55-9a1f-3c2d1e0f9a8b>\n" +
+  JSON.stringify([{ scope: "workspace", text: "Prefer small commits. ".repeat(50) }]) +
+  "\n</agents-instructions-0b4f6c1e-2f43-4d55-9a1f-3c2d1e0f9a8b>";
+
+function tokensOf(breakdown: ReturnType<typeof estimateContextBreakdown>, id: string): number | undefined {
+  return breakdown.categories.find((category) => category.id === id)?.tokens;
+}
+
+function sumOf(breakdown: ReturnType<typeof estimateContextBreakdown>): number {
+  return breakdown.categories.reduce((total, category) => total + category.tokens, 0);
+}
+
+test("the context breakdown splits static context by category and adds up exactly", () => {
+  const mcpTool = fixtureTool("figma_get_file", "Read a Figma file. ".repeat(12), { codemode: true, discovery: figma });
+  const deferredTools = [
+    fixtureTool("figma_export", "Export Figma frames. ".repeat(20), { codemode: true, discovery: figma }),
+    fixtureTool("figma_comment", "Comment on a Figma node.", { codemode: true, discovery: figma }),
+  ];
+  const builtins = [
+    fixtureTool("read_file", "Read a file from the workspace. ".repeat(6)),
+    fixtureTool("grep", "Search file contents."),
+  ];
+  const withSections = {
+    ...options,
+    systemPrompt: BASE_PROMPT + SKILLS_SUFFIX + AGENTS_BLOCK,
+    tools: [...builtins, mcpTool],
+    promptSections: { skills: SKILLS_SUFFIX },
+    deferredTools,
+  } as unknown as BreakdownOptions;
+  const pressure = projectChatContextPressure([user("hello")], withSections);
+  const breakdown = pressure.breakdown;
+  assert.ok(breakdown);
+  assert.equal(sumOf(breakdown), pressure.staticTokens);
+  assert.ok(breakdown.categories.every((category) => category.tokens > 0));
+
+  // Each category is its own chars/4 estimate, give or take the one token
+  // that rounding hands to whichever category keeps the total exact.
+  const alone = (tools: unknown[], systemPrompt = "") =>
+    estimateStaticContextTokens({ ...options, systemPrompt, tools } as unknown as BreakdownOptions);
+  const near = (actual: number | undefined, expected: number) =>
+    assert.ok(actual !== undefined && Math.abs(actual - expected) <= 1, `${actual} vs ${expected}`);
+  near(tokensOf(breakdown, "mcp-tools"), alone([mcpTool]));
+  near(tokensOf(breakdown, "builtin-tools"), alone(builtins));
+  near(tokensOf(breakdown, "skills"), alone([], SKILLS_SUFFIX));
+  near(tokensOf(breakdown, "project-instructions"), alone([], AGENTS_BLOCK));
+  near(tokensOf(breakdown, "system-prompt"), alone([], BASE_PROMPT));
+  assert.equal(tokensOf(breakdown, "memory"), undefined);
+  assert.equal(tokensOf(breakdown, "mcp-instructions"), undefined);
+
+  assert.equal(breakdown.deferred.length, 1);
+  const [deferred] = breakdown.deferred;
+  assert.equal(deferred?.count, 2);
+  assert.equal(deferred?.servers[0]?.name, "figma");
+  assert.equal(deferred?.servers[0]?.count, 2);
+  near(deferred?.tokens, alone(deferredTools));
+  // Deferred tools are reported, never priced into the next request.
+  const { deferredTools: _omitted, ...withoutDeferred } = withSections as BreakdownOptions & { deferredTools?: unknown };
+  assert.equal(
+    projectChatContextPressure([user("hello")], withoutDeferred as BreakdownOptions).contextTokens,
+    pressure.contextTokens,
+  );
+});
+
+test("a context without MCP tools reports no MCP slice and nothing deferred", () => {
+  const breakdown = estimateContextBreakdown({
+    ...options,
+    systemPrompt: BASE_PROMPT + SKILLS_SUFFIX,
+    tools: [fixtureTool("read_file", "Read a file.")],
+    promptSections: { skills: SKILLS_SUFFIX },
+  } as unknown as BreakdownOptions);
+  assert.deepEqual(
+    breakdown.categories.map((category) => category.id).sort(),
+    ["builtin-tools", "skills", "system-prompt"],
+  );
+  assert.deepEqual(breakdown.deferred, []);
+});
+
+test("a deferred tool the model has since been shown is counted once, as declared", () => {
+  const disclosed = fixtureTool("figma_export", "Export Figma frames.", { codemode: true, discovery: figma });
+  const pending = fixtureTool("figma_comment", "Comment on a Figma node.", { codemode: true, discovery: figma });
+  const breakdown = estimateContextBreakdown({
+    ...options,
+    tools: [disclosed],
+    deferredTools: [disclosed, pending],
+  } as unknown as BreakdownOptions);
+  assert.ok((tokensOf(breakdown, "mcp-tools") ?? 0) > 0);
+  assert.equal(breakdown.deferred[0]?.count, 1);
+});
+
+test("a recorded section longer than the final prompt never drives the system prompt negative", () => {
+  const options_ = {
+    ...options,
+    systemPrompt: "Short host prompt.",
+    tools: [fixtureTool("read_file", "Read a file.")],
+    promptSections: { skills: "x".repeat(10_000), memory: "y".repeat(2_000) },
+  } as unknown as BreakdownOptions;
+  const breakdown = estimateContextBreakdown(options_);
+  assert.equal(sumOf(breakdown), estimateStaticContextTokens(options_));
+  assert.ok(breakdown.categories.every((category) => category.tokens > 0));
+  // The prompt sections cannot claim more than the prompt that was sent.
+  const promptTokens =
+    (tokensOf(breakdown, "skills") ?? 0) +
+    (tokensOf(breakdown, "memory") ?? 0) +
+    (tokensOf(breakdown, "system-prompt") ?? 0);
+  assert.ok(Math.abs(promptTokens - Math.ceil(options_.systemPrompt.length / 4)) <= 1);
+  assert.ok((tokensOf(breakdown, "skills") ?? 0) > (tokensOf(breakdown, "memory") ?? 0));
 });

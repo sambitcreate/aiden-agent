@@ -32,7 +32,7 @@ import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
-import { createGenerationContextTransform } from "./generation-context.js";
+import { chatContextPressureFromProjection, createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
 import { createChatRunInputAdmission } from "./chat-run-input-admission.js";
@@ -87,6 +87,7 @@ async function managedTestHarness(
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
     onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
+    contextPromptSections?: PiAgentRuntimeHarnessOptions["contextPromptSections"];
   } = {},
 ) {
   const core = createFauxCore({
@@ -154,6 +155,7 @@ async function managedTestHarness(
     beforeToolCall: options.beforeToolCall,
     prepareNextTurnWithContext: options.prepareNextTurnWithContext,
     ...(options.onContextProjection ? { onContextProjection: options.onContextProjection } : {}),
+    ...(options.contextPromptSections ? { contextPromptSections: options.contextPromptSections } : {}),
     durability: {
       session,
       appendMessages: options.appendMessages ?? appendPiMessages,
@@ -2914,6 +2916,45 @@ test("context projection observers see the coordinator's projection and cannot f
   } finally {
     PiCompactionCoordinator.prototype.checkContextPressure = originalCheckContextPressure;
   }
+});
+
+test("the meter's projection breaks static context down and lists tools deferred behind tool search", async () => {
+  const skills = "\n\n<available_skills>" + "skill: summarize documents. ".repeat(40) + "</available_skills>";
+  const remote = Object.assign<AgentTool, object>({
+    name: "remote_docs", label: "Docs", description: "Search documents", replay: "never",
+    parameters: Type.Object({ query: Type.String() }),
+    execute: async () => ({ content: [{ type: "text", text: "found" }], details: null }),
+  }, { codemode: true, discovery: { namespace: "docs", label: "Documents" } });
+  let harness!: PiAgentRuntimeHarness;
+  const codemode = createPiCodemodeTool({ tools: () => harness.getCallableTools(), executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const pressures: ReturnType<typeof chatContextPressureFromProjection>[] = [];
+  const prepared = await managedTestHarness([fauxAssistantMessage("done")], {
+    tools: [codemode],
+    deferredTools: [remote],
+    initialSystemPrompt: `Managed prompt${skills}`,
+    contextPromptSections: { skills },
+    onContextProjection: (projection, options) => {
+      pressures.push(chatContextPressureFromProjection(projection, options));
+    },
+  });
+  harness = prepared.harness;
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "measure", timestamp: 1 },
+  });
+
+  assert.equal(outcome.kind, "completed");
+  const pressure = pressures[0];
+  assert.ok(pressure?.breakdown);
+  const { categories, deferred } = pressure.breakdown;
+  assert.equal(categories.reduce((sum, category) => sum + category.tokens, 0), pressure.staticTokens);
+  assert.ok(categories.some((category) => category.id === "skills" && category.tokens > 0));
+  // codemode is declared host tooling; the remote tool waits behind it, unpriced.
+  assert.equal(categories.some((category) => category.id === "mcp-tools"), false);
+  assert.deepEqual(
+    deferred.map(({ count, servers }) => ({ count, servers: servers.map(({ name, count: tools }) => ({ name, tools })) })),
+    [{ count: 1, servers: [{ name: "Documents", tools: 1 }] }],
+  );
 });
 
 test("between-tool pressure includes queued steering before the next provider request", async () => {

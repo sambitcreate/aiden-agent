@@ -19,7 +19,7 @@ import {
 import { resolveCompactionModelMetadata } from "./model-runtime.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { skillRegistry } from "./skill-registry-main.js";
-import { buildSystemPrompt } from "./chat-system-prompt.js";
+import { buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import {
   agentsInstructionFingerprint,
@@ -163,7 +163,7 @@ async function ambientContextOptions(
     allowSubagents: false,
     includeCodingTools: true,
   });
-  const hostPrompt = await buildSystemPrompt(
+  const { systemPrompt: hostPrompt, sections } = await buildSystemPromptWithSections(
     folderPath,
     branch,
     permission,
@@ -181,6 +181,8 @@ async function ambientContextOptions(
     supportsImages,
     providerId: chat.providerId,
     modelId: chat.model,
+    // Only what this estimate builds: no MCP tools, MCP guidance or memory.
+    promptSections: sections,
   };
   ambientProfiles.set(chatId, { key, options });
   return options;

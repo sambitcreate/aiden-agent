@@ -114,7 +114,7 @@ import {
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
 import { type SkillRegistrySnapshot } from "./skill-registry.js";
-import { buildSystemPrompt } from "./chat-system-prompt.js";
+import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
   assistantTurnTextSeparator,
@@ -359,11 +359,13 @@ import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-too
 import {
   PiAgentRuntimeHarness,
   piAgentRuntimeExtensions,
+  extensionSkillsPrompt,
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
 } from "./pi-agent-runtime-harness.js";
 import {
+  MEMORY_EXTENSION_ID,
   createMemoryExtension,
   authorizeMemoryProposal,
   authorizeMemoryRemoval,
@@ -2891,6 +2893,7 @@ export const llmClient = {
               truncated: false,
             };
       const telegramInteractive = options.interactionSurface === "telegram";
+      let hostPromptSkills: string | undefined;
       const baseSystemPrompt =
         generationProfile.kind === "design"
           ? (designWiring?.baseSystemPrompt ?? "")
@@ -2917,7 +2920,7 @@ export const llmClient = {
               : withUnattendedAssistantContract(
                   await buildSystemPrompt(folderPath, git.branch, permission, false, false),
                 )
-            : await buildSystemPrompt(
+            : await buildSystemPromptWithSections(
                 folderPath,
                 git.branch,
                 permission,
@@ -2925,7 +2928,10 @@ export const llmClient = {
                 true,
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
-              );
+              ).then(({ systemPrompt, sections }) => {
+                hostPromptSkills = sections.skills;
+                return systemPrompt;
+              });
       const botSystemPrompt = authoritativeBot
         ? preparedBotContext
           ? withBotRuntimeInstructions(
@@ -2951,6 +2957,16 @@ export const llmClient = {
         ),
         mcpServerInstructions,
       );
+      // What each prompt part adds, for the context meter's per-category breakdown.
+      const contextPromptSections = {
+        skills: (hostPromptSkills ?? "") + extensionSkillsPrompt(resolvedContributions.extensions),
+        memory: resolvedContributions.extensions
+          .find((extension) => extension.id === MEMORY_EXTENSION_ID)
+          ?.volatileSystemPrompt?.trim() ?? "",
+        // The tool policy never edits the prompt; MCP guidance only appends to it.
+        "mcp-instructions": modelContributions.systemPrompt.slice(resolvedContributions.systemPrompt.length),
+        "bot-instructions": botSystemPrompt.slice(baseSystemPrompt.length),
+      };
       // Freeze only the already-admitted MCP inventory. The provider sees the
       // discovery/script tools; nested calls still use the ordinary host gates.
       const { declared, deferred: deferredTools } = partitionPiCodemodeTools(modelContributions.tools);
@@ -2970,6 +2986,8 @@ export const llmClient = {
         providerId: model.provider,
         modelId: model.id,
         retainsSystemUpdates: modelRetainsSystemUpdates(model),
+        promptSections: contextPromptSections,
+        deferredTools,
       };
       assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -3172,6 +3190,7 @@ export const llmClient = {
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
+        contextPromptSections,
         models: runtime.models,
         identity: {
           runId: streamId,

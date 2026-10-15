@@ -97,3 +97,63 @@ test("the meter reads usable-input pressure, not raw window occupancy", () => {
   // the number that matches when Aiden would compact.
   assert.equal(contextPressurePercent(pressure()), 85);
 });
+
+function breakdown() {
+  return {
+    categories: [
+      { id: "system-prompt" as const, tokens: 9_000 },
+      { id: "builtin-tools" as const, tokens: 8_000 },
+      { id: "mcp-tools" as const, tokens: 3_000 },
+      { id: "skills" as const, tokens: 1_000 },
+    ],
+    deferred: [
+      {
+        id: "mcp-tools" as const,
+        tokens: 4_500,
+        count: 3,
+        servers: [
+          { name: "figma", count: 2, tokens: 3_000 },
+          { name: "linear", count: 1, tokens: 1_500 },
+        ],
+      },
+    ],
+  };
+}
+
+test("a breakdown that adds up to staticTokens round-trips", () => {
+  const value = pressure({ breakdown: breakdown() });
+  assert.deepEqual(parseChatContextPressure(structuredClone(value)), value);
+});
+
+test("a malformed breakdown is dropped while the rest of the pressure survives", () => {
+  const malformed: unknown[] = [
+    { ...breakdown(), categories: [...breakdown().categories.slice(1), { id: "messages", tokens: 9_000 }] },
+    {
+      ...breakdown(),
+      categories: [{ id: "system-prompt", tokens: 30_000 }, { id: "builtin-tools", tokens: -9_000 }],
+    },
+    // Sums to 20_000, one short of staticTokens.
+    { ...breakdown(), categories: [...breakdown().categories.slice(1), { id: "system-prompt", tokens: 8_000 }] },
+    // A zero row is never sent; one would read as an empty MCP slice.
+    { ...breakdown(), categories: [...breakdown().categories, { id: "memory", tokens: 0 }] },
+    { ...breakdown(), categories: [...breakdown().categories.slice(0, 3), { id: "mcp-tools", tokens: 1_000 }] },
+    // Deferred servers must account for the deferred total.
+    { ...breakdown(), deferred: [{ ...breakdown().deferred[0], count: 4 }] },
+    { ...breakdown(), deferred: [{ ...breakdown().deferred[0], servers: [{ name: "", count: 3, tokens: 4_500 }] }] },
+    { categories: breakdown().categories },
+    "breakdown",
+  ];
+  for (const value of malformed) {
+    const parsed = parseChatContextPressure({ ...pressure(), breakdown: value });
+    assert.ok(parsed, JSON.stringify(value));
+    assert.equal(parsed.breakdown, undefined, JSON.stringify(value));
+    assert.equal(parsed.percentOfUsableInput, 85);
+    assert.equal(parsed.staticTokens, 21_000);
+  }
+});
+
+test("a pressure without a breakdown still parses", () => {
+  const parsed = parseChatContextPressure(pressure());
+  assert.ok(parsed);
+  assert.equal("breakdown" in parsed, false);
+});
