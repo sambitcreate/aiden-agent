@@ -2,6 +2,18 @@ import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from 
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import type {
+  WorkspaceClonePreview,
+  WorkspaceCloneProgress,
+  WorkspaceCloneResult,
+  WorkspaceOpenPathResult,
+  WorkspacePathInspection,
+} from "../shared/workspace-intake";
+import type {
+  FirstMessageWorktreeProgress,
+  FirstMessageWorktreeRequest,
+  FirstMessageWorktreeResult,
+} from "../shared/worktree-on-send";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -871,6 +883,29 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
+  /**
+   * Read-only check of a typed path (`/…`, `~/…`, or `./…` relative to the
+   * given workspace's folder). Never creates anything.
+   */
+  inspectPath: (input: string, relativeToWorkspaceId?: string) =>
+    invoke<WorkspacePathInspection>("workspaces:inspectPath", input, relativeToWorkspaceId),
+  /**
+   * Register a typed path as a workspace, or return the one already there.
+   * With `create`, makes the final folder first when only its parent exists.
+   */
+  openPath: (input: string, options: { create: boolean; relativeToWorkspaceId?: string }) =>
+    invoke<WorkspaceOpenPathResult<Workspace>>("workspaces:openPath", input, options),
+  /** Validate a clone URL and suggest `<clone base>/<repo>` as the destination. */
+  clonePreview: (url: string) => invoke<WorkspaceClonePreview>("workspaces:clonePreview", url),
+  /**
+   * Clone a repository (a deliberate network action) and register it.
+   * `cloneId` (8–64 of `[A-Za-z0-9_-]`) routes progress and cancellation.
+   */
+  clone: (input: { cloneId: string; url: string; destination?: string }) =>
+    invoke<WorkspaceCloneResult<Workspace>>("workspaces:clone", input),
+  cancelClone: (cloneId: string) => invoke<boolean>("workspaces:cloneCancel", cloneId),
+  onCloneProgress: (handler: (progress: WorkspaceCloneProgress) => void) =>
+    onNotification<WorkspaceCloneProgress>("workspaces:clone-progress", handler),
   update: (
     id: string,
     patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
@@ -1273,6 +1308,27 @@ export const chatsApi = {
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
   }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
+  /**
+   * First send with New worktree. Main creates (or, for the same draft,
+   * reuses) the managed worktree before saving the chat in it. A worktree
+   * failure saves nothing and resolves `{ ok: false, code: "worktree-failed" }`;
+   * chat-save failures reject as `createWithFirstMessage` does.
+   */
+  createWithFirstMessageInWorktree: (input: {
+    draftId: string;
+    title?: string;
+    /** The draft's workspace; must equal `worktree.sourceWorkspaceId`. */
+    workspaceId: string;
+    providerId?: string;
+    model?: string;
+    turnId: string;
+    message: { role: "user"; content: string; attachments?: Attachment[] };
+    skillInvocation?: SkillInvocationV1;
+    worktree: FirstMessageWorktreeRequest;
+  }) => invokeChatMutation<FirstMessageWorktreeResult<Chat>>("chats:createWithFirstMessage", input),
+  /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
+  onFirstMessageWorktreeProgress: (handler: (progress: FirstMessageWorktreeProgress) => void) =>
+    onNotification<FirstMessageWorktreeProgress>("chats:first-message-worktree-progress", handler),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),

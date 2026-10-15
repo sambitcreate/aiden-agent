@@ -158,6 +158,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         name: scratch.name,
         folderPath: scratch.folderPath,
         permission: "ask",
+        scratch: true,
         createdAt: now,
         updatedAt: now,
       };

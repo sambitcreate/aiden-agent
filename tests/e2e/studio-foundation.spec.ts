@@ -155,8 +155,14 @@ test.describe("Studio foundation with both flags on", () => {
 
     // Primary navigation sits above the workspace outline, in a fixed order.
     const nav = page.getByRole("navigation", { name: "Primary" });
-    const readRowNames = async () => (await nav.getByRole("button").allTextContents()).map((name) => name.trim());
-    await expect.poll(async () => (await readRowNames()).slice(0, 2)).toEqual(["New Agent", "Scheduled"]);
+    // Icon-only helpers (the New chat in… chevron) have no text, so each row is named by its aria-label or text.
+    const readRowNames = () =>
+      nav.getByRole("button").evaluateAll((buttons) =>
+        buttons.map((button) => (button.getAttribute("aria-label") ?? button.textContent ?? "").trim()),
+      );
+    await expect
+      .poll(async () => (await readRowNames()).slice(0, 3))
+      .toEqual(["New Agent", "New chat in…", "Scheduled"]);
     await expect.poll(async () => (await readRowNames()).slice(-2)).toEqual(["Design", "Images"]);
     const designRow = nav.getByRole("button", { name: "Design", exact: true });
     const imagesRow = nav.getByRole("button", { name: "Images", exact: true });

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  beginChatDraftSend, createChatDraft, discardChatDraft, finishChatDraftSend,
-  getChatDraft, retainChatDraft, subscribeChatDrafts, updateChatDraft,
+  beginChatDraftSend, createChatDraft, discardChatDraft, findReusableChatDraft, finishChatDraftSend,
+  getChatDraft, listChatDrafts, requestChatDraftComposerFocus, retainChatDraft, setChatDraftHasContent,
+  subscribeChatDraftComposerFocus, subscribeChatDrafts, updateChatDraft,
 } from "./chat-draft";
 
 const flush = async () => { await Promise.resolve(); };
@@ -132,4 +133,133 @@ test("superseded new activations discard unowned drafts while preserving mounted
   finishChatDraftSend(sending.chat.id, false);
   discardChatDraft(latest.chat.id);
   await flush();
+});
+
+test("only an open, empty, idle draft in the same workspace is reused", async () => {
+  const draft = createChatDraft("workspace-a");
+  // Not yet mounted: about to be superseded, so never handed back.
+  assert.equal(findReusableChatDraft("workspace-a"), undefined);
+  const release = retainChatDraft(draft.chat.id);
+  assert.equal(findReusableChatDraft("workspace-a")?.chat.id, draft.chat.id);
+  assert.equal(findReusableChatDraft("workspace-b"), undefined);
+
+  setChatDraftHasContent(draft.chat.id, true);
+  assert.equal(findReusableChatDraft("workspace-a"), undefined, "typed text or attachments");
+  setChatDraftHasContent(draft.chat.id, false);
+  assert.equal(findReusableChatDraft("workspace-a")?.chat.id, draft.chat.id, "cleared again");
+
+  updateChatDraft(draft.chat.id, { workspaceId: "workspace-b" });
+  assert.equal(findReusableChatDraft("workspace-a"), undefined, "the draft moved away");
+  assert.equal(findReusableChatDraft("workspace-b")?.chat.id, draft.chat.id);
+
+  beginChatDraftSend(draft.chat.id);
+  assert.equal(findReusableChatDraft("workspace-b"), undefined, "a sending draft is never reused");
+  finishChatDraftSend(draft.chat.id, true);
+  release();
+  await flush();
+});
+
+test("a seeded draft starts with content, and content changes notify subscribers once", async () => {
+  const seeded = createChatDraft("workspace-a", undefined, "Create an automation that ");
+  const releaseSeeded = retainChatDraft(seeded.chat.id);
+  assert.equal(findReusableChatDraft("workspace-a"), undefined);
+  let changes = 0;
+  const unsubscribe = subscribeChatDrafts(() => { changes += 1; });
+  setChatDraftHasContent(seeded.chat.id, true);
+  assert.equal(changes, 0, "unchanged content state is not a change");
+  setChatDraftHasContent(seeded.chat.id, false);
+  assert.equal(changes, 1);
+  setChatDraftHasContent("missing-draft", true);
+  assert.equal(changes, 1);
+  unsubscribe();
+  releaseSeeded();
+  await flush();
+});
+
+test("composer focus reaches a mounted draft now and a later-mounted draft once", () => {
+  let mountedFocus = 0;
+  const unsubscribeMounted = subscribeChatDraftComposerFocus("mounted", () => { mountedFocus += 1; });
+  requestChatDraftComposerFocus("mounted");
+  requestChatDraftComposerFocus("mounted");
+  assert.equal(mountedFocus, 2, "every request for an open draft focuses it, e.g. a reused draft");
+  unsubscribeMounted();
+
+  requestChatDraftComposerFocus("pending");
+  let pendingFocus = 0;
+  const unsubscribePending = subscribeChatDraftComposerFocus("pending", () => { pendingFocus += 1; });
+  assert.equal(pendingFocus, 1, "a draft that mounts after navigation takes the request");
+  unsubscribePending();
+  const resubscribe = subscribeChatDraftComposerFocus("pending", () => { pendingFocus += 1; });
+  assert.equal(pendingFocus, 1, "the pending request is consumed once");
+  resubscribe();
+
+  const { chat } = createChatDraft("workspace-a");
+  requestChatDraftComposerFocus(chat.id);
+  discardChatDraft(chat.id);
+  let discardedFocus = 0;
+  const unsubscribeDiscarded = subscribeChatDraftComposerFocus(chat.id, () => { discardedFocus += 1; });
+  assert.equal(discardedFocus, 0, "a discarded draft drops its pending focus");
+  unsubscribeDiscarded();
+});
+
+test("a draft with text outlives its view until it is sent or cleared; an empty one does not", async () => {
+  const typed = createChatDraft("workspace-a");
+  const releaseTyped = retainChatDraft(typed.chat.id);
+  setChatDraftHasContent(typed.chat.id, true);
+  const empty = createChatDraft("workspace-a");
+  const releaseEmpty = retainChatDraft(empty.chat.id);
+  releaseTyped();
+  releaseEmpty();
+  await flush();
+  assert.equal(getChatDraft(empty.chat.id), undefined);
+  assert.ok(getChatDraft(typed.chat.id), "leaving a draft with text keeps it");
+  assert.deepEqual(listChatDrafts().map(({ chat }) => chat.id), [typed.chat.id]);
+
+  // Another New activation does not sweep it either.
+  const next = createChatDraft("workspace-b");
+  assert.ok(getChatDraft(typed.chat.id));
+  discardChatDraft(next.chat.id);
+
+  // Reopened and cleared, then left: now it goes.
+  const reopened = retainChatDraft(typed.chat.id);
+  setChatDraftHasContent(typed.chat.id, false);
+  reopened();
+  await flush();
+  assert.equal(getChatDraft(typed.chat.id), undefined);
+  assert.deepEqual(listChatDrafts(), []);
+
+  // Reopened and sent: the committed draft goes away.
+  const sent = createChatDraft("workspace-a");
+  const releaseSent = retainChatDraft(sent.chat.id);
+  setChatDraftHasContent(sent.chat.id, true);
+  releaseSent();
+  await flush();
+  const reopenedSent = retainChatDraft(sent.chat.id);
+  beginChatDraftSend(sent.chat.id);
+  finishChatDraftSend(sent.chat.id, true);
+  reopenedSent();
+  await flush();
+  assert.equal(getChatDraft(sent.chat.id), undefined);
+});
+
+test("a failed first send from a draft that was left keeps the draft and its text", async () => {
+  const { chat } = createChatDraft("workspace-a");
+  const release = retainChatDraft(chat.id);
+  setChatDraftHasContent(chat.id, true);
+  beginChatDraftSend(chat.id);
+  release();
+  await flush();
+  finishChatDraftSend(chat.id, false);
+  assert.equal(getChatDraft(chat.id)?.sending, false);
+  discardChatDraft(chat.id);
+});
+
+test("the draft list is a stable snapshot between changes", () => {
+  const first = listChatDrafts();
+  assert.equal(listChatDrafts(), first);
+  const { chat } = createChatDraft("workspace-a");
+  const second = listChatDrafts();
+  assert.notEqual(second, first);
+  assert.equal(listChatDrafts(), second);
+  discardChatDraft(chat.id);
 });
