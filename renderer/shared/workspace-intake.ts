@@ -95,13 +95,22 @@ const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
 const SCP_LIKE = /^([A-Za-z0-9._-]+)@([^:/\s]+):(.+)$/u;
 const SCP_PATH = /^[A-Za-z0-9._~/-]+$/u;
 
+/**
+ * The repository name becomes the default destination folder, so it must be a
+ * plain visible name. Leading dots are refused: `x/.git.git` would otherwise
+ * name `.git` (or `.GIT` on a case-insensitive disk) and turn the clone base
+ * itself into a repository with the remote's config.
+ */
+export function safeRepoName(value: string): string | undefined {
+  const name = value.replace(/\.git$/iu, "");
+  if (!name || name.startsWith(".") || !REPO_NAME.test(name)) return undefined;
+  return name;
+}
+
 function repoNameFromPath(pathname: string): string | undefined {
   const segments = pathname.split("/").filter(Boolean);
   const last = segments[segments.length - 1];
-  if (!last) return undefined;
-  const name = last.replace(/\.git$/iu, "");
-  if (!name || name === "." || name === ".." || !REPO_NAME.test(name)) return undefined;
-  return name;
+  return last ? safeRepoName(last) : undefined;
 }
 
 function hasUnsafePathSegment(pathname: string): boolean {
@@ -131,10 +140,8 @@ export function parseCloneUrl(value: unknown): ParsedCloneUrl {
   const shorthand = /^([^/]+)\/([^/]+)$/u.exec(typed);
   if (shorthand && !typed.includes(":") && !typed.includes("@")) {
     const [, owner, rawRepo] = shorthand;
-    const repo = rawRepo.replace(/\.git$/iu, "");
-    if (!GITHUB_OWNER.test(owner) || !repo || repo === "." || repo === ".." || !REPO_NAME.test(repo)) {
-      return { ok: false, reason: INVALID_URL };
-    }
+    const repo = safeRepoName(rawRepo);
+    if (!GITHUB_OWNER.test(owner) || !repo) return { ok: false, reason: INVALID_URL };
     return { ok: true, url: `https://github.com/${owner}/${repo}.git`, repoName: repo };
   }
 

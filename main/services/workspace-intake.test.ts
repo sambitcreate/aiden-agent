@@ -42,7 +42,12 @@ async function exists(target: string): Promise<boolean> {
 
 async function fixture(
   t: test.TestContext,
-  options: { runClone?: WorkspaceIntakeDependencies["runClone"] } = {},
+  options: {
+    runClone?: WorkspaceIntakeDependencies["runClone"];
+    /** Runs before the service's own mkdir, to simulate a racing writer. */
+    beforeMkdir?: (target: string) => Promise<void>;
+    caseInsensitivePaths?: boolean;
+  } = {},
 ) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-intake-")));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -72,6 +77,7 @@ async function fixture(
     realpath: (target) => fs.realpath(target),
     readdir: (target) => fs.readdir(target),
     mkdir: async (target) => {
+      await options.beforeMkdir?.(target);
       await fs.mkdir(target);
     },
     rmdir: (target) => fs.rmdir(target),
@@ -79,6 +85,7 @@ async function fixture(
     listWorkspaces: async () => [...workspaces],
     getWorkspace: async (id) => workspaces.find((workspace) => workspace.id === id) ?? null,
     createFromFolder: (folderPath) => application.createFromFolder(folderPath),
+    ...(options.caseInsensitivePaths === undefined ? {} : { caseInsensitivePaths: options.caseInsensitivePaths }),
     runClone: async (request) => {
       cloneRequests.push(request);
       return options.runClone ? options.runClone(request) : assert.fail("no clone expected");
@@ -371,6 +378,96 @@ test("a failed clone removes what it created and keeps a folder that already exi
   const reused = await service.clone({ url: "acme/widget", destination: empty }, cloneOptions());
   assert.equal(!reused.ok && reused.code, "auth-failed");
   assert.deepEqual(await fs.readdir(empty), [], "the pre-existing folder is emptied, not removed");
+});
+
+test("clone never targets a .git folder, whatever the URL or destination", async (t) => {
+  const { root, home, service, cloneRequests } = await fixture(t);
+  await fs.mkdir(path.join(home, "projects"));
+  for (const url of ["https://evil.example/x/.git.git", "acme/.git.git", "git@evil.example:x/.GIT.git"]) {
+    const result = await service.clone({ url }, cloneOptions());
+    assert.equal(!result.ok && result.code, "invalid-url", url);
+  }
+  await fs.mkdir(path.join(root, "repo"));
+  for (const destination of ["~/.git", "~/projects/.GIT", path.join(root, "repo", ".git", "nested"), path.join(root, ".Git")]) {
+    const result = await service.clone({ url: "acme/widget", destination }, cloneOptions());
+    assert.equal(!result.ok && result.code, "invalid-destination", destination);
+  }
+  assert.equal(cloneRequests.length, 0, "Git never ran");
+  assert.deepEqual(await fs.readdir(path.join(home, "projects")), []);
+  assert.equal(await exists(path.join(home, ".git")), false);
+});
+
+test("a destination that appears after inspection is never deleted", async (t) => {
+  // A writer fills the folder between inspection and Aiden's mkdir.
+  const filled = await fixture(t, {
+    beforeMkdir: async (target) => {
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "theirs.txt"), "keep");
+    },
+    runClone: async () => assert.fail("Git must not run in a folder Aiden could not claim"),
+  });
+  const occupied = await filled.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(!occupied.ok && occupied.code, "destination-exists");
+  assert.equal(await fs.readFile(path.join(filled.home, "widget", "theirs.txt"), "utf8"), "keep");
+
+  // The racing writer made an empty folder: Aiden adopts it, and a failed clone
+  // empties it again but leaves the folder Aiden did not create.
+  const adopted = await fixture(t, {
+    beforeMkdir: (target) => fs.mkdir(target),
+    runClone: async (request) => {
+      await fs.mkdir(path.join(request.destination, ".git"));
+      return { ok: false as const, reason: "exit" as const, stderrTail: "fatal: early EOF" };
+    },
+  });
+  const failed = await adopted.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(!failed.ok && failed.code, "failed");
+  assert.deepEqual(await fs.readdir(path.join(adopted.home, "widget")), []);
+
+  // Git itself found the folder non-empty (filled after Aiden's claim): nothing is touched.
+  const late = await fixture(t, {
+    runClone: async (request) => {
+      await fs.writeFile(path.join(request.destination, "theirs.txt"), "keep");
+      return {
+        ok: false as const,
+        reason: "exit" as const,
+        stderrTail: "fatal: destination path 'widget' already exists and is not an empty directory.\n",
+      };
+    },
+  });
+  await late.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(await fs.readFile(path.join(late.home, "widget", "theirs.txt"), "utf8"), "keep");
+});
+
+test("clones into aliases of one folder cannot run at the same time", async (t) => {
+  let release: (() => void) | undefined;
+  const { root, service, cloneRequests } = await fixture(t, {
+    caseInsensitivePaths: true,
+    runClone: async (request) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await fs.mkdir(path.join(request.destination, ".git"));
+      return { ok: true as const };
+    },
+  });
+  const real = path.join(root, "real");
+  await fs.mkdir(real);
+  await fs.symlink(real, path.join(root, "link"));
+
+  const first = service.clone({ url: "acme/widget", destination: path.join(real, "widget") }, cloneOptions());
+  for (let attempt = 0; attempt < 200 && cloneRequests.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(cloneRequests.length, 1);
+  for (const alias of [path.join(root, "link", "widget"), path.join(real, "WIDGET")]) {
+    const second = await service.clone({ url: "acme/widget", destination: alias }, cloneOptions());
+    assert.equal(!second.ok && second.code, "busy", alias);
+  }
+  release?.();
+  const result = await first;
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.equal(await exists(path.join(real, "widget", ".git")), true, "the running clone was left intact");
+  assert.equal(cloneRequests.length, 1);
 });
 
 test("the real runner streams progress, and cancel or timeout stops Git", async (t) => {

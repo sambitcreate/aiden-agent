@@ -72,13 +72,15 @@ export interface WorkspaceIntakeDependencies {
   /** Make exactly one directory; the parent must already exist. */
   mkdir(target: string): Promise<void>;
   rmdir(target: string): Promise<void>;
-  /** Remove a directory tree the clone created. */
+  /** Remove one entry a failed clone wrote inside the destination it claimed. */
   removeTree(target: string): Promise<void>;
   listWorkspaces(): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | null | undefined>;
   /** The shared registration path used by the native folder picker. */
   createFromFolder(folderPath: string): Promise<Workspace>;
   runClone(request: GitCloneRequest): Promise<GitCloneOutcome>;
+  /** Treat `Widget` and `widget` as one folder (default: macOS and Windows). */
+  caseInsensitivePaths?: boolean;
 }
 
 export interface GitCloneRequest {
@@ -189,6 +191,8 @@ export interface CloneRequestInput {
 
 export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) {
   const activeDestinations = new Set<string>();
+  const caseInsensitivePaths =
+    deps.caseInsensitivePaths ?? (process.platform === "darwin" || process.platform === "win32");
 
   const relativeBase = async (workspaceId: string | undefined): Promise<string | undefined> => {
     if (!workspaceId) return undefined;
@@ -342,20 +346,54 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     ...extra,
   });
 
-  /** Remove what a failed clone left behind, and nothing that existed before. */
-  const cleanUpFailedClone = async (destination: string, preexisting: boolean): Promise<void> => {
+  /**
+   * Undo a failed clone inside a destination Aiden claimed. Only the folder's
+   * contents are removed, and the folder itself only when Aiden made it; the
+   * destination is never removed recursively.
+   */
+  const cleanUpFailedClone = async (destination: string, created: boolean, stderrTail: string): Promise<void> => {
+    // Something else filled the folder after Aiden claimed it: leave it alone.
+    if (/already exists and is not an empty directory/iu.test(stderrTail)) return;
     try {
-      if (!preexisting) {
-        await deps.removeTree(destination);
-        return;
-      }
-      // The destination was an empty folder before the clone: empty it again.
       for (const entry of await deps.readdir(destination)) {
         await deps.removeTree(path.join(destination, entry));
       }
     } catch {
-      // Cleanup is best effort; Git removes its own partial clone on most failures.
+      // Best effort; Git removes its own partial clone on most failures.
     }
+    if (created) await deps.rmdir(destination).catch(() => undefined);
+  };
+
+  /** One key per folder however it is spelled: canonical parent plus folded name. */
+  const destinationKey = async (destination: string): Promise<string> => {
+    const name = path.basename(destination);
+    const parent = await deps.realpath(path.dirname(destination));
+    return path.join(parent, caseInsensitivePaths ? name.toLowerCase() : name);
+  };
+
+  /** Make the destination, or adopt it only if it is an empty folder. */
+  const claimDestination = async (
+    destination: string,
+  ): Promise<{ ok: true; created: boolean } | { ok: false; failure: CloneFailure }> => {
+    try {
+      await deps.mkdir(destination);
+      return { ok: true, created: true };
+    } catch (error) {
+      if (errnoCode(error) !== "EEXIST") {
+        return { ok: false, failure: fail("invalid-destination", "Aiden couldn't create the destination folder.") };
+      }
+    }
+    try {
+      if (!(await deps.stat(destination)).isDirectory() || (await deps.readdir(destination)).length > 0) {
+        return {
+          ok: false,
+          failure: fail("destination-exists", "The destination folder already exists and isn't empty."),
+        };
+      }
+    } catch {
+      return { ok: false, failure: fail("invalid-destination", "Aiden can't read the destination folder.") };
+    }
+    return { ok: true, created: false };
   };
 
   const clone = async (
@@ -376,13 +414,15 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     if (destination === path.parse(destination).root) {
       return fail("invalid-destination", "Choose a folder for the repository.");
     }
+    // Never clone into or beneath a Git directory: the remote's config would
+    // then govern the enclosing repository.
+    if (destination.split(path.sep).some((segment) => segment.toLowerCase() === ".git")) {
+      return fail("invalid-destination", "Choose a folder that isn't named .git.");
+    }
 
     const inspection = await inspectResolved(destination);
-    let preexisting = false;
-    if (inspection.kind === "invalid") {
-      return fail("invalid-destination", inspection.reason);
-    }
-    if (inspection.kind === "existing-workspace" || inspection.kind === "folder") {
+    if (inspection.kind === "invalid") return fail("invalid-destination", inspection.reason);
+    if (inspection.kind !== "creatable") {
       let entries: string[];
       try {
         entries = await deps.readdir(destination);
@@ -392,15 +432,25 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
       if (entries.length > 0) {
         return fail("destination-exists", "The destination folder already exists and isn't empty.");
       }
-      preexisting = true;
     }
 
-    if (activeDestinations.has(destination)) {
+    let key: string;
+    try {
+      key = await destinationKey(destination);
+    } catch {
+      return fail("invalid-destination", "Aiden can't read the folder that would contain the repository.");
+    }
+    if (activeDestinations.has(key)) {
       return fail("busy", "A clone into that folder is already running.");
     }
-    activeDestinations.add(destination);
+    activeDestinations.add(key);
     try {
-      if (options.signal.aborted) return fail("cancelled", "Clone cancelled.");
+      const claim = await claimDestination(destination);
+      if (!claim.ok) return claim.failure;
+      if (options.signal.aborted) {
+        await cleanUpFailedClone(destination, claim.created, "");
+        return fail("cancelled", "Clone cancelled.");
+      }
       const outcome = await deps.runClone({
         url: parsed.url,
         destination,
@@ -409,7 +459,7 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
         onProgress: (progress) => options.onProgress({ cloneId: options.cloneId, ...progress }),
       });
       if (!outcome.ok) {
-        await cleanUpFailedClone(destination, preexisting);
+        await cleanUpFailedClone(destination, claim.created, outcome.stderrTail);
         if (outcome.reason === "cancelled") return fail("cancelled", "Clone cancelled.");
         if (outcome.reason === "timeout") return fail("timeout", "The clone took too long and was stopped.");
         const detail = cloneFailureDetail(outcome.stderrTail, deps.home);
@@ -429,7 +479,7 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
       }
       return { ok: true, workspace: registered.workspace, destination };
     } finally {
-      activeDestinations.delete(destination);
+      activeDestinations.delete(key);
     }
   };
 
