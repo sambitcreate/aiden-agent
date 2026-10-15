@@ -126,7 +126,7 @@ export function nextRequestContextOptions(
   base: GenerationContextOptions,
   model: NextRequestModel,
 ): GenerationContextOptions {
-  return applyCustomModelToolPolicy(
+  const options = applyCustomModelToolPolicy(
     {
       ...base,
       contextWindow: model.contextWindow,
@@ -137,4 +137,10 @@ export function nextRequestContextOptions(
     },
     model.overrides,
   );
+  // A model that sends no tools has nothing to defer behind tool search either.
+  if (options.tools.length === 0 && options.deferredTools) {
+    const { deferredTools: _deferred, ...withoutDeferred } = options;
+    return withoutDeferred;
+  }
+  return options;
 }

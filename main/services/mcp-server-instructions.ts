@@ -181,6 +181,15 @@ function renderServiceGuidance(servers: readonly ServerEntry[]): string {
   return records.length ? `${header}\n${records.join("\n")}` : "";
 }
 
+// Rendered text neutralizes service-supplied angle brackets, so only the host
+// can open or close the section; Pi joins prompt sections with a blank line.
+const MCP_SERVERS_BLOCK = /(?:^|\n\n)<mcp_servers>\n[\s\S]*?\n<\/mcp_servers>(?=\n\n|$)/gu;
+
+/** Remove the `mcp_servers` section (and its separator) from a replayed system prompt. */
+export function withoutMcpServersSection(systemPrompt: string): string {
+  return systemPrompt.replace(MCP_SERVERS_BLOCK, "");
+}
+
 interface SectionContext {
   messages: readonly unknown[];
 }

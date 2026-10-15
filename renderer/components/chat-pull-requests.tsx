@@ -98,7 +98,7 @@ export function chatPullRequestChecksLabel(
   }
 }
 
-function stateLabel(view: ChatPullRequestView): string {
+export function chatPullRequestStateLabel(view: ChatPullRequestView): string {
   if (view.state === "merged") return "Merged";
   if (view.state === "closed") return "Closed";
   if (view.isDraft) return "Draft";
@@ -214,7 +214,7 @@ function PullRequestRow({
               {checkSummary}
             </span>
           ) : (
-            <span className="text-tertiary">{stateLabel(view)}</span>
+            <span className="text-tertiary">{chatPullRequestStateLabel(view)}</span>
           )}
           {sourceHint(view) ? (
             <span className="truncate text-tertiary">{sourceHint(view)}</span>
@@ -846,7 +846,7 @@ export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
         <ChatPullRequestStateIcon view={view} />
         <span className="truncate">
           PR #{view.number}
-          {checks ? ` · ${checks}` : ` · ${stateLabel(view)}`}
+          {checks ? ` · ${checks}` : ` · ${chatPullRequestStateLabel(view)}`}
         </span>
       </span>
       <button

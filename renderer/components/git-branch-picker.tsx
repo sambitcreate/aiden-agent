@@ -229,7 +229,7 @@ export function GitBranchPicker({
             disabled={disabled}
             aria-label={`Branch ${current}${currentSummary ? `, ${currentSummary}` : ""}`}
             title={disabledReason ?? (currentSummary ? `${current} · ${currentSummary}` : current)}
-            className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+            className="grid min-h-9 w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-control px-2.5 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
           >
             <GitBranch className="size-4.5 text-secondary" aria-hidden="true" />
             <span className="min-w-0 truncate text-regular text-primary">{current}</span>

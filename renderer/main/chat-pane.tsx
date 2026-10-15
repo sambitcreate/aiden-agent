@@ -2694,6 +2694,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             )}
             // A cached repository read must not outlive access being switched off.
             isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
+            leading={<QuickViewToggle disabled={!effectiveWorkspace} />}
             terminalButton={
               <Button
                 iconOnly
@@ -2711,15 +2712,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
               </Button>
             }
             trailing={
-              <>
-                <QuickViewToggle disabled={!effectiveWorkspace} />
-                <EnvironmentPanelToggle />
-                <OpenInEditorPicker
-                  workspaceId={effectiveWorkspace?.id}
-                  folderPath={effectiveWorkspace?.folderPath}
-                />
-              </>
+              <OpenInEditorPicker
+                workspaceId={effectiveWorkspace?.id}
+                folderPath={effectiveWorkspace?.folderPath}
+              />
             }
+            end={<EnvironmentPanelToggle />}
           />
         }
         autoScrollToBottom
