@@ -4,8 +4,8 @@ import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { SubagentRunSnapshot, SubagentRunSnapshotV2 } from "../shared/subagent-runs";
 import type { SubagentRunView, SubagentRunViewState } from "../lib/subagent-view-state";
-import { groupSubagentRuns } from "../lib/subagent-panel-state";
-import { SubagentRunGroups } from "./subagent-run-groups";
+import { groupSubagentRunsByStatus } from "../lib/subagent-panel-state";
+import { SubagentStatusGroups } from "./subagent-status-groups";
 
 afterEach(cleanup);
 
@@ -53,7 +53,7 @@ function runView(runId: string, state: SubagentRunViewState, extra: Partial<Suba
   };
 }
 
-test("groupSubagentRuns places every state in its group, in display order, omitting empty groups", () => {
+test("groupSubagentRunsByStatus places every state in its group, in display order, omitting empty groups", () => {
   const states: SubagentRunViewState[] = [
     "completed",
     "unknown",
@@ -66,7 +66,7 @@ test("groupSubagentRuns places every state in its group, in display order, omitt
     "starting",
     "queued",
   ];
-  const groups = groupSubagentRuns(states.map((state) => runView(state, state)));
+  const groups = groupSubagentRunsByStatus(states.map((state) => runView(state, state)));
   assert.deepEqual(
     groups.map((group) => [group.title, group.runs.map((run) => run.runId)]),
     [
@@ -79,10 +79,10 @@ test("groupSubagentRuns places every state in its group, in display order, omitt
   );
 
   assert.deepEqual(
-    groupSubagentRuns([runView("a", "failed"), runView("b", "completed")]).map((group) => group.title),
+    groupSubagentRunsByStatus([runView("a", "failed"), runView("b", "completed")]).map((group) => group.title),
     ["Failed", "Completed"],
   );
-  assert.deepEqual(groupSubagentRuns([]), []);
+  assert.deepEqual(groupSubagentRunsByStatus([]), []);
 });
 
 function mount(
@@ -93,7 +93,7 @@ function mount(
   const opened: string[] = [];
   const stopped: SubagentRunSnapshot[] = [];
   render(
-    <SubagentRunGroups
+    <SubagentStatusGroups
       runs={runs}
       stopPendingRunIds={stopPendingRunIds}
       stopErrors={stopErrors}

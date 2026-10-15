@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { ChevronRight, Square } from "lucide-react";
-import { groupSubagentRuns, type SubagentRunStatusGroup } from "../lib/subagent-panel-state";
+import { groupSubagentRunsByStatus, type SubagentRunStatusGroup } from "../lib/subagent-panel-state";
 import {
   isSubagentRunViewStateActive,
   subagentElapsedLabel,
@@ -15,7 +15,7 @@ import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { Button } from "./ui";
 
-export interface SubagentRunGroupsProps {
+export interface SubagentStatusGroupsProps {
   runs: readonly SubagentRunView[];
   /** Runs whose Stop request is in flight (the environment panel's stop-pending state). */
   stopPendingRunIds: readonly string[];
@@ -78,8 +78,8 @@ function RunRow({
   now: number;
   stopPending: boolean;
   stopError: string | undefined;
-  onOpen: SubagentRunGroupsProps["onOpen"];
-  onStop: SubagentRunGroupsProps["onStop"];
+  onOpen: SubagentStatusGroupsProps["onOpen"];
+  onStop: SubagentStatusGroupsProps["onStop"];
 }) {
   const stoppable = stoppableSnapshot(run);
   const role = roleLabel(run);
@@ -161,8 +161,8 @@ function GroupRows({
   now: number;
   stopPending: ReadonlySet<string>;
   stopErrors: Readonly<Record<string, string>>;
-  onOpen: SubagentRunGroupsProps["onOpen"];
-  onStop: SubagentRunGroupsProps["onStop"];
+  onOpen: SubagentStatusGroupsProps["onOpen"];
+  onStop: SubagentStatusGroupsProps["onStop"];
 }) {
   return group.runs.map((run) => (
     <RunRow
@@ -177,16 +177,16 @@ function GroupRows({
   ));
 }
 
-export function SubagentRunGroups({
+export function SubagentStatusGroups({
   runs,
   stopPendingRunIds,
   onOpen,
   onStop,
   stopErrors = NO_STOP_ERRORS,
-}: SubagentRunGroupsProps): React.JSX.Element {
+}: SubagentStatusGroupsProps): React.JSX.Element {
   const [completedOpen, setCompletedOpen] = React.useState(false);
   const completedListId = React.useId();
-  const groups = React.useMemo(() => groupSubagentRuns(runs), [runs]);
+  const groups = React.useMemo(() => groupSubagentRunsByStatus(runs), [runs]);
   const stopPending = React.useMemo(() => new Set(stopPendingRunIds), [stopPendingRunIds]);
   const live = groups.some((group) => group.id === "running" || group.id === "needs_attention");
   const now = useNow(live);

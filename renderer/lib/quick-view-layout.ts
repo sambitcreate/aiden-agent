@@ -100,3 +100,35 @@ export function dragTargetIndex(
   }
   return target;
 }
+
+export interface QuickViewVisibilityInput {
+  /** The Changes rule holds: a Git repo with working changes, commits ahead, or this chat's PR. */
+  changesVisible: boolean;
+  /** A commit or push dialog is open, or the Git operation it started is still running. */
+  changesHeld: boolean;
+  /** Changes was on screen in the last committed render. */
+  changesWasShown: boolean;
+  /** The chat has a context projection (after its first message). */
+  hasContextPressure: boolean;
+  subagentsEnabled: boolean;
+  /** Runs this chat has started, finished ones included. */
+  subagentRunCount: number;
+}
+
+/**
+ * The Quick View cards to show, in saved order. Environment always shows; Changes, Context
+ * and Subagents only once they have something to say. A Changes card that owns an open
+ * dialog or a running Git operation stays until that finishes, even if its rule lapses.
+ */
+export function quickViewVisibleSections(
+  order: readonly QuickViewSectionId[],
+  input: QuickViewVisibilityInput,
+): QuickViewSectionId[] {
+  const shown: Record<QuickViewSectionId, boolean> = {
+    environment: true,
+    changes: input.changesVisible || (input.changesHeld && input.changesWasShown),
+    context: input.hasContextPressure,
+    subagents: input.subagentsEnabled && input.subagentRunCount > 0,
+  };
+  return order.filter((id) => shown[id]);
+}

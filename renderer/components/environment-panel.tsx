@@ -30,12 +30,13 @@ import {
 } from "./environment-overview";
 import { ContextBreakdown } from "./context-breakdown";
 import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
-import { SubagentRunGroups } from "./subagent-run-groups";
+import { SubagentStatusGroups } from "./subagent-status-groups";
 import {
   DEFAULT_QUICK_VIEW_LAYOUT,
   QUICK_VIEW_LAYOUT_STORAGE_KEY,
   moveSection,
   parseQuickViewLayout,
+  quickViewVisibleSections,
   serializeQuickViewLayout,
   toggleSectionExpanded,
   type QuickViewLayout,
@@ -64,11 +65,9 @@ import {
   reconcileSubagentPersistenceHandoff,
   resolveSubagentDetailResult,
   resolveSubagentSelection,
-  summarizeSubagentRunViews,
   type SubagentDetailRequest,
   type SubagentReferenceMessage,
   type SubagentRunView,
-  type SubagentRunViewCounts,
 } from "../lib/subagent-view-state";
 import {
   subagentOverviewSummary,
@@ -151,7 +150,7 @@ interface EnvironmentActiveChat {
   workspaceId: string | null;
 }
 
-interface EnvironmentPanelContextValue {
+export interface EnvironmentPanelContextValue {
   toolsOpen: boolean;
   openTabs: EnvironmentPanelTab[];
   closeTab: (tab: EnvironmentPanelTab) => void;
@@ -187,7 +186,6 @@ interface EnvironmentPanelContextValue {
   openReview: (mode: EnvironmentReviewMode) => void;
   subagents: EnvironmentSubagentContext;
   subagentViews: SubagentRunView[];
-  subagentCounts: SubagentRunViewCounts;
   selectedSubagentRunId: string | null;
   subagentFocusDetailVersion: number;
   subagentDetailLoading: boolean;
@@ -220,7 +218,8 @@ interface EnvironmentPanelContextValue {
   setCreateWorktreeHandler: (handler: ((branchName: string) => Promise<void>) | null) => void;
 }
 
-const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
+/** Exported so component tests can render a single surface against a stub panel. */
+export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
 const TABS_STORAGE_KEY = "aiden-agent.environment.open-tabs-v1";
 const OPEN_STORAGE_KEY = "aiden-agent.environment.open";
 const QUICK_VIEW_OPEN_STORAGE_KEY = "aiden-agent.quick-view.open";
@@ -418,10 +417,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagents.workspaceId,
       subagentsEnabled,
     ],
-  );
-  const subagentCounts = React.useMemo(
-    () => summarizeSubagentRunViews(subagentViews),
-    [subagentViews],
   );
   const selectedSubagentView = subagentViews.find((entry) => entry.runId === selectedSubagentRunId);
   const selectedSubagentGenerationId = selectedSubagentView?.generationId;
@@ -1113,7 +1108,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       openReview,
       subagents,
       subagentViews,
-      subagentCounts,
       selectedSubagentRunId: displayedSubagentSelection.runId,
       subagentFocusDetailVersion,
       subagentDetailLoading: displayedSubagentSelection.loading,
@@ -1198,7 +1192,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentStopPending,
       subagentDetailLoading,
       subagents,
-      subagentCounts,
       subagentViews,
       subagentsEnabled,
       devicesEnabled,
@@ -1616,7 +1609,7 @@ interface QuickViewDragPreview {
  * Quick View's cards for a workspace with a readable folder. Environment always shows; the
  * others appear once they have something to say, and every card starts collapsed.
  */
-function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boolean }) {
+export function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boolean }) {
   const panel = useEnvironmentPanel();
   const chatId = panel.activeChat.chatId ?? undefined;
   const [layout, setLayout] = React.useState(readQuickViewLayout);
@@ -1624,8 +1617,9 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
   const [announcement, setAnnouncement] = React.useState("");
   const [changesDialogOpen, setChangesDialogOpen] = React.useState(false);
   const [entering, setEntering] = React.useState<ReadonlySet<QuickViewSectionId>>(() => new Set());
+  const [changesWasShown, setChangesWasShown] = React.useState(false);
   const cardRefs = React.useRef(new Map<QuickViewSectionId, HTMLDivElement>());
-  const shownRef = React.useRef<ReadonlySet<QuickViewSectionId> | null>(null);
+  const previousVisibleRef = React.useRef<ReadonlySet<QuickViewSectionId> | null>(null);
   const focusGripRef = React.useRef<QuickViewSectionId | null>(null);
 
   const changesVisible = useChangesVisibility(workspace.id, chatId, live);
@@ -1634,31 +1628,40 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
   const showFolder = useShowWorkspaceFolder(workspace);
   const pressure = panel.contextDetails?.pressure ?? null;
   const compacting = Boolean(panel.contextDetails?.compacting);
-  const subagentsVisible = panel.subagentsEnabled && panel.subagentViews.length > 0;
   const subagentSummary = subagentOverviewSummary(panel.subagentViews);
   const subagentsBodyMounted = useMountedWhileOpen(Boolean(layout.expanded.subagents));
 
-  const shown: Record<QuickViewSectionId, boolean> = {
-    environment: true,
+  const visible = quickViewVisibleSections(layout.order, {
+    changesVisible,
     // An open commit or push dialog, or the Git operation it started, keeps the card that owns it.
-    changes:
-      changesVisible ||
-      ((changesDialogOpen || panel.gitOperationBusy) && Boolean(shownRef.current?.has("changes"))),
-    context: Boolean(pressure),
-    subagents: subagentsVisible,
-  };
-  const visible = layout.order.filter((id) => shown[id]);
+    changesHeld: changesDialogOpen || panel.gitOperationBusy,
+    changesWasShown,
+    hasContextPressure: Boolean(pressure),
+    subagentsEnabled: panel.subagentsEnabled,
+    subagentRunCount: panel.subagentViews.length,
+  });
   const visibleKey = visible.join(" ");
 
   React.useLayoutEffect(() => {
-    const previous = shownRef.current;
-    const current = new Set(visibleKey.split(" ") as QuickViewSectionId[]);
-    shownRef.current = current;
+    const previous = previousVisibleRef.current;
+    const ids = visibleKey.split(" ") as QuickViewSectionId[];
+    const current = new Set(ids);
+    previousVisibleRef.current = current;
+    setChangesWasShown(current.has("changes"));
+    // A card that leaves mid-drag takes its drag preview with it.
+    setDragPreview((preview) => (preview && !current.has(preview.id) ? null : preview));
+    if (!previous) return;
+    const removed = [...previous].some((id) => !current.has(id));
+    // A removed card that held focus drops it to the body; hand it to the first remaining card.
+    const focusLost = !document.activeElement || document.activeElement === document.body;
+    if (removed && focusLost && live) {
+      cardRefs.current.get(ids[0])?.querySelector<HTMLElement>("button[aria-expanded]")?.focus();
+    }
     // Cards present when Quick View opens arrive with the surface; only later ones animate.
-    if (!previous || prefersReducedMotion()) return;
-    const added = [...current].filter((id) => !previous.has(id));
-    if (added.length > 0) setEntering((ids) => new Set([...ids, ...added]));
-  }, [visibleKey]);
+    if (prefersReducedMotion()) return;
+    const added = ids.filter((id) => !previous.has(id));
+    if (added.length > 0) setEntering((animating) => new Set([...animating, ...added]));
+  }, [live, visibleKey]);
 
   React.useLayoutEffect(() => {
     const id = focusGripRef.current;
@@ -1757,6 +1760,7 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
         kind: "sidebar",
         label: "Open Context in sidebar",
         onSelect: () => panel.showTools("context"),
+        disabled: toolsBlocked,
       },
       children: pressure ? <ContextBreakdown pressure={pressure} compacting={compacting} /> : null,
     },
@@ -1767,10 +1771,11 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
         kind: "sidebar",
         label: "Open Subagents in sidebar",
         onSelect: () => panel.showTools("subagents"),
+        disabled: toolsBlocked,
       },
       // The run list ticks elapsed time, so it only exists while the card is open.
       children: subagentsBodyMounted ? (
-        <SubagentRunGroups
+        <SubagentStatusGroups
           runs={panel.subagentViews}
           stopPendingRunIds={panel.subagentStopPendingRunIds}
           stopErrors={panel.subagentStopErrorsByRunId}
@@ -1828,6 +1833,9 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
   );
 }
 
+/** Matches `-m-1.5` on the Quick View stack: how far its padded scroller extends past the cards' old box. */
+const QUICK_VIEW_STACK_BLEED_PX = 6;
+
 function QuickViewCard({
   width,
   right,
@@ -1882,11 +1890,13 @@ function QuickViewCard({
       onFocusCapture={() => panel.activateSurface("quick-view")}
       onPointerDownCapture={() => panel.activateSurface("quick-view")}
       className={cn(
-        "quick-view-card no-drag absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col gap-2 overflow-y-auto p-0.5 text-primary transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        "quick-view-card no-drag absolute top-14 z-30 -m-1.5 flex max-h-[calc(100%-3.5rem)] flex-col gap-2 overflow-y-auto p-2 text-primary transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
         (!open || !presented) && "translate-x-[calc(100%+0.75rem)] opacity-0",
       )}
       style={{
-        width,
+        // The scroller pads out beyond the cards so card shadows, a dragged card's lift and
+        // its overshoot aren't clipped; the negative margin keeps the cards where they were.
+        width: width + 2 * QUICK_VIEW_STACK_BLEED_PX,
         right,
         pointerEvents: open && presented ? "auto" : "none",
       }}
@@ -1904,6 +1914,7 @@ function QuickViewCard({
   );
 }
 
+/** CSS lengths in px or rem, as the chat column tokens are written; `none` is unbounded. */
 function cssLength(value: string, rootFontSize: number, fallback: number): number {
   if (value.trim() === "none") return Number.POSITIVE_INFINITY;
   const amount = Number.parseFloat(value);

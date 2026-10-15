@@ -81,7 +81,7 @@ const STATUS_GROUPS: ReadonlyArray<{ id: SubagentRunStatusGroupId; title: string
 ];
 
 /** Every run in the chat by outcome, in display order; empty groups are omitted and run order is kept. */
-export function groupSubagentRuns(runs: readonly SubagentRunView[]): SubagentRunStatusGroup[] {
+export function groupSubagentRunsByStatus(runs: readonly SubagentRunView[]): SubagentRunStatusGroup[] {
   const byGroup = new Map<SubagentRunStatusGroupId, SubagentRunView[]>();
   for (const run of runs) {
     const id = STATUS_GROUP_BY_STATE[run.state];

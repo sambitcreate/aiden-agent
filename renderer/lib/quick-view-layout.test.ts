@@ -5,10 +5,12 @@ import {
   dragTargetIndex,
   moveSection,
   parseQuickViewLayout,
+  quickViewVisibleSections,
   serializeQuickViewLayout,
   toggleSectionExpanded,
   type QuickViewLayout,
   type QuickViewSectionId,
+  type QuickViewVisibilityInput,
 } from "./quick-view-layout.js";
 
 test("missing or corrupt storage falls back to the default layout", () => {
@@ -81,4 +83,47 @@ test("a card dragged down uses its bottom edge", () => {
   assert.equal(dragTargetIndex(rects, 0, 40), 0); // bottom 200 < 208
   assert.equal(dragTargetIndex(rects, 0, 50), 1); // bottom 210 > 208
   assert.equal(dragTargetIndex(rects, 0, 500), 2);
+});
+
+const NOTHING_TO_SHOW: QuickViewVisibilityInput = {
+  changesVisible: false,
+  changesHeld: false,
+  changesWasShown: false,
+  hasContextPressure: false,
+  subagentsEnabled: true,
+  subagentRunCount: 0,
+};
+const ALL_ORDER: QuickViewSectionId[] = ["subagents", "context", "changes", "environment"];
+const visibleWith = (input: Partial<QuickViewVisibilityInput>) =>
+  quickViewVisibleSections(ALL_ORDER, { ...NOTHING_TO_SHOW, ...input });
+
+test("Environment is the only card while nothing else has something to show", () => {
+  assert.deepEqual(visibleWith({}), ["environment"]);
+});
+
+test("visible cards keep the saved order", () => {
+  assert.deepEqual(
+    visibleWith({ changesVisible: true, hasContextPressure: true, subagentRunCount: 1 }),
+    ["subagents", "context", "changes", "environment"],
+  );
+});
+
+test("Context appears only once the chat has a context projection", () => {
+  assert.deepEqual(visibleWith({ hasContextPressure: true }), ["context", "environment"]);
+});
+
+test("Subagents needs the feature enabled and at least one run in this chat", () => {
+  assert.deepEqual(visibleWith({ subagentRunCount: 2 }), ["subagents", "environment"]);
+  assert.deepEqual(visibleWith({ subagentRunCount: 2, subagentsEnabled: false }), ["environment"]);
+  assert.deepEqual(visibleWith({ subagentRunCount: 0 }), ["environment"]);
+});
+
+test("Changes shows per its rule, and an open dialog or Git operation only keeps a card already shown", () => {
+  assert.deepEqual(visibleWith({ changesVisible: true }), ["changes", "environment"]);
+  // A commit that just cleaned the tree keeps the card that owns its dialog.
+  assert.deepEqual(visibleWith({ changesHeld: true, changesWasShown: true }), ["changes", "environment"]);
+  // Holding never brings in a card that was not on screen.
+  assert.deepEqual(visibleWith({ changesHeld: true, changesWasShown: false }), ["environment"]);
+  // Once the dialog closes and the operation ends, the lapsed rule removes it.
+  assert.deepEqual(visibleWith({ changesHeld: false, changesWasShown: true }), ["environment"]);
 });
