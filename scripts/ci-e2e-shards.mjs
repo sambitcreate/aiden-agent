@@ -10,6 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Weights affect scheduling only; newly discovered specs always run.
 export const FILE_SECONDS = Object.freeze({
   "assistant-scheduled-profile.spec.ts": 31,
+  "bots-persistence.spec.ts": 11,
   "browser-agent.spec.ts": 56,
   "browser-cancellation.spec.ts": 90,
   "browser-initial-crash.spec.ts": 2,
