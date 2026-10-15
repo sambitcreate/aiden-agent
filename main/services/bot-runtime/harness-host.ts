@@ -296,6 +296,14 @@ export async function createBotHarnessHost(
       const entry: OpenEntry = { ...opened, idleTimer: null, ...(notice === undefined ? {} : { pendingNotice: notice }) };
       open.set(botId, entry);
       scheduleIdle(botId, entry);
+      // pi-durable 1.2 closes a Session for good when any Storage call fails;
+      // drop it so the next open reopens and recovers from what was committed.
+      void entry.harness.closed.then((end) => {
+        if (end.reason !== "failed" || open.get(botId) !== entry) return;
+        open.delete(botId);
+        if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
+        opts.onReport?.(botId, end.error);
+      });
       return entry;
     });
     opening.set(botId, promise);

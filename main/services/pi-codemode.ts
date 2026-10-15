@@ -1,4 +1,4 @@
-import { CodemodeSandbox, DEFAULT_INPUT_SCHEMA_MAX_CHARS, renderDeclarations, schemaToType, toCodemodeIdentifier } from "@earendil-works/pi-codemode";
+import { CodemodeSandbox, DEFAULT_INPUT_SCHEMA_MAX_CHARS, renderDeclarations, schemaToType, toCodemodeIdentifier, type CodemodeOutputItem } from "@earendil-works/pi-codemode";
 import type { AgentTool, AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
 import { Type, type Usage } from "@earendil-works/pi-ai";
 import { isPiCodemodeCallable } from "./pi-runtime-tool.js";
@@ -25,6 +25,28 @@ const TOOL_REFERENCE = /\btools\b(\s*\.\s*([A-Za-z_$][\w$]*))?/gu;
  * lists tools, or names `tools` in any way other than `tools.<known name>`.
  * Scripts that only call tools already available start without waiting.
  */
+/**
+ * Lay out script output the way Pi does, so the model can tell items apart:
+ * with several `text()` items each starts with a `==> text N/M <==` line, and
+ * `console.*` lines follow everything else in one `<console_output>` block.
+ */
+export function layoutCodemodeOutput(output: readonly CodemodeOutputItem[]): CodemodeOutputItem[] {
+  const total = output.filter((item) => item.type === "text" && !item.console).length;
+  const items: CodemodeOutputItem[] = [];
+  const consoleLines: string[] = [];
+  let index = 0;
+  for (const item of output) {
+    if (item.type === "image") items.push(item);
+    else if (item.console) consoleLines.push(item.text);
+    else {
+      index += 1;
+      items.push({ type: "text", text: total > 1 ? `==> text ${index}/${total} <==\n${item.text}` : item.text });
+    }
+  }
+  if (consoleLines.length > 0) items.push({ type: "text", text: `<console_output>\n${consoleLines.join("\n")}\n</console_output>` });
+  return items;
+}
+
 export function codemodeScriptMayNeedPendingTools(code: string, available: ReadonlySet<string>): boolean {
   if (DISCOVERY_GLOBALS.test(code)) return true;
   for (const match of code.matchAll(TOOL_REFERENCE)) {
@@ -246,7 +268,7 @@ export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
         let imageCount = 0;
         let invalidImage = false;
         let limitNoticed = false;
-        for (const item of result.output) {
+        for (const item of layoutCodemodeOutput(result.output)) {
           if (item.type === "image") {
             imageBytes += item.data.length;
             if (++imageCount <= 4 && imageBytes <= 8 * 1024 * 1024) {

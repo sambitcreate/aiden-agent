@@ -70,9 +70,12 @@ test("title generation preserves manual renames and seeds offline sessions", asy
   const dir = temporary(t), harness = extension(api.createSessionParityExtension(dir));
   const manager = api.SessionManager.inMemory(dir);
   const ctx = { sessionManager: manager, model: undefined };
-  await harness.events.get("before_agent_start")({ prompt: "Build my CLI" }, ctx);
+  // pi 1.2 also starts runs from extension custom messages; they carry no prompt and never title the chat.
+  await harness.events.get("before_agent_start")({ messageType: "custom", message: { role: "custom", content: "Reminder" } }, ctx);
+  assert.equal(harness.name(), undefined);
+  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Build my CLI" }, ctx);
   assert.equal(harness.name(), "Build my CLI");
-  await harness.events.get("before_agent_start")({ prompt: "Second message" }, ctx);
+  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Second message" }, ctx);
   assert.equal(harness.name(), "Build my CLI");
 });
 

@@ -101,20 +101,20 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 
 ### 10. Cleanup and catalog — [#469](https://github.com/sambitcreate/aiden-agent/pull/469)
 
-- [ ] Delete dead code (`mcpAgentToolResult`, `createNoRedirectFetch`, stale client version). `McpToolListCache` went in slice 5.
-- [ ] Replace source-grep MCP tests with behavioural tests.
-- [ ] Dev-only `npm run plugins:refresh` and catalog invariant tests.
+- [x] Delete dead code (`mcpAgentToolResult`, `createNoRedirectFetch`, stale client version). `McpToolListCache` went in slice 5.
+- [x] Replace source-grep MCP tests with behavioural tests.
+- [x] Dev-only `npm run plugins:refresh` and catalog invariant tests.
 
 ### 11. Credential hygiene for custom servers (config store, `mcp.ts` transport, Settings) — [#470](https://github.com/sambitcreate/aiden-agent/pull/470)
 
-- [ ] Env and header values of custom servers move to the keychain (config.json keeps names + markers) and are masked in Settings; externally added stdio servers need first-run approval.
-- [ ] Servers switched off for the model are excluded from schedule pickers and `schedule_task`; an approved schedule bound to one fails with a clear reason.
+- [x] Env and header values of custom servers move to the keychain (config.json keeps names + markers) and are masked in Settings; externally added stdio servers need first-run approval.
+- [x] Servers switched off for the model are excluded from schedule pickers and `schedule_task`; an approved schedule bound to one fails with a clear reason.
 
 ### 12. Pi 1.2.0 lockstep upgrade — [#471](https://github.com/sambitcreate/aiden-agent/pull/471)
 
-- [ ] Root and CLI pins to 1.2.0 (`pi-ai`, `pi-agent-core`, `pi-codemode`, `pi-durable`, `chord`, `pi-coding-agent`, `pi-mcp`); drop the CLI `chord` dependency if unused.
-- [ ] `before_agent_start` union (`session-parity.ts`), `deliverAs` on `/attach`, `pi-durable` `output` rename, patch anchors (`SETTINGS_DEFAULTS.enableInstallTelemetry`, `PI_AI_VERSION`), theme `$schema` URL, reject `+`/`-`-prefixed server names.
-- [ ] Pi upgrade evaluation and CLI suites.
+- [x] Root and CLI pins to 1.2.0 (`pi-ai`, `pi-agent-core`, `pi-codemode`, `pi-durable`, `chord`, `pi-coding-agent`, `pi-mcp`); drop the CLI `chord` dependency if unused.
+- [x] `before_agent_start` union (`session-parity.ts`), `deliverAs` on `/attach`, `pi-durable` `output` rename, patch anchors (`SETTINGS_DEFAULTS.enableInstallTelemetry`, `PI_AI_VERSION`), theme `$schema` URL, reject `+`/`-`-prefixed server names.
+- [x] Pi upgrade evaluation and CLI suites.
 
 ## Validation
 

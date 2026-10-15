@@ -43,6 +43,24 @@ test("committed themes match a fresh generation from appearance.ts", () => {
 	}
 });
 
+test("every committed theme passes pi's startup schema validation", async () => {
+	// pi 1.2 validates themes during startup too; an invalid one fails to load.
+	const { validateThemeJson } = await import(
+		path.join(pkgDir, "node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-schema.js")
+	);
+	const files = [
+		...readdirSync(committedThemesDir).filter((name) => name.endsWith(".json")),
+		...readdirSync(path.join(committedThemesDir, "builtin")).map((name) => `builtin/${name}`),
+	];
+	for (const file of files) {
+		assert.doesNotThrow(() => validateThemeJson(file, readJson(path.join(committedThemesDir, file))), file);
+	}
+	assert.throws(
+		() => validateThemeJson("bad", { ...readJson(path.join(committedThemesDir, files[0])), unsupported: true }),
+		"the validator rejects unsupported metadata, so passing means something",
+	);
+});
+
 test("theme files reference only vars they define", () => {
 	const files = [
 		...readdirSync(committedThemesDir).filter((name) => name.endsWith(".json")).map((name) => name),
