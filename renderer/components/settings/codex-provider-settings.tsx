@@ -460,6 +460,7 @@ export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLay
                     href={actionable.url}
                     target="_blank"
                     rel="noopener noreferrer"
+                    data-link-target="external"
                   >
                     Open sign-in page
                     <ExternalLink className="size-3.5" />

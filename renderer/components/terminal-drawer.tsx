@@ -18,9 +18,8 @@ import {
 } from "lucide-react";
 import { Button, Text, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
-import { browserApi, onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
-import { resolveLinkOpen } from "../lib/browser-link-routing";
-import type { BrowserCommand } from "../shared/browser";
+import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
+import { useLinkOpener } from "../lib/link-opener";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -363,6 +362,13 @@ function TerminalViewport({
   onUnavailableRef.current = onUnavailable;
   activeRef.current = active;
 
+  const { openLink, canOpen } = useLinkOpener();
+  // openLink/canOpen change identity when the saved preference loads or
+  // changes; read them through a ref so the terminal (and its scrollback)
+  // isn't torn down and rebuilt just because the preference changed.
+  const linkOpenerRef = React.useRef({ openLink, canOpen });
+  linkOpenerRef.current = { openLink, canOpen };
+
   React.useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -394,33 +400,12 @@ function TerminalViewport({
             if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
             return true;
           },
-          canActivateLink: (url) =>
-            resolveLinkOpen({
-              href: url,
-              modifiers: { metaKey: false, ctrlKey: false },
-              preference: "browser",
-              browserAvailable: true,
-            }) !== null,
+          canActivateLink: (url) => linkOpenerRef.current.canOpen(url),
           onLinkActivate: (url, event) => {
-            const route = resolveLinkOpen({
-              href: url,
+            linkOpenerRef.current.openLink(url, {
               modifiers: { metaKey: event.metaKey, ctrlKey: event.ctrlKey },
-              preference: "browser",
-              browserAvailable: true,
+              workspaceId: session.workspaceId,
             });
-            const command: BrowserCommand | null =
-              route?.kind === "browser" || route?.kind === "external"
-                ? { action: "open_link", url: route.url }
-                : route?.kind === "file"
-                  ? { action: "open_file", path: route.path }
-                  : null;
-            if (command) {
-              void browserApi
-                .command(session.workspaceId, command)
-                .catch((error: unknown) =>
-                  toast.error(error instanceof Error ? error.message : "Could not open this link."),
-                );
-            }
           },
         });
         const mount = hostRef.current;

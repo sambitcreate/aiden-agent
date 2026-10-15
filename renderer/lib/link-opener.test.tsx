@@ -266,3 +266,24 @@ test("right-click: the Aiden item is disabled with no surface, and absent for ma
   assert.equal(screen.queryByRole("menuitem", { name: "Open in Aiden browser" }), null);
   assert.deepEqual(sent(calls), []);
 });
+
+test("openLink with forcePrompt asks even when a preference is saved, without remember", async () => {
+  const calls = ipc("browser");
+  function Caller() {
+    const { openLink } = useLinkOpener();
+    return <button onClick={() => openLink("https://example.com/x", { forcePrompt: true })}>visual</button>;
+  }
+  render(
+    <LinkOpenerProvider workspaceId="ws-1">
+      <Surface />
+      <Caller />
+    </LinkOpenerProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByText("visual"));
+  await screen.findByRole("dialog", { name: "Open this link?" });
+  assert.equal(screen.queryByRole("checkbox"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Open in system browser" }));
+  await flush();
+  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/x"] }]);
+});
