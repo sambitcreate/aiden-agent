@@ -162,7 +162,16 @@ export class FirstMessageWorktreeError extends Error {
 
 /** A retry asked for different settings than the worktree this draft already created. */
 export class FirstMessageWorktreeSettingsChangedError extends Error {
-  constructor(readonly worktree: { workspaceId: string; branch: string; baseRef: string; startPoint: string }) {
+  constructor(
+    readonly worktree: {
+      workspaceId: string;
+      branch: string;
+      baseRef: string;
+      startPoint: string;
+      fromOrigin: boolean;
+      requestedBranchName?: string;
+    },
+  ) {
     super(
       `This draft already created worktree ${worktree.branch} from ${worktree.startPoint}. ` +
         "Send again with those settings, or start a new chat to use different ones.",

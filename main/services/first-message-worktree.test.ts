@@ -558,7 +558,7 @@ test("a retry with different settings reports the existing worktree instead of r
       ok: false,
       code: "worktree-settings-changed",
       reason: "This draft already created worktree aiden/tune-it from main. Send again with those settings, or start a new chat to use different ones.",
-      worktree: { workspaceId: first.workspaceId, branch: "aiden/tune-it", baseRef: "main" },
+      worktree: { workspaceId: first.workspaceId, branch: "aiden/tune-it", baseRef: "main", fromOrigin: false },
     }, JSON.stringify(changed));
   }
   assert.equal(await h.store.get(draftId) ?? undefined, undefined);

@@ -180,12 +180,18 @@ const WORKTREE_FAILURE_REASONS = {
 
 function worktreeFailure(error: unknown): FirstMessageWorktreeResult<never> {
   if (error instanceof FirstMessageWorktreeSettingsChangedError) {
-    const { workspaceId, branch, baseRef } = error.worktree;
+    const { workspaceId, branch, baseRef, fromOrigin, requestedBranchName } = error.worktree;
     return {
       ok: false,
       code: "worktree-settings-changed",
       reason: error.message,
-      worktree: { workspaceId, branch, baseRef },
+      worktree: {
+        workspaceId,
+        branch,
+        baseRef,
+        fromOrigin,
+        ...(requestedBranchName === undefined ? {} : { branchName: requestedBranchName }),
+      },
     };
   }
   const phase = error instanceof FirstMessageWorktreeError ? error.phase : "preparing";

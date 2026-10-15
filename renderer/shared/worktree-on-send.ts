@@ -72,7 +72,18 @@ export type FirstMessageWorktreeResult<C> =
        */
       code: "worktree-settings-changed";
       reason: string;
-      worktree: { workspaceId: string; branch: string; baseRef: string };
+      /**
+       * The existing worktree, with the settings its attempt was sent with:
+       * sending again with `baseRef`, `fromOrigin` and `branchName` uses it.
+       */
+      worktree: {
+        workspaceId: string;
+        branch: string;
+        baseRef: string;
+        fromOrigin: boolean;
+        /** The explicit name that attempt asked for; omitted for Auto. */
+        branchName?: string;
+      };
     };
 
 export type FirstMessageWorktreePhase = "fetching" | "creating" | "ready";
