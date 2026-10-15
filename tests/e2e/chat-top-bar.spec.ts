@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
@@ -122,6 +122,47 @@ test.describe("folder workspaces", () => {
       "true",
     );
     await expect(changes).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("the headline name opens the workspace menu, and a typed path moves the draft there", async ({ aiden }) => {
+    const { page } = aiden;
+    // HOME is the test root, so ~/typed-project resolves inside it.
+    const typedFolder = path.join(aiden.rootDir, "typed-project");
+    await mkdir(typedFolder);
+    await finishLmStudioOnboarding(page);
+    const composer = page.locator("textarea");
+    await composer.fill("Keep this draft text");
+    const headline = page.locator("[data-new-chat-headline]");
+    await expect(headline).toHaveText("What should we build in Aiden E2E workspace?");
+
+    await headline.getByRole("button", { name: "Aiden E2E workspace" }).click();
+    const search = page.getByRole("combobox", { name: "Search workspaces" });
+    await expect(search).toBeFocused();
+    await expect(page.getByRole("option", { name: /^Scratch chat/u })).toBeVisible();
+    await search.fill("~/typed-project");
+    const open = page.getByRole("option", { name: /^Open \/.*typed-project/u });
+    await expect(open).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
+
+    // The draft keeps its text and focus, now in the typed folder.
+    await expect(search).toHaveCount(0);
+    await expect(headline).toHaveText("What should we build in typed-project?");
+    await expect(composer).toHaveValue("Keep this draft text");
+    await expect(composer).toBeFocused();
+    await composer.press("Enter");
+    await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
+    const chats = JSON.parse(await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8")) as {
+      workspaceId?: string;
+      botId?: string;
+    }[];
+    const [chat] = chats.filter((entry) => !entry.botId && entry.workspaceId && entry.workspaceId !== "assistant");
+    const workspace = await page.evaluate(async (workspaceId) => {
+      const bridge = (window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }).aidenAPI.ipc;
+      return bridge.invoke<{ folderPath?: string } | null>("workspaces:get", workspaceId);
+    }, chat.workspaceId);
+    expect(workspace?.folderPath?.endsWith(`${path.sep}typed-project`)).toBe(true);
   });
 
   test("the title menu renames the chat everywhere it is shown", async ({ aiden }) => {

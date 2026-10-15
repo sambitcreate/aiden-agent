@@ -340,3 +340,28 @@ test("New chat in… opens a draft in the chosen workspace from the chevron, the
   await expect.poll(async () => (await regularChats(aiden.userDataDir)).length).toBe(1);
   expect((await regularChats(aiden.userDataDir))[0].workspaceId).toBe(targetId);
 });
+
+test("New chat in… opens a typed path as a workspace and offers Clone", async ({ aiden }) => {
+  const { page } = aiden;
+  // HOME is the test root, so ~/palette-folder resolves inside it.
+  await mkdir(path.join(aiden.rootDir, "palette-folder"));
+  await finishLmStudioOnboarding(page);
+  const search = page.getByRole("combobox", { name: "Search workspaces" });
+  const palette = page.locator("[data-command-palette-content]");
+  const composer = page.locator("textarea");
+
+  await page.getByRole("button", { name: "New Agent", exact: true }).focus();
+  await page.keyboard.press("ControlOrMeta+Shift+N");
+  await expect(search).toBeFocused();
+  await expect(page.getByRole("option", { name: "Clone repository…" })).toBeVisible();
+  // A folder that is missing only its last segment can be created.
+  await search.fill("~/palette-folder/missing/deeper");
+  await expect(palette.getByText("The parent folder doesn't exist.")).toBeVisible();
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await search.fill("~/palette-folder");
+  await expect(page.getByRole("option", { name: /^Open \/.*palette-folder/u })).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Enter");
+  await expect(palette).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in palette-folder?");
+});
