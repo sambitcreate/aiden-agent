@@ -29,7 +29,10 @@ import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
-import { parseChatCreate } from "./chat-create-params.js";
+import {
+  parseAssistantChatCreate,
+  parseChatCreate,
+} from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
 import {
   parseChatContextPressureRequest,
@@ -226,11 +229,46 @@ export function registerChatHistoryHandlers(): void {
     return chatApplicationService.create(parsed, owner);
   });
 
-  // Attended Assistant is an intentional renderer capability: its dock and
-  // approval UI live in this same document. This dedicated, bounded path does
-  // not hide Assistant from its own renderer; it prevents ordinary chat
-  // creation from forging the persisted identity that main treats as mode.
-  ipcMain.handle("chats:createAssistant", rendererChats.createAssistant);
+  ipcMain.handle("chats:createAssistant", async (event, input: unknown) => {
+    // Attended Assistant is an intentional renderer capability: its dock and
+    // approval UI live in this same document. This dedicated, bounded path does
+    // not hide Assistant from its own renderer; it prevents ordinary chat
+    // creation from forging the persisted identity that main treats as mode.
+    const owner = rendererDocumentOwner(
+      event,
+      () =>
+        new Error("Assistant chats require the active application document."),
+    );
+    if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+      throw new Error(appendReconciliationFailureMessage("blocked"));
+    }
+    const parsed = parseAssistantChatCreate(input);
+    const assertCurrent = () => {
+      if (owner.isDestroyed())
+        throw new Error("The renderer document is no longer active.");
+      if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+        throw new Error(appendReconciliationFailureMessage("blocked"));
+      }
+    };
+    try {
+      return chatForRenderer(
+        await chatStore.create({
+          ...parsed,
+          workspaceId: ASSISTANT_WORKSPACE_ID,
+          assertCurrent,
+        }),
+      );
+    } catch (error) {
+      if (isChatCreateReconciliationRequiredError(error)) {
+        llmClient.markAppendReconciliationRequired(owner.documentId);
+        owner.onInvalidated(() => {
+          llmClient.clearAppendReconciliationRequired(owner.documentId);
+        });
+        throw new Error(appendReconciliationFailureMessage("blocked"));
+      }
+      throw error;
+    }
+  });
 
   ipcMain.handle("chats:rename", rendererChats.rename);
 

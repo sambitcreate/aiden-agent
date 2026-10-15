@@ -5,11 +5,7 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { IpcMainInvokeEvent } from "electron";
 import { parseChatAppend } from "./chat-append-params.js";
-import {
-  createRendererChatMutationHandlers,
-  type RendererChatMutationDeps,
-} from "./chat-renderer-mutations.js";
-import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
 import {
   appendReconciliationFailureMessage,
   MAX_CHAT_ID_CHARS,
@@ -65,7 +61,7 @@ async function fixture(
   t: TestContext,
   options: {
     admission?: ChatTurnAdmission;
-    wrapStore?: (store: ChatStore) => RendererChatMutationDeps["chatStore"];
+    wrapStore?: (store: ChatStore) => ChatStore;
     unresolvedGuiArtifactMessage?: (chatId: string) => Promise<string | undefined>;
   } = {},
 ) {
@@ -109,9 +105,13 @@ async function fixture(
     markAppendReconciliationRequired: (ownerId: string) => admission.markAppendReconciliationRequired(ownerId),
     clearAppendReconciliationRequired: (ownerId: string) => admission.clearAppendReconciliationRequired(ownerId),
   };
+  const storeForCallers = options.wrapStore ? options.wrapStore(chatStore) : chatStore;
   const chatApplicationService = createChatApplicationService({
-    chatStore,
-    configStore: { getWorkspace: async () => null },
+    chatStore: storeForCallers,
+    configStore: {
+      getWorkspace: async (id: string) =>
+        id === "workspace-1" ? { id, name: "Workspace", permission: "ask", createdAt: 1, updatedAt: 1 } : null,
+    },
     llmClient: {
       ...llmClient,
       isChatOwnedByInactiveRenderer: () => false,
@@ -143,7 +143,7 @@ async function fixture(
     logError: () => undefined,
   } as unknown as ChatApplicationDependencies);
   const handlers = createRendererChatMutationHandlers({
-    chatStore: options.wrapStore ? options.wrapStore(chatStore) : chatStore,
+    chatStore: storeForCallers,
     chatApplicationService,
     chatTitleService: { renameWithFoundationModels: async () => assert.fail("no title is generated here") },
     botApplicationService: { deleteChat: async () => assert.fail("no Bot chat is deleted here") },
@@ -179,12 +179,15 @@ test("renderer channels return the visible chat and never private Pi protocol", 
   );
   assert.equal(appended?.messages[0]?.pi, undefined);
   const read = await f.chatApplicationService.get("chat-1");
-  const assistant = await f.handlers.createAssistant(event, { providerId: "openrouter", model: "model-a" });
-  assert.equal(assistant?.workspaceId, ASSISTANT_WORKSPACE_ID);
+  const created = await f.chatApplicationService.create(
+    { workspaceId: "workspace-1", title: "New", providerId: "openrouter", model: "model-a" },
+    f.owner,
+  );
+  assert.equal(created?.workspaceId, "workspace-1");
   // Visible-history copies (chats:copyVisibleHistory) start from a payload
   // that never carries the source's private protocol.
   const copied = await f.chatStore.copyVisibleHistory({ sourceChatId: "chat-1" });
-  for (const visible of [appended, read, assistant, copied]) {
+  for (const visible of [appended, read, created, copied]) {
     const serialized = JSON.stringify(visible);
     assert.ok(!serialized.includes(PRIVATE_RESPONSE_ID), "private response id leaked to the renderer");
     assert.ok(!serialized.includes(PRIVATE_THINKING), "private thinking leaked to the renderer");
@@ -213,7 +216,6 @@ test("an owner that needs append reconciliation is fenced from create and append
   const before = await f.chatStore.list();
 
   assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")), { message: blocked });
-  await assert.rejects(f.handlers.createAssistant(event, {}), { message: blocked });
   await assert.rejects(
     f.chatApplicationService.create({ workspaceId: "workspace-1", title: "New" }, f.owner),
     { message: blocked },
@@ -232,8 +234,6 @@ test("an append whose durability is indeterminate fences the document until it i
       appendMessage: async () => {
         throw new Error("directory sync failed");
       },
-      create: store.create,
-      setComputerUsePendingContinue: store.setComputerUsePendingContinue,
     }),
   });
 
@@ -244,37 +244,43 @@ test("an append whose durability is indeterminate fences the document until it i
   assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), true);
   assert.equal(f.admission.isAdmitted("chat-2"), false, "the failed turn released its lease");
   assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-2")), { message: blocked });
-  await assert.rejects(f.handlers.createAssistant(event, {}), { message: blocked });
+  await assert.rejects(
+    f.chatApplicationService.create({ workspaceId: "workspace-1", title: "New" }, f.owner),
+    { message: blocked },
+  );
 
   f.owner.invalidate();
   assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), false, "a reload clears the fence");
 });
 
-test("an Assistant chat whose creation is indeterminate fences the document", async (t) => {
+test("a chat whose creation is indeterminate fences the document", async (t) => {
   const f = await fixture(t, {
     wrapStore: (store) => ({
       ...store,
       create: async () => {
         throw new ChatCreateReconciliationRequiredError("assistant-chat");
       },
-      get: store.get,
-      appendMessage: store.appendMessage,
-      setComputerUsePendingContinue: store.setComputerUsePendingContinue,
     }),
   });
 
-  await assert.rejects(f.handlers.createAssistant(event, {}), { message: blocked });
+  await assert.rejects(
+    f.chatApplicationService.create({ workspaceId: "workspace-1", title: "New" }, f.owner),
+    { message: blocked },
+  );
   assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), true);
   assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")), { message: blocked });
   f.owner.invalidate();
   assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), false);
 });
 
-test("an Assistant chat is not installed for a renderer document that is gone", async (t) => {
+test("a chat is not installed for a renderer document that is gone", async (t) => {
   const f = await fixture(t);
   const before = await f.chatStore.list();
   f.owner.invalidate();
-  await assert.rejects(f.handlers.createAssistant(event, {}), /no longer active/u);
+  await assert.rejects(
+    f.chatApplicationService.create({ workspaceId: "workspace-1", title: "New" }, f.owner),
+    /no longer active/u,
+  );
   assert.deepEqual(await f.chatStore.list(), before);
 });
 
