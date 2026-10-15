@@ -1089,6 +1089,45 @@ final class AidenBotInstantEditTests: XCTestCase {
     }
 
     @MainActor
+    func testTryAgainWhileAnotherMacsBotIsOnItsWayKeepsItsAnswersUntilThatOneLands() async throws {
+        let root = createRoot()
+        // Mac B's create went out at the last launch and its answer was lost.
+        let macB = CreateMac()
+        macB.createErrors = [URLError(.networkConnectionLost)]
+        await createFlow(root).submit(input, operations: try createOperations(macB, instanceId: "mac_b")) { _ in }
+
+        // This launch, a Bot on its way to Mac A is held at the Mac...
+        let flow = createFlow(root)
+        let macA = CreateMac()
+        macA.holds = true
+        var scout = input
+        scout.name = "Scout"
+        let operationsA = try createOperations(macA)
+        let making = Task { await flow.submit(scout, operations: operationsA) { _ in } }
+        let deadline = Date().addingTimeInterval(5)
+        while macA.hold == nil {
+            guard Date() < deadline else { return XCTFail("the create never went out") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        // ...when the phone moves to Mac B, whose cut-off create comes back, and Try Again is tapped.
+        await flow.restore(instanceId: "mac_b", deviceId: "device_1")
+        let failure = try XCTUnwrap(flow.failure(instanceId: "mac_b", deviceId: "device_1"))
+        XCTAssertEqual(flow.retry(failure, instanceId: "mac_b", deviceId: "device_1"), .send(input))
+        await flow.submit(input, operations: try createOperations(macB, instanceId: "mac_b"), retrying: failure) { _ in }
+        XCTAssertEqual(macB.creates.count, 1, "one Bot is made at a time: nothing goes out yet")
+        XCTAssertEqual(flow.failure(instanceId: "mac_b", deviceId: "device_1"), failure, "its answers wait as they were")
+
+        // Once Mac A's Bot lands, Try Again sends Mac B's on the key Mac B may hold.
+        macA.hold?.resume()
+        await making.value
+        XCTAssertEqual(flow.retry(failure, instanceId: "mac_b", deviceId: "device_1"), .send(input))
+        await flow.submit(input, operations: try createOperations(macB, instanceId: "mac_b"), retrying: failure) { _ in }
+        XCTAssertEqual(macB.creates.count, 2)
+        XCTAssertEqual(macB.creates[1].key, macB.creates[0].key)
+        XCTAssertEqual(macA.creates.count, 1)
+    }
+
+    @MainActor
     func testAPendingCreateGoesWithAccessAndWithAnUnpair() async throws {
         let mac = CreateMac()
 

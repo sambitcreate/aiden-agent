@@ -358,9 +358,11 @@ struct AidenBotsHomeView: View {
         return pending
     }
 
-    /// The failed create of the Mac in use; another Mac's waits for that Mac.
+    /// The failed create of the Mac in use; another Mac's waits for that Mac. It shows once no
+    /// other Bot is on its way, since one Bot is made at a time.
     private var activeCreateFailure: AidenBotCreateFlow.Failure? {
-        activePairing.flatMap { createFlow.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+        guard createFlow.pending == nil else { return nil }
+        return activePairing.flatMap { createFlow.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
     }
 
     /// New Bot opens at once, connected or not (R15); the Bot is made once the Mac answers.

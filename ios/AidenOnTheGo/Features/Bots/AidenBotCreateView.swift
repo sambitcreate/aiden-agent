@@ -184,14 +184,17 @@ final class AidenBotCreateFlow {
         retrying: Failure? = nil,
         onCreated: @MainActor (AidenBotDetail) async -> Void
     ) async {
-        guard pending == nil else { return }
-        if let retrying, retrying.instanceId != operations.instanceId || retrying.deviceId != operations.deviceId {
-            // Another Mac is the active one now: nothing goes to it. The answers wait for their own Mac.
-            let scope = Self.scope(instanceId: retrying.instanceId, deviceId: retrying.deviceId)
-            if failures[scope] == nil {
-                var kept = retrying
-                kept.input = input
-                failures[scope] = kept
+        let ownMac = retrying.map { $0.instanceId == operations.instanceId && $0.deviceId == operations.deviceId } ?? true
+        guard pending == nil, ownMac else {
+            // Another Bot is still on its way (one is made at a time), or another Mac is the active
+            // one now: nothing goes out. A Try Again's answers wait as they were, for their own Mac.
+            if let retrying {
+                let scope = Self.scope(instanceId: retrying.instanceId, deviceId: retrying.deviceId)
+                if failures[scope] == nil {
+                    var kept = retrying
+                    kept.input = input
+                    failures[scope] = kept
+                }
             }
             return
         }
