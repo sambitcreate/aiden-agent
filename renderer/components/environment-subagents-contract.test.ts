@@ -536,7 +536,7 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.doesNotMatch(environment, /subagentAnnouncerHost|setSubagentAnnouncerHost/u);
   assert.match(
     environment,
-    /<EnvironmentPanelContext.Provider value=\{value\}>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
+    /<EnvironmentPanelContext.Provider value=\{value\}>\s*<LinkOpenerProvider[^>]*>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
   );
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);

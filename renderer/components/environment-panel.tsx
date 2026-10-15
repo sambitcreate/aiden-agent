@@ -23,7 +23,7 @@ import { acceptBrowserState } from "../lib/browser-ui-state";
 import { cn } from "../lib/ui-utils";
 import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import { useBrowserLinks } from "../lib/use-browser-links";
+import { LinkOpenerProvider, useBrowserSurface } from "../lib/link-opener";
 import {
   FilesPanel,
   type FilesEditorState,
@@ -293,7 +293,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const { activeId } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const [contextDetails, setContextDetails] = React.useState<ChatContextDetails | null>(null);
-  useBrowserLinks(activeId);
   const { subagents: subagentsEnabled, devices: devicesEnabled } = useAppCapabilities();
   const [surfaceState, dispatchSurface] = React.useReducer(
     reduceEnvironmentSurfaceState,
@@ -1199,14 +1198,16 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   return (
     <EnvironmentPanelContext.Provider value={value}>
-      {subagentsEnabled ? (
-        <SubagentLiveAnnouncer
-          ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
-          runs={subagents.liveSnapshots}
-          detailRequest={subagentDetailAnnouncement}
-        />
-      ) : null}
-      {children}
+      <LinkOpenerProvider workspaceId={activeId ?? null}>
+        {subagentsEnabled ? (
+          <SubagentLiveAnnouncer
+            ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
+            runs={subagents.liveSnapshots}
+            detailRequest={subagentDetailAnnouncement}
+          />
+        ) : null}
+        {children}
+      </LinkOpenerProvider>
     </EnvironmentPanelContext.Provider>
   );
 }
@@ -1759,6 +1760,7 @@ export function EnvironmentWorkbench({
   suppressed?: boolean;
 }>) {
   const panel = useEnvironmentPanel();
+  useBrowserSurface(!suppressed);
   const toolsOpen = panel.toolsOpen && !suppressed;
   const quickViewOpen = panel.quickViewOpen && !suppressed;
   const containerRef = React.useRef<HTMLDivElement>(null);

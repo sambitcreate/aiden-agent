@@ -60,10 +60,7 @@ import {
 import { cn } from "../lib/ui-utils";
 import { formatGitHubPausedUntil } from "../lib/github-pause";
 import { chatPullRequestChipLabels, chatPullRequestListStatus } from "../lib/chat-pull-request-chip";
-
-export function openPullRequestExternal(url: string): void {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
+import { useLinkOpener } from "../lib/link-opener";
 
 export function chatPullRequestRef(
   view: ChatPullRequestView,
@@ -177,6 +174,7 @@ function PullRequestRow({
   current: boolean;
   onChanged: () => void;
 }) {
+  const { openLink } = useLinkOpener();
   const [busy, setBusy] = React.useState<"refresh" | "unlink" | null>(null);
   const checkSummary = chatPullRequestChecksLabel(view.checksState);
   return (
@@ -235,13 +233,11 @@ function PullRequestRow({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem onSelect={() => openPullRequestExternal(view.url)}>
+          <DropdownMenuItem onSelect={() => openLink(view.url)}>
             <ExternalLink aria-hidden="true" />
             Open on GitHub
           </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() => openPullRequestExternal(`${view.url}/checks`)}
-          >
+          <DropdownMenuItem onSelect={() => openLink(`${view.url}/checks`)}>
             <CheckCircle2 aria-hidden="true" />
             View checks
           </DropdownMenuItem>
@@ -839,6 +835,7 @@ export function PullRequestCreateDialog({
  * resolved current PR, keeping local review and GitHub state separate.
  */
 export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
+  const { openLink } = useLinkOpener();
   const current = useChatCurrentPullRequest(chatId, Boolean(chatId));
   const view = current.data?.pullRequest;
   if (!view) return null;
@@ -855,7 +852,7 @@ export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
       <button
         type="button"
         className="shrink-0 rounded-control px-1.5 py-0.5 text-small text-accent outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
-        onClick={() => openPullRequestExternal(view.url)}
+        onClick={() => openLink(view.url)}
       >
         View pull request →
       </button>
@@ -867,6 +864,7 @@ export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
  * The composer chip: "Pull Requests · N" / "N open · M linked", opening the rail.
  */
 export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
+  const { openLink } = useLinkOpener();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [linkOpen, setLinkOpen] = React.useState(false);
@@ -1082,7 +1080,7 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
                 variant="transparent"
                 size="small"
                 className="shrink-0 gap-1 px-1.5 text-accent"
-                onClick={() => openPullRequestExternal(currentView.url)}
+                onClick={() => openLink(currentView.url)}
               >
                 View pull request
                 <ExternalLink className="size-3" aria-hidden="true" />
