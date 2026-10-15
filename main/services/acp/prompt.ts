@@ -24,6 +24,15 @@ export const DEFAULT_RECONSTRUCTION_CHARS = 96_000;
 /** Aiden's system prompt is sent whole up to this size. */
 const MAX_INSTRUCTION_CHARS = 64_000;
 
+function deliveredInstructions(instructions: string | undefined): string {
+  return instructions?.trim().slice(0, MAX_INSTRUCTION_CHARS) ?? "";
+}
+
+/** Identity of the exact host instruction text sent to a fresh ACP session. */
+export function hostInstructionsFingerprint(instructions: string | undefined): string {
+  return createHash("sha256").update(deliveredInstructions(instructions)).digest("hex");
+}
+
 export interface PromptCapabilities {
   image: boolean;
   embeddedContext: boolean;
@@ -127,8 +136,8 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
   // body is bounded, keeping its newest part.
   if (input.fresh) {
     const sections: string[] = [];
-    const instructions = input.hostInstructions?.trim();
-    if (instructions) sections.push(`# Instructions from Aiden\n\n${instructions.slice(0, MAX_INSTRUCTION_CHARS)}`);
+    const instructions = deliveredInstructions(input.hostInstructions);
+    if (instructions) sections.push(`# Instructions from Aiden\n\n${instructions}`);
     const history = messages.slice(0, historyEnd).map(formatMessage).filter(Boolean);
     if (history.length > 0) {
       reconstructed = true;

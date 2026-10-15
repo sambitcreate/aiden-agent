@@ -44,9 +44,9 @@ function harness(dir = tempDir(), env = fakeAgentEnv(dir), options = {}): Harnes
 async function turn(
   h: Harness,
   messages: Message[],
-  options: { chatId?: string; signal?: AbortSignal; reasoning?: "low" | "high"; model?: typeof FAKE_FLASH; tools?: Parameters<typeof transcript>[2] } = {},
+  options: { chatId?: string; signal?: AbortSignal; reasoning?: "low" | "high"; model?: typeof FAKE_FLASH; tools?: Parameters<typeof transcript>[2]; systemPrompt?: string } = {},
 ): Promise<AssistantMessage> {
-  const stream = h.runtime.stream(options.model ?? FAKE_FLASH, transcript(messages, "Be helpful.", options.tools ?? []), {
+  const stream = h.runtime.stream(options.model ?? FAKE_FLASH, transcript(messages, options.systemPrompt ?? "Be helpful.", options.tools ?? []), {
     sessionId: options.chatId ?? "chat-1",
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.reasoning ? { reasoning: options.reasoning } : {}),
@@ -207,6 +207,49 @@ test("streams the agent's reply and thinking, and reuses one session per chat", 
   await h.runtime.close();
 });
 
+test("host instructions reconcile on every turn, including A to B to A, while unchanged instructions reuse the warm session", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const host = new RecordingHost("chat-1", h.dir);
+  h.hosts.register(host);
+  const first = await turn(h, [userMessage("echo:one")], { systemPrompt: "INSTRUCTION_A" });
+  const unchanged = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_A" });
+  assert.deepEqual(JSON.parse(text(unchanged)), [{ type: "text", text: "prompt-dump" }]);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
+
+  const changed = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), unchanged, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_B" });
+  const changedPrompt = JSON.parse(text(changed)) as Array<{ resource?: { text: string } }>;
+  assert.match(changedPrompt[0]?.resource?.text ?? "", /^# Instructions from Aiden\n\nINSTRUCTION_B/u);
+  assert.doesNotMatch(changedPrompt[0]?.resource?.text ?? "", /# Instructions from Aiden\n\nINSTRUCTION_A/u);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 2);
+
+  const reverted = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), unchanged, userMessage("prompt-dump"), changed, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_A" });
+  const revertedPrompt = JSON.parse(text(reverted)) as Array<{ resource?: { text: string } }>;
+  assert.match(revertedPrompt[0]?.resource?.text ?? "", /^# Instructions from Aiden\n\nINSTRUCTION_A/u);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 3);
+  assert.equal(host.notices.length, 2);
+});
+
+test("a resumed ACP session rebuilds before prompting when saved host instructions changed", async (t) => {
+  const dir = tempDir();
+  const env = fakeAgentEnv(dir);
+  const first = harness(dir, env);
+  first.hosts.register(new RecordingHost("chat-1", dir));
+  const reply = await turn(first, [userMessage("echo:one")], { systemPrompt: "INSTRUCTION_A" });
+  await first.runtime.close();
+  await first.store.flush();
+
+  const second = harness(dir, env);
+  t.after(() => second.runtime.close());
+  second.hosts.register(new RecordingHost("chat-1", dir));
+  const result = await turn(second, [userMessage("echo:one"), reply, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_B" });
+  const prompt = JSON.parse(text(result)) as Array<{ resource?: { text: string } }>;
+  assert.match(prompt[0]?.resource?.text ?? "", /^# Instructions from Aiden\n\nINSTRUCTION_B/u);
+  const log = readAgentLog(env);
+  assert.equal(log.filter((entry) => entry.method === "resumeSession").length, 1);
+  assert.equal(log.filter((entry) => entry.method === "newSession").length, 2);
+});
+
 test("selects the native model for Aiden's model and reasoning level, and the mode for the permission", async () => {
   const h = harness();
   const host = new RecordingHost("chat-1", h.dir);
@@ -344,6 +387,24 @@ test("bridged Aiden tools run through the Pi tool loop and the same ACP prompt r
   const listed = readAgentLog(h.env).find((entry) => entry.method === "bridgeTools");
   assert.deepEqual(listed?.names, ["aiden_lookup"]);
   await h.runtime.close();
+});
+
+test("a host instruction refresh during a bridged tool rebuilds before its result reaches ACP", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools: lookupTools, systemPrompt: "INSTRUCTION_A" });
+  assert.equal(first.stopReason, "toolUse");
+  const result = await turn(h, [userMessage("bridge:aiden_lookup"), first, toolResultFor(first, "found it")], {
+    tools: lookupTools,
+    systemPrompt: "INSTRUCTION_B",
+  });
+  assert.equal(result.stopReason, "stop");
+  const prompts = readAgentLog(h.env).filter((entry) => entry.method === "prompt");
+  assert.equal(prompts.length, 2);
+  assert.notEqual(prompts[0]?.sessionId, prompts[1]?.sessionId);
+  assert.match(String(prompts[1]?.contextText), /^# Instructions from Aiden\n\nINSTRUCTION_B/u);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 2);
 });
 
 test("Stop cancels the agent's turn and reports an aborted message", async () => {

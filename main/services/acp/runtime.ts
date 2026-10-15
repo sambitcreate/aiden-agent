@@ -48,6 +48,7 @@ import {
   buildPrompt,
   conversationMessages,
   hostInstructionsFor,
+  hostInstructionsFingerprint,
   messageFingerprint,
   messagesFingerprint,
 } from "./prompt.js";
@@ -113,6 +114,7 @@ interface Binding {
   currentModel: string | undefined;
   messageCount: number;
   historyFingerprint: string;
+  hostInstructionsFingerprint: string | undefined;
   expectedAssistantFingerprint: string | undefined;
   pendingContextCount: number;
   pendingContextFingerprint: string;
@@ -356,6 +358,16 @@ export class AcpHarnessRuntime {
         await this.drop(binding, false);
         return this.run(model, context, options, writer);
       }
+      const instructions = this.instructionsFor(context);
+      const instructionFingerprint = hostInstructionsFingerprint(instructions);
+      if (binding.messageCount > 0 && binding.hostInstructionsFingerprint !== instructionFingerprint) {
+        // ACP has no operation to replace host instructions in an existing
+        // session. A new session receives the current instructions and history.
+        this.sessions.remove(binding.chatId);
+        release();
+        await this.drop(binding, false);
+        return this.run(model, context, options, writer);
+      }
       clearTimeout(binding.idleTimer);
       binding.bridge?.setTools(host.bridgeableTools(getCurrentTools(context.messages)));
       await this.syncMode(binding, host, signal);
@@ -372,9 +384,6 @@ export class AcpHarnessRuntime {
         unseenStart += 1;
       }
       const capabilities = binding.initialize.agentCapabilities?.promptCapabilities;
-      const instructions = [this.definition.hostInstructionsPreamble, hostInstructionsFor(context)]
-        .filter((part): part is string => !!part?.trim())
-        .join("\n\n");
       const built = buildPrompt({
         context,
         fresh,
@@ -399,6 +408,7 @@ export class AcpHarnessRuntime {
         unscopedWriteGrants: 0,
       };
       binding.turn = turn;
+      binding.hostInstructionsFingerprint = instructionFingerprint;
       // Text the previous turn produced after its last stream ended is shown
       // first, instead of being dropped.
       binding.tracker.clear();
@@ -485,6 +495,16 @@ export class AcpHarnessRuntime {
   ): Promise<boolean> {
     const turn = binding.turn;
     const conversation = conversationMessages(context);
+    if (turn && binding.hostInstructionsFingerprint !== hostInstructionsFingerprint(this.instructionsFor(context))) {
+      // The host refreshed instructions while this ACP prompt was awaiting a
+      // bridged tool. Do not feed its result back under the old instructions.
+      cancelTools(binding, "Host instructions changed.");
+      this.requestCancel(binding, turn);
+      if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding, false);
+      this.sessions.remove(binding.chatId);
+      await this.drop(binding, false);
+      return false;
+    }
     const announced = [...binding.pendingTools.values()].filter((pending) => pending.announced);
     const results = announced.map((pending) => ({
       pending,
@@ -548,6 +568,12 @@ export class AcpHarnessRuntime {
     binding.pendingContextCount = seen.length;
     binding.pendingContextFingerprint = messagesFingerprint(seen);
     this.flushBuffered(binding);
+  }
+
+  private instructionsFor(context: TranscriptContext): string {
+    return [this.definition.hostInstructionsPreamble, hostInstructionsFor(context)]
+      .filter((part): part is string => !!part?.trim())
+      .join("\n\n");
   }
 
   private requestCancel(binding: Binding, turn: Turn): void {
@@ -710,6 +736,7 @@ export class AcpHarnessRuntime {
         currentModel: currentConfigValue(configOptions, "model"),
         messageCount: restored && saved ? saved.messageCount : 0,
         historyFingerprint: restored && saved ? saved.historyFingerprint : messagesFingerprint([]),
+        hostInstructionsFingerprint: restored ? saved?.hostInstructionsFingerprint : undefined,
         expectedAssistantFingerprint: restored ? saved?.expectedAssistantFingerprint : undefined,
         pendingContextCount: 0,
         pendingContextFingerprint: messagesFingerprint([]),
@@ -969,6 +996,7 @@ export class AcpHarnessRuntime {
       cwd: binding.cwd,
       messageCount: binding.messageCount,
       historyFingerprint: binding.historyFingerprint,
+      hostInstructionsFingerprint: binding.hostInstructionsFingerprint,
       ...(binding.expectedAssistantFingerprint
         ? { expectedAssistantFingerprint: binding.expectedAssistantFingerprint }
         : {}),
