@@ -11,6 +11,7 @@ import type {
   FirstMessageWorktreeResult,
 } from "../shared/worktree-on-send";
 import type { WorktreeSendProgress } from "./draft-git-menu";
+import type { Attachment } from "./types";
 
 /** Rejection used when the user cancels; the composer restores the text without an error toast. */
 export class WorktreeSendCancelledError extends Error {
@@ -65,13 +66,23 @@ export interface WorktreeSendApi<Input, C> {
 }
 
 export type WorktreeFirstSendResult<C> =
-  | { chat: C; worktree: FirstMessageWorktreeInfo }
-  | { chat: C; worktree?: undefined };
+  | { chat: C; worktree: FirstMessageWorktreeInfo; keptWorktreeBranch?: undefined }
+  | {
+      chat: C;
+      worktree?: undefined;
+      /** Run in this checkout after a worktree was already created: it is kept, not deleted. */
+      keptWorktreeBranch?: string;
+    };
 
 export interface WorktreeFirstSend<C> {
   result: Promise<WorktreeFirstSendResult<C>>;
   /** Answer a failure. Ignored unless the send is waiting for one. */
   decide(decision: WorktreeSendDecision): void;
+  /**
+   * Stop publishing this send. The caller releases it once the saved chat (or
+   * the restored composer text) has replaced the progress view.
+   */
+  release(): void;
 }
 
 function existingWorktreeOf(result: unknown): ExistingDraftWorktree | undefined {
@@ -96,27 +107,71 @@ function existingWorktreeOf(result: unknown): ExistingDraftWorktree | undefined 
 }
 
 /**
- * Start a worktree first send. `onView` receives every progress and failure
- * state; it is not called again once `result` settles. An IPC rejection
- * rejects `result` as an ordinary send failure.
+ * A draft's worktree send, readable by any view of that draft. A send outlives
+ * the pane that started it: a failure waits here until the user comes back to
+ * the draft and answers it.
+ */
+export interface ActiveWorktreeSend {
+  draftId: string;
+  text: string;
+  attachments: readonly Attachment[];
+  view: WorktreeSendView;
+  /** Answer a failure. Ignored unless the send is waiting for one. */
+  decide(decision: WorktreeSendDecision): void;
+}
+
+const activeSends = new Map<string, ActiveWorktreeSend>();
+const activeListeners = new Set<() => void>();
+
+function publish(draftId: string, entry: ActiveWorktreeSend | undefined): void {
+  if (entry) activeSends.set(draftId, entry);
+  else if (!activeSends.delete(draftId)) return;
+  for (const listener of activeListeners) listener();
+}
+
+export function subscribeActiveWorktreeSends(listener: () => void): () => void {
+  activeListeners.add(listener);
+  return () => {
+    activeListeners.delete(listener);
+  };
+}
+
+/** The draft's running or failed worktree send; a stable object between changes. */
+export function activeWorktreeSend(draftId: string): ActiveWorktreeSend | undefined {
+  return activeSends.get(draftId);
+}
+
+/**
+ * Start a worktree first send for `draftId`. Progress and failures are
+ * published as the draft's active send (and to `onView`) until `release`.
+ * An IPC rejection rejects `result` as an ordinary send failure.
  */
 export function startWorktreeFirstSend<Input, C>(options: {
   api: WorktreeSendApi<Input, C>;
   input: Input;
   worktree: FirstMessageWorktreeRequest;
-  onView: (view: WorktreeSendView) => void;
+  /** What the progress view shows as the user's message. */
+  message: { text: string; attachments: readonly Attachment[] };
+  onView?: (view: WorktreeSendView) => void;
 }): WorktreeFirstSend<C> {
-  const { api, input, onView } = options;
+  const { api, input, onView, message } = options;
+  const draftId = options.worktree.idempotencyKey;
   let request = options.worktree;
   let progress: WorktreeSendProgress = {};
   let waiting: ((decision: WorktreeSendDecision) => void) | undefined;
   let settled = false;
+  let released = false;
 
+  const decide = (decision: WorktreeSendDecision) => {
+    waiting?.(decision);
+  };
   const show = (view: WorktreeSendView) => {
-    if (!settled) onView(view);
+    if (settled || released) return;
+    publish(draftId, { draftId, ...message, view, decide });
+    onView?.(view);
   };
   const unsubscribe = api.onProgress((event) => {
-    if (event.draftId.toLowerCase() !== request.idempotencyKey.toLowerCase()) return;
+    if (event.draftId.toLowerCase() !== draftId.toLowerCase()) return;
     progress = {
       phase: event.phase,
       ...(event.branch ? { branch: event.branch } : {}),
@@ -132,6 +187,8 @@ export function startWorktreeFirstSend<Input, C>(options: {
       const result = await api.createInWorktree({ ...input, worktree: request });
       if (result.ok) return { chat: result.chat, worktree: result.worktree };
       const existing = existingWorktreeOf(result);
+      // A worktree that reported ready before the chat failed to save is kept.
+      const created = existing?.branch ?? (progress.phase === "ready" ? progress.branch : undefined);
       show({
         status: "failed",
         request,
@@ -147,7 +204,8 @@ export function startWorktreeFirstSend<Input, C>(options: {
       if (decision === "cancel") throw new WorktreeSendCancelledError();
       if (decision === "checkout") {
         show({ status: "checkout", request, progress });
-        return { chat: await api.createInCheckout(input) };
+        const chat = await api.createInCheckout(input);
+        return created ? { chat, keptWorktreeBranch: created } : { chat };
       }
       if (decision === "use-existing" && existing) {
         // Resend exactly as the attempt that created it, so main reuses it.
@@ -168,8 +226,10 @@ export function startWorktreeFirstSend<Input, C>(options: {
   });
   return {
     result,
-    decide(decision) {
-      waiting?.(decision);
+    decide,
+    release() {
+      released = true;
+      if (activeSends.get(draftId)?.decide === decide) publish(draftId, undefined);
     },
   };
 }
