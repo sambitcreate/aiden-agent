@@ -6,6 +6,7 @@ import {
   type ChatApplicationDependencies,
   type ChatApplicationOwner,
 } from "./chat-application-service.js";
+import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 
 function chat(id = "chat-1", workspaceId = "workspace-1"): Chat {
@@ -122,6 +123,51 @@ test("shared chat creation preserves workspace and renderer-owner commit gates",
     ),
     /selected workspace is no longer available/u,
   );
+});
+
+test("public chat creation in flight across a workspace mutation is refused and drained first", async () => {
+  const mutationGate = new WorkspaceMutationGate();
+  const operations = new WorkspaceOperationRegistry();
+  let storeEntered = () => {};
+  const entered = new Promise<void>((resolve) => { storeEntered = resolve; });
+  let resumeStore = () => {};
+  const resumed = new Promise<void>((resolve) => { resumeStore = resolve; });
+  const committed: string[] = [];
+  const application = fixture({
+    workspaceMutationGate: mutationGate,
+    workspaceOperationRegistry: operations,
+    chatStore: {
+      create: async (input: { assertCurrent?: () => void; workspaceId: string; title?: string }) => {
+        storeEntered();
+        await resumed;
+        input.assertCurrent?.();
+        committed.push(input.title ?? "");
+        return chat("created", input.workspaceId);
+      },
+    },
+  } as unknown as Partial<ChatApplicationDependencies>);
+
+  const inFlight = application.service.create({ workspaceId: "workspace-1", title: "Before" }, owner());
+  await entered;
+  const finishMutation = mutationGate.begin("workspace-1");
+  let drained = false;
+  const draining = operations.cancelAndSettle("workspace-1").then(() => { drained = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(drained, false, "the mutation waits for the in-flight create to settle");
+
+  resumeStore();
+  await assert.rejects(inFlight, /workspace changed before the chat was created/u);
+  await draining;
+  assert.equal(drained, true);
+  await assert.rejects(
+    application.service.create({ workspaceId: "workspace-1", title: "During" }, owner()),
+    /workspace is changing/u,
+  );
+
+  finishMutation();
+  const after = await application.service.create({ workspaceId: "workspace-1", title: "After" }, owner());
+  assert.equal(after?.id, "created");
+  assert.deepEqual(committed, ["After"]);
 });
 
 test("shared chat reads retain inactive-renderer reconciliation semantics", async () => {

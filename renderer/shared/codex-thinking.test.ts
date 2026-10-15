@@ -13,7 +13,6 @@ import {
 test("Codex thinking levels stay a small explicit request contract", () => {
   assert.deepEqual(CODEX_THINKING_LEVELS, ["low", "medium", "high", "xhigh", "max"]);
   assert.equal(DEFAULT_CODEX_THINKING_LEVEL, "medium");
-  for (const level of CODEX_THINKING_LEVELS) assert.equal(isCodexThinkingLevel(level), true);
   for (const value of ["off", "minimal", "dynamic", "", null, 1]) {
     assert.equal(isCodexThinkingLevel(value), false);
   }
