@@ -11,6 +11,7 @@ import {
   EnvironmentRows,
   QuickViewUnavailable,
   useChangesSummary,
+  useChangesVisibility,
   useEnvironmentSummary,
   useShowWorkspaceFolder,
 } from "./environment-overview";
@@ -307,6 +308,62 @@ test("the Changes summary reports line totals, a clean tree, or nothing outside 
   const outside = renderHook(() => useChangesSummary(WORKSPACE.id, true), { wrapper: wrapperWithClient() });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === GIT_CHANNELS.review)));
   await waitFor(() => assert.equal(outside.result.current, null));
+});
+
+test("the Changes card shows for working changes, unpushed commits, or the chat's PR, never for a clean repo", async () => {
+  const visibility = (
+    repo: Parameters<typeof installRepoIpc>[0],
+    pullRequest: ChatPullRequestView | undefined = undefined,
+  ) => {
+    const calls = installRepoIpc(repo, {
+      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest, reason: pullRequest ? "created" : "none" }),
+    });
+    const hook = renderHook(() => useChangesVisibility(WORKSPACE.id, "chat-1", true), {
+      wrapper: wrapperWithClient(),
+    });
+    return { calls, hook };
+  };
+  const settled = async ({ calls }: { calls: { channel: string }[] }) => {
+    for (const channel of [GIT_CHANNELS.review, GIT_CHANNELS.pushCapability, PULL_REQUEST_CURRENT_CHANNEL]) {
+      await waitFor(() => assert.ok(calls.some((call) => call.channel === channel)));
+    }
+    await act(async () => {});
+  };
+
+  const dirty = visibility({ review: reviewFixture({ fileCount: 1, additions: 2 }) });
+  await waitFor(() => assert.equal(dirty.hook.result.current, true));
+  dirty.hook.unmount();
+
+  const ahead = visibility({ push: pushFixture({ ahead: 2 }) });
+  await waitFor(() => assert.equal(ahead.hook.result.current, true));
+  ahead.hook.unmount();
+
+  const withPullRequest = visibility({}, PR_VIEW);
+  await waitFor(() => assert.equal(withPullRequest.hook.result.current, true));
+  withPullRequest.hook.unmount();
+
+  const clean = visibility({});
+  await settled(clean);
+  assert.equal(clean.hook.result.current, false);
+  clean.hook.unmount();
+
+  const calls = installNonRepoIpc();
+  const outside = renderHook(() => useChangesVisibility(WORKSPACE.id, "chat-1", true), {
+    wrapper: wrapperWithClient(),
+  });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === GIT_CHANNELS.review)));
+  await act(async () => {});
+  assert.equal(outside.result.current, false);
+});
+
+test("an inactive Changes visibility check asks Git nothing", async () => {
+  const calls = installRepoIpc({ review: reviewFixture({ fileCount: 1 }) });
+  const hook = renderHook(() => useChangesVisibility(WORKSPACE.id, "chat-1", false), {
+    wrapper: wrapperWithClient(),
+  });
+  await act(async () => {});
+  assert.equal(hook.result.current, false);
+  assert.deepEqual(calls, []);
 });
 
 test("the Environment summary names the branch, or Local outside Git", async () => {

@@ -21,7 +21,7 @@ export interface QuickViewSectionProps {
   /** Visible sibling cards' rects at drag start, in visible order; supplied by the parent. */
   measureSiblings: () => DOMRect[];
   /** Tier 3 header button, left of the grip: Open in sidebar (`PanelRightOpen`) or open-external (`ArrowUpRight`). */
-  headerAction?: { kind: "sidebar" | "external"; label: string; onSelect: () => void };
+  headerAction?: { kind: "sidebar" | "external"; label: string; onSelect: () => void; disabled?: boolean };
   /** Live drop target while dragging (null when the drag ends) so the parent can shift siblings. */
   onDragPreview?: (id: QuickViewSectionId, to: number | null) => void;
   children?: React.ReactNode;
@@ -236,7 +236,8 @@ export function QuickViewSection({
             aria-label={headerAction.label}
             title={headerAction.label}
             onClick={headerAction.onSelect}
-            className="grid size-7 shrink-0 place-items-center rounded-control text-tertiary transition-colors hover:bg-list-hover hover:text-primary"
+            disabled={headerAction.disabled}
+            className="grid size-7 shrink-0 place-items-center rounded-control text-tertiary transition-colors hover:bg-list-hover hover:text-primary disabled:pointer-events-none disabled:opacity-45"
           >
             <HeaderActionIcon aria-hidden="true" className="size-4" />
           </button>
@@ -280,5 +281,17 @@ export function QuickViewSection({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Polite status for card moves. The parent renders one of these outside its keyed card list,
+ * so reordering never re-inserts the live region and the message is not lost.
+ */
+export function QuickViewMoveStatus({ message }: { message: string }): React.JSX.Element {
+  return (
+    <div role="status" className="sr-only">
+      {message}
+    </div>
   );
 }

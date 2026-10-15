@@ -21,7 +21,11 @@ export interface SubagentRunGroupsProps {
   stopPendingRunIds: readonly string[];
   onOpen: (runId: string, trigger: HTMLElement) => void;
   onStop: (run: SubagentRunSnapshot) => Promise<void> | void;
+  /** The last Stop failure per run (the environment panel's stop-pending errors). */
+  stopErrors?: Readonly<Record<string, string>>;
 }
+
+const NO_STOP_ERRORS: Readonly<Record<string, string>> = {};
 
 const ROW =
   "grid min-h-11 w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-control px-2.5 py-1 text-left text-regular text-primary outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection motion-reduce:transition-none";
@@ -66,12 +70,14 @@ function RunRow({
   run,
   now,
   stopPending,
+  stopError,
   onOpen,
   onStop,
 }: {
   run: SubagentRunView;
   now: number;
   stopPending: boolean;
+  stopError: string | undefined;
   onOpen: SubagentRunGroupsProps["onOpen"];
   onStop: SubagentRunGroupsProps["onStop"];
 }) {
@@ -134,6 +140,11 @@ function RunRow({
           {stopPending ? "Stopping…" : "Stop"}
         </Button>
       ) : null}
+      {stopError && !stopPending ? (
+        <p role="alert" className="m-0 pr-2.5 pb-1 pl-[2.375rem] text-small text-red">
+          {stopError}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -142,12 +153,14 @@ function GroupRows({
   group,
   now,
   stopPending,
+  stopErrors,
   onOpen,
   onStop,
 }: {
   group: SubagentRunStatusGroup;
   now: number;
   stopPending: ReadonlySet<string>;
+  stopErrors: Readonly<Record<string, string>>;
   onOpen: SubagentRunGroupsProps["onOpen"];
   onStop: SubagentRunGroupsProps["onStop"];
 }) {
@@ -157,6 +170,7 @@ function GroupRows({
       run={run}
       now={now}
       stopPending={stopPending.has(run.runId)}
+      stopError={stopErrors[run.runId]}
       onOpen={onOpen}
       onStop={onStop}
     />
@@ -168,6 +182,7 @@ export function SubagentRunGroups({
   stopPendingRunIds,
   onOpen,
   onStop,
+  stopErrors = NO_STOP_ERRORS,
 }: SubagentRunGroupsProps): React.JSX.Element {
   const [completedOpen, setCompletedOpen] = React.useState(false);
   const completedListId = React.useId();
@@ -202,7 +217,7 @@ export function SubagentRunGroups({
               </button>
               {completedOpen ? (
                 <div id={completedListId}>
-                  <GroupRows group={group} now={now} stopPending={stopPending} onOpen={onOpen} onStop={onStop} />
+                  <GroupRows group={group} now={now} stopPending={stopPending} stopErrors={stopErrors} onOpen={onOpen} onStop={onStop} />
                 </div>
               ) : null}
             </div>
@@ -214,7 +229,7 @@ export function SubagentRunGroups({
               <span>{group.title}</span>
               <span className="tabular-nums">{group.runs.length}</span>
             </div>
-            <GroupRows group={group} now={now} stopPending={stopPending} onOpen={onOpen} onStop={onStop} />
+            <GroupRows group={group} now={now} stopPending={stopPending} stopErrors={stopErrors} onOpen={onOpen} onStop={onStop} />
           </div>
         );
       })}

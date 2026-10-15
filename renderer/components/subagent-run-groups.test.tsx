@@ -85,13 +85,18 @@ test("groupSubagentRuns places every state in its group, in display order, omitt
   assert.deepEqual(groupSubagentRuns([]), []);
 });
 
-function mount(runs: SubagentRunView[], stopPendingRunIds: readonly string[] = []) {
+function mount(
+  runs: SubagentRunView[],
+  stopPendingRunIds: readonly string[] = [],
+  stopErrors?: Readonly<Record<string, string>>,
+) {
   const opened: string[] = [];
   const stopped: SubagentRunSnapshot[] = [];
   render(
     <SubagentRunGroups
       runs={runs}
       stopPendingRunIds={stopPendingRunIds}
+      stopErrors={stopErrors}
       onOpen={(runId) => opened.push(runId)}
       onStop={(run) => {
         stopped.push(run);
@@ -140,6 +145,20 @@ test("a run that is already stopping shows a disabled Stopping… control", () =
   assert.match(pending.textContent ?? "", /Stopping…/u);
   fireEvent.click(pending);
   assert.deepEqual(stopped, []);
+});
+
+test("a failed Stop is reported under that run until the next attempt", () => {
+  mount([runView("live", "running"), runView("other", "running")], [], { live: "Couldn't stop this run." });
+  const alert = screen.getByRole("alert");
+  assert.equal(alert.textContent, "Couldn't stop this run.");
+  // The message sits with the run it belongs to, not the other one.
+  const row = screen.getByRole("button", { name: /^Run live/u }).parentElement!;
+  assert.ok(row.contains(alert));
+  cleanup();
+
+  // While a retry is in flight the old failure is no longer shown.
+  mount([runView("live", "running")], ["live"], { live: "Couldn't stop this run." });
+  assert.equal(screen.queryByRole("alert"), null);
 });
 
 test("clicking a row opens that run", () => {

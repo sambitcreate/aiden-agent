@@ -100,7 +100,15 @@ export function useShowWorkspaceFolder(workspace: Workspace): { label: string; s
   return { label: `Show ${workspace.name} in ${IS_MAC ? "Finder" : "Files"}`, show };
 }
 
-function FolderRow({ workspace, onBrowseFiles }: { workspace: Workspace; onBrowseFiles: () => void }) {
+function FolderRow({
+  workspace,
+  onBrowseFiles,
+  browseDisabled,
+}: {
+  workspace: Workspace;
+  onBrowseFiles: () => void;
+  browseDisabled: boolean;
+}) {
   const { preferredEditor, openPreferredEditor } = usePreferredEditor(workspace.id, workspace.folderPath);
   if (!workspace.folderPath) return null;
   const disabled = workspace.permission === "none";
@@ -109,7 +117,7 @@ function FolderRow({ workspace, onBrowseFiles }: { workspace: Workspace; onBrows
       <button
         type="button"
         onClick={onBrowseFiles}
-        disabled={disabled}
+        disabled={disabled || browseDisabled}
         aria-label={`Browse files in ${workspace.name}`}
         title={workspace.folderPath}
         className={cn(ROW, "min-w-0 flex-1")}
@@ -208,6 +216,25 @@ export function useChangesSummary(
   };
 }
 
+/**
+ * Whether Quick View shows the Changes card: a Git repository with working changes, commits
+ * ahead of the last-fetched upstream, or a pull request for this chat. Reads the same queries
+ * as ChangesRows, so it adds no polling of its own. Pass `active` false for a closed Quick View
+ * or a workspace without file access; disabled queries send nothing.
+ */
+export function useChangesVisibility(
+  workspaceId: string | undefined,
+  chatId: string | undefined,
+  active: boolean,
+): boolean {
+  const review = useGitReview(workspaceId, active);
+  const push = useGitPushCapability(workspaceId, active);
+  const currentPullRequest = useChatCurrentPullRequest(chatId, active);
+  if (!review.data?.isRepo) return false;
+  const pullRequest = chatId ? currentPullRequest.data?.pullRequest ?? null : null;
+  return review.data.summary.fileCount > 0 || (push.data?.ahead ?? 0) > 0 || pullRequest !== null;
+}
+
 /** Collapsed Environment header: the current branch, or Local outside Git. */
 export function useEnvironmentSummary(
   workspace: Workspace | undefined,
@@ -232,6 +259,7 @@ export function EnvironmentRows({
   onGitOperationBusyChange,
   onCreateWorktree,
   onBrowseFiles,
+  toolsDisabled = false,
 }: {
   workspace: Workspace;
   /** Accepted for parity with ChangesRows; Git info polls on its own schedule. */
@@ -241,6 +269,8 @@ export function EnvironmentRows({
   onCreateWorktree?: (branchName: string) => Promise<void>;
   /** Opens the Files tool on this workspace (Folder row). */
   onBrowseFiles: () => void;
+  /** Disables the row that opens a tool, e.g. while a Git operation is in flight. */
+  toolsDisabled?: boolean;
 }) {
   const git = useGitInfo(workspace.id);
   const branchLabel = git.data?.detached ? "Detached HEAD" : git.data?.branch;
@@ -249,7 +279,7 @@ export function EnvironmentRows({
 
   return (
     <div className="flex flex-col">
-      {workspace.folderPath ? <FolderRow workspace={workspace} onBrowseFiles={onBrowseFiles} /> : null}
+      {workspace.folderPath ? <FolderRow workspace={workspace} onBrowseFiles={onBrowseFiles} browseDisabled={toolsDisabled} /> : null}
 
       <div
         className="grid min-h-9 grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 px-2.5"
@@ -321,6 +351,8 @@ export function ChangesRows({
   mutationBlockedReason,
   onGitOperationBusyChange,
   onOpenReview,
+  toolsDisabled = false,
+  onDialogOpenChange,
 }: {
   workspace: Workspace;
   /** Chat presented for this workspace; binds post-push PR detection/linking. */
@@ -329,6 +361,10 @@ export function ChangesRows({
   mutationBlockedReason: string | null;
   onGitOperationBusyChange: (busy: boolean) => void;
   onOpenReview: (mode: "changes" | "compare") => void;
+  /** Disables the rows that open the Changes tool, e.g. while a Git operation is in flight. */
+  toolsDisabled?: boolean;
+  /** Reports whether the commit or push dialog is open, so the owner can keep these rows mounted. */
+  onDialogOpenChange?: (open: boolean) => void;
 }) {
   const [commitOpen, setCommitOpen] = React.useState(false);
   const [commitReview, setCommitReview] = React.useState<GitReview | null>(null);
@@ -352,6 +388,11 @@ export function ChangesRows({
       ? "Aiden could not load the push state."
       : null;
   const isRepo = Boolean(review.data?.isRepo || git.data?.isRepo);
+  const dialogOpen = commitOpen || pushOpen;
+  React.useEffect(() => {
+    onDialogOpenChange?.(dialogOpen);
+  }, [dialogOpen, onDialogOpenChange]);
+  React.useEffect(() => () => onDialogOpenChange?.(false), [onDialogOpenChange]);
   const knownNotRepo = !isRepo && (review.data?.isRepo === false || git.data?.isRepo === false);
 
   if (!available || knownNotRepo) return null;
@@ -377,6 +418,7 @@ export function ChangesRows({
           ref={changesButtonRef}
           type="button"
           onClick={() => onOpenReview("changes")}
+          disabled={toolsDisabled}
           aria-label={changesLabel}
           aria-busy={review.isFetching}
           className={ROW}
@@ -471,6 +513,7 @@ export function ChangesRows({
           <button
             type="button"
             onClick={() => onOpenReview("compare")}
+            disabled={toolsDisabled}
             aria-label="Compare branch using local and last-fetched references"
             className={ROW}
           >
