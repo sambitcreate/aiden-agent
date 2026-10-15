@@ -3,6 +3,8 @@ import {
   discardChatDraft,
   findReusableChatDraft,
   requestChatDraftComposerFocus,
+  setChatDraftGitMode,
+  type ChatDraftGitMode,
 } from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
@@ -201,7 +203,11 @@ function RootContent() {
   // Every new-chat entry point lands here: an empty draft already open in the
   // workspace is reused and focused; otherwise a fresh draft opens there.
   const openNewChatIn = React.useCallback(
-    async (workspaceId: string, initialText?: string): Promise<string | undefined> => {
+    async (
+      workspaceId: string,
+      initialText?: string,
+      options: { gitMode?: ChatDraftGitMode } = {},
+    ): Promise<string | undefined> => {
       if (appendReconciliationRequired) {
         toast.error("Reload Aiden before creating another chat.");
         return undefined;
@@ -212,7 +218,15 @@ function RootContent() {
       }
       const reusable = initialText ? undefined : findReusableChatDraft(workspaceId);
       if (workspaceId !== activeId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
-      const chat = reusable?.chat ?? createChatDraft(workspaceId, undefined, initialText).chat;
+      const chat =
+        reusable?.chat ??
+        createChatDraft(
+          workspaceId,
+          undefined,
+          initialText,
+          options.gitMode ? { gitMode: options.gitMode } : {},
+        ).chat;
+      if (reusable && options.gitMode) setChatDraftGitMode(reusable.chat.id, options.gitMode);
       const previousWorkspaceId = activeId;
       selectWorkspace(workspaceId);
       try {
@@ -279,13 +293,26 @@ function RootContent() {
   }, [activeId, openNewChatIn, pathname]);
   const newChatActions = React.useMemo<NewChatActions>(
     () => ({
-      openNewChatIn: async (workspaceId) => {
-        await openNewChatIn(workspaceId);
+      openNewChatIn: async (workspaceId, options) => {
+        let gitMode: ChatDraftGitMode | undefined;
+        if (options?.newWorktree) {
+          // ⌥↵: only a repository with a commit can start a new worktree.
+          // A local status read; nothing is created until the first send.
+          const git = await queryClient
+            .fetchQuery({
+              queryKey: queryKeys.git(workspaceId),
+              queryFn: () => workspacesApi.gitInfo(workspaceId),
+              staleTime: 5_000,
+            })
+            .catch(() => undefined);
+          if (git?.isRepo && !git.unborn) gitMode = "worktree";
+        }
+        await openNewChatIn(workspaceId, undefined, gitMode ? { gitMode } : {});
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
     }),
-    [cloneRepositoryForNewChat, openFolderForNewChat, openNewChatIn],
+    [cloneRepositoryForNewChat, openFolderForNewChat, openNewChatIn, queryClient],
   );
   // ⌘⇧O: a draft on screen moves to the chosen folder; anywhere else a new
   // draft opens there.

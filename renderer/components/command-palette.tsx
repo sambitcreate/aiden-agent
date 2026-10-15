@@ -366,11 +366,15 @@ export function AppCommandPalette({
     await navigate({ to: "/chat/$chatId", params: { chatId } });
   };
 
+  // ⌥↵ on a New chat in… row opens the draft with New worktree selected.
+  const newWorktreeKeyRef = React.useRef(false);
   const startChatIn = (workspaceId: string) => {
+    const newWorktree = newWorktreeKeyRef.current;
+    newWorktreeKeyRef.current = false;
     if (!allowNavigation()) return;
     rememberCommand("chat.newIn");
     close();
-    void newChat.openNewChatIn(workspaceId).catch((error: unknown) => {
+    void newChat.openNewChatIn(workspaceId, newWorktree ? { newWorktree } : undefined).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : "Aiden could not start a chat there.");
     });
   };
@@ -631,6 +635,9 @@ export function AppCommandPalette({
               }
               className="h-11"
               onKeyDown={(event) => {
+                // Read by the row cmdk selects for this Enter, right after this handler.
+                newWorktreeKeyRef.current =
+                  palette.mode === "newChatIn" && event.key === "Enter" && event.altKey;
                 if (
                   palette.mode !== "root" &&
                   query.length === 0 &&
@@ -986,6 +993,11 @@ export function AppCommandPalette({
                 </>
               ) : null}
             </CommandList>
+            {palette.mode === "newChatIn" ? (
+              <p className="px-5 pb-3 pt-1 text-mini text-tertiary" data-new-chat-in-footer>
+                ⌥↵ in a new worktree
+              </p>
+            ) : null}
           </Command>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
