@@ -1790,7 +1790,149 @@ static int parse_identity(const char *value, uint64_t *result) {
   return 0;
 }
 
+/*
+ * Parent edit_file keeps its in-place write semantics. Resolve the already
+ * canonicalized relative path below an exact root descriptor. Every component
+ * is opened with O_NOFOLLOW, so a late symlink cannot redirect the final open.
+ */
+static int open_edit_parent(int root_fd, const char *relative,
+                            char leaf[NAME_MAX + 1]) {
+  size_t length = strlen(relative);
+  if (length == 0 || length > MAX_PATH_BYTES || relative[0] == '/' ||
+      relative[length - 1] == '/')
+    return -1;
+  char parts[MAX_PATH_BYTES + 1];
+  memcpy(parts, relative, length + 1);
+  int current =
+      openat(root_fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (current < 0)
+    return -1;
+  char *component = parts;
+  for (;;) {
+    char *slash = strchr(component, '/');
+    if (slash != NULL)
+      *slash = '\0';
+    size_t size = strlen(component);
+    if (size == 0 || size > NAME_MAX || strcmp(component, ".") == 0 ||
+        strcmp(component, "..") == 0) {
+      close(current);
+      return -1;
+    }
+    if (slash == NULL) {
+      memcpy(leaf, component, size + 1);
+      return current;
+    }
+    int next = openat(current, component,
+                      O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_NOFOLLOW |
+                          O_CLOEXEC);
+    close(current);
+    if (next < 0)
+      return -1;
+    current = next;
+    component = slash + 1;
+  }
+}
+
+#define MAX_PARENT_EDIT_BYTES (256U * 1024U * 1024U)
+
+static int parent_edit_error(const char *reason) {
+  fprintf(stderr, "%s\n", reason);
+  return EXIT_FAILURE;
+}
+
+static int parent_edit_file(int argc, char **argv) {
+  uint64_t root_device, root_inode, file_device, file_inode, bytes;
+  if (argc != 10 || argv[2][0] != '/' ||
+      parse_identity(argv[3], &root_device) != 0 ||
+      parse_identity(argv[4], &root_inode) != 0 ||
+      parse_identity(argv[6], &file_device) != 0 ||
+      parse_identity(argv[7], &file_inode) != 0 ||
+      parse_identity(argv[9], &bytes) != 0 ||
+      bytes > MAX_PARENT_EDIT_BYTES || !valid_hex_digest(argv[8]))
+    return parent_edit_error("invalid_input");
+
+  unsigned char *contents = malloc(bytes == 0 ? 1 : (size_t)bytes);
+  if (contents == NULL)
+    return parent_edit_error("io_failed");
+  size_t received = 0;
+  while (received < (size_t)bytes) {
+    ssize_t count = read(STDIN_FILENO, contents + received,
+                         (size_t)bytes - received);
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count <= 0) {
+      free(contents);
+      return parent_edit_error("invalid_input");
+    }
+    received += (size_t)count;
+  }
+  unsigned char extra;
+  if (read(STDIN_FILENO, &extra, 1) != 0) {
+    free(contents);
+    return parent_edit_error("invalid_input");
+  }
+
+  int root_fd =
+      open(argv[2], O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  struct stat root_identity;
+  if (root_fd < 0 || fstat(root_fd, &root_identity) != 0 ||
+      !S_ISDIR(root_identity.st_mode) ||
+      (uint64_t)root_identity.st_dev != root_device ||
+      (uint64_t)root_identity.st_ino != root_inode) {
+    if (root_fd >= 0)
+      close(root_fd);
+    free(contents);
+    return parent_edit_error("conflict");
+  }
+  char leaf[NAME_MAX + 1];
+  int parent_fd = open_edit_parent(root_fd, argv[5], leaf);
+  close(root_fd);
+  if (parent_fd < 0) {
+    free(contents);
+    return parent_edit_error("conflict");
+  }
+  int file_fd = openat(parent_fd, leaf,
+                       O_RDWR | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+  struct stat before, after, named;
+  if (file_fd < 0 || fstat(file_fd, &before) != 0 ||
+      !exclusive_regular(&before) ||
+      (uint64_t)before.st_dev != file_device ||
+      (uint64_t)before.st_ino != file_inode ||
+      before.st_size < 0 || before.st_size > MAX_PARENT_EDIT_BYTES) {
+    if (file_fd >= 0)
+      close(file_fd);
+    close(parent_fd);
+    free(contents);
+    return parent_edit_error("conflict");
+  }
+  char actual_sha256[SHA256_HEX_BYTES + 1];
+  if (sha256_descriptor(file_fd, MAX_PARENT_EDIT_BYTES, actual_sha256,
+                        &after) != 0 ||
+      !same_read_identity(&before, &after) ||
+      strcmp(actual_sha256, argv[8]) != 0 ||
+      fstatat(parent_fd, leaf, &named, AT_SYMLINK_NOFOLLOW) != 0 ||
+      !same_read_identity(&before, &named)) {
+    close(file_fd);
+    close(parent_fd);
+    free(contents);
+    return parent_edit_error("conflict");
+  }
+  /* The pathname is never used for the write. A replacement after this
+   * check cannot cause an unrelated file to be opened or truncated. */
+  int good = ftruncate(file_fd, 0) == 0 &&
+             write_all(file_fd, contents, (size_t)bytes) == 0;
+  free(contents);
+  close(file_fd);
+  close(parent_fd);
+  if (!good)
+    return parent_edit_error("io_failed");
+  puts("edited");
+  return ferror(stdout) ? parent_edit_error("io_failed") : 0;
+}
+
 int main(int argc, char **argv) {
+  if (argc >= 2 && strcmp(argv[1], "edit-file") == 0)
+    return parent_edit_file(argc, argv);
   if (argc != 8 || strcmp(argv[1], "serve") != 0 ||
       strcmp(argv[2], "--root") != 0 || strcmp(argv[4], "--device") != 0 ||
       strcmp(argv[6], "--inode") != 0 || argv[3][0] != '/')

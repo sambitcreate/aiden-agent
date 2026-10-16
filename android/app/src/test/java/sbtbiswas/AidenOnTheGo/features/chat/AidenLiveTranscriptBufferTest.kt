@@ -74,4 +74,29 @@ class AidenLiveTranscriptBufferTest {
 
         assertEquals(emptyList<Pair<String, String>>(), published)
     }
+
+    @Test
+    fun replayedPrefixIsPublishedWhenTheRunBecomesVisible() {
+        buffer.appendText("first ")
+        buffer.appendReasoning("thinking")
+        advanceFrame() // The offscreen replay can finish a frame before attachment.
+        published.clear()
+        buffer.appendText("second")
+
+        buffer.publishCurrent()
+        advanceFrame()
+
+        assertEquals(listOf("first second" to "thinking"), published)
+    }
+
+    @Test
+    fun aResetInvalidatesAnEarlierQueuedFrame() {
+        buffer.appendText("old answer")
+        buffer.appendReasoning("old thought")
+        buffer.reset()
+        buffer.appendText("new answer")
+        advanceFrame()
+
+        assertEquals(listOf("" to "", "new answer" to ""), published)
+    }
 }

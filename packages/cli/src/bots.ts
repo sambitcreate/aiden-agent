@@ -15,7 +15,7 @@ import { botMcpLiveToolMatchesGrant, exactBotMcpToolNames } from "../../../main/
 import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { createCliMcpPool, mcpCredentialSignature } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdir, lstat, chmod, rm } from "node:fs/promises";
 import { watch } from "node:fs";
 import { createHmac } from "node:crypto";
@@ -66,6 +66,10 @@ function checkpointFile<T>(agentDir: string, name: string) {
 }
 
 export async function createCliBots(agentDir: string, daemon: ReturnType<typeof createDaemonChats>) {
+  const cliEntry = process.env.AIDEN_CLI_ENTRY;
+  const fileMutatorBinary = cliEntry
+    ? join(dirname(cliEntry), "native", "aiden-subagent-file-mutator")
+    : undefined;
   const directory = join(agentDir, "bot-service"), root = () => directory;
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const info = await lstat(directory);
@@ -159,7 +163,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       if (!live || botCapabilityFactsFingerprint({ device: candidate.device, inode: candidate.inode, policyRevision: candidate.policyRevision }) !== grant.scopeFingerprint) throw new Error("The approved Bot folder changed.");
       locations.push({ id: candidate.id, label: candidate.label, root: live.root, expectedIdentity: { device: live.device, inode: live.inode } });
     }
-    const selected = locations.length ? buildBotFileTools({ defaultLocation: locations[0], additionalLocations: locations.slice(1) }) : [];
+    const selected = locations.length ? buildBotFileTools({ defaultLocation: locations[0], additionalLocations: locations.slice(1), fileMutatorBinary }) : [];
     if (authority.shell.enabled) selected.push(buildPinnedCodingTools(authority.workingDirectory).find((tool) => tool.name === "run_command")!);
     const retained = await capabilities.getBotBinding(authority.botId);
     const snapshot = await catalog.snapshotForRuntime({ botId: authority.botId, signal: admission.signal,

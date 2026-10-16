@@ -221,9 +221,13 @@ test("the sidebar + starts a draft in its workspace and reuses only an empty dra
   await expect(draftRows).toHaveCount(1);
   expect(await draftId()).toBe(initialDraft);
 
-  // The + is hidden until hover or keyboard focus, and stays keyboard reachable.
+  // Focus anywhere in the workspace row reveals its actions for keyboard navigation.
   await page.mouse.move(1, 1);
+  await expect(header).toBeFocused();
+  await expect(plus).toHaveCSS("opacity", "1");
+  await composer.focus();
   await expect(plus).toHaveCSS("opacity", "0");
+  // The + remains keyboard reachable while it is hidden.
   await plus.focus();
   await expect(plus).toHaveCSS("opacity", "1");
   await plus.press("Enter");
