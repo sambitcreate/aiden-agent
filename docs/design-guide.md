@@ -65,7 +65,11 @@ its content, including icons and secondary labels, to the row's foreground;
 destructive rows highlight with the danger fill rather than the accent.
 
 Preserve neutral `focus-visible` outlines on non-text controls, accessible labels
-for icon actions, disabled semantics, and existing hit-target sizes. Text-entry
+for icon actions, disabled semantics, and existing hit-target sizes. Rings are
+for keyboard navigation only: after a click, `renderer/lib/input-modality.ts`
+marks `<html data-input-modality="pointer">` and every ring is hidden until the
+next navigation key, so style rings with `:focus-visible` and never on `:focus`
+or hover. Text-entry
 focus uses fill and caret changes without a new border or ring. Reuse existing
 hover and press feedback and respect Reduce Motion; do not animate the corner
 shape or add layout shifts.
