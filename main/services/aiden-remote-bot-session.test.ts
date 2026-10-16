@@ -2154,11 +2154,14 @@ test("a send refused before the turn starts keeps its uploads for the same reque
   const sends: Array<{ text: string; attachments?: unknown }> = [];
   let refusal: BotSessionError | Error | undefined = new BotSessionError("needs_model");
   const attachments = new AidenRemoteAttachmentStore();
+  let duringRefusal: (() => Promise<void>) | undefined;
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
     runtime: async () => ({
       ...fake.runtime,
       async send(_botId, input) {
+        await duringRefusal?.();
+        duringRefusal = undefined;
         if (refusal) throw refusal;
         sends.push(input);
         return { submissionId: String(sends.length), deduped: false };
@@ -2169,7 +2172,23 @@ test("a send refused before the turn starts keeps its uploads for the same reque
   try {
     const image = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
     const body = { text: "Read this", attachmentIds: [image.id] };
+    // Uploads that arrive while the send is in flight can't take the photo's
+    // place in the Bot's quota (20 per Bot), nor remove it.
+    const later: string[] = [];
+    duringRefusal = async () => {
+      for (let index = 0; index < 20; index += 1) {
+        try {
+          later.push((await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request)).id);
+        } catch (error) {
+          assert.ok(isError("handle_capacity", 429)(error as { code?: string; status?: number }));
+        }
+      }
+      // Removing it mid-send is ignored: the send spends it or gives it back.
+      await service.removeAttachment(DEVICE_ID, BOT_ID, image.id);
+    };
     await assert.rejects(service.send(DEVICE_ID, BOT_ID, "send-request-refused-0001", body));
+    assert.equal(later.length, 19);
+    for (const id of later) await service.removeAttachment(DEVICE_ID, BOT_ID, id);
     // The person chooses a model; the same request now runs with its photo.
     refusal = undefined;
     await service.send(DEVICE_ID, BOT_ID, "send-request-refused-0001", body);

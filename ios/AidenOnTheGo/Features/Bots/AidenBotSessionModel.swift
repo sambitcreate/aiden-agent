@@ -1942,11 +1942,16 @@ final class AidenBotSessionModel {
         return message.attachmentsGone || message.attachments.contains { $0.expiresAt <= now() }
     }
 
-    /// Takes a message whose uploads expired off the list and gives its words
-    /// back, so the person can attach the files again and send it.
-    func reattach(_ id: String) -> String? {
+    /// Takes a message whose uploads expired off the list and returns the
+    /// composer's new text: its words ahead of anything already typed, so
+    /// neither is lost and the files can be attached again.
+    func reattach(_ id: String, into draft: String) -> String? {
         guard let index = outbox.firstIndex(where: { $0.id == id }), attachmentsExpired(outbox[index]) else { return nil }
-        return outbox.remove(at: index).text
+        let words = outbox.remove(at: index).text
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed.isEmpty { return words }
+        if words.isEmpty { return draft }
+        return words + "\n\n" + draft
     }
 
     /// Removes a message that couldn't be sent; nothing else is ever dropped silently.

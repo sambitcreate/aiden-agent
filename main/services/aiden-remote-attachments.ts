@@ -50,6 +50,8 @@ interface PendingAttachmentRecord {
   attachment: Attachment;
   expiresAt: number;
   representationBytes: number;
+  /** Held by an in-flight send that may still give it back; it keeps its quota. */
+  reserved?: boolean;
 }
 
 function ownRecord(value: unknown): Record<string, unknown> | null {
@@ -382,34 +384,34 @@ export class AidenRemoteAttachmentStore {
   }
 
   /**
-   * Consumes like `consume`, and also returns a `restore` that puts the same
-   * references back (with their original expiry) for a caller that proves the
-   * turn never started, so a refused send can be retried with them.
+   * Reserves the references for one send, which then either `commit`s them
+   * (spent, as `consume` does) or `restore`s them for a caller that proves the
+   * turn never started. Until then they keep their quota and can't be used,
+   * removed or reserved again, so a refused send can be retried with them
+   * without the store outgrowing its limits.
    */
-  consumeRestorable(
+  reserve(
     deviceId: string,
     chatId: string,
     input: unknown,
-  ): { attachments: Attachment[]; restore: () => void } {
-    const { selected, now } = this.select(deviceId, chatId, input);
+  ): { attachments: Attachment[]; commit: () => void; restore: () => void } {
+    const { selected } = this.select(deviceId, chatId, input);
     const attachments = selected.map((record) => structuredClone(record.attachment));
     if (attachmentInlineBytes(attachments) > MAX_ATTACHMENT_INLINE_BYTES) {
       throw new AidenRemoteServiceError("payload_too_large", "The attachments exceed the turn limit.", 413);
     }
-    for (const record of selected) this.removeRecord(record);
-    this.prune(now);
-    let restored = false;
-    const restore = () => {
-      if (restored) return;
-      restored = true;
-      const at = this.now();
+    for (const record of selected) record.reserved = true;
+    let settled = false;
+    const settle = (spend: boolean) => {
+      if (settled) return;
+      settled = true;
       for (const record of selected) {
-        if (record.expiresAt <= at || this.records.has(record.id)) continue;
-        this.records.set(record.id, record);
-        this.retainedRepresentationBytes += record.representationBytes;
+        if (spend) this.removeRecord(record);
+        else record.reserved = false;
       }
+      this.prune(this.now());
     };
-    return { attachments, restore };
+    return { attachments, commit: () => settle(true), restore: () => settle(false) };
   }
 
   /** Validate one-shot references without consuming them during model admission. */
@@ -459,6 +461,9 @@ export class AidenRemoteAttachmentStore {
       if (record.chatId !== chatId) {
         throw new AidenRemoteServiceError("handle_invalid", "That attachment belongs to another chat.", 409);
       }
+      if (record.reserved) {
+        throw new AidenRemoteServiceError("handle_invalid", "That attachment is already being sent.", 409);
+      }
       selected.push(record);
     }
     return { selected, now };
@@ -476,6 +481,8 @@ export class AidenRemoteAttachmentStore {
     if (record.chatId !== chatId) {
       throw new AidenRemoteServiceError("handle_invalid", "That attachment belongs to another chat.", 409);
     }
+    // A send holds it; that send spends it or gives it back.
+    if (record.reserved) return;
     this.removeRecord(record);
   }
 

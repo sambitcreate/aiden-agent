@@ -571,8 +571,8 @@ struct AidenBotSessionChatView: View {
                     Button {
                         if expired {
                             // The words go back in the composer; the files are picked again.
-                            if let text = model.reattach(message.id) {
-                                if draftIsEmpty { draft = text }
+                            if let text = model.reattach(message.id, into: draft) {
+                                draft = text
                                 composerFocused = true
                             }
                         } else {

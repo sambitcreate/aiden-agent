@@ -4394,7 +4394,7 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         XCTAssertTrue(model.attachmentsExpired(failed))
         let retried = await model.retrySend(failed.id)
         XCTAssertFalse(retried, "Try again can't succeed with uploads that are gone")
-        XCTAssertEqual(model.reattach(failed.id), "Read this")
+        XCTAssertEqual(model.reattach(failed.id, into: "  "), "Read this")
         XCTAssertTrue(model.outbox.isEmpty)
     }
 
@@ -4410,7 +4410,9 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         _ = await model.send("Summarise")
         let failed = try XCTUnwrap(model.outbox.last)
         XCTAssertTrue(model.attachmentsExpired(failed))
-        XCTAssertEqual(model.reattach(failed.id), "Summarise")
+        // Something typed since stays, after the message's own words.
+        XCTAssertEqual(model.reattach(failed.id, into: "Also the totals"), "Summarise\n\nAlso the totals")
+        XCTAssertNil(model.reattach(failed.id, into: ""), "it comes back once")
     }
 
     func testAMacWithoutBotAttachmentsOffersNoPlus() async throws {

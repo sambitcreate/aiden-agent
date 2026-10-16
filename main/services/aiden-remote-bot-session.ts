@@ -218,7 +218,7 @@ export interface AidenRemoteBotSessionServiceOptions {
    * Staged phone uploads (`bot-attachments-v1`, revision 33): the workspace
    * chats' one-shot store, keyed per Bot so a Bot reference never reaches a chat.
    */
-  attachments?: Pick<AidenRemoteAttachmentStore, "upload" | "remove" | "consumeRestorable">;
+  attachments?: Pick<AidenRemoteAttachmentStore, "upload" | "remove" | "reserve">;
   /**
    * Run start times shared with the desktop live projection (`botRunStarts`):
    * a projector created mid-run, or after the 60 s idle close, keeps the
@@ -1732,7 +1732,7 @@ export class AidenRemoteBotSessionService {
           const runtime = await this.options.runtime();
           // Consumed once, inside the ledger: a replayed request never asks for them again.
           const taken = parsed.attachmentIds
-            ? this.options.attachments!.consumeRestorable(deviceId, botAttachmentScope(bot.id), parsed.attachmentIds)
+            ? this.options.attachments!.reserve(deviceId, botAttachmentScope(bot.id), parsed.attachmentIds)
             : undefined;
           const attached = taken?.attachments ?? [];
           const images = botImageAttachments(attached);
@@ -1751,8 +1751,10 @@ export class AidenRemoteBotSessionService {
             // the key: give the uploads back so the same request can run once the
             // Bot is fixed. Anything else may have run, so they stay spent.
             if (error instanceof AidenOperationNotExecutedError) taken?.restore();
+            else taken?.commit();
             throw error;
           }
+          taken?.commit();
           return { ...sent, ...projectBotSessionState(await runtime.state(bot.id)) };
         },
       );
