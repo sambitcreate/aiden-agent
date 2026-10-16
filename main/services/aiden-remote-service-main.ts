@@ -871,6 +871,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const botFiles = botsSupported
             ? new AidenRemoteBotFileService({
                 instanceId,
+                botAudienceId: BOT_DESKTOP_AUDIENCE_ID,
                 authority: botRuntimeAuthority,
                 chats: chatStore,
               })
