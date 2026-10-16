@@ -123,6 +123,19 @@ test("a long message comes back as a short excerpt around the match", async () =
   }
 });
 
+test("the excerpt keeps the match when a long message has line breaks and indentation after it", async () => {
+  const { harness, conversation, say } = await setup();
+  try {
+    await say(`${"Intro sentence here. ".repeat(20)}The spare key is under the blue pot.\n\n${"    - packing list item\n\n".repeat(80)}`);
+    await say("Where was that key?");
+    const [hit] = searchBotHistory(await history(conversation), "spare key");
+    assert.ok(hit);
+    assert.match(hit.excerpt, /spare key is under the blue pot/u);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("in a turn, bot_recall answers from earlier conversation but not the asking message", async () => {
   const { harness, conversation, say } = await setup();
   try {

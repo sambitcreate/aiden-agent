@@ -72,7 +72,8 @@ export function recallTerms(query: string): string[] {
 function excerptAround(text: string, at: number, length: number): string {
   const flat = text.replace(/\s+/gu, " ").trim();
   if (flat.length <= BOT_RECALL_EXCERPT_CHARS) return flat;
-  const flatAt = Math.min(Math.max(0, at - (text.length - flat.length)), flat.length);
+  // Only whitespace collapsed before the match moves it.
+  const flatAt = Math.min(text.slice(0, at).replace(/\s+/gu, " ").trimStart().length, flat.length);
   let start = Math.max(0, Math.min(flatAt - Math.floor((BOT_RECALL_EXCERPT_CHARS - length) / 3), flat.length - BOT_RECALL_EXCERPT_CHARS));
   if (start > 0) {
     const space = flat.indexOf(" ", start);
