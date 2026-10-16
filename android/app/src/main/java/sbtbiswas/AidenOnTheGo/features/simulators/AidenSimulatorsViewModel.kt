@@ -124,6 +124,8 @@ class AidenSimulatorsViewModel(
     private var sessionWatch: Job? = null
     private var openJob: Job? = null
     private var openingDeviceId: String? = null
+    /** A boot result may publish only for the selection that requested it. */
+    private var selectionGeneration = 0L
     private var foreground = true
     /** The viewer's size in pixels, read on the decode thread to subsample frames. */
     @Volatile private var viewSize: Pair<Int, Int>? = null
@@ -153,6 +155,7 @@ class AidenSimulatorsViewModel(
     fun openViewer() {
         val devices = _chatDevices.value
         if (devices.isEmpty()) return
+        invalidatePendingOpen()
         val listing = _listing.value
         val selected = devices.firstOrNull { it.isViewableOnPhone } ?: devices.first()
         _viewer.value = AidenSimulatorViewerUiState(
@@ -167,10 +170,8 @@ class AidenSimulatorsViewModel(
     }
 
     fun closeViewer() {
+        invalidatePendingOpen()
         stopSession()
-        openJob?.cancel()
-        openJob = null
-        openingDeviceId = null
         _viewer.value = AidenSimulatorViewerUiState()
         _controls.value = AidenSimulatorControls()
         refreshChatDevices()
@@ -180,6 +181,7 @@ class AidenSimulatorsViewModel(
         val state = _viewer.value
         if (!state.open || state.selectedDeviceId == deviceId) return
         if (state.devices.none { it.id == deviceId && it.isViewableOnPhone }) return
+        invalidatePendingOpen()
         _viewer.update { it.copy(selectedDeviceId = deviceId, error = null, startingDeviceName = null) }
         connectSelected()
     }
@@ -197,8 +199,12 @@ class AidenSimulatorsViewModel(
         viewModelScope.launch {
             try {
                 remote.simulators(null)
-                applyListing(remote.simulators(chatId))
-                if (_viewer.value.open && _viewer.value.error == null) connectSelected()
+                val refreshedListing = remote.simulators(chatId)
+                val selectedBeforeRefresh = _viewer.value.selectedDeviceId
+                applyListing(refreshedListing)
+                // applyListing already connected a replacement when selection changed.
+                if (_viewer.value.open && _viewer.value.error == null &&
+                    _viewer.value.selectedDeviceId == selectedBeforeRefresh) connectSelected()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -280,6 +286,7 @@ class AidenSimulatorsViewModel(
         val state = _viewer.value
         if (!state.open || listing == null) return
         if (!listing.sharing) {
+            invalidatePendingOpen()
             stopSession()
             _viewer.update { it.copy(error = AidenSimulatorViewerError.SHARING_OFF) }
             return
@@ -291,14 +298,19 @@ class AidenSimulatorsViewModel(
         val selected = devices.firstOrNull { it.id == state.selectedDeviceId }
             ?: devices.firstOrNull { it.isViewableOnPhone }
             ?: devices.first()
+        val selectionChanged = selected.id != state.selectedDeviceId
+        if (selectionChanged) invalidatePendingOpen()
         _viewer.update {
             it.copy(
                 devices = devices,
                 selectedDeviceId = selected.id,
+                error = if (selectionChanged) null else it.error,
+                startingDeviceName = if (selectionChanged) null else it.startingDeviceName,
                 toolVersions = listing.toolVersions,
                 offersHostRetry = listing.status.offersRetry
             )
         }
+        if (selectionChanged) connectSelected()
     }
 
     private fun connectSelected() {
@@ -327,6 +339,7 @@ class AidenSimulatorsViewModel(
         _controls.update { it.withInputConnected(false) }
         sessionWatch = viewModelScope.launch {
             session.state.collect { stream ->
+                if (_session.value !== session) return@collect
                 _controls.update { it.withInputConnected(stream.inputConnected) }
                 if (stream.phase == AidenSimulatorStreamPhase.FAILED) {
                     _viewer.update { it.copy(error = errorFor(stream.failure)) }
@@ -339,11 +352,13 @@ class AidenSimulatorsViewModel(
     private fun boot(device: AidenSimulatorDevice) {
         if (openJob?.isActive == true && openingDeviceId == device.id) return
         openJob?.cancel()
+        val generation = selectionGeneration
         openingDeviceId = device.id
         _viewer.update { it.copy(startingDeviceName = device.name, error = null) }
         openJob = viewModelScope.launch {
             try {
                 val booted = remote.open(device.id)
+                if (!ownsBoot(device.id, generation)) return@launch
                 _viewer.update { state ->
                     state.copy(
                         devices = state.devices.map { if (it.id == booted.id) booted else it },
@@ -355,11 +370,23 @@ class AidenSimulatorsViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (!ownsBoot(device.id, generation)) return@launch
                 openingDeviceId = null
                 _viewer.update { it.copy(startingDeviceName = null, error = errorFor(error)) }
             }
         }
     }
+
+    private fun invalidatePendingOpen() {
+        selectionGeneration++
+        openJob?.cancel()
+        openJob = null
+        openingDeviceId = null
+    }
+
+    private fun ownsBoot(deviceId: String, generation: Long): Boolean =
+        selectionGeneration == generation && _viewer.value.open &&
+            _viewer.value.selectedDeviceId == deviceId && openingDeviceId == deviceId
 
     private fun stopSession() {
         sessionWatch?.cancel()
