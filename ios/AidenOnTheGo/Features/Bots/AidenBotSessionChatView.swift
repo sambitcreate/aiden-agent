@@ -532,9 +532,9 @@ struct AidenBotSessionChatView: View {
         queuedLook(message.text, mode: message.mode)
     }
 
-    private func queuedLook(_ text: String, mode: AidenStreamInputMode) -> some View {
+    private func queuedLook(_ text: String, mode: AidenStreamInputMode, attachments: [AidenAttachmentReference] = []) -> some View {
         // A queued message waits for the reply; a steer has already joined it.
-        pendingBubble(text, faded: mode == .queue) {
+        pendingBubble(text, faded: mode == .queue, attachments: attachments) {
             if mode == .queue {
                 Text(AidenBotSessionCopy.queued)
             }
@@ -555,7 +555,7 @@ struct AidenBotSessionChatView: View {
         case .sent:
             pendingBubble(message.text, faded: false, attachments: message.attachments) { EmptyView() }
         case let .queued(mode):
-            queuedLook(message.text, mode: mode)
+            queuedLook(message.text, mode: mode, attachments: message.attachments)
         case .failed:
             pendingBubble(message.text, faded: false, attachments: message.attachments) {
                 HStack(spacing: 6) {
