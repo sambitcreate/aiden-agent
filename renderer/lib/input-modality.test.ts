@@ -46,3 +46,21 @@ test("uninstalling stops tracking", () => {
   assert.equal(modality(), "pointer");
   window.happyDOM.close();
 });
+
+test("moving the mouse over a menu hides rings, a still or outside pointer does not", () => {
+  const { window, modality, key } = setup();
+  const doc = window.document;
+  doc.body.innerHTML = '<div role="menu"><div role="menuitem" id="row">Row</div></div><button id="outside">Go</button>';
+  const move = (id: string, movementX: number) =>
+    doc.getElementById(id)!.dispatchEvent(new window.PointerEvent("pointermove", { bubbles: true, movementX, movementY: 0 }));
+  key("ArrowDown");
+  move("outside", 4);
+  assert.equal(modality(), "keyboard", "a moving mouse outside menus keeps keyboard rings");
+  move("row", 0);
+  assert.equal(modality(), "keyboard", "a layout shift under a still cursor is not navigation");
+  move("row", 4);
+  assert.equal(modality(), "pointer");
+  key("ArrowDown");
+  assert.equal(modality(), "keyboard");
+  window.happyDOM.close();
+});

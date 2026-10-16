@@ -23,6 +23,25 @@ export function modalityFromKeydown(event: InputModalityKeyEvent): InputModality
   return "keyboard";
 }
 
+// Menus and listboxes move focus to the row under a moving pointer, so moving
+// the mouse there is pointer navigation even without a click. Elsewhere a
+// moving mouse leaves a keyboard user's ring alone.
+const HOVER_FOCUS_CONTAINER = '[role="menu"], [role="menubar"], [role="listbox"]';
+
+export interface InputModalityPointerMove {
+  movementX: number;
+  movementY: number;
+  target: EventTarget | null;
+}
+
+/** Whether a pointermove is the person steering hover focus in a menu. */
+export function pointerMoveSteersFocus(event: InputModalityPointerMove): boolean {
+  // Chromium sends zero-movement moves when content shifts under a still cursor.
+  if (event.movementX === 0 && event.movementY === 0) return false;
+  const target = event.target as { closest?: (selector: string) => unknown } | null;
+  return typeof target?.closest === "function" && target.closest(HOVER_FOCUS_CONTAINER) !== null;
+}
+
 /** Track the modality on `<html>` for the lifetime of the window. */
 export function installInputModality(doc: Document = document): () => void {
   const root = doc.documentElement;
@@ -34,10 +53,15 @@ export function installInputModality(doc: Document = document): () => void {
     if (modality) set(modality);
   };
   const onPointerdown = () => set("pointer");
+  const onPointermove = (event: PointerEvent) => {
+    if (pointerMoveSteersFocus(event)) set("pointer");
+  };
   doc.addEventListener("keydown", onKeydown, true);
   doc.addEventListener("pointerdown", onPointerdown, true);
+  doc.addEventListener("pointermove", onPointermove, true);
   return () => {
     doc.removeEventListener("keydown", onKeydown, true);
     doc.removeEventListener("pointerdown", onPointerdown, true);
+    doc.removeEventListener("pointermove", onPointermove, true);
   };
 }
