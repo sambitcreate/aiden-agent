@@ -123,6 +123,8 @@ extension AidenRemoteClient: AidenBotSessionTransport {}
 
 /// The exact copy shared with desktop and Android.
 enum AidenBotSessionCopy {
+    static let attachmentsExpired = "Attachments expired"
+    static let attachAgain = "Attach again"
     static let interrupted = "I got interrupted while working on this."
     static let resume = "Resume"
     static let dismiss = "Dismiss"
@@ -316,6 +318,8 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     fileprivate var connectionAttempts = 0
     /// The last failure may have reached the Mac, so Try again keeps the key.
     fileprivate var keepsKey = false
+    /// The Mac no longer holds its staged uploads (they expire after ten minutes).
+    fileprivate var attachmentsGone = false
     /// When a snapshot first showed nothing on the Mac holding it (FR-m5). The
     /// queued list caps at 20 and the Mac leaves out inputs it can't classify,
     /// so one snapshot is not proof: it goes only after a grace period.
@@ -1549,6 +1553,16 @@ final class AidenBotSessionModel {
             outbox[index].expire()
             return
         }
+        if outbox[index].request == nil,
+           outbox[index].attachments.contains(where: { $0.expiresAt <= now() }) {
+            // Never sent, and its uploads are gone from the Mac: sending would only be
+            // refused, so it asks for them again instead.
+            releaseEcho(at: index)
+            outbox[index].status = .failed
+            outbox[index].keepsKey = false
+            outbox[index].attachmentsGone = true
+            return
+        }
         let request: AidenBotMessageRequest
         if let frozen = outbox[index].request {
             request = frozen
@@ -1608,6 +1622,9 @@ final class AidenBotSessionModel {
                 // is a new request with a new key, as on Android.
                 outbox[current].status = .failed
                 outbox[current].keepsKey = false
+                if !outbox[current].attachments.isEmpty, Self.isLostAttachment(error) {
+                    outbox[current].attachmentsGone = true
+                }
                 releaseEcho(at: current)
                 return
             }
@@ -1646,6 +1663,12 @@ final class AidenBotSessionModel {
             guard !Task.isCancelled, let self, !self.released else { return }
             self.wakeOutbox()
         }
+    }
+
+    /// The Mac refused the message because a staged upload expired or was already used.
+    private static func isLostAttachment(_ error: Error) -> Bool {
+        guard case let AidenRemoteClientError.server(_, body) = error else { return false }
+        return ["handle_expired", "handle_invalid"].contains(body.code.rawValue)
     }
 
     /// Whether a message request may have reached the Mac. A request the Mac is
@@ -1886,7 +1909,8 @@ final class AidenBotSessionModel {
     /// keeps its key, so the Mac replays its receipt instead of taking it twice.
     @discardableResult
     func retrySend(_ id: String) async -> Bool {
-        guard let index = outbox.firstIndex(where: { $0.id == id }), outbox[index].status == .failed else { return false }
+        guard let index = outbox.firstIndex(where: { $0.id == id }), outbox[index].status == .failed,
+              !attachmentsExpired(outbox[index]) else { return false }
         if !outbox[index].keepsKey {
             outbox[index].key = UUID()
             outbox[index].request = nil
@@ -1908,6 +1932,21 @@ final class AidenBotSessionModel {
         )
         await runFlush()
         return true
+    }
+
+    /// Whether a failed message can't go again because its photos and files are
+    /// gone from the Mac. One that may have reached the Mac keeps its key and
+    /// is tried as it was, so a sent message is never sent twice.
+    func attachmentsExpired(_ message: AidenBotOutgoingMessage) -> Bool {
+        guard message.status == .failed, !message.keepsKey, !message.attachments.isEmpty else { return false }
+        return message.attachmentsGone || message.attachments.contains { $0.expiresAt <= now() }
+    }
+
+    /// Takes a message whose uploads expired off the list and gives its words
+    /// back, so the person can attach the files again and send it.
+    func reattach(_ id: String) -> String? {
+        guard let index = outbox.firstIndex(where: { $0.id == id }), attachmentsExpired(outbox[index]) else { return nil }
+        return outbox.remove(at: index).text
     }
 
     /// Removes a message that couldn't be sent; nothing else is ever dropped silently.

@@ -381,6 +381,37 @@ export class AidenRemoteAttachmentStore {
     return attachments;
   }
 
+  /**
+   * Consumes like `consume`, and also returns a `restore` that puts the same
+   * references back (with their original expiry) for a caller that proves the
+   * turn never started, so a refused send can be retried with them.
+   */
+  consumeRestorable(
+    deviceId: string,
+    chatId: string,
+    input: unknown,
+  ): { attachments: Attachment[]; restore: () => void } {
+    const { selected, now } = this.select(deviceId, chatId, input);
+    const attachments = selected.map((record) => structuredClone(record.attachment));
+    if (attachmentInlineBytes(attachments) > MAX_ATTACHMENT_INLINE_BYTES) {
+      throw new AidenRemoteServiceError("payload_too_large", "The attachments exceed the turn limit.", 413);
+    }
+    for (const record of selected) this.removeRecord(record);
+    this.prune(now);
+    let restored = false;
+    const restore = () => {
+      if (restored) return;
+      restored = true;
+      const at = this.now();
+      for (const record of selected) {
+        if (record.expiresAt <= at || this.records.has(record.id)) continue;
+        this.records.set(record.id, record);
+        this.retainedRepresentationBytes += record.representationBytes;
+      }
+    };
+    return { attachments, restore };
+  }
+
   /** Validate one-shot references without consuming them during model admission. */
   requiresImageInput(deviceId: string, chatId: string, input: unknown): boolean {
     if (input === undefined) return false;

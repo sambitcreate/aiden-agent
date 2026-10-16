@@ -218,7 +218,7 @@ export interface AidenRemoteBotSessionServiceOptions {
    * Staged phone uploads (`bot-attachments-v1`, revision 33): the workspace
    * chats' one-shot store, keyed per Bot so a Bot reference never reaches a chat.
    */
-  attachments?: Pick<AidenRemoteAttachmentStore, "upload" | "remove" | "consume">;
+  attachments?: Pick<AidenRemoteAttachmentStore, "upload" | "remove" | "consumeRestorable">;
   /**
    * Run start times shared with the desktop live projection (`botRunStarts`):
    * a projector created mid-run, or after the 60 s idle close, keeps the
@@ -1731,18 +1731,28 @@ export class AidenRemoteBotSessionService {
         async () => {
           const runtime = await this.options.runtime();
           // Consumed once, inside the ledger: a replayed request never asks for them again.
-          const attached = parsed.attachmentIds
-            ? this.options.attachments!.consume(deviceId, botAttachmentScope(bot.id), parsed.attachmentIds) ?? []
-            : [];
+          const taken = parsed.attachmentIds
+            ? this.options.attachments!.consumeRestorable(deviceId, botAttachmentScope(bot.id), parsed.attachmentIds)
+            : undefined;
+          const attached = taken?.attachments ?? [];
           const images = botImageAttachments(attached);
-          // The request UUID is the session request id: a resubmission dedupes.
-          const sent = await unlessRefusedBeforeRunning(() => runtime.send(bot.id, {
-            text: botMessageText(parsed.text, attached),
-            requestId: `remote:${deviceId}:${key}`,
-            // Steer joins the running turn; Queue (or nothing, as before) runs after it.
-            ...(parsed.whenBusy ? { whenBusy: parsed.whenBusy === "steer" ? "steer" as const : "followUp" as const } : {}),
-            ...(images.length > 0 ? { attachments: images } : {}),
-          }));
+          let sent: Awaited<ReturnType<typeof runtime.send>>;
+          try {
+            // The request UUID is the session request id: a resubmission dedupes.
+            sent = await unlessRefusedBeforeRunning(() => runtime.send(bot.id, {
+              text: botMessageText(parsed.text, attached),
+              requestId: `remote:${deviceId}:${key}`,
+              // Steer joins the running turn; Queue (or nothing, as before) runs after it.
+              ...(parsed.whenBusy ? { whenBusy: parsed.whenBusy === "steer" ? "steer" as const : "followUp" as const } : {}),
+              ...(images.length > 0 ? { attachments: images } : {}),
+            }));
+          } catch (error) {
+            // A refusal from state never started the turn, and the ledger forgets
+            // the key: give the uploads back so the same request can run once the
+            // Bot is fixed. Anything else may have run, so they stay spent.
+            if (error instanceof AidenOperationNotExecutedError) taken?.restore();
+            throw error;
+          }
           return { ...sent, ...projectBotSessionState(await runtime.state(bot.id)) };
         },
       );

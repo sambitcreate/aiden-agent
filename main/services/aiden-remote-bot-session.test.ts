@@ -41,6 +41,7 @@ import {
 } from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
+  BotSessionError,
   createBotSessionService,
   type BotSessionState,
 } from "./bot-runtime/bot-session-service.js";
@@ -2142,6 +2143,50 @@ test("staged Bot uploads reach the runtime once: images as images, text files af
         JSON.stringify(sample),
       );
     }
+  } finally {
+    await service.close();
+  }
+});
+
+test("a send refused before the turn starts keeps its uploads for the same request", async () => {
+  const fixture = (await contractFixture()).botAttachments;
+  const fake = fakeRuntime({ kind: "idle" });
+  const sends: Array<{ text: string; attachments?: unknown }> = [];
+  let refusal: BotSessionError | Error | undefined = new BotSessionError("needs_model");
+  const attachments = new AidenRemoteAttachmentStore();
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({
+      ...fake.runtime,
+      async send(_botId, input) {
+        if (refusal) throw refusal;
+        sends.push(input);
+        return { submissionId: String(sends.length), deduped: false };
+      },
+    }),
+    attachments,
+  });
+  try {
+    const image = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    const body = { text: "Read this", attachmentIds: [image.id] };
+    await assert.rejects(service.send(DEVICE_ID, BOT_ID, "send-request-refused-0001", body));
+    // The person chooses a model; the same request now runs with its photo.
+    refusal = undefined;
+    await service.send(DEVICE_ID, BOT_ID, "send-request-refused-0001", body);
+    assert.equal(sends.length, 1);
+    assert.deepEqual(sends[0]!.attachments, [
+      { type: "image", mimeType: "image/png", data: fixture.imageUpload.request.data },
+    ]);
+
+    // A failure that may have reached the runtime leaves them spent.
+    const other = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    refusal = new Error("connection reset");
+    await assert.rejects(service.send(DEVICE_ID, BOT_ID, "send-request-refused-0002", { text: "", attachmentIds: [other.id] }));
+    refusal = undefined;
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-refused-0003", { text: "", attachmentIds: [other.id] }),
+      isError("handle_invalid", 409),
+    );
   } finally {
     await service.close();
   }

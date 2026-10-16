@@ -4294,7 +4294,13 @@ extension AidenBotOutboxStore {
 final class AidenBotSessionAttachmentTests: XCTestCase {
     private let botID = "bot_fixture_attach"
 
-    private func loaded(_ transport: FakeBotSessionTransport, supported: Bool = true) async throws -> AidenBotSessionModel {
+    private final class Clock: @unchecked Sendable { var now = Date() }
+
+    private func loaded(
+        _ transport: FakeBotSessionTransport,
+        supported: Bool = true,
+        clock: Clock? = nil
+    ) async throws -> AidenBotSessionModel {
         transport.queueSession(.success(AidenBotSession(
             botId: botID,
             epoch: "epoch_a",
@@ -4304,7 +4310,9 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
             entries: [],
             hasOlder: false
         )))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = clock.map { clock in
+            AidenBotSessionModel(botID: botID, transport: transport, now: { clock.now })
+        } ?? AidenBotSessionModel(botID: botID, transport: transport)
         model.attachmentsSupported = supported
         await model.load()
         return model
@@ -4371,6 +4379,38 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         XCTAssertFalse(model.pendingAttachments.contains { $0.id == removed })
         _ = await model.send("Just the notes")
         XCTAssertEqual(transport.sendAttachmentIds.first??.contains(removed), false)
+    }
+
+    func testAMessageWhoseUploadsExpiredAsksForThemAgainAndKeepsItsWords() async throws {
+        let transport = FakeBotSessionTransport()
+        let clock = Clock()
+        let model = try await loaded(transport, clock: clock)
+        await model.attach([photo])
+        // The uploads outlive their ten minutes on the Mac before the message goes.
+        clock.now = Date(timeIntervalSince1970: 4_102_444_800 + 1)
+        _ = await model.send("Read this")
+        XCTAssertTrue(transport.sendKeys.isEmpty, "a send the Mac would refuse never goes out")
+        let failed = try XCTUnwrap(model.outbox.last)
+        XCTAssertTrue(model.attachmentsExpired(failed))
+        let retried = await model.retrySend(failed.id)
+        XCTAssertFalse(retried, "Try again can't succeed with uploads that are gone")
+        XCTAssertEqual(model.reattach(failed.id), "Read this")
+        XCTAssertTrue(model.outbox.isEmpty)
+    }
+
+    func testAMacThatNoLongerHoldsTheUploadsLeadsToAttachAgain() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        await model.attach([notes])
+        let body = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"handle_invalid","message":"gone","requestId":"req_test_1","retryable":false}"#.utf8)
+        )
+        transport.failNextSend(with: AidenRemoteClientError.server(statusCode: 409, body: body))
+        _ = await model.send("Summarise")
+        let failed = try XCTUnwrap(model.outbox.last)
+        XCTAssertTrue(model.attachmentsExpired(failed))
+        XCTAssertEqual(model.reattach(failed.id), "Summarise")
     }
 
     func testAMacWithoutBotAttachmentsOffersNoPlus() async throws {

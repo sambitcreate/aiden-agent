@@ -557,17 +557,29 @@ struct AidenBotSessionChatView: View {
         case let .queued(mode):
             queuedLook(message.text, mode: mode, attachments: message.attachments)
         case .failed:
+            let expired = model.attachmentsExpired(message)
             pendingBubble(message.text, faded: false, attachments: message.attachments) {
                 HStack(spacing: 6) {
-                    Label(AidenBotSessionCopy.couldNotSend, systemImage: "exclamationmark.circle.fill")
+                    Label(
+                        expired ? AidenBotSessionCopy.attachmentsExpired : AidenBotSessionCopy.couldNotSend,
+                        systemImage: "exclamationmark.circle.fill"
+                    )
                         .labelStyle(.titleAndIcon)
                         .foregroundStyle(palette.danger)
                     Text("·")
                         .accessibilityHidden(true)
                     Button {
-                        Task { await model.retrySend(message.id) }
+                        if expired {
+                            // The words go back in the composer; the files are picked again.
+                            if let text = model.reattach(message.id) {
+                                if draftIsEmpty { draft = text }
+                                composerFocused = true
+                            }
+                        } else {
+                            Task { await model.retrySend(message.id) }
+                        }
                     } label: {
-                        Text(AidenBotSessionCopy.tryAgain)
+                        Text(expired ? AidenBotSessionCopy.attachAgain : AidenBotSessionCopy.tryAgain)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(palette.accent)
                             .frame(minWidth: 44, minHeight: 44)
