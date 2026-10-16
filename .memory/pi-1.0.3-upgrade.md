@@ -1,6 +1,6 @@
 # Pi 1.0.3 upgrade (2026-10-05)
 
-> Superseded pins (2026-10-13): live desktop/CLI Pi packages are now exactly 1.2.0 (MCP remediation slice 12; see `mcp-plugins-remediation.md`). The frozen 0.87.1 legacy harness is unchanged. The record below is historical.
+> Superseded pins (2026-10-15): live desktop/CLI Pi packages are now exactly 1.3.0 (see `pi-1.3.0-upgrade.md`; 1.2.0 landed in MCP remediation slice 12). The frozen 0.87.1 legacy harness is unchanged. The record below is historical.
 
 User approved committing a plan and starting implementation. Execution source: `docs/plans/pi-1.0.3-upgrade-plan.md`; historical stable parity work: `docs/plans/pi-1-parity-plan.md` on the stack.
 
