@@ -39,7 +39,7 @@ test("viewer query defaults to the light Aiden theme and falls back for presets 
   assert.deepEqual(parseVisualViewerQuery(new URLSearchParams("scheme=dark&theme=midnight")), { scheme: "dark", preset: "midnight" });
   assert.deepEqual(parseVisualViewerQuery(new URLSearchParams("theme=aurora-2")), LIGHT);
   for (const bad of ["scheme=sepia", "theme=Mid night", "theme=%3Cx%3E", "scheme=dark&scheme=light", "theme=aiden&extra=1"]) {
-    assert.throws(() => parseVisualViewerQuery(new URLSearchParams(bad)), undefined, bad);
+    assert.throws(() => parseVisualViewerQuery(new URLSearchParams(bad)), Error, bad);
   }
 });
 
