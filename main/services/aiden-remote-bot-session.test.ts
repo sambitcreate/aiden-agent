@@ -12,6 +12,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/provid
 import { BOT_ACTIVITY_PHASES } from "../../renderer/shared/bot-activity.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
+import { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
@@ -40,6 +41,7 @@ import {
 } from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
+  BotSessionError,
   createBotSessionService,
   type BotSessionState,
 } from "./bot-runtime/bot-session-service.js";
@@ -434,6 +436,19 @@ const assistant = (id: number, text: string, stopReason = "stop", content?: unkn
 const notice = (id: number, data: unknown): RawEntry => ({ id, kind: BOT_NOTICE_ENTRY_KIND, data });
 const card = (id: number, pluginId: string, status = "pending"): RawEntry => ({
   id, kind: "aiden.connect-card", data: { type: "connect_card", pluginId, reason: "I can read your mail.", status },
+});
+
+test("photos sent without words read as a caption on phones, and words keep their own text", () => {
+  const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
+  const withContent = (id: number, content: unknown[]): RawEntry => ({
+    id, kind: "pi.user", model: [{ role: "user", content, timestamp: 1_700_000_000_000 }],
+  });
+  const texts = projectBotSessionEntries([
+    withContent(1, [image]),
+    withContent(2, [image, image]),
+    withContent(3, [{ type: "text", text: "What is this?" }, image]),
+  ] as never).map((entry) => (entry.type === "message" ? entry.text : entry.type));
+  assert.deepEqual(texts, ["Sent a photo", "Sent 2 photos", "What is this?"]);
 });
 
 test("phones see what the Mac shows: no self-intro prompt, no [SILENT] turn, and a failed turn surfaces", () => {
@@ -2060,6 +2075,158 @@ test("a host without bot-activity-v1 refuses whenBusy instead of guessing", asyn
   );
   await service.close();
   await ungated.close();
+});
+
+test("staged Bot uploads reach the runtime once: images as images, text files after the words", async () => {
+  const fixture = (await contractFixture()).botAttachments;
+  const fake = fakeRuntime({ kind: "idle" });
+  const sends: Array<{ text: string; requestId: string; attachments?: unknown }> = [];
+  let ids = 0;
+  const attachments = new AidenRemoteAttachmentStore({
+    randomId: () => `att_${String(++ids).padStart(43, "x")}`,
+  });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({
+      ...fake.runtime,
+      async send(_botId, input) {
+        sends.push(input);
+        return { submissionId: String(sends.length), deduped: false };
+      },
+    }),
+    attachments,
+  });
+  try {
+    assert.equal(service.supportsAttachments, true);
+    const image = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    const text = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request);
+    assert.deepEqual(
+      [image.kind, image.size, text.kind, text.size],
+      [fixture.imageUpload.response.kind, fixture.imageUpload.response.size, fixture.textUpload.response.kind, fixture.textUpload.response.size],
+    );
+
+    // Another device can't spend this phone's references, and the refusal leaves them usable.
+    await assert.rejects(
+      service.send("device_2", BOT_ID, "send-request-attach-0000", { text: "Mine now", attachmentIds: [image.id] }),
+      isError("handle_wrong_device", 403),
+    );
+
+    const body = { text: "What did I spend?", attachmentIds: [image.id, text.id] };
+    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0001", body);
+    // A retried request replays its receipt without asking for the spent references again.
+    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0001", body);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0]!.text, "What did I spend?\n\nnotes.md:\n# Groceries\n- oats");
+    assert.deepEqual(sends[0]!.attachments, [
+      { type: "image", mimeType: "image/png", data: fixture.imageUpload.request.data },
+    ]);
+
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0002", { text: "Again", attachmentIds: [image.id] }),
+      isError("handle_invalid", 409),
+    );
+
+    // Words are optional with attachments; a removed upload can't be sent.
+    const only = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0003", { text: "", attachmentIds: [only.id] });
+    assert.equal(sends[1]!.text, "");
+    const removed = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request);
+    await service.removeAttachment(DEVICE_ID, BOT_ID, removed.id);
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0004", { text: "Hi", attachmentIds: [removed.id] }),
+      isError("handle_invalid", 409),
+    );
+    for (const [index, sample] of (fixture.rejectedSends as unknown[]).entries()) {
+      await assert.rejects(
+        service.send(DEVICE_ID, BOT_ID, `send-request-reject-000${index}`, sample),
+        isError("invalid_request", 400),
+        JSON.stringify(sample),
+      );
+    }
+  } finally {
+    await service.close();
+  }
+});
+
+test("a send refused before the turn starts keeps its uploads for the same request", async () => {
+  const fixture = (await contractFixture()).botAttachments;
+  const fake = fakeRuntime({ kind: "idle" });
+  const sends: Array<{ text: string; attachments?: unknown }> = [];
+  let refusal: BotSessionError | Error | undefined = new BotSessionError("needs_model");
+  const attachments = new AidenRemoteAttachmentStore();
+  let duringRefusal: (() => Promise<void>) | undefined;
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({
+      ...fake.runtime,
+      async send(_botId, input) {
+        await duringRefusal?.();
+        duringRefusal = undefined;
+        if (refusal) throw refusal;
+        sends.push(input);
+        return { submissionId: String(sends.length), deduped: false };
+      },
+    }),
+    attachments,
+  });
+  try {
+    const image = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    const body = { text: "Read this", attachmentIds: [image.id] };
+    // Uploads that arrive while the send is in flight can't take the photo's
+    // place in the Bot's quota (20 per Bot), nor remove it.
+    const later: string[] = [];
+    duringRefusal = async () => {
+      for (let index = 0; index < 20; index += 1) {
+        try {
+          later.push((await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request)).id);
+        } catch (error) {
+          assert.ok(isError("handle_capacity", 429)(error as { code?: string; status?: number }));
+        }
+      }
+      // Removing it mid-send is ignored: the send spends it or gives it back.
+      await service.removeAttachment(DEVICE_ID, BOT_ID, image.id);
+    };
+    await assert.rejects(service.send(DEVICE_ID, BOT_ID, "send-request-refused-0001", body));
+    assert.equal(later.length, 19);
+    for (const id of later) await service.removeAttachment(DEVICE_ID, BOT_ID, id);
+    // The person chooses a model; the same request now runs with its photo.
+    refusal = undefined;
+    await service.send(DEVICE_ID, BOT_ID, "send-request-refused-0001", body);
+    assert.equal(sends.length, 1);
+    assert.deepEqual(sends[0]!.attachments, [
+      { type: "image", mimeType: "image/png", data: fixture.imageUpload.request.data },
+    ]);
+
+    // A failure that may have reached the runtime leaves them spent.
+    const other = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    refusal = new Error("connection reset");
+    await assert.rejects(service.send(DEVICE_ID, BOT_ID, "send-request-refused-0002", { text: "", attachmentIds: [other.id] }));
+    refusal = undefined;
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-refused-0003", { text: "", attachmentIds: [other.id] }),
+      isError("handle_invalid", 409),
+    );
+  } finally {
+    await service.close();
+  }
+});
+
+test("a host without Bot attachments refuses attachmentIds and the upload routes", async () => {
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService(fake.runtime);
+  try {
+    assert.equal(service.supportsAttachments, false);
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0009", { text: "Hi", attachmentIds: [`att_${"A".repeat(43)}`] }),
+      isError("invalid_request", 400),
+    );
+    await assert.rejects(
+      service.uploadAttachment(DEVICE_ID, BOT_ID, { name: "a.txt", mimeType: "text/plain", kind: "text", text: "a" }),
+      isError("not_found", 404),
+    );
+  } finally {
+    await service.close();
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -2,11 +2,13 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "../styles.css";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
+import { installInputModality } from "../lib/input-modality";
 import { PillApp } from "./pill-app";
 
 // The pill window is fully transparent; only the pill surface is painted.
 document.documentElement.classList.add("aiden-pill-window");
 applyCachedAppearance();
+installInputModality();
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
