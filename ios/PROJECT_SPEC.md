@@ -4,7 +4,7 @@ Status: Approved implementation specification; bot-first extension approved Augu
 Protocol: Aiden Remote API v1 (`/api/aiden/v1`)
 Product: Aiden On The Go
 Platforms: iPhone and iPad, iOS/iPadOS 18+
-Authority: `docs/plans/bot-first-aiden-on-the-go-plan.md`, `docs/plans/aiden-on-the-go-plan.md`, and `docs/aiden-remote-api-v1.md`
+Authority: `docs/superpowers/specs/2026-10-07-bots-rework-design.md`, `docs/plans/bot-first-aiden-on-the-go-plan.md` (completed), `docs/plans/aiden-on-the-go-plan.md`, and `docs/aiden-remote-api-v1.md`
 
 ## 1. Product contract
 
@@ -12,7 +12,7 @@ Aiden On The Go is the native mobile control plane for a user-owned Aiden Agent 
 
 The app is not a Hermes WebUI client, a hosted service, a web view, or an agent runtime. Imported Hermex code is an implementation foundation only. New code must use Aiden Remote API v1 DTOs and events; do not add or preserve Hermes endpoints as a compatibility layer.
 
-The active product extension redesigns iPhone and iPad first around two areas, **Bots** and **Workspaces**, selected from the Aiden logo. Mac UX redesign is deferred. The paired Mac remains authoritative for bot identity, conversations, access policy, managed workspace, shell/tool execution, provider and capability catalogs, and the canonical bot photo.
+The shipped product extension redesigns iPhone and iPad first around two areas, **Bots** and **Workspaces**, selected from the Aiden logo. Mac UX redesign is deferred. The paired Mac remains authoritative for bot identity, conversations, access policy, managed workspace, shell/tool execution, provider and capability catalogs, and the canonical bot photo.
 
 Task progress and delegated-agent inspection are separately negotiated, read-only chat projections. The phone may request `tasks:read` and `agents:read` only after the authenticated server advertises the matching feature, then renders bounded snapshots and the standalone chat-scoped progress stream. These projections never grant turn control or expose child prompts, transcripts, private run identifiers, paths, credentials, or raw diagnostics; a public agent turn ID is only a selector for a bounded historical roster read.
 
@@ -29,15 +29,16 @@ The complete planned product includes:
 - Aiden scheduled-task list/create/edit/remove/pause/resume/run-now/preview/history/settings.
 - Cache-only App Intents, app-driven Live Activities, native or paired-Mac local-model dictation, and desktop-configured read-aloud under the authenticated `tts-v1` contract.
 - Offline read-only display of previously fetched data. Mutations are disabled while disconnected.
-- A Bot-first Messages-like inbox with favorites, recent threads, search, bot profiles, and guided create/edit flows, alongside the retained Workspaces experience.
+- A Bot-first inbox (a single Bots list with search), Bot profiles with Advanced settings and a Character card, and Bot creation from presets or scratch, alongside the retained Workspaces experience.
+- Bot message attachments (`bot-attachments-v1`, contract revision 33): images and text files staged with `POST /bots/{botId}/attachments` and sent with `attachmentIds`.
 - Exactly one persistent chat per Bot. Every Bot entry point resumes it and creates it only when absent; legacy duplicate records are recoverable but not a second writable conversation.
 - A Bot's AI provider and model are required, revisioned Bot settings chosen during New Bot and changed only from Edit Bot. The one persistent chat mirrors that Bot-owned choice for execution and is repaired from it after interruption; Bot composers and access-reduction sheets never offer a competing model selector. Workspace chats retain their existing composer model controls.
-- Bot Access with explicit **Full Access** by default after one versioned one-time notice, plus **Custom** reductions for Mac files, shell, configured Connections/MCPs, Skills, and other projected capability groups. A chat may narrow its bot but never exceed it.
+- Bot Access with **Full Access** by default, plus **Custom** reductions for desktop files, shell, configured Connections/MCPs, Skills, and other projected capability groups, edited in the Bot's Advanced settings. There is no per-chat access override.
 - Exactly one hidden, durable, non-Git Aiden-managed home per bot. Shell and ordinary file creation start there; Full Access may inspect other OS-accessible Mac locations when the task needs it.
 - Bot avatars using the existing semantic editor everywhere and the system Image Playground sheet where supported. Only a person-accepted image is sent to the paired Mac and stored as the canonical bot photo.
-- Bot conversations presented through the existing `AidenChatDetailView` and its existing chat feature/view-model path, with bot identity and Access affordances added around that shared implementation.
+- Durable Bot conversations presented through `AidenBotSessionChatView` on hosts advertising `bot-durable-session-v1`; legacy Bot chats and Workspace chats use `AidenChatDetailView`.
 
-Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insights panels, Cloudflare-specific onboarding, uncontracted server TTS, voice-note upload, generic terminal UI, and every control without an Aiden service contract. The bounded paired-Mac transcription endpoint is a remote speech exception: it invokes the existing Mac-local Parakeet model and never stores audio. Mac-projected Bot Access selectors for Skills and Connections are Aiden features, not retained Hermes panels. A bot may use the existing Mac-owned shell tool when its effective policy allows it, but the phone never gains a generic terminal or client-supplied command endpoint. Computer Use remains governed by its existing explicit opt-in and safety rules. Share Extension and cloud push remain deferred.
+Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insights panels, Cloudflare-specific onboarding, uncontracted server TTS, voice-note upload, generic terminal UI, and every control without an Aiden service contract. The bounded paired-Mac transcription endpoint is a remote speech exception: it invokes the desktop's selected local speech model and never stores audio. Mac-projected Bot Access selectors for Skills and Connections are Aiden features, not retained Hermes panels. A bot may use the existing Mac-owned shell tool when its effective policy allows it, but the phone never gains a generic terminal or client-supplied command endpoint. Computer Use remains governed by its existing explicit opt-in and safety rules. Share Extension and cloud push remain deferred.
 
 ## 3. Security invariants
 
@@ -53,7 +54,7 @@ Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insi
 - Workspace turns honor the workspace's saved `full`, `ask`, or `none` permission. Bot turns instead honor a main-owned, revisioned Full/Custom policy: Full is explicit after the current notice, Custom uses exact reductions, and corrupt, missing-after-migration, or future-version policy state fails closed. Neither transport can mint Assistant/unattended modes or silently enable Computer Use.
 - Every bot has exactly one main-owned managed home. The Mac sets it as the shell/tool working directory and ordinary save location, does not initialize `.git`, and injects the operating contract after editable bot instructions so a phone, renderer, or prompt cannot replace it. Full Access may inspect other OS-accessible Mac locations only as needed and remains subject to OS permissions, global disables, approvals, and destructive-action safeguards.
 - Regular chats continue to use their saved Workspace permission. A bot chat uses the Bot Full/Custom resolver as its only user-facing access policy. Its managed workspace has a main-owned internal runtime baseline that remote clients cannot view or edit and that can never add authority beyond the resolved Bot policy.
-- The versioned Full Access notice must be accepted before a Full bot can act, and the Mac stores the acknowledgement by policy version. The notice explains shell, Mac files, currently enabled Connections/Skills, dynamic additions to Full, the private managed home, and the path to Custom. A per-chat policy can only reduce the bot ceiling.
+- Full Access is the default Bot policy (the Bots rework removed the `bot-full-access-v1` notice wall); Custom reductions are stored by the desktop as a revisioned policy and fail closed when corrupt or from a future version.
 - Image Playground may use Apple Intelligence and Private Cloud Compute on supported devices. Aiden uploads only the normalized image the person accepts, through an authenticated bounded asset route, and the Mac independently validates it before making it canonical. Rejected drafts, prompts, temporary URLs, credentials, and local paths are not sent in ordinary Bot DTOs or logs.
 - A dropped TCP/SSE connection does not resend a prompt or cancel server-owned work. The client reconciles by stable turn, stream, operation, and run IDs.
 
@@ -68,7 +69,7 @@ Scheduled Tasks, Usage, appearance, and paired-installation Settings remain shar
 
 Keep the Bots and Workspaces navigation roots alive while switching areas so in-progress navigation, scroll position, selection, and unsent drafts survive the switch. Persist the last selected area and safe navigation identifiers per paired installation; retain message drafts through the shared device-local draft store rather than copying them into a second Bot chat model.
 
-Use one device-local draft store keyed by paired installation and chat ID for both product areas. `AidenChatViewModel` remains the sole owner of composer behavior and synchronizes that shared draft record; there is no Bot-specific draft, composer, or chat view model.
+Use one device-local draft store keyed by paired installation and chat ID for both product areas. `AidenChatViewModel` remains the sole owner of composer behavior and synchronizes that shared draft record.
 
 Draft text stays in the app's protected private container, never the App Group, intent/widget cache, or logs. It is cleared after accepted send and purged with installation removal, revocation, or replacement-device pairing. An ambiguous send is stored separately from the editable draft, with its exact request, attachment references, device scope, idempotency key and first-attempt time. Retry is explicit and permitted only inside the conservative 24-hour replay window; it never substitutes a new key for an unresolved attempt. Removal and revocation purge both records.
 
@@ -76,9 +77,9 @@ Server-supported Remote capabilities and the authenticated device's granted capa
 
 Files and Git are workspace-scoped destinations, not global tabs. iPhone uses native navigation stacks. iPad uses `NavigationSplitView` and must remain useful in split view, rotation, and Stage Manager sizes.
 
-The existing `AidenChatDetailView` is the only iOS conversation implementation. Bot work may adapt it and its existing feature/view-model dependencies, but must never fork or copy the transcript, composer, streaming, attachments, approvals, outcome reconciliation, voice, or offline-history path. Bot-specific identity, title, access summary, and per-chat Access sheet wrap that shared view.
+Workspace chats and legacy (pre-durable-session) Bot chats use `AidenChatDetailView`. On hosts advertising `bot-durable-session-v1`, each Bot's single durable conversation uses `AidenBotSessionChatView` with `AidenBotSessionModel`, which shares the attachment picker, transcript rendering components, and offline-history rules rather than reimplementing them.
 
-The conversation toolbar has a top-right ellipsis. For a workspace-backed chat it opens Workspace Settings and workspace-scoped destinations. Workspace Settings contains name, permission, folder/worktree display state, Files, Git, and management links. For a bot chat it opens Bot defaults and This chat access; workspace pickers, branch/worktree controls, Review, and persistent Terminal chrome stay hidden. A Workspace composer retains message/voice input, attachments, model/thinking controls, send, and stop. A Bot composer uses the same shared implementation but omits model selection entirely; its provider/model are changed only in Edit Bot.
+The conversation toolbar has a top-right ellipsis. For a workspace-backed chat it opens Workspace Settings and workspace-scoped destinations. Workspace Settings contains name, permission, folder/worktree display state, Files, Git, and management links. For a bot chat it opens the Bot's profile (Advanced, Memory, Routines, Character); workspace pickers, branch/worktree controls, Review, and persistent Terminal chrome stay hidden. A Workspace composer retains message/voice input, attachments, model/thinking controls, send, and stop. A Bot composer uses the same shared implementation but omits model selection entirely; its provider/model are changed only in Edit Bot.
 
 Bot managed homes never appear in the Workspace registry. Bot Files reuse the existing native file presentation through bot-chat-scoped Remote routes; the Mac binds every handle to the device, bot, chat, policy epoch, managed-home identity, and snapshot. Ordinary Workspace file routes reject managed Bot homes, so an opaque workspace ID cannot bypass Custom Files or per-chat reductions.
 
@@ -121,12 +122,12 @@ Derived from the owner's Contact Sheet Generator project:
 - App Store SKU: `aiden-on-the-go-ios`
 - Device families: iPhone and iPad
 
-The installed Apple Development identity currently belongs to team `7EK65FX44E`. Do not claim release/signing readiness until a physical-device build provisions the identifiers above under team `5WP229CBB8`.
+Apple Distribution signing and App Store profiles for the app and Live Activity widget are provisioned under team `5WP229CBB8` (see `TESTFLIGHT.md`). Every exported IPA must still be checked for `get-task-allow=false` and the exact identifiers above before upload.
 
 ## 8. Bot avatars and Apple image creation
 
 - The semantic Aiden avatar editor remains the universal creation, offline, unsupported-device, and rollback path.
-- On iOS/iPadOS 18.1 or later, use the system SwiftUI Image Playground sheet only when `supportsImagePlayground` is true. Do not use the deprecated programmatic `ImageCreator` path or promise that generation is universally on-device; Private Cloud Compute is acceptable.
+- On iOS/iPadOS 18.4 or later, use the system SwiftUI Image Playground sheet only when `supportsImagePlayground` is true. Do not use the deprecated programmatic `ImageCreator` path or promise that generation is universally on-device; Private Cloud Compute is acceptable.
 - Prefill only visible bot identity/purpose, keep personalization disabled, support the explicit non-personalized illustration/animation/sketch styles, and provide honest cancel, restriction, model-download, usage-limit, and unavailable states.
 - Preview and normalize locally. Nothing is uploaded until the person chooses **Use this image**. Then send the bounded accepted image to the paired Mac, which validates and stores the canonical bot photo with semantic fallback.
 - The connected iPhone 13 Pro is valid physical-device evidence for the unsupported fallback and absence of dead controls. A supported Apple Intelligence iPhone or iPad is still required to prove successful system-sheet generation and paired-Mac persistence.
@@ -135,7 +136,7 @@ The installed Apple Development identity currently belongs to team `7EK65FX44E`.
 
 - App Intents use current open/navigation protocols and App Group-cached installation/workspace IDs only. The intent process performs no network or Keychain access and never sends a prompt or mutation.
 - Live Activity state is under 4 KB and excludes response text by default, paths, tool arguments, approval details, provider errors, and credentials. With no push relay, it shows honest last-known/stale state while the app is terminated and reconciles only when the authenticated app next runs.
-- Voice input is an editable draft using either native on-device recognition or the user-selected paired-Mac mode. Paired-Mac mode records at most 60 seconds of 16 kHz mono PCM, sends it only over the authenticated pinned-TLS Aiden connection, transcribes with the selected Mac-local Parakeet model, and does not persist the recording. It currently returns final text after stop; native recognizers may provide partial text. Voice-note attachments remain absent. The September 2026 Read Aloud extension uses native audio playback of the paired Mac's bounded `tts-v1` output. The Mac alone enables/configures cloud speech; mobile settings are read-only. Selected response text is sent by the Mac to Google only after explicit Play, and replay reuses session audio.
+- Voice input is an editable draft using either native on-device recognition or the user-selected paired-Mac mode. Paired-Mac mode records at most 60 seconds of 16 kHz mono PCM, sends it only over the authenticated pinned-TLS Aiden connection, transcribes with the speech model selected on the paired desktop (Parakeet v3 by default), and does not persist the recording. It currently returns final text after stop; native recognizers may provide partial text. Voice-note attachments remain absent. The September 2026 Read Aloud extension uses native audio playback of the paired Mac's bounded `tts-v1` output. The Mac alone enables/configures cloud speech; mobile settings are read-only. Selected response text is sent by the Mac to Google only after explicit Play, and replay reuses session audio.
 
 ## 10. Testing gates
 
@@ -143,7 +144,7 @@ Every phase adds or updates tests before review. Before a phase can advance:
 
 1. Its focused TypeScript/XCTest suites pass.
 2. Desktop type-check and applicable full tests pass.
-3. Signed physical-device build/launch passes for iOS behavior changes; simulator use remains excluded by owner direction.
+3. Signed physical-device build/launch passes for iOS behavior changes; simulator builds and XCTest runs are allowed for development and regression checks; hardware-dependent behavior and release acceptance require a signed physical-device build.
 4. Physical-device verification runs when the phase acceptance explicitly requires hardware, LAN, microphone, signing, or ActivityKit behavior.
 5. A different subagent completes a direct source-and-test audit between bot-first phases. Every P0/P1 finding is fixed, affected checks are rerun, and review repeats until clear, as explicitly requested by the owner on August 22, 2026.
 6. Every P0 and P1 finding is fixed and the affected tests are rerun.
@@ -152,7 +153,7 @@ Phase acceptance evidence belongs in `docs/testing/aiden-on-the-go/`. Evidence m
 
 ## 11. Delivery order
 
-The original `docs/plans/aiden-on-the-go-plan.md` phases 0 through 12 remain the shipped mobile foundation and release-evidence record. Implement the active bot-first extension through `docs/plans/bot-first-aiden-on-the-go-plan.md` phases 0 through 9 in order. Do not expose later Bot endpoints during an earlier phase or advance merely because code compiles: satisfy the phase acceptance gate, complete independent review, fix findings, rerun affected checks, and record evidence first.
+The original `docs/plans/aiden-on-the-go-plan.md` phases 0 through 12 remain the shipped mobile foundation and release-evidence record. The bot-first extension (`docs/plans/bot-first-aiden-on-the-go-plan.md` phases 0–9) is complete; the Bots rework (`docs/superpowers/specs/2026-10-07-bots-rework-design.md`, Remote contract revision 25 and later) supersedes its access and conversation model. New Bot work follows that spec and the Remote API's current contract revision.
 
 ## 12. Attribution
 

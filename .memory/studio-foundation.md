@@ -1,6 +1,6 @@
 # Studio Foundation (Track F)
 
-Status (2026-10-07): implemented; PR A (#375) and PR B open. Binding spec: `docs/plans/studio-foundation-adr.md`. Umbrella: `docs/plans/design-studio-create-images-rebuild-plan.md`. Next: DS-1 (Design Studio) and CI-1 (Create Images) fill the placeholder routes.
+Status: merged in PR A (#375) and PR B (#376) on 2026-10-07; shipped in 0.55.0. Binding spec: `docs/plans/studio-foundation-adr.md`. Umbrella: `docs/plans/design-studio-create-images-rebuild-plan.md`. Next: DS-1 (Design Studio) and CI-1 (Create Images) fill the placeholder routes.
 
 ## Flags
 - `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` and `AIDEN_EXPERIMENTAL_CREATE_IMAGES` (values `1` or `true`, default off). Read in `main/services/studio/feature-flags.ts`, exposed to the renderer as the `designStudio` / `createImages` app capabilities.

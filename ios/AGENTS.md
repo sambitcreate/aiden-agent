@@ -7,7 +7,7 @@ Aiden On The Go is the native SwiftUI iPhone/iPad companion for the Aiden Agent 
 Read these before changing mobile behavior or contracts:
 
 1. `../AGENTS.md` for repository-wide requirements.
-2. `../docs/plans/bot-first-aiden-on-the-go-plan.md` for the active bot-first scope, delivery order, and phase gates.
+2. `../docs/superpowers/specs/2026-10-07-bots-rework-design.md` for current Bot scope (it supersedes the completed `../docs/plans/bot-first-aiden-on-the-go-plan.md`, which is now history).
 3. `../docs/plans/aiden-on-the-go-plan.md` for the shipped mobile foundation and its still-open release gates.
 4. `PROJECT_SPEC.md` for the approved mobile product contract.
 5. `../docs/aiden-remote-api-v1.md` and `../protocol/aiden-remote/v1/openapi.json` for protocol behavior and exact wire shapes.
@@ -17,7 +17,7 @@ For bot behavior, the bot-first plan supersedes the older plan only where it say
 
 ## Delivery rules
 
-- Keep the completed phases 0–12 foundation stable. Implement bot-first phases 0–8 in order; do not expose later production endpoints to make an earlier phase easier.
+- Keep the completed phases 0–12 foundation stable. Keep the completed bot-first phases 0–9 stable; new Bot work follows the Bots rework spec and the current Remote contract revision.
 - Add or update focused XCTest and cross-platform contract coverage with every behavioral slice.
 - Before advancing a bot-first phase, satisfy its evidence gate in `../docs/testing/aiden-on-the-go/`, run the applicable full suites, and have a different subagent perform a direct source-and-test review. Fix every P0/P1 finding, rerun affected checks, and repeat review until the phase is clear. The owner explicitly requested phased subagent implementation and review on August 22, 2026.
 - Preserve unrelated user changes and imported MIT attribution.
@@ -30,11 +30,11 @@ For bot behavior, the bot-first plan supersedes the older plan only where it say
 - Decode additive response fields tolerantly, but fail closed when required identity, authentication, capability, ownership, revision, sequence, expiry, or mutation-precondition fields are missing or invalid.
 - Do not send or persist Aiden credentials in URLs, App Group data, App Intents, logs, Live Activities, fixtures, or source control. Device credentials belong in Keychain.
 - LAN production traffic uses hostname/certificate validation plus the QR-pinned P-256 SPKI SHA-256 fingerprint. A matching pin alone never bypasses normal trust evaluation.
-- The client never sends a free-form Mac path. Workspace-browser selections and workspace-file identities use separate opaque, server-issued capabilities.
+- The client never sends a free-form desktop path. Workspace-browser selections and workspace-file identities use separate opaque, server-issued capabilities.
 - TCP/SSE loss never retries a turn creation or abandons server-owned work. Reconcile by stable IDs and sequence.
 - Workspace remote controls cannot mint Assistant/unattended authority, enable Computer Use, add a terminal, or widen a Workspace chat's stored permission/tool contract.
-- Bots use a separate main-owned Full/Custom policy. Full Access is an explicit valid record available only after the current versioned notice; Custom may reduce access per bot and per chat, and a chat can never exceed its bot. OS permissions, global disables, existing approvals, and Computer Use's existing explicit opt-in remain authoritative.
-- Do not expose a generic terminal or client-supplied shell-command endpoint. The Mac-owned bot runtime may use its existing shell tool when the effective Bot policy allows it; commands start in the bot's managed home and are still subject to Aiden's ordinary safety gates.
+- Bots use a separate main-owned Full/Custom policy. Full Access is the default Bot policy (no notice wall since the Bots rework); Custom reduces access per Bot from its Advanced settings. OS permissions, global disables, existing approvals, and Computer Use's existing explicit opt-in remain authoritative.
+- Do not expose a generic terminal or client-supplied shell-command endpoint. The desktop-owned bot runtime may use its existing shell tool when the effective Bot policy allows it; commands start in the bot's managed home and are still subject to Aiden's ordinary safety gates.
 
 ## Product boundaries
 
@@ -43,8 +43,8 @@ For bot behavior, the bot-first plan supersedes the older plan only where it say
 - Workspace permission belongs in Workspace Settings opened from the conversation-toolbar ellipsis, never in the composer.
 - App Intents are App-Group-cache-only navigation. Live Activities are bounded last-known state without cloud push. Dictation may use native on-device recognition or the explicitly selected paired-Mac local model; Read Aloud uses native playback with the desktop-owned `tts-v1` setup; mobile enablement/configuration is deferred.
 - Redesign the iPhone/iPad experience now around the Aiden-logo Workspaces/Bots switcher. Mac UI redesign is deferred; Mac changes in this scope are runtime/persistence integration and canonical bot-photo display in existing surfaces.
-- Reuse the existing `AidenChatDetailView` and its chat feature/view-model path for every Bot conversation. Add bot-specific title, identity, and Access affordances around it; never fork, copy, or build a second transcript, composer, streaming, approval, attachment, or reconciliation implementation.
-- Give every bot exactly one hidden Aiden-managed home. It is not initialized as a Git repository, shell starts there, and ordinary artifacts are saved there. Under Full Access, the bot may inspect other OS-accessible Mac locations when the task needs it. Only the Mac resolves and injects the private path and operating instructions.
+- Durable Bot sessions (`bot-durable-session-v1`) use `AidenBotSessionChatView`/`AidenBotSessionModel`; Workspace and legacy Bot chats use `AidenChatDetailView`. Share components between them (attachment picker, transcript rows, avatar views) instead of adding a third conversation implementation.
+- Give every bot exactly one hidden Aiden-managed home. It is not initialized as a Git repository, shell starts there, and ordinary artifacts are saved there. Under Full Access, the bot may inspect other OS-accessible desktop locations when the task needs it. Only the desktop resolves and injects the private path and operating instructions.
 - Use iPhone navigation stacks and an adaptive iPad `NavigationSplitView`; do not introduce a custom UI system for branding.
 - Use the system Image Playground sheet when supported. Private Cloud Compute is acceptable; after explicit **Use this image**, upload only the accepted normalized image to the paired Mac as the canonical bot photo. Keep the semantic avatar path fully usable on unsupported devices.
 

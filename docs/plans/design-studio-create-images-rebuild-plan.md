@@ -316,7 +316,7 @@ Rules:
 
 **Exit:** with both flags off, behavior matches `main` (sidebar, router and bundle-budget evidence). With them on, two empty canvases render. F-3 passes on desktop and native suites. CI is green at the exact head, and the PR merges.
 
-**Status (2026-10-07): implemented; PRs open.** Track F shipped as two PRs: PR A (F-3 chat visibility predicate, [#375](https://github.com/sambitcreate/aiden-agent/pull/375)) and PR B (F-1, F-2, F-4, F-5, F-6; this PR). Exit criteria met locally: with both flags off the sidebar, router and bundle budget match `main` (entry chunk 21526 B raw / 8249 B gzip before the canvas kit, 21594 B / 8284 B on the branch), and with both flags on two empty canvases render under the chat sidebar. The remaining exit item is CI green on the exact head of each PR before merge; this section moves to "landed" when both merge.
+**Status (2026-10-07): merged in #375 and #376; shipped in 0.55.0.** Track F shipped as two PRs: PR A (F-3 chat visibility predicate, [#375](https://github.com/sambitcreate/aiden-agent/pull/375)) and PR B (F-1, F-2, F-4, F-5, F-6; this PR). Exit criteria met locally: with both flags off the sidebar, router and bundle budget match `main` (entry chunk 21526 B raw / 8249 B gzip before the canvas kit, 21594 B / 8284 B on the branch), and with both flags on two empty canvases render under the chat sidebar. The remaining exit item is CI green on the exact head of each PR before merge; this section moves to "landed" when both merge.
 
 ---
 

@@ -1,6 +1,6 @@
 # Image Generation settings, providers and conversation-mode images
 
-Status: in progress (2026-10-12) on `feature/image-gen-tool-conversation-cb306a`.
+Status: merged in PR #443 (2026-10-13) and shipped in 0.56.0.
 
 ## Goal
 
