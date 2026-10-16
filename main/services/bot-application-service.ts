@@ -78,6 +78,7 @@ type CapabilityStorePort = Pick<
   | "auditBotInventory"
   | "migrateLegacyBotsToFull"
   | "getBotPolicy"
+  | "getBotWebSearchEnabled"
   | "getBotAuthorityStatus"
   | "assertBotAuthorityMatchesIdentity"
   | "deleteBotAuthority"
@@ -1450,6 +1451,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     async getBotAccess(botId: string) {
       await ensureOperational();
       return deps.capabilityStore.getBotPolicy(botId);
+    },
+
+    async botWebSearchEnabled(botId: string) {
+      await ensureOperational();
+      return deps.capabilityStore.getBotWebSearchEnabled(botId);
     },
 
     async capabilityCatalog(audienceId: string, botId?: string) {
