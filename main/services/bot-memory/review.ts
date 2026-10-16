@@ -30,7 +30,7 @@
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Api, AssistantMessage, Message, Model, Models, Tool, ToolCall } from "@earendil-works/pi-ai";
-import type { Conversation, EntryId, EntryRecord } from "@earendil-works/pi-durable";
+import type { Conversation, EntryId, EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
 import {
   BOT_MEMORY_REVIEW_ENTRY_KIND,
   type BotMemoryReviewEntryData,
@@ -331,18 +331,34 @@ function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, Unatt
   return owners;
 }
 
+/** Looks up committed submissions by request id, in order (undefined when none). */
+export type SubmissionLookup = (requestIds: readonly string[]) => Promise<ReadonlyArray<SubmissionRecord | undefined>>;
+
+/** Each routine or self-intro notice's request id, resolved to the input it became and the entry that answered it. */
+async function resolveUnattended(steps: readonly Step[], lookup: SubmissionLookup): Promise<Map<string, UnattendedInput>> {
+  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : [])))];
+  const unattended = new Map<string, UnattendedInput>();
+  if (ids.length === 0) return unattended;
+  const records = await lookup(ids);
+  records.forEach((record, index) => {
+    if (record?.type !== "input" || record.entry === undefined) return;
+    unattended.set(ids[index]!, { entry: record.entry, ...(record.status === "done" ? { answer: record.answer } : {}) });
+  });
+  return unattended;
+}
+
 /**
- * Ownership over a conversation's whole history, oldest first, without
- * resolving notices to their exact submissions: each routine or self-intro
- * notice marks the next input. For read-only callers (`bot_recall`) that have
- * the committed entries but no transaction.
+ * Ownership over a conversation's whole history (`entries`, oldest first),
+ * with every notice resolved through `lookup` to its exact submission, as
+ * `memoryProvenance` does. For read-only callers (`bot_recall`) that hold the
+ * committed history and a transaction rather than a `Conversation`.
  */
-export function provenanceOfHistory(entries: readonly EntryRecord[]): MemoryProvenance {
+export async function provenanceOfHistory(entries: readonly EntryRecord[], lookup: SubmissionLookup): Promise<MemoryProvenance> {
   const steps = entries.flatMap((entry) => {
     const step = stepOf(entry);
     return step === undefined ? [] : [step];
   });
-  return ownership(steps, new Map(), true);
+  return ownership(steps, await resolveUnattended(steps, lookup), true);
 }
 
 /**
@@ -379,18 +395,9 @@ export async function memoryProvenance(
     cursor = page.next;
   } while (cursor !== undefined && !done());
   const steps = newestFirst.reverse();
-  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : [])))];
-  const unattended = new Map<string, UnattendedInput>();
-  if (ids.length > 0) {
-    const records = await conversation.commit(
-      (tx) => Promise.all(ids.map((requestId) => tx.submissionByRequest(conversation.id, requestId))),
-      BACKGROUND_CONTEXT,
-    );
-    records.forEach((record, index) => {
-      if (record?.type !== "input" || record.entry === undefined) return;
-      unattended.set(ids[index]!, { entry: record.entry, ...(record.status === "done" ? { answer: record.answer } : {}) });
-    });
-  }
+  const unattended = await resolveUnattended(steps, (ids) =>
+    conversation.commit((tx) => Promise.all(ids.map((requestId) => tx.submissionByRequest(conversation.id, requestId))), BACKGROUND_CONTEXT),
+  );
   return ownership(steps, unattended, cursor === undefined);
 }
 

@@ -16,7 +16,7 @@
 
 import type { Context, JsonValue } from "@earendil-works/chord";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { EntryRecord, ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { EntryRecord, SubmissionRecord, ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 
 export type DurableTool = ToolRegistration;
 export type ToolReplay = "safe" | "unsafe";
@@ -27,6 +27,8 @@ export interface BotToolCall {
   readonly signal: AbortSignal;
   /** Committed entries of the calling conversation, newest first (the store's default scan order). */
   entries(): Promise<EntryRecord[]>;
+  /** Committed submissions of the calling conversation by request id, in order (undefined when none). */
+  submissions(requestIds: readonly string[]): Promise<Array<SubmissionRecord | undefined>>;
   /** Append a display/bookkeeping entry to the calling conversation. */
   appendEntry(kind: string, data: JsonValue): Promise<void>;
   /**
@@ -59,6 +61,8 @@ function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal): 
         } while (cursor !== undefined);
         return entries;
       }, context),
+    submissions: (requestIds) =>
+      api.commit((tx) => Promise.all(requestIds.map((requestId) => tx.submissionByRequest(api.conversationId, requestId))), context),
     appendEntry: async (kind, data) => {
       await api.commit((tx) => tx.appendEntry(api.conversationId, { kind, data }), context);
     },

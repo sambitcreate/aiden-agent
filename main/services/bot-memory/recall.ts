@@ -15,7 +15,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { BotToolEntry } from "../bot-runtime/bot-extension.js";
-import { provenanceOfHistory, textOf } from "./review.js";
+import { provenanceOfHistory, textOf, type SubmissionLookup } from "./review.js";
 
 export const BOT_RECALL_TOOL_NAME = "bot_recall";
 export const BOT_RECALL_DEFAULT_RESULTS = 5;
@@ -97,12 +97,18 @@ function dateOf(entry: EntryRecord): string | undefined {
 /**
  * The best `limit` matches for `query` among the person's own turns in
  * `entries` (the whole history, oldest first). The newest input and
- * everything after it (the asking turn) are skipped.
+ * everything after it (the asking turn) are skipped. `lookup` resolves
+ * routine notices to the inputs they actually submitted.
  */
-export function searchBotHistory(entries: readonly EntryRecord[], query: string, limit = BOT_RECALL_DEFAULT_RESULTS): BotRecallHit[] {
+export async function searchBotHistory(
+  entries: readonly EntryRecord[],
+  lookup: SubmissionLookup,
+  query: string,
+  limit = BOT_RECALL_DEFAULT_RESULTS,
+): Promise<BotRecallHit[]> {
   const terms = recallTerms(query);
   if (terms.length === 0) return [];
-  const provenance = provenanceOfHistory(entries);
+  const provenance = await provenanceOfHistory(entries, lookup);
   let end = entries.length;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     if (entries[index]!.kind === "pi.user") {
@@ -146,7 +152,10 @@ function resultOf(text: unknown, results: number, isError = false): AgentToolRes
 }
 
 /** The tool for one call, reading the history of the conversation it runs in. */
-export function createBotRecallTool(history: () => Promise<readonly EntryRecord[]>): AgentTool<typeof parameters, BotRecallToolDetails> {
+export function createBotRecallTool(
+  history: () => Promise<readonly EntryRecord[]>,
+  lookup: SubmissionLookup,
+): AgentTool<typeof parameters, BotRecallToolDetails> {
   return {
     name: BOT_RECALL_TOOL_NAME,
     label: "Recall",
@@ -159,7 +168,7 @@ export function createBotRecallTool(history: () => Promise<readonly EntryRecord[
       }
       const entries = await history();
       signal?.throwIfAborted();
-      const results = searchBotHistory(entries, query, limit ?? BOT_RECALL_DEFAULT_RESULTS);
+      const results = await searchBotHistory(entries, lookup, query, limit ?? BOT_RECALL_DEFAULT_RESULTS);
       return resultOf(
         results.length === 0
           ? { ok: true, query, results: [], note: "No earlier messages match. Try other keywords, or say you don't remember." }
@@ -172,10 +181,14 @@ export function createBotRecallTool(history: () => Promise<readonly EntryRecord[
 
 /** The entry `bot-session-main` adds to every Bot's tools. Replay is safe: it only reads. */
 export function botRecallToolEntry(): BotToolEntry {
-  const unbound = createBotRecallTool(async () => []);
+  const unbound = createBotRecallTool(async () => [], async (requestIds) => requestIds.map(() => undefined));
   return {
     tool: unbound as unknown as AgentTool,
     replay: "safe",
-    bind: (call) => createBotRecallTool(async () => (await call.entries()).reverse()) as unknown as AgentTool,
+    bind: (call) =>
+      createBotRecallTool(
+        async () => (await call.entries()).reverse(),
+        (requestIds) => call.submissions(requestIds),
+      ) as unknown as AgentTool,
   };
 }
