@@ -1,9 +1,10 @@
 # Managed worktree process cleanup
 
 2026-10-15, pending PR #500. Started from `origin/main` `11b58367`;
-merged latest `origin/main` `dd2c0d03` into the PR branch without rebasing.
-The merged root `package.json` test chain matches main, and this PR changes no
-Aiden Remote protocol revision or native-client fixture.
+merged latest `origin/main` `b1e6054a` into the PR branch without rebasing.
+That integration includes #498, #503, #506 and #501. The merged root
+`package.json` test chain matches main, and this PR changes no Aiden Remote
+protocol revision or native-client fixture.
 
 Explicit managed-worktree removal now awaits exit of Aiden-owned PTY sessions
 after signalling them. The terminal service retains pending exits across retries;
@@ -46,6 +47,17 @@ The existing iOS and Android clients surface the Remote error message without
 a protocol revision. Focused iOS simulator XCTest (12 tests) and Android JVM
 tests (934 tests) passed on the prior head; the Linux-only inventory follow-up
 did not change either client or the Remote contract.
+
+The `b1e6054a` merge conflicted only on the three native manifest `builtAt`
+fields. Their helper records combined automatically, preserving both this PR's
+worktree remover and #501's file mutator binaries. Local validation on the
+merge commit passed root typecheck, 36 native remover tests, 160 focused
+desktop/Remote tests, 6 prebuilt manifest tests, terminal coverage, 99 CLI
+tests, Android JVM tests, focused iOS simulator XCTest, and the sidebar E2E
+case repaired by #506. The root tool-output chain passed 214 tests with CI's
+Node 22.22.3; local Node 26 has different `fs.glob` symlink results. New
+exact-head CI and review gates remain pending. PR #504 has merge priority, so
+this branch may require one more `main` integration before eligibility.
 
 This is one bounded phase. No automatic retention sweep or new owner metadata is
 enabled. Future eligibility must default old worktrees to manual, keep manual
