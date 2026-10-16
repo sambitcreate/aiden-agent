@@ -1659,6 +1659,29 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    /// Revision 33 (`bot-attachments-v1`): stages one image or text file for
+    /// this device's next message to the Bot. The reference is single-use.
+    func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
+        try validateBotIdentifier(botId)
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "attachments"],
+            body: upload,
+            acceptedStatus: [201]
+        )
+    }
+
+    /// Drops a staged upload the person removed before sending.
+    func removeBotAttachment(botId: String, attachmentId: String) async throws {
+        try validateBotIdentifier(botId)
+        try await sendWithoutResponse(
+            method: "DELETE",
+            path: ["bots", botId, "attachments", attachmentId],
+            headers: [:],
+            acceptedStatus: [204]
+        )
+    }
+
     func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
         try await botSessionAction("resume", botId: botId, idempotencyKey: idempotencyKey)
     }

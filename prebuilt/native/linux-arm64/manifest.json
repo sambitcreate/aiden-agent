@@ -1,6 +1,6 @@
 {
   "target": "linux-arm64",
-  "builtAt": "2026-09-26T10:12:57.490Z",
+  "builtAt": "2026-10-16T03:49:21.713Z",
   "helpers": {
     "worktree-remover": {
       "sha256": "1832482e431808d4fad7d2ce9f27b554caca716ffc44cdc43679976f367142e4",
@@ -15,8 +15,8 @@
       "source": "6679af2569fb7fea609dce1eedf99059481256f0e57c2bd7946aa59194d70575"
     },
     "subagent-file-mutator": {
-      "sha256": "901257685634ec526eca8ec83a1ddd5836feaea4110abc74b6396a0e7c9c2536",
-      "source": "9abc3f74bdaadf60c2e8f4921b3ad8ad12401308184cc84db092e9f072caf6cf"
+      "sha256": "3f877ba4817854a5e520130da35a8a9580800823f32107da0823a75d1c694337",
+      "source": "6df6e44fd44d1611bce415dc7d697fcee0d83302c0349f6c053c3784bdfdcd8c"
     }
   }
 }

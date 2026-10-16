@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hybrid New Chat</title>
+<style>
+:root {
+  color-scheme: light;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-code: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --page: #e9ebef;
+  --surface-background: rgb(246 247 249);
+  --surface-sidebar: rgb(238 240 243);
+  --surface-popover: #ffffff;
+  --surface-context-bar: rgb(232 234 238);
+  --surface-control: rgb(61 63 65 / 0.084);
+  --surface-control-hover: rgb(61 63 65 / 0.129);
+  --surface-input: #ffffff;
+  --surface-list-hover: rgb(61 63 65 / 0.053);
+  --surface-list-selection: rgb(0 106 214 / 0.12);
+  --border-separator: rgb(61 63 65 / 0.087);
+  --accent: #006ad6; --accent-foreground: #fff;
+  --text-primary: #3D3F41; --text-secondary: #545963; --text-tertiary: #6b707a;
+  --toolbar-icon: #77797a;
+  --soft-pos-bg: rgb(22 140 76 / 0.12);  --soft-pos-fg: #18794a;
+  --soft-warn-bg: rgb(201 120 0 / 0.13); --soft-warn-fg: #8a5300;
+  --soft-note-bg: rgb(0 106 214 / 0.10); --soft-note-fg: #0058b0;
+  --soft-pr-bg: rgb(122 72 220 / 0.11);  --soft-pr-fg: #6435c0;
+  --focus-ring: rgb(61 63 65 / 0.45);
+  --elev-pop: 0 10px 30px -8px rgb(0 0 0 / 0.22), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  --elev-composer: 0 2px 8px rgb(0 0 0 / 0.12);
+  --elev-window: 0 24px 60px -20px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(0 0 0 / 0.12);
+  --r-menu: 8px; --r-card: 12px; --r-popover: 12px; --r-composer: 28px; --r-pill: 9999px;
+  --ease: cubic-bezier(.16,1,.3,1);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  color-scheme: dark; --page: #121418;
+  --surface-background: rgb(24 27 33); --surface-sidebar: rgb(32 36 44); --surface-popover: #292e37;
+  --surface-context-bar: rgb(36 40 49); --surface-control: rgb(209 212 218 / 0.094); --surface-control-hover: rgb(209 212 218 / 0.139);
+  --surface-input: rgb(40 44 53); --surface-list-hover: rgb(209 212 218 / 0.059); --surface-list-selection: rgb(62 151 246 / 0.18);
+  --border-separator: rgb(209 212 218 / 0.097); --accent: #3e97f6; --accent-foreground: #000;
+  --text-primary: #D1D4DA; --text-secondary: #A9B1BA; --text-tertiary: #8f97a2; --toolbar-icon: #b9bcc3;
+  --soft-pos-bg: rgb(52 199 120 / 0.16); --soft-pos-fg: #5fd394;
+  --soft-warn-bg: rgb(255 179 64 / 0.15); --soft-warn-fg: #ffc266; --soft-note-bg: rgb(62 151 246 / 0.16); --soft-note-fg: #7ab8ff;
+  --soft-pr-bg: rgb(167 128 255 / 0.17); --soft-pr-fg: #b9a0ff; --focus-ring: rgb(209 212 218 / 0.55);
+  --elev-pop: 0 10px 30px -8px rgb(0 0 0 / 0.6), 0 0 0 0.5px rgb(255 255 255 / 0.08);
+  --elev-window: 0 24px 60px -20px rgb(0 0 0 / 0.7), 0 0 0 0.5px rgb(255 255 255 / 0.08);
+} }
+:root[data-theme="dark"] {
+  color-scheme: dark; --page: #121418;
+  --surface-background: rgb(24 27 33); --surface-sidebar: rgb(32 36 44); --surface-popover: #292e37;
+  --surface-context-bar: rgb(36 40 49); --surface-control: rgb(209 212 218 / 0.094); --surface-control-hover: rgb(209 212 218 / 0.139);
+  --surface-input: rgb(40 44 53); --surface-list-hover: rgb(209 212 218 / 0.059); --surface-list-selection: rgb(62 151 246 / 0.18);
+  --border-separator: rgb(209 212 218 / 0.097); --accent: #3e97f6; --accent-foreground: #000;
+  --text-primary: #D1D4DA; --text-secondary: #A9B1BA; --text-tertiary: #8f97a2; --toolbar-icon: #b9bcc3;
+  --soft-pos-bg: rgb(52 199 120 / 0.16); --soft-pos-fg: #5fd394;
+  --soft-warn-bg: rgb(255 179 64 / 0.15); --soft-warn-fg: #ffc266; --soft-note-bg: rgb(62 151 246 / 0.16); --soft-note-fg: #7ab8ff;
+  --soft-pr-bg: rgb(167 128 255 / 0.17); --soft-pr-fg: #b9a0ff; --focus-ring: rgb(209 212 218 / 0.55);
+  --elev-pop: 0 10px 30px -8px rgb(0 0 0 / 0.6), 0 0 0 0.5px rgb(255 255 255 / 0.08);
+  --elev-window: 0 24px 60px -20px rgb(0 0 0 / 0.7), 0 0 0 0.5px rgb(255 255 255 / 0.08);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--text-primary); font: 14px/1.45 var(--font-ui); -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+svg.i { width: 15px; height: 15px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.page { max-width: 1180px; margin: 0 auto; padding: 32px 16px 80px; }
+h1 { font-size: 24px; font-weight: 650; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 19px; font-weight: 640; margin: 0 0 6px; letter-spacing: -0.01em; }
+h3.sec { font-size: 14px; margin: 0 0 8px; font-weight: 620; }
+.sub { color: var(--text-secondary); margin: 0; max-width: 780px; }
+section.block { margin-top: 44px; }
+.topline { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.pill-btn { border: 0; background: var(--surface-control); border-radius: var(--r-pill); padding: 6px 12px; cursor: pointer; font-size: 13px; }
+.pill-btn:hover { background: var(--surface-control-hover); }
+.pill-btn[aria-pressed="true"] { background: var(--surface-list-selection); color: var(--accent); }
+.principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 20px; }
+.card { background: var(--surface-background); border-radius: var(--r-card); padding: 14px 16px; }
+.card h4 { margin: 0 0 6px; font-size: 13.5px; font-weight: 620; }
+.card p { margin: 0; color: var(--text-secondary); font-size: 13px; }
+.card .num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--soft-note-bg); color: var(--soft-note-fg); font-size: 11px; font-weight: 700; margin-right: 6px; }
+code { font: 12px var(--font-code); background: var(--surface-control); padding: 1px 5px; border-radius: 5px; }
+.kbd { font: 11px var(--font-ui); color: var(--text-secondary); background: var(--surface-control); padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
+.proto { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; margin-top: 16px; align-items: start; }
+@media (max-width: 1120px) { .proto { grid-template-columns: minmax(0, 1fr); } }
+.scroller { overflow-x: auto; border-radius: 14px; padding-bottom: 2px; }
+.win { width: 800px; height: 640px; display: grid; grid-template-columns: 214px 1fr; border-radius: 14px; overflow: hidden; background: var(--surface-background); box-shadow: var(--elev-window); position: relative; }
+.side { background: var(--surface-sidebar); padding: 12px 10px; display: flex; flex-direction: column; gap: 1px; font-size: 13px; overflow: hidden; }
+.lights { display: flex; gap: 7px; padding: 2px 4px 14px; }
+.lights span { width: 11px; height: 11px; border-radius: 50%; background: var(--surface-control-hover); }
+.split { display: flex; align-items: center; border-radius: var(--r-menu); }
+.split:hover { background: var(--surface-list-hover); }
+.s-btn { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--r-menu); border: 0; background: transparent; cursor: pointer; text-align: left; width: 100%; }
+.split .more { width: 26px; height: 26px; border: 0; background: transparent; border-radius: 6px; display: grid; place-items: center; cursor: pointer; color: var(--text-tertiary); opacity: 0; transition: opacity .2s var(--ease); }
+.split:hover .more, .split .more:focus-visible { opacity: 1; }
+.split .more:hover { background: var(--surface-control); }
+.s-label { font-size: 11px; color: var(--text-tertiary); padding: 12px 8px 4px; font-weight: 560; }
+.ws-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--r-menu); position: relative; }
+.ws-row:hover { background: var(--surface-list-hover); }
+.ws-row .add { margin-left: auto; width: 20px; height: 20px; border: 0; background: transparent; border-radius: 5px; display: grid; place-items: center; cursor: pointer; color: var(--text-tertiary); opacity: 0; }
+.ws-row:hover .add, .ws-row .add:focus-visible { opacity: 1; }
+.ws-row .add:hover { background: var(--surface-control); }
+.s-chat { padding: 4px 8px 4px 31px; color: var(--text-secondary); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: var(--r-menu); }
+.s-chat.sel { background: var(--surface-list-selection); color: var(--text-primary); }
+.s-chat.draft { font-style: italic; }
+.s-chat.wt { padding-left: 50px; }
+.s-sub { padding: 4px 8px 4px 31px; color: var(--text-secondary); font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
+.main { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.crumb { height: 40px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 18px; font-size: 12.5px; color: var(--text-secondary); border-bottom: 1px solid var(--border-separator); }
+.crumb.hidden { visibility: hidden; border-color: transparent; }
+.crumb b { color: var(--text-primary); font-weight: 560; }
+.body { flex: 1; overflow: hidden; display: flex; flex-direction: column; align-items: center; padding: 0 28px; }
+.hero { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 84px; }
+.hero .bot { width: 38px; height: 38px; border-radius: 12px; background: var(--surface-control); display: grid; place-items: center; color: var(--toolbar-icon); }
+.hero h3 { font-size: 21px; font-weight: 500; margin: 0; letter-spacing: -0.01em; text-align: center; }
+.hero .wsname { border: 0; background: none; padding: 0 3px; font: inherit; cursor: pointer; color: var(--text-primary); border-radius: 6px; box-shadow: inset 0 -1.5px 0 var(--text-tertiary); }
+.hero .wsname:hover { background: var(--surface-list-hover); }
+.hero .hint { font-size: 12.5px; color: var(--text-tertiary); }
+.transcript { width: 100%; max-width: 520px; padding-top: 22px; display: flex; flex-direction: column; gap: 12px; }
+.bubble { align-self: flex-end; background: var(--surface-control); border-radius: 18px; padding: 8px 14px; max-width: 80%; }
+.activity { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-secondary); padding: 8px 12px; border-radius: var(--r-card); background: var(--surface-list-hover); }
+.activity .row { display: flex; align-items: center; gap: 8px; }
+.activity .ok { color: var(--soft-pos-fg); }
+.spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--surface-control-hover); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.sk { height: 8px; border-radius: 4px; background: var(--surface-control); }
+.sk-group { display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+.dock { width: 100%; max-width: 540px; margin: 0 auto 20px; position: relative; }
+.ctx { display: flex; align-items: center; gap: 2px; background: var(--surface-context-bar); border-radius: 16px 16px 0 0; padding: 5px 8px 14px; margin: 0 14px -10px; min-height: 42px; }
+.ctx.summary { padding: 3px 8px 12px; min-height: 34px; }
+.ctx .grow, .mini-ctx .grow, .c-row .grow { flex: 1; }
+.composer { background: var(--surface-input); border-radius: var(--r-composer); box-shadow: var(--elev-composer); padding: 10px 12px 10px 18px; position: relative; }
+.composer textarea { width: 100%; border: 0; outline: none; resize: none; background: transparent; color: var(--text-primary); font: inherit; height: 40px; padding: 4px 0; }
+.composer textarea::placeholder { color: var(--text-tertiary); }
+.c-row { display: flex; align-items: center; gap: 6px; }
+.send { width: 30px; height: 30px; border-radius: 50%; background: var(--text-primary); color: var(--surface-background); display: grid; place-items: center; border: 0; cursor: pointer; }
+.send:disabled { opacity: .4; cursor: default; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 5px 9px; border-radius: var(--r-pill); font-size: 12.5px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; max-width: 240px; transition: background .2s var(--ease), color .2s var(--ease); }
+.chip span.t { overflow: hidden; text-overflow: ellipsis; }
+.chip:hover, .chip[aria-expanded="true"] { background: var(--surface-control); color: var(--text-primary); }
+.chip.strong { color: var(--text-primary); }
+.chip.static { cursor: default; } .chip.static:hover { background: transparent; color: var(--text-secondary); }
+.chip .chev { width: 11px; height: 11px; opacity: .6; }
+.chip.wt, .chip.wt:hover, .chip.wt[aria-expanded="true"] { background: var(--soft-note-bg); color: var(--soft-note-fg); }
+.chip.pr, .chip.pr:hover { background: var(--soft-pr-bg); color: var(--soft-pr-fg); }
+.chip.pr.merged { background: var(--surface-control); color: var(--text-secondary); }
+.chip.sm { font-size: 12px; padding: 3px 8px; }
+.badge { font-size: 10.5px; font-weight: 650; padding: 0 6px; border-radius: var(--r-pill); background: var(--soft-warn-bg); color: var(--soft-warn-fg); }
+.dotlive { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.enter { animation: enter .26s var(--ease); }
+@keyframes enter { from { opacity: 0; transform: translateY(4px) scale(.96); } to { opacity: 1; transform: none; } }
+.sep { width: 1px; height: 14px; background: var(--border-separator); margin: 0 4px; flex: none; }
+.pop { position: absolute; z-index: 20; background: var(--surface-popover); border-radius: var(--r-popover); box-shadow: var(--elev-pop); padding: 6px; font-size: 13px; width: 300px; animation: pop .2s var(--ease); transform-origin: bottom left; }
+@keyframes pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+.pop .search { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; color: var(--text-tertiary); border-bottom: 1px solid var(--border-separator); margin-bottom: 4px; }
+.pop .search input { border: 0; outline: none; background: transparent; flex: 1; color: var(--text-primary); }
+.pop .lbl, .palette .lbl { font-size: 11px; color: var(--text-tertiary); padding: 6px 8px 3px; font-weight: 560; }
+.pop .it { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: var(--r-menu); color: var(--text-primary); white-space: nowrap; border: 0; background: transparent; width: 100%; text-align: left; cursor: pointer; }
+.pop .it:hover:not(:disabled) { background: var(--surface-list-hover); }
+.pop .it.sel { background: var(--surface-list-selection); }
+.pop .it:disabled { color: var(--text-tertiary); cursor: default; }
+.pop .it .meta { margin-left: auto; color: var(--text-tertiary); font-size: 11.5px; padding-left: 10px; }
+.pop .it .pth { color: var(--text-tertiary); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+.pop .it .check { margin-left: auto; color: var(--accent); display: flex; }
+.pop hr { border: 0; height: 1px; background: var(--border-separator); margin: 4px 2px; }
+.pop .note { font-size: 12px; color: var(--text-secondary); padding: 6px 8px; white-space: normal; }
+.pop .note.warn { background: var(--soft-warn-bg); color: var(--soft-warn-fg); border-radius: var(--r-menu); margin: 2px 2px 4px; }
+.pop .field { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; }
+.pop .field label { font-size: 11.5px; color: var(--text-tertiary); }
+.pop .field input { border: 0; background: var(--surface-list-hover); border-radius: 8px; padding: 7px 9px; outline: none; }
+.pop .row-end { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 8px 4px; align-items: center; }
+.btn { border: 0; border-radius: 10px; padding: 6px 12px; cursor: pointer; font-size: 12.5px; background: var(--surface-control); }
+.btn:hover { background: var(--surface-control-hover); }
+.btn.accent { background: var(--accent); color: var(--accent-foreground); }
+.radio { width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--text-tertiary); flex: none; position: relative; }
+.radio.on { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.radio.on::after { content: ""; position: absolute; inset: 3.5px; border-radius: 50%; background: var(--accent); }
+.toggle { margin-left: auto; width: 28px; height: 16px; border-radius: 9px; background: var(--surface-control-hover); position: relative; flex: none; }
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .3); transition: left .2s var(--ease); }
+.toggle.on { background: var(--accent); } .toggle.on::after { left: 14px; }
+.scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .18); z-index: 30; }
+.palette { position: absolute; z-index: 31; left: 50%; top: 70px; width: 460px; transform: translateX(-50%); background: var(--surface-popover); border-radius: 14px; box-shadow: var(--elev-pop); padding: 6px; font-size: 13px; }
+.palette .q { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; border-bottom: 1px solid var(--border-separator); margin-bottom: 4px; }
+.palette .q input { border: 0; outline: none; background: transparent; flex: 1; font-size: 14px; color: var(--text-primary); }
+.palette .crumbtag { background: var(--surface-control); border-radius: 6px; padding: 1px 7px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.palette .foot { display: flex; gap: 14px; padding: 8px 10px 4px; color: var(--text-tertiary); font-size: 11.5px; border-top: 1px solid var(--border-separator); margin-top: 4px; }
+.palette .it { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--r-menu); border: 0; background: transparent; width: 100%; text-align: left; cursor: pointer; white-space: nowrap; }
+.palette .it:hover, .palette .it.sel { background: var(--surface-list-selection); }
+.palette .it .meta { margin-left: auto; color: var(--text-tertiary); font-size: 11.5px; }
+.palette .it .pth { color: var(--text-tertiary); font-size: 11.5px; }
+.panel-col { display: flex; flex-direction: column; gap: 12px; }
+.ctrls { display: flex; flex-wrap: wrap; gap: 6px; }
+.log { display: flex; flex-direction: column; gap: 8px; max-height: 440px; overflow-y: auto; }
+.log .e { font-size: 12.5px; padding: 8px 10px; border-radius: 10px; background: var(--surface-list-hover); animation: enter .26s var(--ease); }
+.log .e .tag { display: inline-block; font-size: 10.5px; font-weight: 650; padding: 0 6px; border-radius: var(--r-pill); margin-right: 6px; }
+.tag.disk { background: var(--soft-warn-bg); color: var(--soft-warn-fg); }
+.tag.none { background: var(--soft-pos-bg); color: var(--soft-pos-fg); }
+.tag.ui { background: var(--soft-note-bg); color: var(--soft-note-fg); }
+.tag.net { background: var(--soft-pr-bg); color: var(--soft-pr-fg); }
+.ladder { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.rung { display: grid; grid-template-columns: 210px minmax(0, 1fr) 280px; gap: 16px; align-items: center; background: var(--surface-background); border-radius: var(--r-card); padding: 12px 16px; }
+@media (max-width: 960px) { .rung { grid-template-columns: minmax(0, 1fr); } }
+.rung .st { font-size: 13px; font-weight: 600; }
+.rung .st small { display: block; font-weight: 400; color: var(--text-tertiary); font-size: 12px; }
+.rung .why { font-size: 12.5px; color: var(--text-secondary); }
+.mini-ctx { display: flex; align-items: center; gap: 2px; background: var(--surface-context-bar); border-radius: 14px; padding: 4px 8px; min-width: 0; overflow: hidden; }
+.mini-ctx.summary { padding: 2px 8px; }
+.flows { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 12px; margin-top: 14px; }
+.flow ol { margin: 8px 0 0; padding: 0; list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 8px; }
+.flow li { counter-increment: s; display: flex; gap: 10px; font-size: 13px; }
+.flow li::before { content: counter(s); flex: none; width: 19px; height: 19px; border-radius: 50%; background: var(--surface-control); color: var(--text-secondary); font-size: 11px; font-weight: 650; display: grid; place-items: center; margin-top: 1px; }
+.flow .cost { font-size: 11.5px; color: var(--text-tertiary); margin-top: 10px; }
+.tbl-wrap { overflow-x: auto; background: var(--surface-background); border-radius: var(--r-card); margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 13px; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border-separator); vertical-align: top; }
+th { font-size: 12px; color: var(--text-tertiary); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+td.k { font-weight: 560; white-space: nowrap; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-top: 12px; }
+ul.plain { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 5px; }
+ul.plain b { color: var(--text-primary); font-weight: 560; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="folder-plus" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="right" viewBox="0 0 24 24"><path d="m10 7 5 5-5 5"/></symbol>
+  <symbol id="left" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5"/></symbol>
+  <symbol id="laptop" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></symbol>
+  <symbol id="branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/></symbol>
+  <symbol id="tree" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a2 2 0 0 0-2-2h-4M14 5l-2 2 2 2"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <symbol id="clone" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></symbol>
+  <symbol id="bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01"/></symbol>
+  <symbol id="up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.8 7L4 20l1-4.6A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+  <symbol id="globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+</defs></svg>
+
+<div class="page">
+  <div class="topline">
+    <div>
+      <h1>Hybrid new chat: interaction spec</h1>
+      <p class="sub">⌘N still opens a draft instantly in the last workspace. The composer's top bar then shows only what applies to that folder: git controls appear only for git repos, and pull requests only once a branch has commits on a GitHub repo. After the first send it shrinks to the branch and PR, and for a plain folder it disappears.</p>
+    </div>
+    <button class="pill-btn" id="themeBtn" type="button">Toggle theme</button>
+  </div>
+
+  <div class="principles">
+    <div class="card"><h4><span class="num">1</span>Instant by default</h4><p>⌘N never asks. It opens a draft with the composer focused, in the workspace you're looking at.</p></div>
+    <div class="card"><h4><span class="num">2</span>Each chip shows only when it applies</h4><p>No branch chip for plain folders, no machine chip without paired Macs, and no PR chip until there's something to open as a PR.</p></div>
+    <div class="card"><h4><span class="num">3</span>Nothing on disk until you send</h4><p>Switching workspace or choosing a new worktree only edits the draft. Only Open folder, Clone and a Local branch checkout write to disk straight away, and each is a deliberate action.</p></div>
+    <div class="card"><h4><span class="num">4</span>Summary, not gone</h4><p>After the first send the bar shrinks to the branch and any PR. The workspace is already in the window header. Today the whole bar disappears, PR chip included.</p></div>
+  </div>
+
+  <section class="block">
+    <h2>Try it</h2>
+    <p class="sub">Pick a workspace from the chip or the headline (try <b>Notes</b>, a plain folder), switch to a new worktree from the branch chip, type a message and press ↵. Then use <b>Agent commits</b> to see the PR chip appear. Each action is listed on the right with what it changed.</p>
+    <div class="proto">
+      <div class="scroller"><div class="win" id="win"></div></div>
+      <div class="panel-col">
+        <div class="card">
+          <h3 class="sec">Simulate</h3>
+          <div class="ctrls">
+            <button class="pill-btn" data-act="reset">New draft (⌘N)</button>
+            <button class="pill-btn" data-act="palette">New chat in… (⌘⇧N)</button>
+            <button class="pill-btn" data-act="commit">Agent commits</button>
+            <button class="pill-btn" data-act="openpr">PR opened / merged</button>
+            <button class="pill-btn" data-act="paired" id="pairedBtn" aria-pressed="false">Paired Mac online</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="sec">What just happened</h3>
+          <div class="log" id="log"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>How the top bar grows</h2>
+    <p class="sub">The same bar at each stage. Each chip arrives with a short fade and rise of a few pixels, and disappears the same way. With Reduce Motion it just appears.</p>
+    <div class="ladder" id="ladder"></div>
+  </section>
+
+  <section class="block">
+    <h2>Chip rules</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Chip</th><th>Shown when</th><th>Hidden when</th><th>Click does</th><th>Today</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Workspace</td><td>Always on a draft</td><td>After send. The window header's workspace chip already shows it.</td><td>Workspace menu (also opened by clicking the name in the headline)</td><td>Same chip, but no recents, Open folder or Clone</td></tr>
+        <tr><td class="k">Machine</td><td>At least one paired Mac is online, or the draft targets a paired Mac</td><td>No paired Macs</td><td>This Mac / paired Macs. Switching reloads the workspace list from that Mac.</td><td>A static "Local" label is always shown</td></tr>
+        <tr><td class="k">Branch</td><td>The folder is a git repo</td><td>Plain folder, scratch chat, or folder missing</td><td>Branch menu: <i>Work in</i> (this checkout / new worktree / existing worktrees) + branches</td><td>Shown for git repos. Worktree is created on pick and needs a typed name.</td></tr>
+        <tr><td class="k">Changes badge</td><td>Uncommitted changes in this checkout</td><td>Clean, or New worktree is selected (a new worktree starts clean)</td><td>Same menu, with the dirty-tree note</td><td>Shown inside the menu only</td></tr>
+        <tr><td class="k">Pull request</td><td>The git repo has a GitHub remote <b>and</b> any one of: the branch has commits ahead of base, a PR is linked, or a PR creation is pending</td><td>Plain folder, a repo with no GitHub remote, or nothing to open yet (always the case on a draft)</td><td>Create PR / PR details</td><td><b>Always shown, even on a draft or a plain folder. Then hidden with the bar after the first send.</b></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="block">
+    <h2>Inside the menus</h2>
+    <div class="two">
+      <div class="card">
+        <h4>Workspace menu</h4>
+        <ul class="plain">
+          <li>Opens with the <b>search field focused</b>. Lists up to 5 <b>recent</b> workspaces, ordered by latest chat activity, with relative times.</li>
+          <li><b>All workspaces (n)</b> appears only when there are more than 5. When you type, the menu shows matches from all workspaces in one list.</li>
+          <li>Worktree workspaces are <b>left out</b> of this list. They appear in the branch menu under their repo, so the list stays short.</li>
+          <li>If what you type starts with <code>/</code>, <code>~</code> or <code>.</code>, a path row appears: <b>Open ~/x</b> if the folder exists, <b>Create folder and open</b> if only its parent exists, otherwise an inline error.</li>
+          <li>The actions are always at the bottom: <b>Open folder…</b> <span class="kbd">⌘⇧O</span> and <b>Clone repository…</b>, which turns the menu into a URL field with an editable destination. Clone runs only when you press Clone, shows progress in the menu, and selects the result.</li>
+          <li><b>Scratch chat</b> is the last row (today's <code>~/aiden</code> behaviour, renamed).</li>
+          <li>Choosing a workspace keeps your typed text, attachments and model, and puts focus back in the composer. The branch chip resets to that workspace's remembered mode.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Branch menu (git repos only)</h4>
+        <ul class="plain">
+          <li>The <b>Work in</b> group comes first, as radio rows: <b>This checkout</b> (current branch + changes), <b>New worktree</b>, and one row per <b>existing worktree</b> (shown only if there are any).</li>
+          <li><b>This checkout</b> lists branches. Picking one checks it out <i>now</i>, as today. With uncommitted changes, other branches are disabled, with a note and a <b>Use a new worktree instead</b> button.</li>
+          <li><b>New worktree</b> replaces the list with <b>Start from</b> (base branch radio). It adds <b>Start from origin</b> only if the repo has a remote, and shows <b>Branch name: Auto</b>, which you can edit. Nothing is created until you send.</li>
+          <li>The auto name is <code>aiden/&lt;slug of the first message&gt;</code>, with a number added if the name is taken. You no longer have to type a branch name before starting.</li>
+          <li><b>An existing worktree</b> moves the draft to that worktree's workspace.</li>
+          <li>The mode is remembered <b>per workspace</b> and defaults to This checkout.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Flows</h2>
+    <div class="flows">
+      <div class="card flow"><h4>Quick start (most chats)</h4><ol>
+        <li><span class="kbd">⌘N</span> opens a draft in the workspace you're viewing. The composer is focused.</li>
+        <li>The headline reads "What should we build in <u>aiden-agent</u>?", so you can see where the chat will run.</li>
+        <li>Type and press <span class="kbd">↵</span>. The bar shrinks to a summary.</li>
+      </ol><div class="cost">Extra clicks compared with today: 0</div></div>
+      <div class="card flow"><h4>Wrong workspace</h4><ol>
+        <li>Click the workspace name in the headline or the chip. The search field is focused.</li>
+        <li>Type "lum" and press <span class="kbd">↵</span>.</li>
+        <li>The draft moves to the new workspace and keeps your text. The draft row moves in the sidebar too.</li>
+      </ol><div class="cost">Nothing is written to disk. Esc closes the menu and returns to the composer.</div></div>
+      <div class="card flow"><h4>Start in a new worktree</h4><ol>
+        <li>Open the branch chip and choose <b>New worktree</b>. The chip turns blue and reads "New worktree · from main".</li>
+        <li>Optionally choose another base branch or edit the name.</li>
+        <li>Send. Your message appears straight away, with a progress row (<i>Fetching origin → Creating aiden/fix-login → Ready</i>), then the agent starts.</li>
+        <li>If it fails, the progress row offers <b>Retry</b> and <b>Run in this checkout instead</b>. Until it succeeds the chat stays a draft.</li>
+      </ol><div class="cost">Replaces today's flow, which creates the worktree immediately and needs a typed branch name.</div></div>
+      <div class="card flow"><h4>Use a folder that isn't a workspace yet</h4><ol>
+        <li>Workspace menu → <b>Open folder…</b> <span class="kbd">⌘⇧O</span>, or paste <code>~/projects/website</code> into search.</li>
+        <li>The folder is added as a workspace and the draft moves to it.</li>
+        <li>The branch chip appears only if the folder is a git repo.</li>
+      </ol><div class="cost">Or <b>Clone repository…</b>: paste the URL, check the destination, press Clone, and it's selected when done.</div></div>
+      <div class="card flow"><h4>Choose first</h4><ol>
+        <li><span class="kbd">⌘⇧N</span>, or the chevron beside New Agent in the sidebar, opens the <b>New chat in…</b> palette.</li>
+        <li>Recent workspaces are listed first. Typing a path works as in the menu.</li>
+        <li><span class="kbd">↵</span> starts a draft there. <span class="kbd">⌥↵</span> starts a draft there with New worktree already selected.</li>
+      </ol><div class="cost">Also: the hover <b>+</b> on any sidebar workspace row starts a draft there.</div></div>
+      <div class="card flow"><h4>After the chat starts</h4><ol>
+        <li>The bar shrinks to the branch (<i>aiden/fix-login</i>). The workspace is fixed and shown in the window header. For a plain folder the bar disappears.</li>
+        <li>Once the agent commits on a GitHub repo, a purple <b>Create PR</b> chip appears in the summary.</li>
+        <li>After the PR exists the chip reads <b>#482 · Open</b>, then <b>Merged</b>.</li>
+      </ol><div class="cost">The setting that hides the bar today (<code>autoHideComposerContext</code>) would choose between the summary and fully hidden.</div></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>When things actually happen</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Action</th><th>Immediately</th><th>On first send</th></tr></thead>
+      <tbody>
+        <tr><td class="k">⌘N / New Agent / row +</td><td>Draft in memory, plus a sidebar row in italics</td><td>Chat saved to that workspace</td></tr>
+        <tr><td class="k">Switch workspace</td><td>Draft moved to the new workspace</td><td>—</td></tr>
+        <tr><td class="k">Choose New worktree / base / name</td><td>Draft settings only</td><td>Fetch (if Start from origin) → create worktree → register it as a workspace → save the chat there</td></tr>
+        <tr><td class="k">Choose existing worktree</td><td>Draft moved to that worktree</td><td>—</td></tr>
+        <tr><td class="k">Checkout branch (This checkout)</td><td><b>git checkout</b>, blocked if there are uncommitted changes (as today)</td><td>—</td></tr>
+        <tr><td class="k">Open folder / path</td><td><b>Workspace registered</b>. Creating a missing folder needs you to choose Create.</td><td>—</td></tr>
+        <tr><td class="k">Clone repository</td><td><b>git clone</b> over the network with your git credentials, only after you press Clone</td><td>—</td></tr>
+        <tr><td class="k">Leave an empty draft</td><td>Draft discarded. ⌘N later reuses an empty draft in the same workspace.</td><td>—</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="block">
+    <h2>Edge cases, keyboard, accessibility</h2>
+    <div class="two">
+      <div class="card"><h4>Edge cases</h4><ul class="plain">
+        <li><b>Folder missing:</b> the workspace chip shows a warning badge. Sending is blocked, with "Locate…" or "Remove".</li>
+        <li><b>Repo with no commits:</b> the branch chip reads "No commits yet" and New worktree is disabled.</li>
+        <li><b>Detached HEAD:</b> the branch chip shows the short SHA. New worktree still works from any base.</li>
+        <li><b>The folder becomes a repo while the draft is open</b> (for example, the agent runs <code>git init</code> in another chat): the branch chip appears on the next focus or refresh.</li>
+        <li><b>Paired Mac goes offline mid-draft:</b> the machine chip shows Offline and sending is blocked. Switching to This Mac keeps the text.</li>
+        <li><b>@-mentions of files</b> that don't exist in the new workspace get a soft warning chip after a switch.</li>
+      </ul></div>
+      <div class="card"><h4>Keyboard and accessibility</h4><ul class="plain">
+        <li><span class="kbd">⌘N</span> new draft · <span class="kbd">⌘⇧N</span> New chat in… · <span class="kbd">⌘⇧O</span> open folder (⌘O is already Open in editor).</li>
+        <li>In menus: <span class="kbd">↑↓</span> to move, <span class="kbd">↵</span> to choose, <span class="kbd">Esc</span> to close and go back to the composer. Focus is never lost.</li>
+        <li>Chips are buttons with <code>aria-haspopup</code> and labels like "Workspace: aiden-agent". Work in uses <code>role=radiogroup</code>.</li>
+        <li>New chips are announced politely ("Pull request available"), with no moving focus.</li>
+        <li>Neutral <code>focus-visible</code> rings on chips. The search field gets no accent ring, per the text-input rule.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Where it lands in code</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Area</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td class="k">renderer/components/composer.tsx</td><td>Context bar decides which chips to show. Hide the "Local" label when there are no paired Macs. Render the PR chip only when its condition holds. Add a summary variant after send.</td></tr>
+        <tr><td class="k">composer-context-bar.tsx</td><td>Replace the full collapse with a summary state. <code>autoHideComposerContext</code> chooses between summary and hidden.</td></tr>
+        <tr><td class="k">workspace-picker.tsx</td><td>Recents, path rows, Open folder, Clone sub-view, Scratch renamed. Leave worktree workspaces out of the list.</td></tr>
+        <tr><td class="k">git-branch-picker.tsx</td><td>Work in radio group, New worktree draft settings (base branch, from origin, auto name), dirty-tree escape hatch.</td></tr>
+        <tr><td class="k">chat-pull-requests.tsx</td><td><code>ChatPullRequestsChip</code> is shown only when the repo has a GitHub remote and the branch is ahead of base, a PR is linked, or one is pending.</td></tr>
+        <tr><td class="k">renderer/lib/chat-draft.ts</td><td>Draft carries <code>gitMode</code>, <code>baseRef</code>, <code>fromOrigin</code> and <code>branchName?</code>, plus a per-workspace mode memory.</td></tr>
+        <tr><td class="k">main/services/chat-first-message-commit.ts</td><td>Create the worktree before saving the chat when <code>gitMode = worktree</code>. Return a recoverable error on failure.</td></tr>
+        <tr><td class="k">main/handlers/workspaces.ts</td><td><code>git:createWorktree</code> accepts a base ref, from-origin and an auto name. New <code>workspaces:clone</code>.</td></tr>
+        <tr><td class="k">keybindings.ts · command-palette.tsx · chat-sidebar.tsx</td><td><code>chat.newIn</code> (⌘⇧N) palette mode, a New Agent split button, a hover + on workspace rows, an italic draft row.</td></tr>
+        <tr><td class="k">Remote protocol, iOS and Android</td><td>Creating the worktree on send changes the new-chat contract (<code>aiden-remote-git</code>). Needs a protocol revision and updates to both native clients' new-chat flows.</td></tr>
+        <tr><td class="k">Onboarding</td><td>The workspace step mentions Open folder and Clone. Check the feature-tour tile for worktrees.</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="block">
+    <h2>Open questions</h2>
+    <ul class="plain">
+      <li>Should ⌘N use the workspace you're <i>viewing</i> (proposed) or the last one you <i>sent from</i>?</li>
+      <li>Should a branch checkout in This checkout also wait until send, to be consistent? (Proposed: no. It stays immediate because it's a deliberate git action.)</li>
+      <li>Should the PR chip show for GitLab or other forges, or only for GitHub as today?</li>
+      <li>Should the summary strip show <b>changes</b> (+12 −3) next to the branch once the agent edits files?</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+(function () {
+  const $ = (s, r = document) => r.querySelector(s);
+  const icon = (id, extra = '') => `<svg class="i ${extra}"><use href="#${id}"/></svg>`;
+  const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const W = {
+    aiden: { name: 'aiden-agent', path: '~/projects/aiden-agent', git: true, gh: true, dirty: 3, cur: 'main', branches: ['main', 'feat/sync', 'fix/login'], worktrees: [{ branch: 'feat/sync', when: '2h' }], when: 'now' },
+    lumin: { name: 'luminAI', path: '~/projects/luminAI', git: true, gh: false, dirty: 0, cur: 'dev', branches: ['main', 'dev'], worktrees: [], when: '2h' },
+    notes: { name: 'Notes', path: '~/Documents/Notes', git: false, when: '3d' },
+    sheet: { name: 'Contact-Sheet', path: '~/projects/Contact-Sheet', git: true, gh: true, dirty: 0, cur: 'main', branches: ['main'], worktrees: [], when: '5d' },
+    scratch: { name: 'Scratch chat', path: '~/aiden', git: false, when: '' },
+  };
+  let order = ['aiden', 'lumin', 'notes', 'sheet'];
+  const modeMemory = {};
+  const fresh = (ws) => ({
+    ws, mode: (W[ws] && W[ws].git && modeMemory[ws]) || 'local', existing: null, base: null, origin: true, name: '', editName: false,
+    stage: 'draft', text: '', sentText: '', branchOut: '', ahead: false, pr: null,
+    menu: null, q: '', view: 'list', cloneUrl: '', cloning: false, palQ: '', machine: 'This Mac',
+  });
+  let S = fresh('aiden');
+  let paired = false;
+  const history = [];
+
+  function log(tag, msg) {
+    const label = { disk: 'writes to disk', none: 'nothing on disk', ui: 'UI only', net: 'network' }[tag];
+    const el = document.createElement('div');
+    el.className = 'e';
+    el.innerHTML = `<span class="tag ${tag}">${label}</span>${msg}`;
+    $('#log').prepend(el);
+  }
+  const ws = () => W[S.ws];
+  const slug = (t) => 'aiden/' + (t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').slice(0, 4).join('-') || 'new-chat');
+  const baseOf = () => S.base || (ws().branches ? ws().branches[0] : 'main');
+
+  function branchChip() {
+    const w = ws();
+    if (!w.git) return '';
+    const exp = `aria-haspopup="menu" aria-expanded="${S.menu === 'branch'}"`;
+    if (S.mode === 'worktree') return `<button class="chip wt enter" data-menu="branch" ${exp} aria-label="Branch: new worktree from ${esc(baseOf())}">${icon('tree')}<span class="t">New worktree · from ${esc(baseOf())}</span>${icon('chev', 'chev')}</button>`;
+    if (S.mode === 'existing') return `<button class="chip strong enter" data-menu="branch" ${exp}>${icon('tree')}<span class="t">${esc(S.existing)}</span>${icon('chev', 'chev')}</button>`;
+    const dirty = w.dirty ? `<span class="badge" title="${w.dirty} uncommitted changes">${w.dirty}</span>` : '';
+    return `<button class="chip enter" data-menu="branch" ${exp} aria-label="Branch: ${esc(w.cur)}">${icon('branch')}<span class="t">${esc(w.cur)}</span>${dirty}${icon('chev', 'chev')}</button>`;
+  }
+  function prChip() {
+    const w = ws();
+    if (!w.git || !w.gh) return '';
+    if (S.pr === 'open') return `<button class="chip pr sm enter" data-menu="pr" aria-label="Pull request 482, open">${icon('pr')}<span class="t">#482 · Open</span><span class="dotlive"></span></button>`;
+    if (S.pr === 'merged') return `<button class="chip pr merged sm enter" data-menu="pr">${icon('pr')}<span class="t">#482 · Merged</span></button>`;
+    if (S.ahead) return `<button class="chip pr sm enter" data-menu="pr">${icon('pr')}<span class="t">Create PR</span></button>`;
+    return '';
+  }
+  function topBar() {
+    const w = ws();
+    if (S.stage !== 'draft') {
+      if (!w.git) return '';
+      return `<div class="ctx summary" role="group" aria-label="Chat context">
+        <button class="chip sm" data-menu="branch-sent" aria-haspopup="menu">${icon(S.mode === 'local' ? 'branch' : 'tree')}<span class="t">${esc(S.branchOut)}</span></button>
+        <span class="grow"></span><span aria-live="polite">${prChip()}</span></div>`;
+    }
+    return `<div class="ctx" role="group" aria-label="New chat context">
+      <button class="chip strong" data-menu="ws" aria-haspopup="menu" aria-expanded="${S.menu === 'ws'}" aria-label="Workspace: ${esc(w.name)}">${icon(S.ws === 'scratch' ? 'chat' : 'folder')}<span class="t">${esc(w.name)}</span>${icon('chev', 'chev')}</button>
+      ${paired ? `<button class="chip enter" data-menu="machine" aria-haspopup="menu" aria-expanded="${S.menu === 'machine'}">${icon('laptop')}<span class="t">${esc(S.machine)}</span>${icon('chev', 'chev')}</button>` : ''}
+      <span class="grow"></span>${branchChip()}</div>`;
+  }
+
+  function wsMenu() {
+    if (S.view === 'clone') {
+      const repo = (S.cloneUrl.split('/').pop() || '').replace(/\.git$/, '') || 'repo';
+      return `<div class="pop" style="bottom:100px;left:14px" role="dialog" aria-label="Clone repository">
+        <button class="it" data-act="ws-back">${icon('left')}Clone repository</button><hr>
+        <div class="field"><label for="cloneUrl">Git URL or owner/repo</label><input id="cloneUrl" value="${esc(S.cloneUrl)}" placeholder="github.com/acme/website" autocomplete="off"></div>
+        <div class="field"><label>Destination</label><input value="~/projects/${esc(repo)}" readonly></div>
+        <div class="note">Uses your git credentials. Runs only when you press Clone.</div>
+        <div class="row-end">${S.cloning ? `<span class="spin"></span><span class="note">Cloning…</span>` : `<button class="btn" data-act="ws-back">Cancel</button><button class="btn accent" data-act="do-clone">Clone</button>`}</div></div>`;
+    }
+    const q = S.q.trim();
+    let body = '';
+    if (/^[~\/.]/.test(q)) {
+      const last = q.replace(/\/+$/, '').split('/').pop();
+      const known = order.find(k => W[k].path === q);
+      if (known) body += `<button class="it sel" data-ws="${known}">${icon('folder')}${esc(W[known].name)}<span class="meta">already a workspace</span></button>`;
+      else if (['website', 'dotfiles'].includes(last)) body += `<button class="it sel" data-act="open-path" data-path="${esc(q)}">${icon('folder-plus')}Open&nbsp;<span class="pth">${esc(q)}</span></button>`;
+      else if (last) body += `<button class="it sel" data-act="open-path" data-path="${esc(q)}" data-create="1">${icon('plus')}Create folder and open&nbsp;<span class="pth">${esc(q)}</span></button>`;
+      body += `<div class="note">Try <code>~/projects/website</code> (existing repo) or <code>~/projects/new-idea</code> (new folder).</div>`;
+    } else {
+      const list = order.filter(k => !q || W[k].name.toLowerCase().includes(q.toLowerCase()));
+      const shown = q ? list : list.slice(0, 5);
+      body += `<div class="lbl">${q ? 'Matches' : 'Recent'}</div>`;
+      body += shown.map(k => `<button class="it ${k === S.ws ? 'sel' : ''}" data-ws="${k}">${icon('folder')}${esc(W[k].name)}${k === S.ws ? `<span class="check">${icon('check')}</span>` : `<span class="meta">${W[k].when}</span>`}</button>`).join('') || `<div class="note">No workspace matches "${esc(q)}". Paste a path to open a folder.</div>`;
+      if (!q && order.length > 5) body += `<button class="it" style="color:var(--text-secondary)">${icon('right')}All workspaces (${order.length})</button>`;
+    }
+    return `<div class="pop" style="bottom:100px;left:14px" role="menu" aria-label="Workspaces">
+      <div class="search">${icon('search')}<input id="wsq" value="${esc(S.q)}" placeholder="Search or paste a path…" autocomplete="off" aria-label="Search workspaces"></div>
+      ${body}<hr>
+      <button class="it" data-act="open-folder">${icon('folder-plus')}Open folder…<span class="meta">⌘⇧O</span></button>
+      <button class="it" data-act="clone">${icon('clone')}Clone repository…</button>
+      <button class="it" data-ws="scratch">${icon('chat')}Scratch chat<span class="meta">no project</span></button></div>`;
+  }
+  function branchMenu() {
+    const w = ws();
+    const radio = (on) => `<span class="radio ${on ? 'on' : ''}"></span>`;
+    let h = `<div class="lbl">Work in</div><div role="radiogroup" aria-label="Work in">
+      <button class="it" role="radio" aria-checked="${S.mode === 'local'}" data-mode="local">${radio(S.mode === 'local')}This checkout<span class="meta">${esc(w.cur)}${w.dirty ? ` · ${w.dirty} changes` : ''}</span></button>
+      <button class="it" role="radio" aria-checked="${S.mode === 'worktree'}" data-mode="worktree">${radio(S.mode === 'worktree')}New worktree<span class="meta">created on send</span></button>
+      ${w.worktrees.map(t => `<button class="it" role="radio" aria-checked="${S.mode === 'existing' && S.existing === t.branch}" data-mode="existing" data-wt="${esc(t.branch)}">${radio(S.mode === 'existing' && S.existing === t.branch)}${icon('tree')}${esc(t.branch)}<span class="meta">${t.when}</span></button>`).join('')}
+      </div><hr>`;
+    if (S.mode === 'local') {
+      h += `<div class="lbl">Branches</div>`;
+      if (w.dirty) h += `<div class="note warn">${w.dirty} uncommitted changes. Commit or stash them to switch branches here.<br><button class="btn" style="margin-top:6px" data-mode="worktree">Use a new worktree instead</button></div>`;
+      h += w.branches.map(b => `<button class="it ${b === w.cur ? 'sel' : ''}" data-checkout="${esc(b)}" ${w.dirty && b !== w.cur ? 'disabled' : ''}>${icon('branch')}${esc(b)}${b === w.cur ? `<span class="check">${icon('check')}</span>` : ''}</button>`).join('');
+    } else if (S.mode === 'worktree') {
+      h += `<div class="lbl">Start from</div>`;
+      h += w.branches.map(b => `<button class="it" data-base="${esc(b)}">${radio(b === baseOf())}${esc(b)}</button>`).join('');
+      if (w.gh) h += `<button class="it" data-act="origin">${icon('globe')}Start from origin/${esc(baseOf())}<span class="toggle ${S.origin ? 'on' : ''}"></span></button>`;
+      h += `<hr>`;
+      h += S.editName
+        ? `<div class="field"><label for="bn">Branch name (↵ to save, blank = auto)</label><input id="bn" value="${esc(S.name)}" placeholder="aiden/…"></div>`
+        : `<button class="it" data-act="edit-name">${icon('edit')}Branch name<span class="meta">${S.name ? esc(S.name) : 'Auto (from first message)'}</span></button>`;
+    } else {
+      h += `<div class="note">Runs in the worktree for <b>${esc(S.existing)}</b> as it is now.</div>`;
+    }
+    return `<div class="pop" style="bottom:100px;right:14px;width:310px;transform-origin:bottom right" role="menu" aria-label="Branch">${h}</div>`;
+  }
+  function branchSentMenu() {
+    return `<div class="pop" style="bottom:98px;left:110px;width:270px" role="menu">
+      <div class="note">On <b>${esc(S.branchOut)}</b>${S.mode === 'worktree' ? ' (new worktree)' : ''}. The workspace is fixed once a chat starts.</div><hr>
+      <button class="it">${icon('folder')}Show in Finder</button><button class="it">${icon('branch')}Copy branch name</button></div>`;
+  }
+  function machineMenu() {
+    return `<div class="pop" style="bottom:100px;left:150px;width:240px" role="menu"><div class="lbl">Run on</div>
+      ${['This Mac', 'Studio'].map(m => `<button class="it ${S.machine === m ? 'sel' : ''}" data-machine="${m}">${icon('laptop')}${m}${S.machine === m ? `<span class="check">${icon('check')}</span>` : `<span class="meta">online</span>`}</button>`).join('')}</div>`;
+  }
+  function prMenu() {
+    if (S.pr) return `<div class="pop" style="bottom:98px;right:14px;width:280px;transform-origin:bottom right"><div class="note"><b>#482</b> ${S.pr === 'open' ? 'Open · checks passing' : 'Merged'}<br>${esc(S.branchOut)} → ${esc(baseOf())}</div><hr><button class="it">${icon('globe')}Open on GitHub</button></div>`;
+    return `<div class="pop" style="bottom:98px;right:14px;width:290px;transform-origin:bottom right"><div class="note">Create a pull request<br><span style="color:var(--text-tertiary)">${esc(baseOf())} ← ${esc(S.branchOut)} · 2 commits</span></div><div class="row-end"><button class="btn">Draft</button><button class="btn accent" data-act="openpr">Create PR</button></div></div>`;
+  }
+  function palette() {
+    const q = S.palQ.trim().toLowerCase();
+    const list = order.filter(k => !q || W[k].name.toLowerCase().includes(q));
+    return `<div class="scrim" data-act="close"></div><div class="palette" role="dialog" aria-label="New chat in">
+      <div class="q"><span class="crumbtag">New chat in</span><input id="palq" value="${esc(S.palQ)}" placeholder="Search workspaces or paste a path…" autocomplete="off"></div>
+      <div class="lbl">Recent</div>
+      ${list.map((k, i) => `<button class="it ${i === 0 ? 'sel' : ''}" data-pal="${k}">${icon('folder')}${esc(W[k].name)}&nbsp;<span class="pth">${esc(W[k].path)}</span><span class="meta">${k === S.ws ? 'current' : W[k].when}</span></button>`).join('')}
+      <div class="lbl">Add</div>
+      <button class="it" data-act="open-folder">${icon('folder-plus')}Open folder…</button>
+      <button class="it" data-act="clone-pal">${icon('clone')}Clone repository…</button>
+      <div class="foot"><span>↵ new chat</span><span>⌥↵ in a new worktree</span><span>esc close</span></div></div>`;
+  }
+
+  function sidebar() {
+    let h = `<div class="lights"><span></span><span></span><span></span></div>
+      <div class="split"><button class="s-btn" data-act="reset">${icon('edit')}New Agent<span class="kbd" style="margin-left:auto">⌘N</span></button><button class="more" data-act="palette" aria-label="New chat in…">${icon('chev')}</button></div>
+      <div class="s-label">Workspaces</div>`;
+    const keys = (S.ws === 'scratch' || history.some(c => c.ws === 'scratch')) ? ['scratch', ...order] : order;
+    for (const k of keys) {
+      const w = W[k];
+      const active = k === S.ws;
+      h += `<div class="ws-row">${icon(k === 'scratch' ? 'chat' : 'folder')}<span>${esc(w.name)}</span>${k !== 'scratch' ? `<button class="add" data-newin="${k}" aria-label="New chat in ${esc(w.name)}">${icon('plus')}</button>` : ''}</div>`;
+      if (active && S.stage === 'draft' && S.mode !== 'existing') h += `<div class="s-chat draft sel">New chat</div>`;
+      history.filter(c => c.ws === k && !c.wt).forEach(c => { h += `<div class="s-chat ${c.cur ? 'sel' : ''}">${esc(c.title)}</div>`; });
+      (w.worktrees || []).forEach(t => {
+        h += `<div class="s-sub">${icon('tree')}${esc(t.branch)}</div>`;
+        if (active && S.stage === 'draft' && S.mode === 'existing' && S.existing === t.branch) h += `<div class="s-chat wt draft sel">New chat</div>`;
+        history.filter(c => c.ws === k && c.wt === t.branch).forEach(c => { h += `<div class="s-chat wt ${c.cur ? 'sel' : ''}">${esc(c.title)}</div>`; });
+      });
+    }
+    return `<aside class="side">${h}</aside>`;
+  }
+  function body() {
+    const w = ws();
+    if (S.stage === 'draft') {
+      const head = S.ws === 'scratch'
+        ? `<h3>What's on your mind?</h3><div class="hint">Scratch chat · not tied to a project</div>`
+        : `<h3>What should we build in <button class="wsname" data-menu="ws" aria-haspopup="menu">${esc(w.name)}</button>?</h3>${S.mode === 'worktree' ? `<div class="hint">A new worktree from ${esc(baseOf())} will be created when you send</div>` : S.mode === 'existing' ? `<div class="hint">In the ${esc(S.existing)} worktree</div>` : ''}`;
+      return `<div class="hero"><div class="bot">${icon('bot')}</div>${head}</div>`;
+    }
+    let act = '';
+    if (S.mode === 'worktree' && w.git) {
+      act = S.stage === 'creating'
+        ? `<div class="activity" role="status"><div class="row"><span class="spin"></span>Creating worktree <b>${esc(S.branchOut)}</b> from ${S.origin && w.gh ? 'origin/' : ''}${esc(baseOf())}…</div></div>`
+        : `<div class="activity"><div class="row ok">${icon('check')}Worktree <b>${esc(S.branchOut)}</b> ready</div></div>`;
+    }
+    const reply = S.stage === 'sent' ? `<div class="sk-group"><div class="sk" style="width:92%"></div><div class="sk" style="width:76%"></div><div class="sk" style="width:84%"></div></div>` : '';
+    return `<div class="transcript"><div class="bubble">${esc(S.sentText)}</div>${act}${reply}</div>`;
+  }
+
+  function render() {
+    const menus = { ws: wsMenu, branch: branchMenu, 'branch-sent': branchSentMenu, machine: machineMenu, pr: prMenu };
+    $('#win').innerHTML = sidebar() + `<div class="main"><div class="crumb ${S.stage === 'draft' ? 'hidden' : ''}"><b>${esc(S.sentText.slice(0, 40))}</b></div><div class="body">${body()}</div>
+      <div class="dock">${topBar()}<div class="composer">
+        <textarea id="ta" placeholder="${S.stage === 'draft' ? 'Ask Aiden anything…' : 'Reply…'}" aria-label="Message">${esc(S.text)}</textarea>
+        <div class="c-row"><span style="color:var(--toolbar-icon);display:flex">${icon('plus')}</span><span class="grow"></span><span class="chip static">Model</span>
+        <button class="send" data-act="send" aria-label="Send" ${S.stage === 'creating' ? 'disabled' : ''}>${icon('up')}</button></div></div>
+        ${S.menu && menus[S.menu] ? menus[S.menu]() : ''}</div></div>
+      ${S.menu === 'palette' ? palette() : ''}`;
+    const focusId = S.menu === 'ws' ? (S.view === 'clone' ? 'cloneUrl' : 'wsq') : S.menu === 'palette' ? 'palq' : (S.editName && S.menu === 'branch') ? 'bn' : null;
+    if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
+  }
+  const focusComposer = () => { const t = $('#ta'); t && t.focus(); };
+
+  function setWs(k) {
+    const prev = S.ws;
+    S.ws = k; S.mode = (W[k].git && modeMemory[k]) || 'local'; S.existing = null; S.base = null; S.menu = null; S.q = ''; S.view = 'list';
+    if (k !== 'scratch') { order = [k, ...order.filter(x => x !== k)]; W[k].when = 'now'; }
+    if (k === 'scratch') log('none', 'Scratch chat picked. Branch chip hidden. Today the scratch folder in <code>~/aiden</code> gets created on send.');
+    else log('none', `Draft moved ${prev !== k ? 'from <b>' + esc(W[prev].name) + '</b> ' : ''}to <b>${esc(W[k].name)}</b>. Text kept. ${W[k].git ? 'Branch chip shown because it\'s a git repo' + (W[k].dirty ? ', with a changes badge' : '') + '.' : '<b>Branch and PR chips hidden</b> because this is a plain folder.'}`);
+    render(); focusComposer();
+  }
+  function addWorkspace(key, data, tag, msg) {
+    W[key] = Object.assign({ when: 'now' }, data);
+    order = [key, ...order.filter(x => x !== key)];
+    log(tag, msg);
+    setWs(key);
+  }
+  function send() {
+    if (S.stage !== 'draft') { log('ui', 'Follow-up messages work as today.'); return; }
+    const w = ws();
+    S.sentText = S.text.trim() || 'Fix the login redirect loop';
+    S.text = ''; S.menu = null;
+    if (w.git) S.branchOut = S.mode === 'worktree' ? (S.name.trim() || slug(S.sentText)) : S.mode === 'existing' ? S.existing : w.cur;
+    history.forEach(c => c.cur = false);
+    if (S.mode === 'worktree' && w.git) {
+      S.stage = 'creating';
+      log('disk', `Send → ${S.origin && w.gh ? 'fetch origin, ' : ''}create worktree <b>${esc(S.branchOut)}</b> from ${esc(baseOf())}, register it under ${esc(w.name)}. Your message shows straight away.`);
+      render();
+      setTimeout(() => {
+        S.stage = 'sent';
+        w.worktrees = [{ branch: S.branchOut, when: 'now' }, ...w.worktrees];
+        history.push({ ws: S.ws, wt: S.branchOut, title: S.sentText.slice(0, 26), cur: true });
+        log('ui', 'Worktree ready and chat saved. The bar shrinks to the branch, and the workspace is now fixed.');
+        render();
+      }, 1400);
+      return;
+    }
+    S.stage = 'sent';
+    history.push({ ws: S.ws, wt: S.mode === 'existing' ? S.existing : null, title: S.sentText.slice(0, 26), cur: true });
+    log('disk', `Chat saved to <b>${esc(w.name)}</b>. ${w.git ? ' The bar shrinks to the branch.' : ' Plain folder, so the bar disappears.'}${w.git && w.gh ? ' The PR chip waits until the branch has commits.' : ''}`);
+    render();
+  }
+
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-act],[data-menu],[data-ws],[data-mode],[data-base],[data-checkout],[data-machine],[data-pal],[data-newin]');
+    const inWin = e.target.closest('#win');
+    if (!t) { if (inWin && S.menu && !e.target.closest('.pop,.palette')) { S.menu = null; S.view = 'list'; render(); } return; }
+    const d = t.dataset;
+    if (d.menu) {
+      S.menu = S.menu === d.menu ? null : d.menu; S.q = ''; S.view = 'list'; S.editName = false;
+      if (S.menu === 'branch') log('ui', `Branch menu. The <i>Work in</i> group comes first${ws().worktrees.length ? ' and lists existing worktrees' : ''}.`);
+      render(); return;
+    }
+    if (d.ws) { setWs(d.ws); return; }
+    if (d.newin) { history.forEach(c => c.cur = false); S = fresh(d.newin); log('none', `Hover + on <b>${esc(W[d.newin].name)}</b> → new draft there.`); render(); focusComposer(); return; }
+    if (d.pal) { history.forEach(c => c.cur = false); S = fresh(d.pal); log('none', `New chat in… → <b>${esc(W[d.pal].name)}</b>. Draft opened, composer focused.`); render(); focusComposer(); return; }
+    if (d.mode) {
+      S.mode = d.mode; if (d.wt) S.existing = d.wt; S.editName = false;
+      modeMemory[S.ws] = d.mode === 'existing' ? 'local' : d.mode;
+      if (d.mode === 'worktree') log('none', 'New worktree chosen. Nothing created yet. The chip turns blue, and the changes badge hides because a new worktree starts clean.');
+      else if (d.mode === 'existing') log('none', `Draft moved to the existing worktree <b>${esc(d.wt)}</b>.`);
+      else log('none', 'Back to this checkout.');
+      render(); return;
+    }
+    if (d.base) { S.base = d.base; log('none', `Base branch → <b>${esc(d.base)}</b> (saved on the draft).`); render(); return; }
+    if (d.checkout) { const w = ws(); if (d.checkout !== w.cur) { w.cur = d.checkout; log('disk', `<b>git checkout ${esc(d.checkout)}</b> runs now. This is deliberate, as today.`); } S.menu = null; render(); return; }
+    if (d.machine) { S.machine = d.machine; S.menu = null; log('ui', `Run on <b>${esc(d.machine)}</b>. The workspace list would reload from that Mac.`); render(); return; }
+    switch (d.act) {
+      case 'reset': {
+        history.forEach(c => c.cur = false);
+        const k = S.ws === 'scratch' ? order[0] : S.ws;
+        S = fresh(k); log('none', `⌘N → draft in <b>${esc(W[k].name)}</b>, the workspace you were viewing. Composer focused, no prompt.`); render(); focusComposer(); break;
+      }
+      case 'palette': S.menu = 'palette'; S.palQ = ''; log('ui', '⌘⇧N → New chat in… palette.'); render(); break;
+      case 'close': S.menu = null; render(); focusComposer(); break;
+      case 'send': send(); break;
+      case 'origin': S.origin = !S.origin; render(); break;
+      case 'edit-name': S.editName = true; render(); break;
+      case 'ws-back': S.view = 'list'; S.cloning = false; render(); break;
+      case 'clone': S.view = 'clone'; render(); break;
+      case 'clone-pal': S.menu = 'ws'; S.view = 'clone'; render(); break;
+      case 'do-clone': {
+        const url = S.cloneUrl.trim() || 'github.com/acme/website';
+        const repo = url.split('/').pop().replace(/\.git$/, '') || 'website';
+        S.cloning = true; render();
+        setTimeout(() => { S.cloning = false; S.view = 'list'; addWorkspace('c_' + repo, { name: repo, path: '~/projects/' + repo, git: true, gh: true, dirty: 0, cur: 'main', branches: ['main'], worktrees: [] }, 'net', `Cloned <b>${esc(url)}</b> into <code>~/projects/${esc(repo)}</code> and registered it.`); }, 1100);
+        break;
+      }
+      case 'open-folder': S.menu = null; addWorkspace('website', { name: 'website', path: '~/projects/website', git: true, gh: true, dirty: 0, cur: 'main', branches: ['main', 'redesign'], worktrees: [] }, 'disk', 'Native folder dialog → <code>~/projects/website</code> registered as a workspace.'); break;
+      case 'open-path': {
+        const p = d.path; const name = p.replace(/\/+$/, '').split('/').pop();
+        const created = Boolean(d.create);
+        addWorkspace('p_' + name, created ? { name, path: p, git: false } : { name, path: p, git: true, gh: true, dirty: 0, cur: 'main', branches: ['main'], worktrees: [] }, 'disk',
+          created ? `Created <code>${esc(p)}</code> and registered it. It isn't a git repo, so there's no branch chip.` : `Opened <code>${esc(p)}</code> as a workspace.`);
+        break;
+      }
+      case 'commit':
+        if (S.stage !== 'sent') { log('ui', 'Send a message first. The PR chip never appears on a draft.'); break; }
+        if (!ws().git) { log('ui', `<b>${esc(ws().name)}</b> isn't a git repo, so there's no PR chip.`); break; }
+        if (!ws().gh) { log('ui', `<b>${esc(ws().name)}</b> has no GitHub remote, so the PR chip stays hidden.`); break; }
+        S.ahead = true; log('ui', 'Branch is 2 commits ahead of base → <b>Create PR</b> chip appears in the summary.'); render(); break;
+      case 'openpr':
+        if (S.stage !== 'sent' || !ws().git || !ws().gh) { log('ui', 'No PR chip here: needs a sent chat in a GitHub repo.'); break; }
+        S.ahead = true; S.pr = S.pr === 'open' ? 'merged' : 'open'; S.menu = null;
+        log('net', S.pr === 'open' ? 'PR <b>#482</b> opened → the chip shows its status.' : 'PR merged → the chip goes neutral.'); render(); break;
+      case 'paired':
+        paired = !paired; $('#pairedBtn').setAttribute('aria-pressed', String(paired));
+        if (!paired) S.machine = 'This Mac';
+        log('ui', paired ? 'A paired Mac is online → <b>machine chip appears</b>.' : 'No paired Macs → machine chip hidden.'); render(); break;
+    }
+  });
+  document.addEventListener('input', (e) => {
+    const id = e.target.id;
+    if (id === 'ta') S.text = e.target.value;
+    else if (id === 'wsq') { S.q = e.target.value; render(); }
+    else if (id === 'palq') { S.palQ = e.target.value; render(); }
+    else if (id === 'cloneUrl') { S.cloneUrl = e.target.value; render(); }
+    else if (id === 'bn') S.name = e.target.value;
+  });
+  document.addEventListener('keydown', (e) => {
+    const id = e.target.id;
+    if (e.key === 'Escape' && S.menu) { S.menu = null; S.view = 'list'; render(); focusComposer(); return; }
+    if (e.key !== 'Enter') return;
+    if (id === 'ta' && !e.shiftKey) { e.preventDefault(); send(); }
+    else if (id === 'wsq') { e.preventDefault(); const first = $('.pop .it.sel, .pop [data-ws]'); first && first.click(); }
+    else if (id === 'palq') {
+      e.preventDefault(); const first = $('.palette [data-pal]');
+      if (first) { const k = first.dataset.pal; history.forEach(c => c.cur = false); S = fresh(k);
+        if (e.altKey && W[k].git) { S.mode = 'worktree'; log('none', `⌥↵ → draft in <b>${esc(W[k].name)}</b> with New worktree selected.`); } else log('none', `↵ → draft in <b>${esc(W[k].name)}</b>.`);
+        render(); focusComposer(); }
+    }
+    else if (id === 'bn') { e.preventDefault(); S.editName = false; log('none', `Branch name set to <b>${esc(S.name || 'auto')}</b>.`); render(); }
+    else if (id === 'cloneUrl') { e.preventDefault(); const b = $('[data-act="do-clone"]'); b && b.click(); }
+  });
+
+  const c = (cls, ic, txt, extra = '') => `<span class="chip ${cls}">${icon(ic)}<span class="t">${txt}</span>${extra}</span>`;
+  const chev = icon('chev', 'chev');
+  const rungs = [
+    ['Draft · plain folder', 'Notes, scratch', `<div class="mini-ctx">${c('strong', 'folder', 'Notes', chev)}<span class="grow"></span></div>`, 'Only the workspace. No branch, no PR, no "Local" label.'],
+    ['Draft · git repo', 'clean checkout', `<div class="mini-ctx">${c('strong', 'folder', 'Contact-Sheet', chev)}<span class="grow"></span>${c('', 'branch', 'main', chev)}</div>`, 'The branch chip appears because the folder is a repo.'],
+    ['Draft · git repo with changes', 'uncommitted work', `<div class="mini-ctx">${c('strong', 'folder', 'aiden-agent', chev)}<span class="grow"></span>${c('', 'branch', 'main', '<span class="badge">3</span>' + chev)}</div>`, 'A changes badge appears, so you notice before checking out or starting a worktree.'],
+    ['Draft · paired Mac online', '', `<div class="mini-ctx">${c('strong', 'folder', 'aiden-agent', chev)}${c('', 'laptop', 'This Mac', chev)}<span class="grow"></span>${c('', 'branch', 'main', chev)}</div>`, 'The machine chip appears only when you have somewhere else to run.'],
+    ['Draft · New worktree picked', '', `<div class="mini-ctx">${c('strong', 'folder', 'aiden-agent', chev)}<span class="grow"></span>${c('wt', 'tree', 'New worktree · from main', chev)}</div>`, 'Soft blue fill: the branch is decided at send. The changes badge hides because the worktree starts clean.'],
+    ['Sent · summary', 'first message sent', `<div class="mini-ctx summary">${c('sm', 'tree', 'aiden/fix-login')}<span class="grow"></span></div>`, 'Shrinks to the branch only. The window header\'s workspace chip already names the workspace, so it isn\'t repeated. For a plain folder the strip disappears.'],
+    ['Sent · branch has commits', 'GitHub remote', `<div class="mini-ctx summary">${c('sm', 'tree', 'aiden/fix-login')}<span class="grow"></span>${c('pr sm', 'pr', 'Create PR')}</div>`, 'The PR chip appears when there are commits to open as a PR.'],
+    ['Sent · PR open', '', `<div class="mini-ctx summary">${c('sm', 'tree', 'aiden/fix-login')}<span class="grow"></span>${c('pr sm', 'pr', '#482 · Open', '<span class="dotlive"></span>')}</div>`, 'Shows status at a glance. It turns neutral when merged or closed.'],
+  ];
+  $('#ladder').innerHTML = rungs.map(r => `<div class="rung"><div class="st">${r[0]}<small>${r[1]}</small></div>${r[2]}<div class="why">${r[3]}</div></div>`).join('');
+
+  $('#themeBtn').addEventListener('click', () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+  });
+
+  log('none', '⌘N → draft in <b>aiden-agent</b>. It\'s a git repo with 3 uncommitted changes, so the branch chip and a changes badge show. No PR chip on a draft.');
+  render();
+})();
+</script>
+</body>
+</html>

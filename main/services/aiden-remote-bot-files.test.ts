@@ -104,6 +104,7 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
   const handles = new AidenOpaqueHandleStore();
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
+    botAudienceId: "desktop:local",
     chats: { get: async (chatId) => chats.get(chatId) ?? null },
     handles,
     authority: {
@@ -182,6 +183,73 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
   }
 });
 
+test("a device paired without its own Full Access notice opens Bot Files under the Mac owner's authority", async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-bot-files-"));
+  const root = path.join(temporary, "managed-home");
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(path.join(root, "brief.md"), "agenda\n", "utf8");
+  const chat: Chat = {
+    id: "chat-1",
+    botId: "bot-1",
+    workspaceId: "managed-workspace-1",
+    title: "Chief of Staff",
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  // Only the Mac owner accepted Full Access. The runtime resolver folds the
+  // store's missing-notice rejection for any other audience into
+  // access_unavailable, which Bot Files reports as a stale-access 409.
+  const acceptedAudiences = new Set(["desktop:local"]);
+  const service = new AidenRemoteBotFileService({
+    instanceId: "instance-1",
+    botAudienceId: "desktop:local",
+    chats: { get: async (chatId) => chatId === chat.id ? chat : null },
+    authority: {
+      admit: async ({ audienceId, botId, chatId }): Promise<BotRuntimeAuthorityAdmission> => {
+        if (!acceptedAudiences.has(audienceId)) {
+          throw new BotRuntimeAuthorityError("access_unavailable");
+        }
+        return {
+          authority: authorityFixture({
+            root,
+            botId,
+            chatId,
+            workspaceId: "managed-workspace-1",
+            epoch: "1",
+            botHome: true,
+          }),
+          signal: new AbortController().signal,
+          revalidateBeforeEffect: async () => undefined,
+          release: () => undefined,
+        };
+      },
+    },
+  });
+
+  try {
+    const index = await service.list("device-new-iphone", "chat-1");
+    assert.deepEqual(index.entries.map(({ displayPath }) => displayPath), ["brief.md"]);
+    const file = index.entries[0]!;
+    const document = await service.read("device-new-iphone", "chat-1", file.id);
+    assert.equal(document.content, "agenda\n");
+    const saved = await service.write("device-new-iphone", "chat-1", file.id, {
+      content: "agenda v2\n",
+      expectedVersion: document.version,
+    });
+    assert.equal(saved.content, "agenda v2\n");
+    assert.equal(await fs.readFile(path.join(root, "brief.md"), "utf8"), "agenda v2\n");
+    // Admitting as the Mac owner must not let another paired device use this one's handle.
+    await assert.rejects(
+      () => service.read("device-other", "chat-1", file.id),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
+    );
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home access", async () => {
   let admissions = 0;
   const chats = new Map<string, Chat>([
@@ -196,6 +264,7 @@ test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home 
   ]);
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
+    botAudienceId: "desktop:local",
     chats: { get: async (chatId) => chats.get(chatId) ?? null },
     authority: {
       admit: async () => {
@@ -217,7 +286,9 @@ test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home 
 
 async function httpFixture(options: {
   capabilities: readonly AidenRemoteCapability[];
-  authorizationBlocked?: () => boolean;
+  authorizationBlocked?: (deviceId: string) => boolean;
+  /** Holds a Bot Files read after the service is called and before it returns. */
+  holdRead?: () => Promise<void>;
 }) {
   const calls: string[] = [];
   const fileId = `file_${"f".repeat(43)}`;
@@ -226,14 +297,21 @@ async function httpFixture(options: {
     displayName: () => "Studio Mac",
     appVersion: "0.30.0",
     devices: {
-      authenticate: async (credential) => credential === "a".repeat(43) ? {
-        id: "device-authorized-12345678",
-        revoked: false,
-        acceptsBotCapabilities: true,
-        capabilities: new Set(options.capabilities),
-      } : null,
-      acquireDeviceAuthorization: () => {
-        if (options.authorizationBlocked?.()) {
+      authenticate: async (credential) => {
+        const id = credential === "a".repeat(43)
+          ? "device-authorized-12345678"
+          : credential === "b".repeat(43)
+            ? "device-other-87654321"
+            : undefined;
+        return id ? {
+          id,
+          revoked: false,
+          acceptsBotCapabilities: true,
+          capabilities: new Set(options.capabilities),
+        } : null;
+      },
+      acquireDeviceAuthorization: (deviceId) => {
+        if (options.authorizationBlocked?.(deviceId)) {
           throw new AidenRemoteServiceError(
             "credential_revoked",
             "This device was revoked in Aiden Settings.",
@@ -247,10 +325,12 @@ async function httpFixture(options: {
     botFiles: {
       list: async (deviceId, chatId) => {
         calls.push(`list:${deviceId}:${chatId}`);
+        await options.holdRead?.();
         return { snapshotId: "files-1", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20 };
       },
       read: async (deviceId, chatId, suppliedFileId) => {
         calls.push(`read:${deviceId}:${chatId}:${suppliedFileId}`);
+        await options.holdRead?.();
         return {
           id: suppliedFileId,
           displayPath: "note.txt",
@@ -333,6 +413,47 @@ test("Bot conversation file routes require conjunctive Bot and file grants", asy
   }
 });
 
+test("a Bot Files read held across device revocation publishes nothing, and other devices keep reading", async () => {
+  const revoked = new Set<string>();
+  let release: (() => void) | undefined;
+  let held: (() => void) | undefined;
+  const app = await httpFixture({
+    capabilities: ["bot:read", "files:read"],
+    authorizationBlocked: (deviceId) => revoked.has(deviceId),
+    holdRead: async () => {
+      if (revoked.size > 0 || !release) return;
+      held?.();
+      await new Promise<void>((resolve) => { release = resolve; });
+    },
+  });
+  try {
+    for (const path of ["/bot-conversations/chat-1/files", `/bot-conversations/chat-1/files/${app.fileId}`]) {
+      release = () => undefined;
+      const reached = new Promise<void>((resolve) => { held = resolve; });
+      const pending = fetch(`${app.base}${path}`, { headers: authorizationHeaders });
+      await reached;
+      // Revocation completes while the Mac-owner Bot authority is still reading.
+      revoked.add("device-authorized-12345678");
+      release();
+      const response = await pending;
+      assert.equal(response.status, 403);
+      const body = await response.json();
+      assert.equal(body.error.code, "credential_revoked");
+      assert.equal(JSON.stringify(body).includes("hello"), false);
+      revoked.clear();
+    }
+    release = undefined;
+    revoked.add("device-authorized-12345678");
+    const other = await fetch(`${app.base}/bot-conversations/chat-1/files/${app.fileId}`, {
+      headers: { ...authorizationHeaders, authorization: `Bearer ${"b".repeat(43)}` },
+    });
+    assert.equal(other.status, 200);
+    assert.equal((await other.json()).content, "hello");
+  } finally {
+    await app.close();
+  }
+});
+
 test("stalled Bot file PUT parses its body before device revocation admission", async () => {
   let blocked = false;
   const app = await httpFixture({
@@ -380,7 +501,7 @@ async function budgetBotFixture(t: test.TestContext) {
   const handles = new AidenOpaqueHandleStore();
   let releases = 0;
   const service = new AidenRemoteBotFileService({
-    instanceId: "instance", handles,
+    instanceId: "instance", botAudienceId: "desktop:local", handles,
     chats: { get: async id => ({ id, botId: "bot", workspaceId: "home", title: "Bot", messages: [], createdAt: 1, updatedAt: 1 }) },
     authority: { admit: async ({ botId, chatId }) => ({
       authority: authorityFixture({ root, botId, chatId, workspaceId: "home", epoch: "1", botHome: true }),

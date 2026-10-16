@@ -3,9 +3,16 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
+import {
+  autoWorktreeBranchName,
+  uniqueBranchName,
+  type FirstMessageWorktreeBaseSource,
+} from "../../renderer/shared/worktree-on-send.js";
 import type {
   GitCreatedWorktree,
   GitDeleteWorktreeResult,
+  GitWorktreeBase,
+  GitWorktreeBaseUpstream,
   ManagedWorktreeDeletionLifecycle,
   ManagedWorktreeDirtyState,
   ManagedWorktreeSnapshotCapture,
@@ -38,7 +45,28 @@ export interface WorkspaceWorktreeApplicationDependencies {
     root: string,
     branch: string,
     signal?: AbortSignal,
+    options?: { startPoint?: string; ownershipToken?: string },
   ): Promise<GitCreatedWorktree>;
+  /** Validate a chosen base branch. Required only by `createFromBase`. */
+  resolveWorktreeBase?(folderPath: string, baseRef: string, signal?: AbortSignal): Promise<GitWorktreeBase>;
+  /** Fetch one base branch and return its tracking commit. Required only by `createFromBase`. */
+  fetchWorktreeBase?(
+    folderPath: string,
+    upstream: GitWorktreeBaseUpstream,
+    signal?: AbortSignal,
+  ): Promise<string>;
+  /** Existing local branch names. Required only by `createFromBase`. */
+  localBranchNames?(folderPath: string, signal?: AbortSignal): Promise<string[]>;
+  /**
+   * Roll back an unsaved registration on `branch` carrying `ownershipToken`.
+   * Required only by `discardInterruptedWorktree`.
+   */
+  rollbackOwnedWorktree?(
+    folderPath: string,
+    branch: string,
+    ownershipToken: string,
+    createdFromHead: string,
+  ): Promise<"absent" | "rolled-back">;
   rollbackWorktree(
     folderPath: string,
     created: GitCreatedWorktree,
@@ -122,6 +150,50 @@ export interface WorkspaceWorktreeApplicationDependencies {
   logError(area: string, message: string, error: unknown): void;
 }
 
+/** A new worktree from a chosen base, with an explicit or automatic branch name. */
+export interface WorktreeFromBaseRequest {
+  /** Local branch, remote-tracking branch (`origin/main`), or `HEAD`. */
+  baseRef: string;
+  /** Fetch the base from its upstream remote first; falls back to the local base without one. */
+  fromOrigin: boolean;
+  /** Explicit branch name. Git validates it; an existing branch is an error. */
+  branchName?: string;
+  /** Without `branchName`: name the branch `aiden/<slug of seed>`, made unique. */
+  autoName?: { seed: string };
+  requestedName?: string;
+  /**
+   * Called before Git creates anything, with the branch and the identity the
+   * worktree will carry: the workspace id it will be saved under and the
+   * ownership token written into its Git registration. A caller that records
+   * these can later recognise exactly this attempt's worktree.
+   */
+  onBranchResolved?(attempt: WorktreeFromBaseAttempt): Promise<void> | void;
+  onProgress?(progress: {
+    phase: "fetching" | "creating";
+    branch?: string;
+    startPoint?: string;
+  }): void;
+}
+
+export interface WorktreeFromBaseAttempt {
+  branch: string;
+  workspaceId: string;
+  ownershipToken: string;
+  /** The commit the worktree is about to start at. */
+  baseCommit: string;
+  startPoint: string;
+  baseSource: FirstMessageWorktreeBaseSource;
+}
+
+export interface WorktreeFromBaseResult {
+  workspace: Workspace;
+  branch: string;
+  /** What the worktree started from, as shown to the user: `origin/main`, `main`, or `HEAD`. */
+  startPoint: string;
+  baseCommit: string;
+  baseSource: FirstMessageWorktreeBaseSource;
+}
+
 function displayName(source: Workspace, branch: string, requested?: string): string {
   const trimmed = requested?.trim();
   if (trimmed) return [...trimmed].slice(0, 120).join("");
@@ -158,6 +230,118 @@ export function createWorkspaceWorktreeApplicationService(
   // restores of the same snapshot are serialized here per process.
   const restoreLocks = new Map<string, Promise<Workspace>>();
 
+  const createIn = async (
+    resolved: { folderPath: string; workspace: Workspace },
+    signal: AbortSignal,
+    sourceWorkspaceId: string,
+    branch: string,
+    requestedName?: string,
+    start?: { point: string; commit: string },
+    identity?: { workspaceId: string; ownershipToken: string },
+  ): Promise<Workspace> => {
+    const worktreeRoot = await dependencies.ensureWorktreeRoot();
+    // Admit checkout allocation before creating its directory or Git branch.
+    // ensureWorktreeRoot may already have created the empty managed root.
+    const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath, start?.commit);
+    // Reserve the provisioner's enforced maximum, so changing source files
+    // cannot invalidate a smaller, racy pre-copy estimate. Provisioning is a
+    // no-op off macOS until the transfer helper gains a Linux port, so the
+    // reserve is only needed where provisioning can actually run.
+    const provisionedReserve =
+      process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
+    const repository = await dependencies.repositoryPaths(resolved.folderPath);
+    await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + provisionedReserve);
+    const worktree = await dependencies.createWorktree(
+      resolved.folderPath,
+      worktreeRoot,
+      branch,
+      signal,
+      ...(start || identity
+        ? [{
+            ...(start ? { startPoint: start.point } : {}),
+            ...(identity ? { ownershipToken: identity.ownershipToken } : {}),
+          }]
+        : []),
+    );
+    const provisionedFiles: string[] = [];
+    try {
+      await dependencies.checkCreateCapacity(worktree.path, provisionedReserve);
+      const sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
+      await dependencies.provisionIncludedFiles({
+        sourceRoot,
+        worktreePath: worktree.path,
+        signal,
+        onProvisioned: (relativePath) => provisionedFiles.push(relativePath),
+      });
+    } catch (error) {
+      await dependencies
+        .rollbackWorktree(resolved.folderPath, worktree, {
+          provisionedIgnored: provisionedFiles,
+        })
+        .catch((rollbackError) => {
+          dependencies.logError(
+            "git",
+            "Aiden could not fully roll back a managed worktree after provisioning failed.",
+            rollbackError,
+          );
+        });
+      throw error;
+    }
+    const now = dependencies.now();
+    const workspace: Workspace = {
+      id: identity?.workspaceId ?? dependencies.createWorkspaceId(),
+      name: displayName(resolved.workspace, branch, requestedName),
+      folderPath: worktree.workspacePath,
+      permission: resolved.workspace.permission,
+      managedWorktree: {
+        repositoryPath: worktree.repositoryPath,
+        worktreePath: worktree.path,
+        branch,
+        worktreeGitDir: worktree.worktreeGitDir,
+        ownershipToken: worktree.ownershipToken,
+        worktreeDevice: worktree.worktreeDevice,
+        worktreeInode: worktree.worktreeInode,
+        createdFromHead: worktree.createdFromHead,
+        provisionedFiles,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      const saved = await commitManagedWorktreeCreation({
+        validateBeforeSave: async () => {
+          const latest = await dependencies.environment.resolve(sourceWorkspaceId, true);
+          if (
+            !latest ||
+            signal.aborted ||
+            latest.folderPath !== resolved.folderPath ||
+            latest.workspace.permission !== resolved.workspace.permission
+          ) {
+            throw new Error("The source workspace changed while Aiden was creating the worktree.");
+          }
+        },
+        saveWorkspace: () => dependencies.saveWorkspace(workspace),
+        validateAfterSave: () => {
+          if (signal.aborted || dependencies.workspaceIsChanging(sourceWorkspaceId)) {
+            throw new Error("The source workspace changed while Aiden was saving the worktree.");
+          }
+        },
+        removeWorkspaceRecord: (savedWorkspace) => dependencies.removeWorkspace(savedWorkspace.id),
+        rollbackWorktree: () =>
+          dependencies.rollbackWorktree(resolved.folderPath, worktree, {
+            provisionedIgnored: provisionedFiles,
+          }),
+      });
+      dependencies.notifyChanged();
+      return saved;
+    } catch (error) {
+      if (error instanceof ManagedWorktreeCreationError) {
+        dependencies.logError("git", error.logMessage, error.errors);
+      }
+      throw error;
+    }
+  };
+
   const create = async (
     owner: WorkspaceOperationDocumentOwner,
     sourceWorkspaceId: string,
@@ -166,104 +350,93 @@ export function createWorkspaceWorktreeApplicationService(
   ): Promise<Workspace> => dependencies.environment.run(
     owner,
     sourceWorkspaceId,
-    async (resolved, signal) => {
-      const worktreeRoot = await dependencies.ensureWorktreeRoot();
-      // Admit checkout allocation before creating its directory or Git branch.
-      // ensureWorktreeRoot may already have created the empty managed root.
-      const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath);
-      // Reserve the provisioner's enforced maximum, so changing source files
-      // cannot invalidate a smaller, racy pre-copy estimate. Provisioning is a
-      // no-op off macOS until the transfer helper gains a Linux port, so the
-      // reserve is only needed where provisioning can actually run.
-      const provisionedReserve =
-        process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
-      const repository = await dependencies.repositoryPaths(resolved.folderPath);
-      await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + provisionedReserve);
-      const worktree = await dependencies.createWorktree(
-        resolved.folderPath,
-        worktreeRoot,
-        branch,
-        signal,
-      );
-      const provisionedFiles: string[] = [];
-      try {
-        await dependencies.checkCreateCapacity(worktree.path, provisionedReserve);
-        const sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
-        await dependencies.provisionIncludedFiles({
-          sourceRoot,
-          worktreePath: worktree.path,
-          signal,
-          onProvisioned: (relativePath) => provisionedFiles.push(relativePath),
-        });
-      } catch (error) {
-        await dependencies
-          .rollbackWorktree(resolved.folderPath, worktree, {
-            provisionedIgnored: provisionedFiles,
-          })
-          .catch((rollbackError) => {
-            dependencies.logError(
-              "git",
-              "Aiden could not fully roll back a managed worktree after provisioning failed.",
-              rollbackError,
-            );
-          });
-        throw error;
-      }
-      const now = dependencies.now();
-      const workspace: Workspace = {
-        id: dependencies.createWorkspaceId(),
-        name: displayName(resolved.workspace, branch, requestedName),
-        folderPath: worktree.workspacePath,
-        permission: resolved.workspace.permission,
-        managedWorktree: {
-          repositoryPath: worktree.repositoryPath,
-          worktreePath: worktree.path,
-          branch,
-          worktreeGitDir: worktree.worktreeGitDir,
-          ownershipToken: worktree.ownershipToken,
-          worktreeDevice: worktree.worktreeDevice,
-          worktreeInode: worktree.worktreeInode,
-          createdFromHead: worktree.createdFromHead,
-          provisionedFiles,
-        },
-        createdAt: now,
-        updatedAt: now,
-      };
-      try {
-        const saved = await commitManagedWorktreeCreation({
-          validateBeforeSave: async () => {
-            const latest = await dependencies.environment.resolve(sourceWorkspaceId, true);
-            if (
-              !latest ||
-              signal.aborted ||
-              latest.folderPath !== resolved.folderPath ||
-              latest.workspace.permission !== resolved.workspace.permission
-            ) {
-              throw new Error("The source workspace changed while Aiden was creating the worktree.");
-            }
-          },
-          saveWorkspace: () => dependencies.saveWorkspace(workspace),
-          validateAfterSave: () => {
-            if (signal.aborted || dependencies.workspaceIsChanging(sourceWorkspaceId)) {
-              throw new Error("The source workspace changed while Aiden was saving the worktree.");
-            }
-          },
-          removeWorkspaceRecord: (savedWorkspace) => dependencies.removeWorkspace(savedWorkspace.id),
-          rollbackWorktree: () =>
-            dependencies.rollbackWorktree(resolved.folderPath, worktree, {
-              provisionedIgnored: provisionedFiles,
-            }),
-        });
-        dependencies.notifyChanged();
-        return saved;
-      } catch (error) {
-        if (error instanceof ManagedWorktreeCreationError) {
-          dependencies.logError("git", error.logMessage, error.errors);
-        }
-        throw error;
-      }
-    },
+    (resolved, signal) => createIn(resolved, signal, sourceWorkspaceId, branch, requestedName),
   );
+
+  /**
+   * Create a managed worktree from a chosen base, optionally fetching it from
+   * its upstream first, through the same admission, hooks-disabled creation,
+   * provisioning and rollback path as `create`.
+   */
+  const createFromBase = async (
+    owner: WorkspaceOperationDocumentOwner,
+    sourceWorkspaceId: string,
+    request: WorktreeFromBaseRequest,
+  ): Promise<WorktreeFromBaseResult> => {
+    const { resolveWorktreeBase, fetchWorktreeBase, localBranchNames } = dependencies;
+    if (!resolveWorktreeBase || !fetchWorktreeBase || !localBranchNames) {
+      throw new Error("Creating a worktree from a base branch is unavailable.");
+    }
+    if (request.branchName === undefined && request.autoName === undefined) {
+      throw new Error("Choose a branch name for the new worktree.");
+    }
+    return dependencies.environment.run(owner, sourceWorkspaceId, async (resolved, signal) => {
+      const base = await resolveWorktreeBase(resolved.folderPath, request.baseRef, signal);
+      // Start at the resolved commit itself, so what is recorded before
+      // creation is exactly what the worktree starts at.
+      let start = { point: base.commit, commit: base.commit };
+      let startPoint = base.name;
+      let baseSource: FirstMessageWorktreeBaseSource = "local";
+      if (request.fromOrigin) {
+        if (base.upstream) {
+          const remoteName = `${base.upstream.remote}/${base.upstream.branch}`;
+          request.onProgress?.({ phase: "fetching", startPoint: remoteName });
+          const commit = await fetchWorktreeBase(resolved.folderPath, base.upstream, signal);
+          start = { point: commit, commit };
+          startPoint = remoteName;
+          baseSource = "fetched";
+        } else {
+          baseSource = "no-upstream";
+        }
+      }
+      const existing = await localBranchNames(resolved.folderPath, signal);
+      let branch = request.branchName;
+      if (branch === undefined) {
+        branch = uniqueBranchName(autoWorktreeBranchName(request.autoName!.seed), existing);
+        if (!branch) throw new Error("Aiden could not find a free branch name for the new worktree.");
+      } else if (uniqueBranchName(branch, existing, 1) !== branch) {
+        // Refuse before anything is recorded, so a caller never associates an
+        // existing branch (or another worktree on it) with this attempt.
+        throw new Error(`Branch “${branch}” already exists.`);
+      }
+      if (signal.aborted) throw new Error("The worktree was cancelled before it was created.");
+      const identity = { workspaceId: dependencies.createWorkspaceId(), ownershipToken: randomUUID() };
+      await request.onBranchResolved?.({ branch, ...identity, baseCommit: start.commit, startPoint, baseSource });
+      request.onProgress?.({ phase: "creating", branch, startPoint });
+      const workspace = await createIn(
+        resolved,
+        signal,
+        sourceWorkspaceId,
+        branch,
+        request.requestedName,
+        start,
+        identity,
+      );
+      return {
+        workspace,
+        branch,
+        startPoint,
+        baseCommit: workspace.managedWorktree?.createdFromHead ?? start.commit,
+        baseSource,
+      };
+    });
+  };
+
+  /**
+   * Roll back the worktree an interrupted `createFromBase` attempt may have
+   * left registered in Git but never saved as a workspace, identified by the
+   * branch and ownership token it recorded. Absent is not an error.
+   */
+  const discardInterruptedWorktree = async (
+    owner: WorkspaceOperationDocumentOwner,
+    sourceWorkspaceId: string,
+    attempt: Pick<WorktreeFromBaseAttempt, "branch" | "ownershipToken" | "baseCommit">,
+  ): Promise<"absent" | "rolled-back"> => {
+    const { rollbackOwnedWorktree } = dependencies;
+    if (!rollbackOwnedWorktree) throw new Error("Recovering an interrupted worktree is unavailable.");
+    return dependencies.environment.run(owner, sourceWorkspaceId, async (resolved) =>
+      rollbackOwnedWorktree(resolved.folderPath, attempt.branch, attempt.ownershipToken, attempt.baseCommit));
+  };
 
   const remove = async (
     owner: WorkspaceOperationDocumentOwner,
@@ -619,7 +792,7 @@ export function createWorkspaceWorktreeApplicationService(
     }
   };
 
-  return { create, remove, restore };
+  return { create, createFromBase, discardInterruptedWorktree, remove, restore };
 }
 
 export type WorkspaceWorktreeApplicationService = ReturnType<

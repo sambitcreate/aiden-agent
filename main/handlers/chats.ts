@@ -1,7 +1,7 @@
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
-import { BrowserWindow, dialog, ipcMain } from "../platform.js";
+import { BrowserWindow, dialog, ipcMain, logger } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -26,7 +26,18 @@ import { asString, createRendererChatMutationHandlers } from "./chat-renderer-mu
 import { closeDeviceSessionsForChat } from "./devices.js";
 import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
-import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
+import {
+  createFirstMessageCommitter,
+  createWorktreeFirstMessageCommitter,
+} from "../services/chat-first-message-commit.js";
+import {
+  createFileFirstMessageWorktreeLedger,
+  createFirstMessageWorktreeCoordinator,
+} from "../services/first-message-worktree.js";
+import { workspaceWorktreeApplicationService } from "../services/workspace-worktree-application-service-main.js";
+import { ensureUserDataDir } from "../services/data-store.js";
+import type { Chat } from "../services/types.js";
+import path from "node:path";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import {
@@ -112,16 +123,48 @@ export function registerChatHistoryHandlers(): void {
     workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
+  const firstMessageWorktrees = createFirstMessageWorktreeCoordinator({
+    ledger: createFileFirstMessageWorktreeLedger({
+      filePath: async () => path.join(await ensureUserDataDir(), "first-message-worktrees.json"),
+      logError: (message, error) => logger.error("git", message, error),
+    }),
+    createFromBase: (owner, sourceWorkspaceId, request) =>
+      workspaceWorktreeApplicationService.createFromBase(owner, sourceWorkspaceId, request),
+    discardInterruptedWorktree: (owner, sourceWorkspaceId, attempt) =>
+      workspaceWorktreeApplicationService.discardInterruptedWorktree(owner, sourceWorkspaceId, attempt),
+    getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
+    logError: (message, error) => logger.error("git", message, error),
+  });
+  const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
+    commit: commitFirstMessage,
+    ensureWorktree: (request, seed, owner, onProgress) =>
+      firstMessageWorktrees.ensure(request, seed, owner, onProgress),
+    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+  });
+  const announceFirstMessage = (chat: Chat) => {
+    ipcMain.broadcast("chats:metadata-updated", {
+      chatId: chat.id,
+      title: chat.title,
+      workspaceId: persistedChatWorkspaceId(chat.workspaceId),
+      updatedAt: chat.updatedAt,
+    });
+  };
   ipcMain.handle("chats:createWithFirstMessage", (event, input: unknown) => {
     const parsed = parseChatFirstMessage(input);
     const owner = rendererDocumentOwner(event, () => new Error("Chats require the active application document."));
-    return commitFirstMessage(parsed, owner).then((chat) => {
-      ipcMain.broadcast("chats:metadata-updated", {
-        chatId: chat.id,
-        title: chat.title,
-        workspaceId: persistedChatWorkspaceId(chat.workspaceId),
-        updatedAt: chat.updatedAt,
+    if (parsed.worktree) {
+      // New worktree: the result is a FirstMessageWorktreeResult, and progress
+      // goes only to this document.
+      return commitFirstMessageInWorktree(parsed, owner, (progress) => {
+        if (!owner.isDestroyed()) owner.send("chats:first-message-worktree-progress", progress);
+      }).then((result) => {
+        if (!result.ok) return result;
+        announceFirstMessage(result.chat);
+        return { ...result, chat: chatForRenderer(result.chat) };
       });
+    }
+    return commitFirstMessage(parsed, owner).then((chat) => {
+      announceFirstMessage(chat);
       return chatForRenderer(chat);
     });
   });

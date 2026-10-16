@@ -35,6 +35,7 @@ import {
   AIDEN_REMOTE_BOT_PROACTIVE_FEATURE,
   AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
+  AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
@@ -301,6 +302,10 @@ export interface AidenRemoteRouterDependencies {
         | "supportsMemory"
         | "supportsProactive"
         | "supportsActivity"
+        // Contract revision 33 (`bot-attachments-v1`).
+        | "uploadAttachment"
+        | "removeAttachment"
+        | "supportsAttachments"
       >
     >;
   /**
@@ -365,6 +370,7 @@ export type AidenRemoteRouteLabel =
   | "bots"
   | "bot"
   | "botSession"
+  | "botAttachment"
   | "botSessionEvents"
   | "botQuestionAnswer"
   | "botRoutines"
@@ -449,6 +455,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/bots/:botId/dismiss",
     "/bots/:botId/stop",
   ],
+  botAttachment: ["/bots/:botId/attachments", "/bots/:botId/attachments/:attachmentId"],
   botSessionEvents: ["/bots/:botId/session/events"],
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
@@ -1503,6 +1510,14 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
   return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
 }
 
+/** Revision 33: uploads, removals and `attachmentIds` ship together, or not at all. */
+function botAttachmentsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const sessions = dependencies.botSessions;
+  return sessions?.supportsAttachments === true &&
+    typeof sessions.uploadAttachment === "function" &&
+    typeof sessions.removeAttachment === "function";
+}
+
 /**
  * The one place a Bot detail leaves the router (create, get, PATCH, avatar
  * DELETE): `chatActivity` only for `bot:activity` holders, so an older
@@ -1891,6 +1906,8 @@ export function createAidenRemoteRequestHandler(
             ...(dependencies.botSessions?.supportsProactive === true ? [AIDEN_REMOTE_BOT_PROACTIVE_FEATURE] : []),
             // Bot chat activity on phones (contract revision 30).
             ...(botActivityWired(dependencies) ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
+            // Bot message attachments (contract revision 33).
+            ...(botAttachmentsWired(dependencies) ? [AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE] : []),
             // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
             ...(!isDesktopDevice(device) && dependencies.simulators?.host("mobile")
               ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE]
@@ -2088,11 +2105,11 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.botFiles) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(
-          response,
-          200,
-          await dependencies.botFiles.list(device.id, botConversationFilesMatch[1]!),
-        );
+        const index = await dependencies.botFiles.list(device.id, botConversationFilesMatch[1]!);
+        // Bot authority is the Mac owner's, so it does not end with this
+        // device. Cross the revocation fence again before publishing.
+        admitDevice(device.id)();
+        writeJson(response, 200, index);
         return;
       }
       const botConversationFileMatch =
@@ -2106,15 +2123,13 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.botFiles) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(
-          response,
-          200,
-          await dependencies.botFiles.read(
-            device.id,
-            botConversationFileMatch[1]!,
-            botConversationFileMatch[2]!,
-          ),
+        const file = await dependencies.botFiles.read(
+          device.id,
+          botConversationFileMatch[1]!,
+          botConversationFileMatch[2]!,
         );
+        admitDevice(device.id)();
+        writeJson(response, 200, file);
         return;
       }
       if (botConversationFileMatch && request.method === "PUT") {
@@ -2272,6 +2287,31 @@ export function createAidenRemoteRequestHandler(
           200,
           await botSessionsOrNotFound(dependencies).send(device.id, botMessagesMatch[1]!, key, body),
         );
+        return;
+      }
+      const botAttachmentsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/attachments$/u.exec(path);
+      if (botAttachmentsMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botAttachment";
+        const body = await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read", "chat:write"]);
+        if (!botAttachmentsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 201, await dependencies.botSessions!.uploadAttachment!(device.id, botAttachmentsMatch[1]!, body));
+        return;
+      }
+      const botAttachmentMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/attachments\/(att_[A-Za-z0-9_-]{43})$/u.exec(path);
+      if (botAttachmentMatch && request.method === "DELETE") {
+        requireNoQuery(query);
+        route = "botAttachment";
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read", "chat:write"]);
+        if (!botAttachmentsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        await dependencies.botSessions!.removeAttachment!(device.id, botAttachmentMatch[1]!, botAttachmentMatch[2]!);
+        response.writeHead(204, responseHeaders());
+        response.end();
         return;
       }
       const botResumeMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/resume$/u.exec(path);

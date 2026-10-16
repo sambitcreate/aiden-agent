@@ -871,6 +871,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const botFiles = botsSupported
             ? new AidenRemoteBotFileService({
                 instanceId,
+                botAudienceId: BOT_DESKTOP_AUDIENCE_ID,
                 authority: botRuntimeAuthority,
                 chats: chatStore,
               })
@@ -891,6 +892,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
                 runStarts: botRunStarts,
                 onReport: (botId, error) => logger.warn("aiden-remote", `Bot ${botId} queued or placed messages could not be read for phones.`, error),
+                // Phone uploads share the workspace chats' one-shot store (revision 33).
+                attachments: remoteAttachmentStore,
                 presets: {
                   list: () => BOT_PRESETS,
                   // The one process-wide starter the desktop uses: a Mac tap and a
