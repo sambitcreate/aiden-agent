@@ -6,11 +6,13 @@
 import "../styles.css";
 import { invoke } from "../lib/ipc-bridge";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
+import { installInputModality } from "../lib/input-modality";
 import type { AppInfo } from "../lib/ipc";
 import type { Provider } from "../lib/types";
 import type { StartupReads } from "./app";
 
 applyCachedAppearance();
+installInputModality();
 
 const startup: StartupReads = {
   info: invoke<AppInfo>("app:getInfo"),

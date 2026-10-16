@@ -508,6 +508,8 @@ test("Web Search authority changes fence an active Bot lease before durable publ
     catalog: catalog(),
     access: { accessMode: "full", catalogRevision, confirmedForeground: true },
   });
+  // Omission never grants network access.
+  assert.equal(await store.getBotWebSearchEnabled(policy.botId), false);
   await store.createChatPolicy({
     chatId: "chat:web-fence",
     botId: policy.botId,
@@ -538,6 +540,7 @@ test("Web Search authority changes fence an active Bot lease before durable publ
   assert.throws(() => admitted.lease.assertCurrent(), /access changed/u);
   publication.release();
   const enabled = await update;
+  assert.equal(await store.getBotWebSearchEnabled(policy.botId), true);
 
   const reAdmitted = await store.admit({
     audienceId: "device:a",
@@ -562,6 +565,7 @@ test("Web Search authority changes fence an active Bot lease before durable publ
   assert.throws(() => reAdmitted.lease.assertCurrent(), /access changed/u);
   revocationPublication.release();
   await revocation;
+  assert.equal(await store.getBotWebSearchEnabled(policy.botId), false);
 });
 
 test("Custom bindings survive restart, stay out of public views, and gate drift before leasing", async (t) => {

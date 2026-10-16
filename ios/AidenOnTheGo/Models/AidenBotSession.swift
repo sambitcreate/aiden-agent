@@ -9,6 +9,8 @@ enum AidenBotSessionWire {
     static let maxEntries = 200
     static let maxTextLength = 100_000
     static let maxMessageLength = 32_000
+    /// Revision 33: references one Bot message may spend.
+    static let maxMessageAttachments = 10
     static let maxLabelLength = 120
     static let maxReasonLength = 280
     static let maxEpochLength = 64
@@ -885,26 +887,39 @@ struct AidenBotMessageRequest: Codable, Equatable, Sendable {
     let text: String
     /// Revision 30 (`bot-activity-v1`): Steer joins the running turn; Queue runs after it.
     let whenBusy: AidenStreamInputMode?
+    /// Revision 33 (`bot-attachments-v1`): staged uploads this message spends.
+    /// Absent (never empty) without attachments; with them the text may be empty.
+    let attachmentIds: [String]?
 
-    init(text: String, whenBusy: AidenStreamInputMode? = nil) throws {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+    init(text: String, whenBusy: AidenStreamInputMode? = nil, attachmentIds: [String] = []) throws {
+        guard attachmentIds.count <= AidenBotSessionWire.maxMessageAttachments,
+              Set(attachmentIds).count == attachmentIds.count,
+              attachmentIds.allSatisfy({ $0.range(of: #"^att_[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil }) else {
+            throw AidenBotContractError.invalidField("attachmentIds")
+        }
+        guard !attachmentIds.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               text.unicodeScalars.count <= AidenBotSessionWire.maxMessageLength else {
             throw AidenBotContractError.invalidField("text")
         }
         self.text = text
         self.whenBusy = whenBusy
+        self.attachmentIds = attachmentIds.isEmpty ? nil : attachmentIds
     }
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["text", "whenBusy"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["text", "whenBusy", "attachmentIds"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        let attachmentIds = try values.decodeIfPresent([String].self, forKey: .attachmentIds)
+        // An empty list is refused on the wire, never read as no attachments.
+        if attachmentIds?.isEmpty == true { throw AidenBotContractError.invalidField("attachmentIds") }
         try self.init(
             text: try values.decode(String.self, forKey: .text),
-            whenBusy: try values.decodeIfPresent(AidenStreamInputMode.self, forKey: .whenBusy)
+            whenBusy: try values.decodeIfPresent(AidenStreamInputMode.self, forKey: .whenBusy),
+            attachmentIds: attachmentIds ?? []
         )
     }
 
-    private enum CodingKeys: String, CodingKey { case text, whenBusy }
+    private enum CodingKeys: String, CodingKey { case text, whenBusy, attachmentIds }
 }
 
 /// The empty `{}` body of resume, dismiss, and stop.

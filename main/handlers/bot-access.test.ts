@@ -57,6 +57,7 @@ function setup(options: {
     getBotAccess: record("getBotAccess", () => ({ revision: "policy" })),
     modelSelection: record("modelSelection", () => ({ providerId: "p", modelId: "m" })),
     visionModelSelection: record("visionModelSelection", () => undefined),
+    botWebSearchEnabled: record("botWebSearchEnabled", () => true),
     updateBotAccess: record("updateBotAccess", options.updateBotAccess ?? (() => ({ revision: "next" }))),
   };
   const handlers = new Map<string, (event: FakeEvent, ...args: unknown[]) => unknown>();
@@ -137,6 +138,7 @@ test("the Bot editor reads catalog, access, and models as the desktop audience",
     access: { revision: "policy" },
     modelSelection: { providerId: "p", modelId: "m" },
     visionModelSelection: undefined,
+    webSearchEnabled: true,
   });
   assert.deepEqual(audiences("modelSelection"), [DESKTOP]);
   assert.deepEqual(audiences("visionModelSelection"), [DESKTOP]);

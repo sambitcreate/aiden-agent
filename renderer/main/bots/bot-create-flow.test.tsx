@@ -66,6 +66,7 @@ test("name and what it helps with create a Bot, offer connections, and open its 
     confirmedForeground: true,
     providerId: "prov-text",
     modelId: "model-text",
+    webSearchEnabled: true,
     visionModel: { providerId: "prov-vision", modelId: "model-vision" },
   });
   const introduced = calls.filter((call) => call.channel === "bots:introduce");

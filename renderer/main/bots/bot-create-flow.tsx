@@ -302,7 +302,7 @@ export function BotCreateFlow({
         title={step === 1 ? "New Bot" : "Connections"}
         description={
           step === 2
-            ? `Optional. ${displayName} can use any app you connect on this Mac.`
+            ? `Optional. ${displayName} can search the web and use any app you connect on this Mac.`
             : undefined
         }
         confirmLabel={step === 1 ? "Next" : "Create"}
