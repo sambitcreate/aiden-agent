@@ -1,9 +1,9 @@
 # Managed worktree process cleanup
 
 Started 2026-10-15, pending PR #500. Started from `origin/main` `11b58367`;
-as of 2026-10-16, merged latest `origin/main` `515de6738` into the PR branch
-without rebasing. The integrations include #498, #503, #506, #501, #504, and
-the 0.57.0 release merge. The merged root
+as of 2026-10-16, merged latest `origin/main` `9deb63f52` into the PR branch
+without rebasing. The integrations include #498, #503, #506, #501, #504,
+the 0.57.0 release merge, #508, #509, #510 and #511. The merged root
 `package.json` test chain matches main, and this PR changes no Aiden Remote
 protocol revision or native-client fixture.
 
@@ -82,3 +82,28 @@ This is one bounded phase. No automatic retention sweep or new owner metadata is
 enabled. Future eligibility must default old worktrees to manual, keep manual
 worktrees out of sweeps, skip uncertain/dirty/unpushed/unknown-ignored/open-PR-
 head-or-base candidates, report the reason, and revalidate before deletion.
+
+The `e55d71a61` exact-head CI run `38854074444` was green across desktop,
+mobile, E2E, CLI, and Linux packaging, with Pullfrog passing. Hermes did not
+produce a verdict: service logs showed AGY quota exhaustion (429), with a
+reported reset near 15:34 UTC on October 16. After main advanced to
+`716636cf9`, that main was merged without conflicts. The #509 Remote Bot Files
+authority fix and #508 E2E adjustment did not change this PR's process cleanup
+path, package test chain, or Remote revision 32. Post-merge local root typecheck,
+36 native remover tests, 6 manifest tests, 31 lifecycle tests, 99 CLI tests,
+Android JVM gate and 109 focused iOS Remote client tests passed. A combined
+desktop/Remote run hit an existing four-second Git timeout under concurrent
+CLI build load; the isolated lifecycle suite passed. Fresh exact-head CI and
+Hermes review remain required after this merge.
+
+Main advanced again to `9deb63f52` (#510 Bot Web Search and #511 focus
+modality); the merge had no conflicts. The package test chain matches main
+and Remote revision remains 32. A combined local desktop/Remote run on the
+earlier `716636cf9` integration passed 218 of 221 cases, but wall-clock
+delays under extreme host load (load average above 250) expired a Bot Files
+handle and a Remote Git snapshot and caused a first-message Git timeout.
+The focused Bot Files case had passed in the first combined run; the isolated
+lifecycle suite and CLI rerun also passed. Preserve these failures in the PR
+record and use fresh exact-head hosted CI to judge the new head.
+Root typecheck and 119 focused Bot access, Web Search, renderer, and input
+modality tests passed after the `9deb63f52` merge.
