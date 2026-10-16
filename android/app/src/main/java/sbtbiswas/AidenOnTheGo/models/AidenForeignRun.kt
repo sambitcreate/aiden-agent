@@ -58,14 +58,14 @@ data class AidenForeignRunResolution(
     }
 }
 
-/** Contract revision 24: the phone's live projection of a run it did not start
+/** Contract revision 24: the phone's control projection of a run it did not start
  * (on the Mac, in Telegram or from the scheduler). It is a pure reducer over
  * [AidenRemoteRunEvent], so attaching mid-run, gap snapshots and
  * first-responder-wins resolutions are testable without a network. */
 class AidenForeignRunProjection(val runId: String) {
     sealed interface Effect {
         data class TextAppended(val text: String) : Effect
-        data object Reasoning : Effect
+        data class ReasoningAppended(val text: String) : Effect
         data class ToolStarted(val name: String) : Effect
         data object ToolFinished : Effect
         data class ApprovalRequired(val approvalId: String) : Effect
@@ -77,10 +77,6 @@ class AidenForeignRunProjection(val runId: String) {
     }
 
     var lastSequence = 0
-        private set
-    var liveText = ""
-        private set
-    var reasoning = ""
         private set
     private val _tools = mutableListOf<AidenLiveTool>()
     val tools: List<AidenLiveTool> get() = _tools.map { it.copy() }
@@ -165,8 +161,6 @@ class AidenForeignRunProjection(val runId: String) {
                 )
             }
             is AidenRemoteRunEvent.Kind.Snapshot -> {
-                liveText = ""
-                reasoning = ""
                 _tools.clear()
                 _approvals.clear()
                 _approvals.addAll(kind.snapshot.approvals.filter { it.approvalId !in locallyAnswered })
@@ -205,13 +199,11 @@ class AidenForeignRunProjection(val runId: String) {
             }
             AidenRemoteEventType.TEXT_DELTA -> {
                 val text = payload.text.orEmpty()
-                liveText += text
                 if (_approvals.isEmpty() && _questions.isEmpty()) state = AidenStreamState.RUNNING
                 listOf(Effect.TextAppended(text))
             }
             AidenRemoteEventType.REASONING_DELTA -> {
-                reasoning += payload.text.orEmpty()
-                listOf(Effect.Reasoning)
+                listOf(Effect.ReasoningAppended(payload.text.orEmpty()))
             }
             AidenRemoteEventType.TOOL_STARTED -> {
                 val id = payload.toolId ?: return emptyList()

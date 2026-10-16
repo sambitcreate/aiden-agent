@@ -1,6 +1,6 @@
 {
   "target": "darwin-universal",
-  "builtAt": "2026-10-15T22:02:18.044Z",
+  "builtAt": "2026-10-16T03:49:05.251Z",
   "helpers": {
     "worktree-remover": {
       "sha256": "72f46591d67614b8125feb58a0d8ac11e794ad83ae917076bb135a49396cb7be",

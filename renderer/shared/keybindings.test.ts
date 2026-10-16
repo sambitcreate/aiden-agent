@@ -61,7 +61,7 @@ test("future keybinding documents are used defensively without being downgraded"
     () =>
       applyKeybindingMutation(future, {
         commandId: "chat.new",
-        binding: "Command+Shift+N",
+        binding: "Command+Alt+N",
       }),
     (error) => error instanceof KeybindingValidationError && error.code === "future-version",
   );
@@ -193,6 +193,81 @@ test("rejects conflicts and reserved bindings without mutating the prior value",
   assert.equal(effectiveBindings(current)["chat.new"], "Command+N");
 });
 
+test("New chat in… owns Command+Shift+N beside New chat and refuses to share it", () => {
+  assert.equal(effectiveBinding("chat.newIn", undefined), "Command+Shift+N");
+  assert.equal(effectiveBinding("chat.new", undefined), "Command+N");
+  assert.throws(
+    () => applyKeybindingMutation(undefined, { commandId: "chat.new", binding: "Command+Shift+N" }),
+    (error) => error instanceof KeybindingValidationError && error.code === "conflict",
+  );
+  assert.throws(
+    () => applyKeybindingMutation(undefined, { commandId: "chat.newIn", binding: "Command+N" }),
+    (error) => error instanceof KeybindingValidationError && error.code === "conflict",
+  );
+});
+
+test("a shortcut saved before New chat in… existed keeps Command+Shift+N", () => {
+  // Saved by an earlier build: New chat on Command+Shift+N, nothing for New chat in….
+  const saved = { version: 1, commands: { "chat.new": { binding: "Command+Shift+N" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.deepEqual(
+    [effectiveBinding("chat.new", repaired), effectiveBinding("chat.newIn", repaired)],
+    ["Command+Shift+N", null],
+  );
+  assert.equal(shouldPersistCanonicalKeybindings(saved, repaired), true, "the yield is saved once");
+  // Once saved, later repairs leave both choices alone, and the user can bind
+  // New chat in… to a free shortcut.
+  assert.deepEqual(repairKeybindingOverrides(repaired), repaired);
+  const rebound = applyKeybindingMutation(repaired, {
+    commandId: "chat.newIn",
+    binding: "Command+Alt+N",
+  });
+  assert.deepEqual(
+    [effectiveBinding("chat.new", rebound), effectiveBinding("chat.newIn", rebound)],
+    ["Command+Shift+N", "Command+Alt+N"],
+  );
+
+  // The same holds when the saved shortcut belongs to an unrelated command.
+  const other = repairKeybindingOverrides({
+    version: 1,
+    commands: { "model.change": { binding: "Command+Shift+N" } },
+  });
+  assert.deepEqual(
+    [effectiveBinding("model.change", other), effectiveBinding("chat.newIn", other)],
+    ["Command+Shift+N", null],
+  );
+
+  // Without a saved claim the new default applies.
+  const untouched = repairKeybindingOverrides({
+    version: 1,
+    commands: { "chat.new": { binding: "Command+Alt+N" } },
+  });
+  assert.equal(effectiveBinding("chat.newIn", untouched), "Command+Shift+N");
+});
+
+test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder", () => {
+  // Saved by an earlier build: New chat on Command+Shift+O, before Open folder… owned that default.
+  const saved = { version: 1, commands: { "chat.new": { binding: "Command+Shift+O" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.deepEqual(
+    [effectiveBinding("chat.new", repaired), effectiveBinding("workspace.openFolder", repaired)],
+    ["Command+Shift+O", null],
+  );
+  assert.deepEqual(migrateLegacyKeybindings(saved), repaired, "startup repairs through the same path");
+  assert.equal(shouldPersistCanonicalKeybindings(saved, repaired), true, "the yield is saved once");
+  // Once saved, later repairs leave both choices alone, and the user can bind
+  // Open folder… to a free shortcut.
+  assert.deepEqual(repairKeybindingOverrides(repaired), repaired);
+  const rebound = applyKeybindingMutation(repaired, {
+    commandId: "workspace.openFolder",
+    binding: "Command+Alt+O",
+  });
+  assert.deepEqual(
+    [effectiveBinding("chat.new", rebound), effectiveBinding("workspace.openFolder", rebound)],
+    ["Command+Shift+O", "Command+Alt+O"],
+  );
+});
+
 test("catalog defaults remain conflict-free and avoid native role accelerators", () => {
   assert.doesNotThrow(() => validateEffectiveBindings(effectiveBindings(undefined)));
   assert.equal(effectiveBinding("sidebar.toggle", undefined), "Command+B");
@@ -201,7 +276,7 @@ test("catalog defaults remain conflict-free and avoid native role accelerators",
 test("reset removes only the selected override", () => {
   const changed = applyKeybindingMutation(undefined, {
     commandId: "chat.new",
-    binding: "Command+Shift+N",
+    binding: "Command+Alt+N",
   });
   const reset = applyKeybindingMutation(changed, { commandId: "chat.new", reset: true });
   assert.equal(reset.commands["chat.new"], undefined);
@@ -285,11 +360,11 @@ test("normalization tolerates malformed canonical data and preserves future comm
   });
   const reboundKnown = applyKeybindingMutation(changed, {
     commandId: "chat.new",
-    binding: "Command+Shift+N",
+    binding: "Command+Alt+N",
   });
   assert.deepEqual((reboundKnown.commands as Record<string, unknown>)["chat.new"], {
     futurePolicy: { mode: "future" },
-    binding: "Command+Shift+N",
+    binding: "Command+Alt+N",
     disabled: false,
   });
   const resetKnown = applyKeybindingMutation(reboundKnown, {
@@ -316,7 +391,7 @@ test("current keybinding edits, resets, and repairs preserve unknown root fields
     version: 1 as const,
     futurePolicy: { owner: "newer-build", revision: 3 },
     commands: {
-      "chat.new": { binding: "Command+Shift+N" },
+      "chat.new": { binding: "Command+Alt+N" },
     },
   };
   const normalized = normalizeKeybindingOverrides(source);

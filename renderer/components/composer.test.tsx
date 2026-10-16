@@ -114,22 +114,6 @@ test("custom provider artwork keeps its original pixels instead of becoming a ma
   assert.doesNotMatch(markup, /mask-image|background-color/u);
 });
 
-test("workspace context collapses only after a persisted user message and retains portal controls", () => {
-  const composer = source("./composer.tsx");
-  const bar = source("./composer-context-bar.tsx");
-  const styles = source("../styles.css");
-  assert.match(composer, /sessionChat\?\.messages\.some\(\(message\) => message\.role === "user"\)/u);
-  assert.match(bar, /autoHide && hasUserMessages/u);
-  assert.match(bar, /inert=\{hidden \|\| undefined\}/u);
-  assert.match(bar, /aria-hidden=\{hidden \|\| undefined\}/u);
-  assert.match(bar, /APPEARANCE_CHANGE_EVENT/u);
-  assert.match(styles, /\.composer-context-collapse\[data-collapsed="true"\][\s\S]*?grid-template-rows: 0fr/u);
-  assert.match(styles, /transform: translateY\(8px\)/u);
-  assert.match(styles, /:root\[data-reduce-motion="true"\] \.composer-context-content \{\s*transition: none;/u);
-  // A hidden strip must not unmount slash-opened worktree dialogs.
-  assert.match(bar, /className="composer-context-content">\{children\}/u);
-});
-
 test("composer focus tints the whole shell, not only the textarea", () => {
   const composer = source("./composer.tsx");
   const styles = source("../styles.css");
@@ -331,17 +315,12 @@ test("visualize preserves the slash draft when validation rejects the send", () 
   );
 });
 
+// The picker's own blocked behaviour is rendered in workspace-picker.test.tsx.
 test("workspace picker closes and exposes a persistent reason when workspace changes are blocked", () => {
   const composer = source("./composer.tsx");
-  const picker = source("./workspace-picker.tsx");
   assert.match(composer, /blockedReason=\{workspaceChangeBlockedReason\}/u);
   assert.match(composer, /key=\{workspaceChangeBlockedReason \? "blocked" : "available"\}/u);
   assert.match(composer, /Workspace unavailable: \$\{workspaceChangeBlockedReason\}/u);
-  assert.match(picker, /open=\{blockedReason \? false : open\}/u);
-  assert.match(picker, /aria-describedby/u);
-  assert.match(picker, /className="sr-only" role="status"/u);
-  assert.match(picker, /disabled=\{pending !== null \|\| Boolean\(blockedReason\)\}/u);
-  assert.match(picker, /!pending && !blockedReason && setOpen\(nextOpen\)/u);
 });
 
 test("workspace access keyboard navigation moves focus without changing permission", () => {

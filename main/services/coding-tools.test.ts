@@ -1780,6 +1780,29 @@ test("file mutation tools report bounded line additions and deletions", async ()
   }
 });
 
+test("edit_file writes JavaScript replacement markers literally", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-literal-edit-"));
+  try {
+    const file = path.join(root, "sample.ts");
+    await fs.writeFile(file, "const output = PLACEHOLDER;\n", "utf8");
+    const editFile = buildCodingTools(root).find((tool) => tool.name === "edit_file");
+    assert.ok(editFile);
+
+    const replacement = 'input.replace(/x/g, "$&"); // $1 $` $\' $$';
+    const result = await editFile.execute("literal-markers", {
+      path: "sample.ts",
+      old_string: "PLACEHOLDER",
+      new_string: replacement,
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(result.content, [{ type: "text", text: "Edited sample.ts." }]);
+    assert.equal(await fs.readFile(file, "utf8"), `const output = ${replacement};\n`);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("every permitted subagent filesystem tool observes cancellation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-abort-"));
   try {

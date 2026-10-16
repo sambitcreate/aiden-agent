@@ -1,6 +1,8 @@
 // Compact composer Git control: local status/refs, safe branch switching,
 // branch creation, and managed isolated worktrees using Aiden's existing menu
-// vocabulary and progressive disclosure.
+// vocabulary and progressive disclosure. On a draft it also chooses where the
+// chat will run (Work in): this checkout, a new worktree created on first
+// send, or one of the repository's existing managed worktrees.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,6 +24,11 @@ import {
 import { Check, ChevronDown, FolderGit2, GitBranch, Loader2, Plus } from "lucide-react";
 import { gitApi } from "../lib/ipc";
 import { queryKeys, useGitBranches, useGitWorktrees } from "../lib/queries";
+import { branchChipState } from "../lib/draft-git-menu";
+import { cn } from "../lib/ui-utils";
+import { DraftWorkIn, useDraftWorktreeDefaults, type GitBranchPickerDraft } from "./draft-work-in";
+
+export type { GitBranchPickerDraft } from "./draft-work-in";
 
 interface GitBranchPickerProps {
   workspaceId: string;
@@ -38,6 +45,12 @@ interface GitBranchPickerProps {
   openWorktreeOnMount?: boolean;
   /** Restores focus to the slash-command origin instead of the untouched trigger. */
   programmaticReturnFocusRef?: React.RefObject<HTMLElement | null>;
+  /** Uncommitted changes from the workspace's Git status, shown on the compact trigger before the menu loads its own read. */
+  uncommitted?: number;
+  /** The workspace is an Aiden-managed worktree. */
+  managedWorktree?: boolean;
+  /** Set on drafts: the Work in choice and New worktree settings. */
+  draft?: GitBranchPickerDraft;
 }
 
 type CreateMode = "branch" | "worktree" | null;
@@ -69,12 +82,17 @@ export function GitBranchPicker({
   unborn: unbornProp = false,
   openWorktreeOnMount = false,
   programmaticReturnFocusRef,
+  uncommitted: uncommittedProp,
+  managedWorktree = false,
+  draft,
 }: GitBranchPickerProps) {
   const qc = useQueryClient();
   const searchRef = React.useRef<HTMLInputElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
+  // A draft chooses New worktree in Work in instead of creating one now.
+  const createWorktree = draft ? undefined : onCreateWorktree;
   const openManagedWorktree =
-    openWorktreeOnMount && Boolean(onCreateWorktree) && !disabled && !unbornProp;
+    openWorktreeOnMount && Boolean(createWorktree) && !disabled && !unbornProp;
   const programmaticOriginRef = React.useRef(openManagedWorktree);
   const [open, setOpen] = React.useState(openManagedWorktree);
   const [createMode, setCreateMode] = React.useState<CreateMode>(
@@ -84,13 +102,20 @@ export function GitBranchPicker({
   const [query, setQuery] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
-  const branches = useGitBranches(workspaceId, open);
+  const draftNewWorktree = draft?.gitMode === "worktree";
+  // A New worktree draft reads branches while closed too, to resolve its base.
+  const branches = useGitBranches(workspaceId, open || draftNewWorktree);
   const worktrees = useGitWorktrees(workspaceId, open);
   const detached = branches.data?.detached ?? detachedProp;
   const unborn = branches.data?.unborn ?? unbornProp;
   const currentRef = branches.data?.current ?? branch;
   const current = detached ? "Detached HEAD" : currentRef;
-  const uncommitted = branches.data?.uncommitted ?? 0;
+  // The branches read is disabled (and not refreshed) while the menu is closed,
+  // so a closed trigger follows the caller's live Git status when it has one.
+  const uncommitted =
+    open || uncommittedProp === undefined
+      ? (branches.data?.uncommitted ?? uncommittedProp ?? 0)
+      : uncommittedProp;
   const ahead = branches.data?.ahead ?? 0;
   const behind = branches.data?.behind ?? 0;
   const upstream = branches.data?.upstream;
@@ -110,6 +135,22 @@ export function GitBranchPicker({
   React.useEffect(() => {
     if (disabled && !busy) setOpen(false);
   }, [busy, disabled]);
+
+  useDraftWorktreeDefaults(draft, branches.data);
+  const chip = branchChipState({
+    branch: current,
+    uncommitted,
+    draftGitMode: draft?.gitMode,
+    baseRef: draft?.worktree?.baseRef,
+    managedWorktree,
+  });
+  // On a draft, uncommitted changes keep this checkout on its branch: the
+  // escape hatch is a new worktree, which starts clean.
+  const draftDirty = Boolean(draft) && uncommitted > 0;
+  // New worktree and an existing worktree replace the branch list with their own settings.
+  const showBranchList =
+    !draft ||
+    (draft.gitMode !== "worktree" && !(draft.workIn.selectedWorktreeId && draft.workIn.source));
 
   const refresh = () =>
     Promise.all([
@@ -147,6 +188,7 @@ export function GitBranchPicker({
   };
 
   const checkout = async (name: string) => {
+    if (draftDirty && name !== currentRef) return;
     if (unavailable || name === currentRef || branchWorktrees.has(name)) {
       if (name === currentRef) setOpen(false);
       return;
@@ -181,8 +223,8 @@ export function GitBranchPicker({
     let closeAfterSuccess = false;
     try {
       if (createMode === "worktree") {
-        if (!onCreateWorktree) return;
-        await onCreateWorktree(name);
+        if (!createWorktree) return;
+        await createWorktree(name);
       } else {
         await gitApi.createBranch(workspaceId, name);
         await refresh();
@@ -245,18 +287,45 @@ export function GitBranchPicker({
             variant="transparent"
             size="small"
             disabled={disabled}
-            className="composer-branch-trigger h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]"
-            title={disabledReason ?? (currentSummary ? `${current} · ${currentSummary}` : current)}
+            data-branch-chip={chip.kind}
+            className={cn(
+              "composer-branch-trigger h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 max-[520px]:max-w-[7rem]",
+              chip.kind === "new-worktree"
+                ? "bg-status-accent-surface text-status-accent hover:bg-status-accent-surface active:bg-status-accent-surface"
+                : "text-tertiary",
+            )}
+            aria-label={chip.ariaLabel}
+            title={
+              disabledReason ??
+              (chip.kind === "new-worktree"
+                ? `${chip.label}. Created when you send.`
+                : currentSummary
+                  ? `${current} · ${currentSummary}`
+                  : current)
+            }
           >
-            <GitBranch className="size-4 shrink-0" />
-            <span className="min-w-0 truncate text-small">{current}</span>
+            {chip.kind === "checkout" ? (
+              <GitBranch className="size-4 shrink-0" />
+            ) : (
+              <FolderGit2 className="size-4 shrink-0" />
+            )}
+            <span className="min-w-0 truncate text-small">{chip.label}</span>
+            {chip.changes > 0 ? (
+              <span
+                data-changes-badge
+                aria-hidden="true"
+                className="inline-flex h-4 shrink-0 items-center rounded-full bg-status-warning-surface px-1.5 text-mini font-medium tabular-nums text-status-warning"
+              >
+                {chip.changes}
+              </span>
+            ) : null}
           </Button>
         )}
       </CustomDropdownMenuTrigger>
 
       <CustomDropdownMenuContent
         align="start"
-        className="w-72 p-0"
+        className={cn("p-0", draft ? "w-80" : "w-72")}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
@@ -273,7 +342,18 @@ export function GitBranchPicker({
           });
         }}
       >
-        {createMode ? (
+        {draft && !createMode ? (
+          <DraftWorkIn
+            draft={draft}
+            branches={branches.data}
+            current={current}
+            uncommitted={uncommitted}
+            unborn={unborn}
+            disabled={unavailable}
+            onDone={() => setOpen(false)}
+          />
+        ) : null}
+        {!showBranchList && !createMode ? null : createMode ? (
           <div className="flex flex-col gap-2 p-3" aria-busy={busy}>
             <Text variant="small" color="tertiary">
               {createMode === "worktree" ? "Isolated worktree" : "New branch"} from {current}
@@ -334,6 +414,27 @@ export function GitBranchPicker({
                 Local branches
               </Text>
             </div>
+            {draftDirty ? (
+              <div
+                className="mx-2 mt-2 flex flex-col items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-2 text-small text-status-warning"
+                data-dirty-checkout-note
+              >
+                <span>
+                  {uncommitted} uncommitted change{uncommitted === 1 ? "" : "s"}. Commit or stash
+                  them to switch branches here.
+                </span>
+                {!unborn ? (
+                  <Button
+                    variant="filled"
+                    size="small"
+                    disabled={unavailable}
+                    onClick={() => void draft?.onSelectNewWorktree()}
+                  >
+                    Use a new worktree instead
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             {branches.error ? (
               <div
                 className="mx-2 mt-2 flex items-center justify-between gap-2 rounded-control bg-status-red-surface px-2 py-1.5 text-small text-status-red"
@@ -368,7 +469,9 @@ export function GitBranchPicker({
                   <CommandItem
                     key={name}
                     value={name}
-                    disabled={unavailable || Boolean(otherWorktree)}
+                    disabled={
+                      unavailable || Boolean(otherWorktree) || (draftDirty && name !== currentRef)
+                    }
                     onSelect={() => void checkout(name)}
                     className="gap-2"
                   >
@@ -433,7 +536,7 @@ export function GitBranchPicker({
                     : "Create and checkout new branch…"}
                 </span>
               </CommandItem>
-              {onCreateWorktree ? (
+              {createWorktree ? (
                 <CommandItem
                   forceMount
                   value="__create-worktree__"

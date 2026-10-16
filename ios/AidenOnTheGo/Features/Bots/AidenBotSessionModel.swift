@@ -893,8 +893,10 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
             self.timer = Task { [weak self] in
                 try? await Task.sleep(for: limit)
                 guard !Task.isCancelled else { return }
-                work.cancel()
+                // Publish the timeout before cancellation can make the work
+                // throw CancellationError and discard a later queued choice.
                 self?.finish(.failure(AidenBotRequestTimedOut()))
+                work.cancel()
             }
             return false
         }

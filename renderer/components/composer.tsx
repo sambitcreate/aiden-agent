@@ -25,7 +25,6 @@ import {
   Loader2,
   Lock,
   Mic,
-  Monitor,
   OctagonAlert,
   Paperclip,
   Plus,
@@ -35,10 +34,13 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
-import { ComposerContextBar } from "./composer-context-bar";
+import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
+import { useComposerContextChips } from "./use-composer-context-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
-import { GitBranchPicker } from "./git-branch-picker";
-import { WorkspacePicker } from "./workspace-picker";
+import { GitBranchPicker, type GitBranchPickerDraft } from "./git-branch-picker";
+import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
+import { WorkspacePicker, type WorkspaceMenuRequest } from "./workspace-picker";
+import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
 import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
@@ -51,7 +53,7 @@ import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
-import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
+import type { Attachment, Chat, GitInfo, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
@@ -94,6 +96,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  subscribeRestoredUnsentMessage,
   subscribeStagedComposerText,
   takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
@@ -168,19 +171,31 @@ interface ComposerProps {
   freezeWhileSending?: boolean;
   /** Survives navigating away and reopening a draft whose commit is pending. */
   firstMessageSaving?: boolean;
+  /** Replaces "Sending…" while the first message waits on something else (a worktree choice). */
+  firstSendStatus?: string;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
   gitBranch?: string;
   gitDetached?: boolean;
   gitUnborn?: boolean;
+  /** The workspace's Git status read: change count, upstream and remote for the context-bar chips. */
+  gitStatus?: GitInfo;
   onOpenFolder?: () => void;
   onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
   workspacePickerEnabled?: boolean;
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace?: () => Promise<void>;
+  /** Workspace menu's Open folder…: native picker, then move the draft there. */
+  onOpenFolderAsWorkspace?: () => Promise<void>;
+  /** Opens the draft's workspace menu from outside (the headline name, the palette's Clone row). */
+  workspaceMenuRequest?: WorkspaceMenuRequest;
   onCreateGitWorktree?: (branchName: string) => Promise<void>;
+  /** Drafts: Work in and New worktree settings for the branch menu. */
+  draftGit?: GitBranchPickerDraft;
+  /** Drafts: `/worktree [name]` chooses New worktree instead of creating one now. */
+  onDraftNewWorktree?: (branchName?: string) => Promise<void>;
   onGitOperationBusyChange?: (busy: boolean) => void;
   gitOperationBusy?: boolean;
   workspaceChangeBlockedReason?: string;
@@ -244,7 +259,7 @@ interface ComposerProps {
    * catalog instead of this Mac's, even while the slash palette is off.
    */
   hostSkills?: ComposerSkillCatalog;
-  /** Replaces the "Local" label: which Mac a new chat will run on. */
+  /** Which Mac a new chat will run on; omitted when no paired Mac can run it. */
   machinePicker?: React.ReactNode;
   /** The context bar for a chat whose project lives on another Mac. */
   remoteContext?: React.ReactNode;
@@ -342,18 +357,24 @@ export function Composer({
   configurationBusy = false,
   freezeWhileSending = false,
   firstMessageSaving = false,
+  firstSendStatus,
   inputRef,
   workspace,
   gitBranch,
   gitDetached,
   gitUnborn,
+  gitStatus,
   onOpenFolder,
   onChangePermission,
   workspacePickerEnabled,
   workspaces = [],
   onSelectWorkspace,
   onCreateScratchWorkspace,
+  onOpenFolderAsWorkspace,
+  workspaceMenuRequest,
   onCreateGitWorktree,
+  draftGit,
+  onDraftNewWorktree,
   onGitOperationBusyChange,
   gitOperationBusy = false,
   workspaceChangeBlockedReason,
@@ -458,6 +479,19 @@ export function Composer({
     const seed = takeComposerAttachmentSeed(chatId);
     if (seed) updateAttachments(seed);
   }, [chatId, updateAttachments]);
+  // An unsent message handed back after this composer opened (a cancelled
+  // worktree send the user came back to): its text and its attachments.
+  React.useEffect(
+    () =>
+      subscribeRestoredUnsentMessage(chatId, (restored) => {
+        setText((current) => failedSendDraft(restored.text, current));
+        if (restored.attachments.length > 0) {
+          attachmentRevisionRef.current += 1;
+          updateAttachments((current) => failedSendAttachments(restored.attachments, current));
+        }
+      }),
+    [chatId, setText, updateAttachments],
+  );
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
   React.useLayoutEffect(() => {
@@ -891,6 +925,11 @@ export function Composer({
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
+      if (onDraftNewWorktree) {
+        await onDraftNewWorktree(branchName);
+        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+        return;
+      }
       if (!branchName) {
         setWorktreeRequest((request) => request + 1);
         return;
@@ -909,7 +948,7 @@ export function Composer({
         requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
-    [inputRef, onCreateGitWorktree, onGitOperationBusyChange, sessionCommandBusy],
+    [inputRef, onCreateGitWorktree, onDraftNewWorktree, onGitOperationBusyChange, sessionCommandBusy],
   );
 
   const forkFromTurn = React.useCallback(
@@ -1681,6 +1720,8 @@ export function Composer({
         afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
       });
     } catch (error) {
+      // Cancelling a worktree send puts the text back without an error.
+      if (isWorktreeSendCancelled(error)) return;
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
     }
   };
@@ -1775,6 +1816,17 @@ export function Composer({
   const folderName = workspace?.folderPath
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
+  const hasUserMessages =
+    sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
+  const { chips: contextChips, pullRequestAnnouncement } = useComposerContextChips({
+    chatId,
+    started: hasUserMessages,
+    workspace,
+    gitBranch,
+    gitStatus,
+    machinePicker: Boolean(machinePicker),
+  });
+  const autoHideContext = useAutoHideComposerContext();
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
     if (workspaceChangeBlockedReason) {
@@ -1824,7 +1876,7 @@ export function Composer({
   return (
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
-        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">Sending…</Text> : null}
+        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
         <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
@@ -1857,15 +1909,28 @@ export function Composer({
           {queuedMessages}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           {surfaces.localContext ? (
-          <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
-          <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
-            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+          <ComposerContextBar mode={contextChips.barMode} inputRef={inputRef}>
+          <div
+            className={cn(
+              "relative z-0 mx-3 flex min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 backdrop-blur-md transition-[padding,min-height] duration-200 ease-out",
+              contextChips.barMode === "summary" ? "min-h-7 pb-1.5 pt-0.5" : "min-h-8 pb-2 pt-1",
+            )}
+          >
+            {!contextChips.workspace ? null : workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
                 key={workspaceChangeBlockedReason ? "blocked" : "available"}
                 workspaces={workspaces}
                 activeWorkspaceId={workspace?.id}
                 onSelectWorkspace={onSelectWorkspace}
                 onCreateScratchWorkspace={onCreateScratchWorkspace}
+                onOpenFolder={onOpenFolderAsWorkspace}
+                busyReason={workspaceChangeBusyReason({
+                  sending: sending || firstSendPending,
+                  generating: isGenerating,
+                  gitBusy: gitOperationBusy,
+                })}
+                openRequest={workspaceMenuRequest}
+                returnFocusRef={inputRef}
                 blockedReason={workspaceChangeBlockedReason}
                 trigger={
                   <Button
@@ -1902,17 +1967,9 @@ export function Composer({
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
-            {/* Execution location — Pi runs locally on this host, unless a new chat picks another Mac. */}
-            {machinePicker ?? (
-              <span
-                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-                title="The agent runs locally on this device"
-              >
-                <Monitor className="size-4 shrink-0" />
-                Local
-              </span>
-            )}
-            {gitBranch && workspace?.folderPath ? (
+            {/* Execution location: shown only when a paired Mac could run this new chat. */}
+            {contextChips.machine ? machinePicker : null}
+            {contextChips.branch && gitBranch && workspace?.folderPath ? (
               <GitBranchPicker
                 key={`git-branch-picker-${worktreeRequest}`}
                 workspaceId={workspace.id}
@@ -1932,13 +1989,24 @@ export function Composer({
                 worktreeDescription={gitWorktreeDescription}
                 openWorktreeOnMount={worktreeRequest > 0}
                 programmaticReturnFocusRef={inputRef}
+                uncommitted={contextChips.changesBadge}
+                managedWorktree={Boolean(workspace.managedWorktree)}
+                draft={draftGit}
               />
             ) : null}
-            <ChatPullRequestsChip chatId={chatId} />
+            {contextChips.pullRequest ? (
+              <span className="composer-context-chip-enter flex shrink-0">
+                <ChatPullRequestsChip chatId={chatId} />
+              </span>
+            ) : null}
+            {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
+            <span role="status" className="sr-only">
+              {pullRequestAnnouncement}
+            </span>
           </div>
           </ComposerContextBar>
           ) : remoteContext ? (
-            <ComposerContextBar hasUserMessages={hasMessages} inputRef={inputRef}>
+            <ComposerContextBar mode={autoHideContext && hasMessages ? "hidden" : "full"} inputRef={inputRef}>
               <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
                 {remoteContext}
               </div>
