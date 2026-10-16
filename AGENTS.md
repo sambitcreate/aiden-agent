@@ -10,6 +10,15 @@ The `.memory/` folder contains context and history from previous work on this pr
 
 The current plan inventory and status live in [`docs/plans/README.md`](docs/plans/README.md). Update that index when a plan's status changes, and move completed plans into its `completed/` archive.
 
+## Keeping docs current
+
+Every change that alters behavior, platform support, commands, settings, versions, contracts, or release/distribution facts must update the affected docs in the same PR. Before finishing, search the docs for claims your change makes stale and fix them; do not leave doc updates for a follow-up.
+
+- Check at least: `README.md`, `PRODUCT.md`, the relevant `docs/*.md` guide (for example `docs/linux.md`, `docs/devices.md`, `docs/aiden-on-the-go-remote-access.md`, `docs/aiden-remote-api-v1.md`), `docs/plans/README.md` status rows, `packages/cli/README.md` for CLI changes, and `ios/` or Android docs and App Store metadata for mobile changes.
+- Platform claims (Mac-only, Linux, CLI, iOS, Android) must match `main/services/host-platform-capabilities.ts` and the feature flags; version and pin claims must match `package.json` and `packages/cli/package.json`.
+- Dated records (changelogs, TestFlight logs, completed plans) are history: add new entries instead of rewriting old ones.
+- If you notice a stale claim outside your change's scope, fix it when it is a small factual correction, or note it in the PR description.
+
 ## UI design references
 
 For UI work, follow `GUI.md` and use the `graphical-ui`, `graphical-convert`, or `graphical-audit` skill in `.agents/skills/` as appropriate. Aiden adopts the Untitled theme's structure (motion, borderless surfaces, filled inputs, button padding, type-step ratios) but keeps its own corner radii and preset palettes; the definitions in `renderer/styles.css` and `renderer/shared/appearance.ts` take precedence over the snapshot values in `gui/themes/`. Timeless Grotesk is not used.

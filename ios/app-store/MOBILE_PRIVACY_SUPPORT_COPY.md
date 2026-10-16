@@ -25,7 +25,7 @@ Chats, prompts, selected attachments, workspace operations, and approval decisio
 - **Local Network:** used only to discover or connect to an Aiden Agent installation on a network you choose.
 - **Camera:** used when you choose to scan a pairing QR code. Camera frames are processed for pairing and are not uploaded to Aiden.
 - **Photos and Files:** content is accessed only after you select it. Selected content is sent to the paired desktop and may be processed by the AI provider you chose for the request.
-- **Microphone and Speech Recognition:** requested only when you start dictation. In **On this device** mode, the app uses the platform speech API. In **Paired desktop** mode, it sends a bounded microphone recording through the authenticated, encrypted Aiden connection to the selected local Parakeet model on your desktop; neither endpoint stores the recording. The text composer remains usable if recognition is unavailable or permission is denied.
+- **Microphone and Speech Recognition:** requested only when you start dictation. In **On this device** mode, the app uses the platform speech API. In **Paired desktop** mode, it sends a bounded microphone recording through the authenticated, encrypted Aiden connection to the speech model selected on your desktop (Parakeet v3 by default); neither endpoint stores the recording. The text composer remains usable if recognition is unavailable or permission is denied.
 - **Notifications and Live Activities:** used for device-local status. Live Activities contain bounded last-known run state, use no Aiden cloud push relay, and hide assistant response excerpts by default.
 
 ## Bot image creation

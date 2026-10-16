@@ -1,6 +1,6 @@
 # On-device speech engine foundation (STT sub-project 1)
 
-Status: Implemented on this branch (2026-10-09), PR pending. Plan: `docs/superpowers/plans/2026-10-09-stt-engine-foundation.md`; verification results are in its `## Progress`.
+Status: Merged in PR #436 (2026-10-09), hardening in #439; shipped in 0.56.0. Plan: `docs/superpowers/plans/2026-10-09-stt-engine-foundation.md`; verification results are in its `## Progress`.
 Branch: `feature/speech-to-text-update-203d37`.
 Reference: Handy (`cjpais/handy`, MIT) at `f6b3f82` (2026-10-08), local checkout `/Users/sambitbiswas/projects/opp/handy`. Handy is Rust/Tauri, so Aiden ports behavior and algorithms as original TypeScript. No Handy source is copied.
 

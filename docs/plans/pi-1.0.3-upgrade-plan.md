@@ -1,6 +1,6 @@
 # Pi 1.0.3 upgrade and stack reconciliation
 
-Status: active, 2026-10-05. Implementation integrated on `feature/pi-1.0.3-upgrade`; local acceptance complete; exact-head hosted acceptance and merge pending in [PR #357](https://github.com/sambitcreate/aiden-agent/pull/357). The plan was committed first as `9a5d67d7`. This supersedes the individual open stack PRs with one replacement PR, preserving their commit ancestry. Historical implementation evidence remains in [Pi parity](pi-1-parity-plan.md).
+Status: merged in [PR #357](https://github.com/sambitcreate/aiden-agent/pull/357) on 2026-10-05 and shipped in 0.54.0; pins later moved to Pi 1.2.0 in PR #471. The plan was committed first as `9a5d67d7`. This supersedes the individual open stack PRs with one replacement PR, preserving their commit ancestry. Historical implementation evidence remains in [Pi parity](pi-1-parity-plan.md).
 
 ## Verified baseline
 

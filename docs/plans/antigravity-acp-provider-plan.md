@@ -1,6 +1,6 @@
 # Google Antigravity provider over ACP
 
-Status: Implemented (2026-10-07) on `feature/antigravity-aiden-integration-0631d1`, pending live acceptance with a signed-in Google account. Plan written 2026-10-06 and revised the same day after a T3 Code review.
+Status: Implemented (2026-10-07), merged in PR #371 and shipped in 0.55.0; pending live acceptance with a signed-in Google account. Plan written 2026-10-06 and revised the same day after a T3 Code review.
 
 ## Implementation status
 

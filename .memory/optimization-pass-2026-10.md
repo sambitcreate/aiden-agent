@@ -2,7 +2,7 @@
 
 The audit is `docs/performance/optimization-audit-2026-10-03.md`. §13 maps each finding ID to a branch, a head commit, and a status.
 - 15 fix branches plus updates to the Pi 1.0 PR stack (#299–#307).
-- The new branches have no PRs yet and were left unmerged pending an owner decision.
+- At the time the branches had no PRs; several have since merged (e.g. #329, #330, #332 in 0.53.0). Check §13 of the audit for each branch's current state.
 - Each branch carries its own `.memory/<topic>.md` with per-finding rationale.
 
 Open owner decisions:

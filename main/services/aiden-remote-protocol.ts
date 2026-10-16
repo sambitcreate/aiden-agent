@@ -45,8 +45,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * generation timeline may carry a display-only `questionnaire` recap of the
  * questions and what the owner chose; older clients ignore it.
  *
- * Contract revision 30 (provisional; re-claim the next revision after `main`'s
- * at merge): Bot chat activity on phones (`bot-activity-v1`, `bot:activity`).
+ * Contract revision 30: Bot chat activity on phones (`bot-activity-v1`, `bot:activity`).
  *
  * Contract revision 31: connection reliability. Desktop-only `peer-routes-v1`
  * route advertisements with route-specific trust, and the `android` pairing
@@ -58,8 +57,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * behind the `app-controls:read`/`app-controls:respond` progress capabilities,
  * the `app_controls_changed` progress event and the `builtin` skill source.
  *
- * Contract revision 33 (provisional; re-claim the next revision after `main`'s
- * at merge): Bot message attachments (`bot-attachments-v1`). Phones stage
+ * Contract revision 33: Bot message attachments (`bot-attachments-v1`). Phones stage
  * images and text files with `POST /bots/{botId}/attachments` and send them
  * with `attachmentIds` on `POST /bots/{botId}/messages`.
  */

@@ -32,7 +32,7 @@ Description draft:
 
 > Aiden On The Go is the native iPhone and iPad companion for Aiden Agent on your macOS or Linux desktop. Pair directly with a desktop you control over your local network or Tailscale, then continue Aiden chats and manage workspaces from your mobile device.
 >
-> Review conversations, stream responses, handle approval requests, inspect workspace files, work with supported Git flows, and manage scheduled tasks. App Intents provide quick navigation, Live Activities show bounded run status, and optional voice dictation can use the device's native recognizer or a local speech model on your paired desktop. Read-aloud stays on device.
+> Review conversations, stream responses, handle approval requests, inspect workspace files, work with supported Git flows, and manage scheduled tasks. App Intents provide quick navigation, Live Activities show bounded run status, and optional voice dictation can use the device's native recognizer or a local speech model on your paired desktop. Read Aloud plays responses voiced by your paired desktop.
 >
 > Your desktop remains the execution authority. Remote Access is off by default, each mobile device uses a revocable credential, and provider credentials remain on the desktop.
 
@@ -77,7 +77,7 @@ Evidence for that answer in the current distribution candidate:
 - The app contains no analytics, advertising, crash-reporting, account, or Aiden-hosted relay SDK.
 - Pairing credentials and custom headers stay in Keychain. Cached chats/settings stay on the user's device; authoritative chats/files remain on the desktop the user pairs.
 - QR camera frames are processed for pairing and are not uploaded to Aiden's developer.
-- Dictation uses either Apple’s native recognizer or, only when the person selects **Paired desktop**, a bounded recording sent directly over the authenticated pinned-TLS connection to the desktop-local Parakeet model. Neither endpoint retains that recording. Read-aloud uses Apple system frameworks locally. Aiden's developer operates no speech collection service.
+- Dictation uses either Apple’s native recognizer or, only when the person selects **Paired desktop**, a bounded recording sent directly over the authenticated pinned-TLS connection to the speech model selected on that desktop (Parakeet v3 by default). Neither endpoint retains that recording. Read Aloud asks the paired desktop, over the same connection, to voice a selected response with the speech provider configured on that desktop (`tts-v1`); the desktop sends that text to the provider only after an explicit Play, and the phone only plays the returned audio. Aiden's developer operates no speech collection service.
 - Photos/files selected by the user are sent directly to their paired desktop and may then be sent to model providers the user configured there. Aiden's developer cannot access them. Provider processing remains governed by each selected provider and should be described in the public policy.
 - Optional Bot image generation uses Apple's system Image Playground on supported devices and may use Private Cloud Compute. Aiden disables person/Photos personalization and supplies only the visible Bot name and purpose as starting concepts. Aiden's developer runs no image-generation or proxy service and cannot access those concepts, rejected candidates, or results. When the person chooses **Use this image**, the app sends only that normalized image directly to the paired desktop, which stores the canonical Bot photo.
 - Local Network or Tailscale traffic goes directly to the paired installation. Aiden does not run a central account, synchronization service, analytics endpoint, or proxy.
@@ -121,7 +121,7 @@ Do not replace unresolved values with placeholders in App Store Connect.
 Provide these notes only with a reachable, reviewer-safe paired Aiden Agent environment and the final approved contact details:
 
 1. Pair the iPhone or iPad with the supplied Aiden Agent desktop, then tap the Aiden logo and choose **Bots**.
-2. Accept the one-time Full Access notice or choose **Customize first**. Full Access uses only capabilities already enabled on the paired desktop; Custom can reduce Files, commands, Connections, and Skills.
+2. New Bots start with Full Access; switch to **Custom** in the Bot's Advanced settings to reduce access. Full Access uses only capabilities already enabled on the paired desktop; Custom can reduce Files, commands, Connections, and Skills.
 3. Create a Bot with the built-in semantic avatar, save it, and start a chat. Apple Intelligence is not required for this complete path.
 4. On eligible Apple Intelligence hardware with iOS/iPadOS 18.4 or later, **Create with Apple Intelligence** opens Apple's system Image Playground. Apple controls generation and may use Private Cloud Compute. Aiden disables person/Photos personalization and sends the paired desktop only the image explicitly accepted and saved.
 5. On unsupported hardware, including iPhone 13 Pro, the editor honestly keeps the semantic avatar available and has no dead Image Playground action.
