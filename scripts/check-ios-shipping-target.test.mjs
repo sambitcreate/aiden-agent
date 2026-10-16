@@ -84,6 +84,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenSceneRefreshGate.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift",
+  "AidenOnTheGo/Features/Remote/AidenVisualDocument.swift",
+  "AidenOnTheGo/Features/Remote/AidenVisualViewer.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkEvaluator.swift",
@@ -140,6 +142,7 @@ const testSources = [
   "AidenScheduledTaskTests.swift",
   "AidenSimulatorViewerTests.swift",
   "AidenStreamingPerformanceTests.swift",
+  "AidenVisualViewerTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
 ];
 
