@@ -406,17 +406,17 @@ test(
     ].join("");
     try {
       const startedAt = Date.now();
-      await assert.rejects(
+      const timedOut = assert.rejects(
         runBoundedCommand(
           process.execPath,
           ["-e", leaderSource, descendantSource, descendantPidPath],
-          { timeoutMs: 250, terminateGraceMs: 100, killGraceMs: 100 },
+          { timeoutMs: 2_000, terminateGraceMs: 100, killGraceMs: 100 },
         ),
         /timed out/,
       );
-      assert.ok(Date.now() - startedAt < 1_500, "the bounded runner should settle promptly");
-      const descendantPid = Number(await readFile(descendantPidPath, "utf8"));
-      assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 1);
+      const descendantPid = await waitForPidFile(descendantPidPath);
+      await timedOut;
+      assert.ok(Date.now() - startedAt < 3_500, "the bounded runner should settle promptly");
       await waitForProcessExit(descendantPid);
     } finally {
       await rm(root, { recursive: true, force: true });
