@@ -5,3 +5,4 @@
 - Linux verification was unavailable locally: `docker` is installed, but its configured OrbStack daemon socket is not running.
 - The 2026-10-16 main merge conflicted only where #494's test deadline option and main's native file-mutator option were added to the same interface. Keeping both resolved it; the root test script matched main without manual edits.
 - `.memory/` and `.papercuts/` are ignored even for previously committed files; a path-specific `git add` rejected their updates. Stage tracked updates with `git add -u` instead.
+- Main advanced to the 0.57.0 release while the first merged head was being validated. A second ordinary merge and focused rerun were needed before publishing the final exact head.
