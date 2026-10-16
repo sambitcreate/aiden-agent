@@ -38,6 +38,8 @@ export interface BotFileToolRouterOptions {
    * Defaults to the process-wide roots (`setBotFileToolProtectedRoots`).
    */
   readonly protectedRoots?: () => readonly string[];
+  /** Installation-owned native helper used for edit_file. */
+  readonly fileMutatorBinary?: string;
 }
 
 /** File tools that change a file; only these are fenced from protected roots. */
@@ -146,11 +148,12 @@ function checkedLocation(location: BotFileToolLocation, role: string): BotFileTo
   });
 }
 
-function underlyingTools(location: BotFileToolLocation): ReadonlyMap<BotFileToolName, AgentTool> {
+function underlyingTools(location: BotFileToolLocation, fileMutatorBinary?: string): ReadonlyMap<BotFileToolName, AgentTool> {
   const selected = buildPinnedCodingTools(
     location.root,
     undefined,
     location.expectedIdentity,
+    { fileMutatorBinary },
   ).filter((tool) => TOOL_NAMES.has(tool.name));
   const map = new Map<BotFileToolName, AgentTool>();
   for (const tool of selected) {
@@ -252,7 +255,7 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
 
   const prepared = locations.map<PreparedLocation>((location) => ({
     ...location,
-    tools: underlyingTools(location),
+    tools: underlyingTools(location, options.fileMutatorBinary),
   }));
   const byId = new Map(prepared.map((location) => [location.id, location] as const));
   const schemaLocations = prepared.map(({ id, label }) => ({ id, label }));

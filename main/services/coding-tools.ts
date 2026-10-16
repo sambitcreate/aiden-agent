@@ -6,7 +6,8 @@
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
 import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
 import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
@@ -28,6 +29,7 @@ import type { RE2 as RE2Matcher } from "re2-wasm";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { boundedToolOutput } from "./tool-output-context.js";
 import { parseProducedFile, type ProducedFile } from "../../renderer/shared/produced-file.js";
+import { resolveSubagentFileMutatorBinary } from "./subagents/subagent-file-mutator-io.js";
 
 const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
@@ -42,6 +44,7 @@ const MAX_GREP_ENTRIES = 10_000;
 const MAX_GREP_BYTES = 10 * 1024 * 1024;
 const MAX_GREP_DURATION_MS = 5_000;
 const MAX_SEARCH_PATTERN_CHARS = 1_000;
+const MAX_PARENT_EDIT_BYTES = 256 * 1024 * 1024;
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".cache"]);
 let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 
@@ -166,15 +169,6 @@ function fileMutationResult(
   };
 }
 
-async function readExistingText(filePath: string): Promise<string> {
-  try {
-    return await fs.readFile(filePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
-}
-
 function throwIfAborted(signal: AbortSignal | undefined, fallback: string): void {
   if (!signal?.aborted) return;
   throw signal.reason instanceof Error ? signal.reason : new Error(fallback);
@@ -256,6 +250,7 @@ interface WorkspaceRootGuard {
   lexical: string;
   canonical: string | null;
   identity: Stats | null;
+  exactIdentity: PinnedWorkspaceRootIdentity | null;
   testObserver?: {
     beforeDirectoryOpen?(directoryPath: string): void | Promise<void>;
     afterDirectoryOpen?(directoryPath: string): void | Promise<void>;
@@ -264,6 +259,7 @@ interface WorkspaceRootGuard {
     onFileRead?(bytes: number): void;
     onDirectoryEntry?(entryPath: string): void;
     beforeWriteCommit?(entryPath: string): void | Promise<void>;
+    beforeFileWrite?(entryPath: string): void | Promise<void>;
   };
 }
 
@@ -281,6 +277,7 @@ function createParentWorkspaceRoot(
     lexical: path.resolve(root),
     canonical: null,
     identity: null,
+    exactIdentity: null,
     testObserver,
   };
 }
@@ -293,17 +290,21 @@ function pinWorkspaceRoot(
   const lexical = path.resolve(root);
   const canonical = realpathSync(lexical);
   const identity = statSync(canonical);
+  const exactStat = statSync(canonical, { bigint: true });
+  const exactIdentity = {
+    device: exactStat.dev.toString(),
+    inode: exactStat.ino.toString(),
+  };
   if (!identity.isDirectory()) throw new Error("The workspace root is not a directory.");
   if (expectedIdentity) {
-    const exactIdentity = statSync(canonical, { bigint: true });
     if (
-      exactIdentity.dev.toString() !== expectedIdentity.device ||
-      exactIdentity.ino.toString() !== expectedIdentity.inode
+      exactIdentity.device !== expectedIdentity.device ||
+      exactIdentity.inode !== expectedIdentity.inode
     ) {
       throw new Error("The authorized workspace root changed before this generation started.");
     }
   }
-  return { lexical, canonical, identity, testObserver };
+  return { lexical, canonical, identity, exactIdentity, testObserver };
 }
 
 async function verifyWorkspaceRoot(
@@ -472,8 +473,8 @@ async function nearestExistingAncestor(fullPath: string): Promise<string> {
 }
 
 /**
- * Resolve a writable path without letting mkdir/writeFile follow a symlink to
- * somewhere outside the workspace. Existing safe symlinks are canonicalized.
+ * Select a canonical in-root target. Native descriptor traversal creates any
+ * missing parents later; pathname-based mkdir here would be raceable.
  */
 async function resolveWritableInRoot(
   workspace: WorkspaceRootGuard,
@@ -490,15 +491,15 @@ async function resolveWritableInRoot(
 
   await workspace.testObserver?.beforeWriteCommit?.(lexical);
   throwIfAborted(signal, "File write cancelled.");
-  await fs.mkdir(parent, { recursive: true });
-  throwIfAborted(signal, "File write cancelled.");
-  const realParent = await fs.realpath(parent);
-  assertRealPathInRoot(realRoot, realParent, suppliedPath);
+  const canonicalParent = path.join(realAncestor, path.relative(ancestor, parent));
+  assertRealPathInRoot(realRoot, canonicalParent, suppliedPath);
 
   try {
     await fs.lstat(lexical);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return lexical;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return path.join(canonicalParent, path.basename(lexical));
+    }
     throw error;
   }
 
@@ -1052,7 +1053,45 @@ function makeParentReadFile(workspace: WorkspaceRootGuard): AgentTool {
   };
 }
 
-function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
+async function commitPinnedWrite(input: {
+  binary?: string;
+  root: string;
+  rootIdentity: PinnedWorkspaceRootIdentity;
+  relativePath: string;
+  before?: { identity: PinnedWorkspaceRootIdentity; sha256: string };
+  updated: Buffer;
+}): Promise<void> {
+  if (input.updated.length > MAX_PARENT_EDIT_BYTES) {
+    throw new Error("The written file exceeds the safe write limit.");
+  }
+  const args = [
+    "write-file", input.root, input.rootIdentity.device, input.rootIdentity.inode,
+    input.relativePath,
+    ...(input.before
+      ? ["existing", input.before.identity.device, input.before.identity.inode, input.before.sha256]
+      : ["new"]),
+    String(input.updated.length),
+  ];
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(input.binary ?? resolveSubagentFileMutatorBinary(), args, {
+      encoding: "utf8",
+      maxBuffer: 1024,
+      timeout: 120_000,
+    }, (error, stdout, stderr) => {
+      if (error || stdout !== "written\n") {
+        reject(new Error(stderr.trim() === "conflict"
+          ? "The workspace file changed before the write could be committed."
+          : "The workspace write could not be completed safely; the target file may be incomplete."));
+      } else {
+        resolve();
+      }
+    });
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.end(input.updated);
+  });
+}
+
+function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool {
   return {
     name: "write_file",
     label: "Write File",
@@ -1063,20 +1102,99 @@ function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
       content: Type.String({ description: "Full file content to write." }),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<FileMutationDetailsV1>> => {
+      const activeWorkspace = workspace.exactIdentity === null
+        ? pinWorkspaceRoot(workspace.lexical, workspace.testObserver)
+        : workspace;
       const { path: p, content } = params as { path: string; content: string };
-      const full = await resolveWritableInRoot(workspace, p, signal);
-      const before = await readExistingText(full);
+      const full = await resolveWritableInRoot(activeWorkspace, p, signal);
+      let before = "";
+      let preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string } | undefined;
+      try {
+        const handle = await fs.open(full, fsConstants.O_RDONLY |
+          (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+        try {
+          const stat = await handle.stat({ bigint: true });
+          if (!stat.isFile() || stat.nlink !== 1n) {
+            throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
+          }
+          const source = await handle.readFile();
+          before = source.toString("utf8");
+          preimage = {
+            identity: { device: stat.dev.toString(), inode: stat.ino.toString() },
+            sha256: createHash("sha256").update(source).digest("hex"),
+          };
+        } finally {
+          await handle.close();
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
       throwIfAborted(signal, "File write cancelled.");
       const details = fileMutationDetails(before, content);
       throwIfAborted(signal, "File write cancelled.");
-      details.producedFile = parseProducedFile({ relativePath: path.relative(await fs.realpath(workspace.lexical), path.join(await fs.realpath(path.dirname(full)), path.basename(full))).split(path.sep).join("/"), operation: "written", bytes: Buffer.byteLength(content) }, "write_file");
-      await fs.writeFile(full, content, "utf-8");
+      const root = await verifyWorkspaceRoot(activeWorkspace, signal);
+      const relativePath = path.relative(root, full).split(path.sep).join("/");
+      const updated = Buffer.from(content, "utf8");
+      details.producedFile = parseProducedFile({ relativePath, operation: "written", bytes: updated.length }, "write_file");
+      await activeWorkspace.testObserver?.beforeFileWrite?.(full);
+      throwIfAborted(signal, "File write cancelled.");
+      await commitPinnedWrite({
+        binary,
+        root,
+        rootIdentity: activeWorkspace.exactIdentity!,
+        relativePath,
+        before: preimage,
+        updated,
+      });
       return fileMutationResult(`Wrote ${content.length} chars to ${p}.`, details);
     },
   };
 }
 
-function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
+async function commitPinnedEdit(input: {
+  binary?: string;
+  root: string;
+  rootIdentity: PinnedWorkspaceRootIdentity;
+  relativePath: string;
+  fileIdentity: PinnedWorkspaceRootIdentity;
+  originalSha256: string;
+  updated: Buffer;
+}): Promise<void> {
+  if (input.updated.length > MAX_PARENT_EDIT_BYTES) {
+    throw new Error("The edited file exceeds the safe write limit.");
+  }
+  const args = [
+    "edit-file",
+    input.root,
+    input.rootIdentity.device,
+    input.rootIdentity.inode,
+    input.relativePath,
+    input.fileIdentity.device,
+    input.fileIdentity.inode,
+    input.originalSha256,
+    String(input.updated.length),
+  ];
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(input.binary ?? resolveSubagentFileMutatorBinary(), args, {
+      encoding: "utf8",
+      maxBuffer: 1024,
+      timeout: 120_000,
+    }, (error, stdout, stderr) => {
+      if (error || stdout !== "edited\n") {
+        reject(new Error(stderr.trim() === "conflict"
+          ? "The workspace file changed before the edit could be committed."
+          : "The workspace edit could not be completed safely."));
+      } else {
+        resolve();
+      }
+    });
+    // The callback owns child errors, including an early native rejection.
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.end(input.updated);
+  });
+}
+
+function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool {
   return {
     name: "edit_file",
     label: "Edit File",
@@ -1099,8 +1217,24 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
         old_string: string;
         new_string: string;
       };
-      const { full } = await resolveExistingInRoot(workspace, p, signal);
-      const original = await fs.readFile(full, "utf-8");
+      const { root, full } = await resolveExistingInRoot(workspace, p, signal);
+      const handle = await fs.open(
+        full,
+        fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+      );
+      let source: Buffer;
+      let fileIdentity: PinnedWorkspaceRootIdentity;
+      try {
+        const stat = await handle.stat({ bigint: true });
+        if (!stat.isFile() || stat.nlink !== 1n) {
+          throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
+        }
+        source = await handle.readFile();
+        fileIdentity = { device: stat.dev.toString(), inode: stat.ino.toString() };
+      } finally {
+        await handle.close();
+      }
+      const original = source.toString("utf8");
       throwIfAborted(signal, "File edit cancelled.");
       const count = original.split(old_string).length - 1;
       if (count === 0) throw new Error(`old_string not found in ${p}.`);
@@ -1108,11 +1242,28 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
         throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
       await workspace.testObserver?.beforeWriteCommit?.(full);
       throwIfAborted(signal, "File edit cancelled.");
-      const updated = original.replace(old_string, new_string);
+      const start = original.indexOf(old_string);
+      const updated = original.slice(0, start) + new_string + original.slice(start + old_string.length);
       const details = fileMutationDetails(original, updated);
       throwIfAborted(signal, "File edit cancelled.");
-      details.producedFile = parseProducedFile({ relativePath: path.relative(await fs.realpath(workspace.lexical), path.join(await fs.realpath(path.dirname(full)), path.basename(full))).split(path.sep).join("/"), operation: "edited", bytes: Buffer.byteLength(updated) }, "edit_file");
-      await fs.writeFile(full, updated, "utf-8");
+      const relativePath = path.relative(root, full).split(path.sep).join("/");
+      const updatedBytes = Buffer.from(updated, "utf8");
+      details.producedFile = parseProducedFile({ relativePath, operation: "edited", bytes: updatedBytes.length }, "edit_file");
+      const rootStat = workspace.exactIdentity === null
+        ? await fs.stat(root, { bigint: true })
+        : null;
+      await commitPinnedEdit({
+        binary,
+        root,
+        rootIdentity: workspace.exactIdentity ?? {
+          device: rootStat!.dev.toString(),
+          inode: rootStat!.ino.toString(),
+        },
+        relativePath,
+        fileIdentity,
+        originalSha256: createHash("sha256").update(source).digest("hex"),
+        updated: updatedBytes,
+      });
       return fileMutationResult(`Edited ${p}.`, details);
     },
   };
@@ -1792,6 +1943,8 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
  */
 export interface CodingToolOptions {
   pathPrefix?: string | (() => string | null | undefined);
+  /** Trusted native helper from the application installation, if packaged outside Electron. */
+  fileMutatorBinary?: string;
 }
 
 export function runCommandEnv(
@@ -1961,8 +2114,8 @@ function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: Coding
     declarePiRuntimeReplay(withForegroundReadScope(makeParentListDir(workspace)), "safe"),
     declarePiRuntimeReplay(withForegroundReadScope(makeParentGlob(workspace)), "safe"),
     declarePiRuntimeReplay(withForegroundReadScope(makeParentGrep(workspace)), "safe"),
-    declarePiRuntimeReplay(makeEditFile(workspace), "never"),
-    declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
+    declarePiRuntimeReplay(makeEditFile(workspace, options.fileMutatorBinary), "never"),
+    declarePiRuntimeReplay(makeWriteFile(workspace, options.fileMutatorBinary), "never"),
     declarePiRuntimeReplay(makeRunCommand(workspace, options), "never"),
   ];
 }
@@ -1987,8 +2140,9 @@ export function buildPinnedCodingTools(
   testObserver?: WorkspaceRootGuard["testObserver"],
   /** Optional authority-proven identity captured before the tool set is built. */
   expectedIdentity?: PinnedWorkspaceRootIdentity,
+  options: CodingToolOptions = {},
 ): AgentTool[] {
-  return buildParentCodingToolSet(pinWorkspaceRoot(root, testObserver, expectedIdentity));
+  return buildParentCodingToolSet(pinWorkspaceRoot(root, testObserver, expectedIdentity), options);
 }
 
 /**

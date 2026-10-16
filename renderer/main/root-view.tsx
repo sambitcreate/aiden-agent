@@ -1,10 +1,17 @@
-import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
+import {
+  createChatDraft,
+  discardChatDraft,
+  findReusableChatDraft,
+  requestChatDraftComposerFocus,
+  setChatDraftGitMode,
+  type ChatDraftGitMode,
+} from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
-import { appApi, chatsApi, localRunsApi, onNotification } from "../lib/ipc";
+import { appApi, chatsApi, localRunsApi, onNotification, workspacesApi } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
@@ -19,7 +26,9 @@ import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
 } from "../lib/lifecycle-guard";
-import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
+import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../lib/command-system";
+import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
+import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
@@ -69,7 +78,8 @@ function RootContent() {
   const botPanel = useBotPanelActions();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
-  const { activeId } = useActiveWorkspace();
+  const { activeId, select: selectWorkspace } = useActiveWorkspace();
+  const { palette } = useCommandSystem();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
@@ -191,35 +201,134 @@ function RootContent() {
   );
   useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
   useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
+  // Every new-chat entry point lands here: an empty draft already open in the
+  // workspace is reused and focused; otherwise a fresh draft opens there.
+  const openNewChatIn = React.useCallback(
+    async (
+      workspaceId: string,
+      initialText?: string,
+      options: { gitMode?: ChatDraftGitMode } = {},
+    ): Promise<string | undefined> => {
+      if (appendReconciliationRequired) {
+        toast.error("Reload Aiden before creating another chat.");
+        return undefined;
+      }
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return undefined;
+      }
+      const reusable = initialText ? undefined : findReusableChatDraft(workspaceId);
+      if (workspaceId !== activeId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
+      const chat =
+        reusable?.chat ??
+        createChatDraft(
+          workspaceId,
+          undefined,
+          initialText,
+          options.gitMode ? { gitMode: options.gitMode } : {},
+        ).chat;
+      if (reusable && options.gitMode) setChatDraftGitMode(reusable.chat.id, options.gitMode);
+      const previousWorkspaceId = activeId;
+      selectWorkspace(workspaceId);
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+      } catch (error) {
+        if (!reusable) discardChatDraft(chat.id);
+        if (previousWorkspaceId && previousWorkspaceId !== workspaceId) {
+          selectWorkspace(previousWorkspaceId);
+        }
+        throw error;
+      }
+      requestChatDraftComposerFocus(chat.id);
+      return chat.id;
+    },
+    [
+      activeId,
+      appendReconciliationRequired,
+      environmentPanel.agentBusy,
+      environmentPanel.cancelAgent,
+      navigate,
+      navigationBlockedReason,
+      selectWorkspace,
+    ],
+  );
   const openNewChat = React.useCallback(
     async (initialText?: string) => {
       if (!activeId) {
         toast.info("Choose a workspace before starting a chat.");
         return;
       }
-      if (appendReconciliationRequired) {
-        toast.error("Reload Aiden before creating another chat.");
-        return;
-      }
-      if (navigationBlockedReason) {
-        toast.info(navigationBlockedReason);
-        return;
-      }
-      const chat = createChatDraft(activeId, undefined, initialText).chat;
-      try {
-        await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
-      } catch (error) {
-        discardChatDraft(chat.id);
-        throw error;
-      }
+      await openNewChatIn(activeId, initialText);
     },
-    [activeId, appendReconciliationRequired, navigate, navigationBlockedReason],
+    [activeId, openNewChatIn],
   );
+  const openFolderForNewChat = React.useCallback(async () => {
+    if (appendReconciliationRequired) {
+      toast.error("Reload Aiden before creating another chat.");
+      return;
+    }
+    if (navigationBlockedReason) {
+      toast.info(navigationBlockedReason);
+      return;
+    }
+    const workspace = await workspacesApi.createFromFolder();
+    if (!workspace) return;
+    // The active-workspace provider only accepts ids it has already listed.
+    await queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
+    await openNewChatIn(workspace.id);
+  }, [appendReconciliationRequired, navigationBlockedReason, openNewChatIn, queryClient]);
+  // Clone repository… from New chat in…: the draft being viewed (or a new one
+  // in the active workspace) opens its workspace menu in the Clone view.
+  const cloneRepositoryForNewChat = React.useCallback(async () => {
+    const viewedChatId = chatIdFromPath(pathname);
+    if (viewedChatId && draftWorkspaceMenu(viewedChatId)) {
+      requestDraftWorkspaceMenu(viewedChatId, "clone");
+      return;
+    }
+    if (!activeId) {
+      toast.info("Choose a workspace before starting a chat.");
+      return;
+    }
+    const chatId = await openNewChatIn(activeId);
+    if (chatId) requestDraftWorkspaceMenu(chatId, "clone");
+  }, [activeId, openNewChatIn, pathname]);
+  const newChatActions = React.useMemo<NewChatActions>(
+    () => ({
+      openNewChatIn: async (workspaceId, options) => {
+        let gitMode: ChatDraftGitMode | undefined;
+        if (options?.newWorktree) {
+          // ⌥↵: only a repository with a commit can start a new worktree.
+          // A local status read; nothing is created until the first send.
+          const git = await queryClient
+            .fetchQuery({
+              queryKey: queryKeys.git(workspaceId),
+              queryFn: () => workspacesApi.gitInfo(workspaceId),
+              staleTime: 5_000,
+            })
+            .catch(() => undefined);
+          if (git?.isRepo && !git.unborn) gitMode = "worktree";
+        }
+        await openNewChatIn(workspaceId, undefined, gitMode ? { gitMode } : {});
+      },
+      openFolderForNewChat,
+      cloneRepositoryForNewChat,
+    }),
+    [cloneRepositoryForNewChat, openFolderForNewChat, openNewChatIn, queryClient],
+  );
+  // ⌘⇧O: a draft on screen moves to the chosen folder; anywhere else a new
+  // draft opens there.
   useCommandHandler(
-    "chat.new",
-    () => openNewChat(),
-    Boolean(activeId) && !appendReconciliationRequired,
+    "workspace.openFolder",
+    async () => {
+      const draftMenu = draftWorkspaceMenu(chatIdFromPath(pathname));
+      if (draftMenu) await draftMenu.openFolder();
+      else await openFolderForNewChat();
+    },
+    !appendReconciliationRequired,
   );
+  const newChatAvailable = Boolean(activeId) && !appendReconciliationRequired;
+  useCommandHandler("chat.new", () => openNewChat(), newChatAvailable);
+  useCommandHandler("chat.newIn", () => palette.openMode("newChatIn"), newChatAvailable);
   React.useEffect(
     () =>
       onAssistantAutomationComposerRequested((draft) => {
@@ -452,15 +561,17 @@ function RootContent() {
   }, []);
 
   return (
-    <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
-      <Outlet />
-      <OnboardingFlow
-        onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
-      />
-      <AssistantDock rightInset={environmentPanel.dockRightInset} />
-      <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
-      <PairingRequestSheet />
-      {capabilities.bots ? <BotConnectionSetupHost /> : null}
-    </div>
+    <NewChatActionsProvider value={newChatActions}>
+      <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
+        <Outlet />
+        <OnboardingFlow
+          onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
+        />
+        <AssistantDock rightInset={environmentPanel.dockRightInset} />
+        <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <PairingRequestSheet />
+        {capabilities.bots ? <BotConnectionSetupHost /> : null}
+      </div>
+    </NewChatActionsProvider>
   );
 }

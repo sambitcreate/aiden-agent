@@ -1903,6 +1903,49 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testOpeningAnEndedForeignRunReconcilesAfterTheInitialTranscriptRead() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(
+            scenario: .endedBeforeAttach, replyAfterAttach: true, failFirstReconcile: true
+        )
+        fixture.startRun()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+
+        await model.load(observeProgress: false)
+        try await waitForCondition("failed first terminal read") { fixture.failedReconcileReads == 1 }
+        try await waitForCondition("recovered terminal answer") {
+            model.chat.messages.contains { $0.id == "reply-mac" }
+        }
+        XCTAssertEqual(model.chat.messages.map(\.id), ["reply-mac"])
+        XCTAssertEqual(model.chat.messages.first?.text, "Hello from the Mac")
+        XCTAssertTrue(model.liveText.isEmpty, "Historical replay must stay quiet")
+        XCTAssertFalse(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.chatReads, 3, "The failed terminal read retries once")
+    }
+
+    @MainActor
+    func testOpeningAnAlreadyCurrentEndedRunDoesNotDuplicateItsAnswer() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .endedBeforeAttach)
+        fixture.startRun()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+
+        await model.load(observeProgress: false)
+        try await waitForCondition("terminal replay settled") { !model.isLookingForForeignRun }
+        XCTAssertEqual(model.chat.messages.map(\.id), ["reply-mac"])
+        XCTAssertEqual(fixture.chatReads, 2, "The terminal read accepts the same answer once")
+        XCTAssertTrue(model.liveText.isEmpty)
+    }
+
+    @MainActor
     private func makeAnnouncedRunModel(
         _ fixture: AidenAnnouncedRunFixture,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil
@@ -2075,7 +2118,7 @@ final class AidenChatTests: XCTestCase {
         try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
         XCTAssertTrue(model.isObservingForeignRun)
         XCTAssertEqual(fixture.currentRunRequests, 2, "The announced turn is looked up once the replay ends.")
-        XCTAssertEqual(fixture.chatReads, 1, "The load already read the earlier run's reply.")
+        XCTAssertEqual(fixture.chatReads, 2, "Terminal replay verifies the durable transcript after the load read.")
     }
 
     @MainActor
@@ -12880,17 +12923,26 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
     private let scenario: Scenario
     private let rosterReadable: Bool
     private let firstRosterTurnId: String
+    private let replyAfterAttach: Bool
+    private let failFirstReconcile: Bool
     private var started = false
     private var runRequestsSinceStart = 0
     private var runRequests = 0
     private var reads = 0
+    private var failedReads = 0
     var currentRunRequests: Int { lock.withLock { runRequests } }
     var chatReads: Int { lock.withLock { reads } }
+    var failedReconcileReads: Int { lock.withLock { failedReads } }
 
-    init(scenario: Scenario, rosterReadable: Bool = true, firstRosterTurnId: String = "turn-old") {
+    init(
+        scenario: Scenario, rosterReadable: Bool = true, firstRosterTurnId: String = "turn-old",
+        replyAfterAttach: Bool = false, failFirstReconcile: Bool = false
+    ) {
         self.scenario = scenario
         self.rosterReadable = rosterReadable
         self.firstRosterTurnId = firstRosterTurnId
+        self.replyAfterAttach = replyAfterAttach
+        self.failFirstReconcile = failFirstReconcile
     }
 
     func startRun() { lock.withLock { started = true } }
@@ -12918,8 +12970,12 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
                 """.utf8))
             case "/api/aiden/v1/chats/chat-progress-lifecycle":
                 reads += 1
+                if failFirstReconcile && reads == 2 {
+                    failedReads += 1
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"#.utf8))
+                }
                 // The reply reaches the transcript once the run has finished.
-                let messages = started && scenario == .endedBeforeAttach
+                let messages = started && scenario == .endedBeforeAttach && (!replyAfterAttach || runRequests > 0)
                     ? #"[{"id":"reply-mac","role":"assistant","text":"Hello from the Mac","createdAt":"2026-10-13T10:00:03Z"}]"#
                     : "[]"
                 return (200, "application/json", Data("""
