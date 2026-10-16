@@ -39,6 +39,8 @@ import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.j
 import { botRoutineCron } from "../../renderer/shared/bot-routine-schedule.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import type { AidenRemoteAttachmentProjection, AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
+import type { Attachment } from "./types.js";
 import type { BotMemoryView } from "../../renderer/shared/bot-memory.js";
 import {
   BOT_DAILY_CHECKIN_SUGGESTION,
@@ -150,7 +152,13 @@ export interface AidenRemoteBotSessionRuntime {
   send(
     botId: string,
     /** `whenBusy` while a turn runs: `steer` joins it, `followUp` (the default) runs after it. */
-    input: { text: string; requestId: string; whenBusy?: "steer" | "followUp" },
+    input: {
+      text: string;
+      requestId: string;
+      whenBusy?: "steer" | "followUp";
+      /** Revision 33: the person's images, as the desktop Bot chat sends them. */
+      attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
+    },
   ): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
@@ -206,6 +214,11 @@ export interface AidenRemoteBotSessionServiceOptions {
   onReport?(botId: string, error: unknown): void;
   /** Pause before a failed classification is retried; defaults to one second. */
   classifyRetryMs?: number;
+  /**
+   * Staged phone uploads (`bot-attachments-v1`, revision 33): the workspace
+   * chats' one-shot store, keyed per Bot so a Bot reference never reaches a chat.
+   */
+  attachments?: Pick<AidenRemoteAttachmentStore, "upload" | "remove" | "consume">;
   /**
    * Run start times shared with the desktop live projection (`botRunStarts`):
    * a projector created mid-run, or after the 60 s idle close, keeps the
@@ -1131,6 +1144,27 @@ function mapSessionError(error: unknown): never {
  * name the Mac user and Aiden's private folders), as is anything shaped like
  * an API key, and the text is cut to the wire bound.
  */
+/**
+ * The store key for a Bot's staged uploads. A `/` never appears in a chat id,
+ * so a Bot's references can't be spent in a workspace chat or the other way round.
+ */
+function botAttachmentScope(botId: string): string {
+  return `bots/${botId}`;
+}
+
+function botImageAttachments(attachments: readonly Attachment[]): Array<{ type: "image"; mimeType: string; data: string }> {
+  return attachments
+    .filter((attachment) => attachment.kind === "image" && attachment.data)
+    .map((attachment) => ({ type: "image" as const, mimeType: attachment.mimeType, data: attachment.data! }));
+}
+
+/** Text files follow the words the way the desktop Bot chat sends them: name, then contents. */
+export function botMessageText(text: string, attachments: readonly Attachment[]): string {
+  return attachments
+    .filter((attachment) => attachment.kind === "text" && attachment.text)
+    .reduce((body, attachment) => `${body}\n\n${attachment.name}:\n${attachment.text}`, text);
+}
+
 export function redactRemoteError(message: string): string {
   return redactRemoteText(message, 500) || "This routine failed.";
 }
@@ -1252,6 +1286,11 @@ export class AidenRemoteBotSessionService {
    */
   get supportsActivity(): boolean {
     return Boolean(this.options.turnIntents) && this.options.bots.supportsChatActivity === true;
+  }
+
+  /** Staged image and text uploads for Bot messages (revision 33, `bot-attachments-v1`). */
+  get supportsAttachments(): boolean {
+    return Boolean(this.options.attachments);
   }
 
   /** Proposal answers, suggestions and the notification feed are one feature (`bot-proactive-v1`). */
@@ -1667,9 +1706,13 @@ export class AidenRemoteBotSessionService {
   }
 
   async send(deviceId: string, botId: string, key: string, input: unknown): Promise<AidenRemoteBotMessageReceipt> {
-    // `whenBusy` is revision 30: a host that does not announce it refuses the key.
+    // `whenBusy` is revision 30 and `attachmentIds` revision 33: a host that
+    // does not announce one refuses its key.
     const parsed = parseOrInvalid(
-      (value) => parseAidenRemoteBotMessageRequest(value, { allowWhenBusy: this.supportsActivity }),
+      (value) => parseAidenRemoteBotMessageRequest(value, {
+        allowWhenBusy: this.supportsActivity,
+        allowAttachments: this.supportsAttachments,
+      }),
       input,
       "The Bot message is invalid.",
     );
@@ -1680,12 +1723,18 @@ export class AidenRemoteBotSessionService {
         parsed,
         async () => {
           const runtime = await this.options.runtime();
+          // Consumed once, inside the ledger: a replayed request never asks for them again.
+          const attached = parsed.attachmentIds
+            ? this.options.attachments!.consume(deviceId, botAttachmentScope(bot.id), parsed.attachmentIds) ?? []
+            : [];
+          const images = botImageAttachments(attached);
           // The request UUID is the session request id: a resubmission dedupes.
           const sent = await unlessRefusedBeforeRunning(() => runtime.send(bot.id, {
-            text: parsed.text,
+            text: botMessageText(parsed.text, attached),
             requestId: `remote:${deviceId}:${key}`,
             // Steer joins the running turn; Queue (or nothing, as before) runs after it.
             ...(parsed.whenBusy ? { whenBusy: parsed.whenBusy === "steer" ? "steer" as const : "followUp" as const } : {}),
+            ...(images.length > 0 ? { attachments: images } : {}),
           }));
           return { ...sent, ...projectBotSessionState(await runtime.state(bot.id)) };
         },
@@ -1695,6 +1744,25 @@ export class AidenRemoteBotSessionService {
     } catch (error) {
       return mapSessionError(error);
     }
+  }
+
+  /** Stage one image or text file for this device's next message to the Bot (revision 33). */
+  async uploadAttachment(deviceId: string, botId: string, input: unknown): Promise<AidenRemoteAttachmentProjection> {
+    const attachments = this.attachmentStore();
+    const bot = await this.options.bots.bot(botId);
+    return attachments.upload(deviceId, botAttachmentScope(bot.id), input);
+  }
+
+  /** Drop a staged upload the person removed before sending; an unknown id is already gone. */
+  async removeAttachment(deviceId: string, botId: string, attachmentId: string): Promise<void> {
+    const attachments = this.attachmentStore();
+    const bot = await this.options.bots.bot(botId);
+    attachments.remove(deviceId, botAttachmentScope(bot.id), attachmentId);
+  }
+
+  private attachmentStore() {
+    if (!this.options.attachments) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    return this.options.attachments;
   }
 
   private async control(

@@ -4251,7 +4251,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 32,
+      contractRevision: 33,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -5220,6 +5220,48 @@ test("bot-activity-v1 and bot:activity are offered only while activity frames an
       assert.deepEqual(seen, [`session:${served}`, `events:${served}`], `${sessionsActivity}/${chatActivity}`);
     } finally {
       await holder.close();
+    }
+  }
+});
+
+test("bot-attachments-v1 is offered only while Bot uploads are wired, and its routes reach the Bot session", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const attachmentId = `att_${"A".repeat(43)}`;
+  for (const wired of [true, false]) {
+    const seen: string[] = [];
+    const base = recordingActivitySessions([], false) as unknown as Record<string, unknown>;
+    const sessions = {
+      ...base,
+      supportsAttachments: wired,
+      uploadAttachment: async (deviceId: string, botId: string, body: { name: string }) => {
+        seen.push(`upload:${botId}:${body.name}`);
+        return { id: attachmentId, name: body.name, mimeType: "text/plain", kind: "text", size: 2, expiresAt: "2026-10-16T09:10:00.000Z" };
+      },
+      removeAttachment: async (_deviceId: string, botId: string, id: string) => {
+        seen.push(`remove:${botId}:${id === attachmentId}`);
+      },
+    } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write", "chat:read", "chat:write"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: sessions,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.features.includes("bot-attachments-v1"), wired);
+      const upload = await fetch(`${app.base}/bots/bot-1/attachments`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ name: "a.txt", mimeType: "text/plain", kind: "text", text: "hi" }),
+      });
+      assert.equal(upload.status, wired ? 201 : 404);
+      if (wired) assert.equal((await upload.json()).id, attachmentId);
+      const removed = await fetch(`${app.base}/bots/bot-1/attachments/${attachmentId}`, { method: "DELETE", headers });
+      assert.equal(removed.status, wired ? 204 : 404);
+      assert.deepEqual(seen, wired ? ["upload:bot-1:a.txt", "remove:bot-1:true"] : []);
+    } finally {
+      await app.close();
     }
   }
 });

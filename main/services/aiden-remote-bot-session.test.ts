@@ -12,6 +12,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/provid
 import { BOT_ACTIVITY_PHASES } from "../../renderer/shared/bot-activity.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
+import { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
@@ -2060,6 +2061,95 @@ test("a host without bot-activity-v1 refuses whenBusy instead of guessing", asyn
   );
   await service.close();
   await ungated.close();
+});
+
+test("staged Bot uploads reach the runtime once: images as images, text files after the words", async () => {
+  const fixture = (await contractFixture()).botAttachments;
+  const fake = fakeRuntime({ kind: "idle" });
+  const sends: Array<{ text: string; requestId: string; attachments?: unknown }> = [];
+  let ids = 0;
+  const attachments = new AidenRemoteAttachmentStore({
+    randomId: () => `att_${String(++ids).padStart(43, "x")}`,
+  });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({
+      ...fake.runtime,
+      async send(_botId, input) {
+        sends.push(input);
+        return { submissionId: String(sends.length), deduped: false };
+      },
+    }),
+    attachments,
+  });
+  try {
+    assert.equal(service.supportsAttachments, true);
+    const image = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    const text = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request);
+    assert.deepEqual(
+      [image.kind, image.size, text.kind, text.size],
+      [fixture.imageUpload.response.kind, fixture.imageUpload.response.size, fixture.textUpload.response.kind, fixture.textUpload.response.size],
+    );
+
+    // Another device can't spend this phone's references, and the refusal leaves them usable.
+    await assert.rejects(
+      service.send("device_2", BOT_ID, "send-request-attach-0000", { text: "Mine now", attachmentIds: [image.id] }),
+      isError("handle_wrong_device", 403),
+    );
+
+    const body = { text: "What did I spend?", attachmentIds: [image.id, text.id] };
+    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0001", body);
+    // A retried request replays its receipt without asking for the spent references again.
+    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0001", body);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0]!.text, "What did I spend?\n\nnotes.md:\n# Groceries\n- oats");
+    assert.deepEqual(sends[0]!.attachments, [
+      { type: "image", mimeType: "image/png", data: fixture.imageUpload.request.data },
+    ]);
+
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0002", { text: "Again", attachmentIds: [image.id] }),
+      isError("handle_invalid", 409),
+    );
+
+    // Words are optional with attachments; a removed upload can't be sent.
+    const only = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
+    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0003", { text: "", attachmentIds: [only.id] });
+    assert.equal(sends[1]!.text, "");
+    const removed = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request);
+    await service.removeAttachment(DEVICE_ID, BOT_ID, removed.id);
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0004", { text: "Hi", attachmentIds: [removed.id] }),
+      isError("handle_invalid", 409),
+    );
+    for (const [index, sample] of (fixture.rejectedSends as unknown[]).entries()) {
+      await assert.rejects(
+        service.send(DEVICE_ID, BOT_ID, `send-request-reject-000${index}`, sample),
+        isError("invalid_request", 400),
+        JSON.stringify(sample),
+      );
+    }
+  } finally {
+    await service.close();
+  }
+});
+
+test("a host without Bot attachments refuses attachmentIds and the upload routes", async () => {
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService(fake.runtime);
+  try {
+    assert.equal(service.supportsAttachments, false);
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0009", { text: "Hi", attachmentIds: [`att_${"A".repeat(43)}`] }),
+      isError("invalid_request", 400),
+    );
+    await assert.rejects(
+      service.uploadAttachment(DEVICE_ID, BOT_ID, { name: "a.txt", mimeType: "text/plain", kind: "text", text: "a" }),
+      isError("not_found", 404),
+    );
+  } finally {
+    await service.close();
+  }
 });
 
 // ---------------------------------------------------------------------------
