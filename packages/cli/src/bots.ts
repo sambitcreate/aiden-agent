@@ -65,6 +65,9 @@ function checkpointFile<T>(agentDir: string, name: string) {
   };
 }
 
+/** The CLI host owner's Bot capability audience (`aiden bots …`, remote Bot Files). */
+export const CLI_BOT_OWNER_AUDIENCE_ID = "cli:local";
+
 export async function createCliBots(agentDir: string, daemon: ReturnType<typeof createDaemonChats>) {
   const cliEntry = process.env.AIDEN_CLI_ENTRY;
   const fileMutatorBinary = cliEntry
@@ -228,7 +231,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     },
     async stop() { watcher.close(); inventoryLeases.invalidate("inventory_changed"); await mcp.close(); },
     async command(args: string[]) {
-      const [action = "list", id, input] = args, audienceId = "cli:local";
+      const [action = "list", id, input] = args, audienceId = CLI_BOT_OWNER_AUDIENCE_ID;
       switch (action) {
         case "list": return application.list();
         case "get": return application.get(id);
