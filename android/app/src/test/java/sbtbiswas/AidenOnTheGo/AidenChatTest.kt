@@ -621,6 +621,102 @@ class AidenChatTest {
     }
 
     @Test
+    fun foreignRunReplayAndLiveBurstAreCompleteBeforeAToolControlAppears() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val releaseLiveBurst = CountDownLatch(1)
+        val liveFeedRequested = CountDownLatch(1)
+        val afterCursor = java.util.concurrent.atomic.AtomicReference<String?>()
+        val liveFeeds = java.util.concurrent.atomic.AtomicInteger()
+        val burst = (0 until 120).joinToString("") { index ->
+            runFrame(index + 5, "text_delta", """{"text":"word "}""")
+        }
+        withForeignRunChat(initial = foreignRunChat(), route = { path, request ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> runFeed(
+                    runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                        runFrame(2, "text_delta", """{"text":"prefix "}""") +
+                        runFrame(3, "reasoning_delta", """{"text":"first thought"}""")
+                )
+                "/runs/run-mac/events" -> {
+                    if (liveFeeds.incrementAndGet() == 1) {
+                        afterCursor.set(request.requestUrl?.queryParameter("after"))
+                        liveFeedRequested.countDown()
+                        releaseLiveBurst.await(10, TimeUnit.SECONDS)
+                        runFeed(
+                            runFrame(4, "reasoning_delta", """{"text":" and next"}""") + burst +
+                                runFrame(125, "tool_started", """{"toolId":"tool-1","name":"run_command"}""")
+                        )
+                    } else runFeed("").setHeadersDelay(5, TimeUnit.SECONDS)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            try {
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.startProgressObservation()
+                assertTrue(withContext(Dispatchers.IO) { liveFeedRequested.await(5, TimeUnit.SECONDS) })
+                withTimeout(5_000) { model.liveText.first { it == "prefix " } }
+                assertEquals("first thought", model.reasoning.value)
+                assertEquals("3", afterCursor.get())
+
+                releaseLiveBurst.countDown()
+                withTimeout(5_000) { model.tools.first { it.any { tool -> tool.id == "tool-1" } } }
+                assertEquals("prefix " + "word ".repeat(120), model.liveText.value)
+                assertEquals("first thought and next", model.reasoning.value)
+                assertTrue(model.canStopCurrentRun)
+            } finally {
+                releaseLiveBurst.countDown()
+            }
+        }
+    }
+
+    @Test
+    fun foreignRunGapSnapshotDropsPublishedAndQueuedOutputBeforeNewDeltas() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val releaseGap = CountDownLatch(1)
+        val gapRequested = CountDownLatch(1)
+        val resumedFeeds = java.util.concurrent.atomic.AtomicInteger()
+        val snapshot = """{"runId":"run-mac","chatId":"chat-mac","reason":"gap","epoch":"epoch-2","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"""
+        withForeignRunChat(initial = foreignRunChat(), route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> runFeed(
+                    runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                        runFrame(2, "text_delta", """{"text":"old prefix "}""")
+                )
+                "/runs/run-mac/events" -> {
+                    if (resumedFeeds.incrementAndGet() == 1) {
+                        gapRequested.countDown()
+                        releaseGap.await(10, TimeUnit.SECONDS)
+                        runFeed(
+                            runFrame(3, "text_delta", """{"text":"queued old "}""") +
+                                runFrame(0, "snapshot", snapshot) +
+                                runFrame(1, "text_delta", """{"text":"new prefix "}""") +
+                                runFrame(2, "tool_started", """{"toolId":"tool-new","name":"run_command"}""")
+                        )
+                    } else runFeed("").setHeadersDelay(5, TimeUnit.SECONDS)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            try {
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.startProgressObservation()
+                assertTrue(withContext(Dispatchers.IO) { gapRequested.await(5, TimeUnit.SECONDS) })
+                withTimeout(5_000) { model.liveText.first { it == "old prefix " } }
+
+                releaseGap.countDown()
+                withTimeout(5_000) { model.tools.first { it.any { tool -> tool.id == "tool-new" } } }
+                assertEquals("new prefix ", model.liveText.value)
+                assertEquals("", model.reasoning.value)
+            } finally {
+                releaseGap.countDown()
+            }
+        }
+    }
+
+    @Test
     fun validRunProgressRestoresTheReconnectBudgetAcrossMoreThanFourDisconnects() {
         val wireJson = Json(json) { explicitNulls = false }
         val requests = java.util.concurrent.atomic.AtomicInteger()
