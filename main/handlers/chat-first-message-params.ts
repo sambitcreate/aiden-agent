@@ -1,15 +1,26 @@
 import { parseChatAppend, type ParsedChatAppend } from "./chat-append-params.js";
 import { parseChatCreate } from "./chat-create-params.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import {
+  parseFirstMessageWorktreeRequest,
+  type FirstMessageWorktreeRequest,
+} from "../../renderer/shared/worktree-on-send.js";
 
 const KEYS = new Set([
   "draftId", "workspaceId", "providerId", "model", "title",
-  "turnId", "message", "skillInvocation",
+  "turnId", "message", "skillInvocation", "worktree",
 ]);
 
 export interface ParsedChatFirstMessage extends ParsedChatAppend {
   title?: string;
   workspaceId: string;
+  /** Create a managed worktree from the draft's workspace and save the chat there. */
+  worktree?: FirstMessageWorktreeRequest;
+  /**
+   * Set only by the worktree commit path, never parsed from IPC: the workspace
+   * a skill selection was minted in when it differs from the chat's workspace.
+   */
+  skillWorkspaceId?: string;
 }
 
 /** Project the complete untrusted envelope before retaining it across awaits. */
@@ -47,10 +58,23 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
   if (!append.content.trim() && !append.attachments?.length) {
     throw new Error("Add a message or attachment before sending.");
   }
+  let worktree: FirstMessageWorktreeRequest | undefined;
+  if (record.worktree !== undefined) {
+    worktree = parseFirstMessageWorktreeRequest(record.worktree);
+    if (worktree.sourceWorkspaceId !== create.workspaceId) {
+      throw new Error("A new worktree must start from the draft's workspace.");
+    }
+    if (worktree.idempotencyKey !== record.draftId.toLowerCase()) {
+      throw new Error("The worktree request does not belong to this draft.");
+    }
+  }
   return {
     ...append,
     title: create.title,
     workspaceId: create.workspaceId,
+    ...(worktree ? { worktree } : {}),
+    // The small, bounded worktree request is left out so the chat commit that
+    // follows it fingerprints the same message whatever base was chosen.
     retainedBytes: append.retainedBytes + Buffer.byteLength(create.workspaceId, "utf8") + Buffer.byteLength(create.title ?? "", "utf8") + 64,
   };
 }

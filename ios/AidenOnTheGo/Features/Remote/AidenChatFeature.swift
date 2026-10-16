@@ -9476,17 +9476,12 @@ extension AidenChatViewModel {
                             discardUnsettledForeignRun()
                             if await retryAnnouncedRun() { continue attach }
                         }
+                        // The load may have read the transcript before the Mac
+                        // committed the reply. Terminal replay settles that read
+                        // even though historical activity stays off screen.
+                        guard isCurrentForeignRun(generation, context: context) else { return }
                         foreignRunAccountedRunId = runId
-                        // The run finished before it could be shown live, so
-                        // its reply is only in the transcript. A load has just
-                        // read it, and a run already accounted for was read or
-                        // shown before; a newly found run reads it once.
-                        if reason != .load, isNewRun,
-                           isCurrentForeignRun(generation, context: context) {
-                            await reconcileChat(context: context)
-                        }
-                        guard generation == foreignRunGeneration else { return }
-                        endForeignRunObservation(preservingRecovery: true)
+                        await endForeignRunQuietly(context: context, reconcile: isNewRun)
                         return
                     }
                 }
@@ -9742,10 +9737,10 @@ extension AidenChatViewModel {
         if foreignRunIsLive, activeStreamID == nil { flushPendingStreamingContent() }
         let generation = foreignRunGeneration
         var reconciled = true
-        if reconcile, foreignRunIsLive {
+        if reconcile {
             reconciled = await reconcileChat(context: context)
         }
-        guard generation == foreignRunGeneration else { return }
+        guard isCurrentForeignRun(generation, context: context) else { return }
         foreignRunGeneration &+= 1
         foreignRunSettleTask?.cancel()
         foreignRunSettleTask = nil
@@ -9754,7 +9749,11 @@ extension AidenChatViewModel {
         let finalState = foreignRun?.endState
         foreignRun = nil
         foreignRunIsLive = false
-        guard wasLive, activeStreamID == nil else { return }
+        guard activeStreamID == nil else { return }
+        if !wasLive {
+            if !reconciled { scheduleForeignRunReconciliation(context: context) }
+            return
+        }
         pendingApproval = nil
         pendingQuestion = nil
         if finalState == nil, streamState?.isTerminal != true { streamState = nil }

@@ -557,6 +557,250 @@ class AidenChatTest {
     )
 
     @Test
+    fun endedReplayAfterTheOpeningReadRecoversTheFinalAnswerWithoutShowingHistoricalOutput() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val ended = java.util.concurrent.atomic.AtomicBoolean(false)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val answer = AidenChatMessage("reply-mac", AidenChatRole.ASSISTANT, "Finished on the Mac", createdAt = Instant.EPOCH)
+        withForeignRunChat(initial = foreignRunChat(), route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> {
+                    val read = reads.incrementAndGet()
+                    if (ended.get() && read == 2) MockResponse().setResponseCode(503)
+                    else MockResponse().setBody(wireJson.encodeToString(
+                        foreignRunChat(if (ended.get()) listOf(answer) else emptyList())
+                    ))
+                }
+                "/chats/chat-mac/runs/current/events" -> {
+                    ended.set(true)
+                    runFeed(
+                        runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                            runFrame(2, "done", """{"messageId":"reply-mac"}""", terminal = true) +
+                            runFrame(2, "run.ended", """{"runId":"run-mac","chatId":"chat-mac","state":"done"}""", terminal = true)
+                    )
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            assertEquals("The opening transcript predates completion", 1, reads.get())
+            model.startProgressObservation()
+            withTimeout(10_000) { model.chat.first { it?.messages?.any { message -> message.id == "reply-mac" } == true } }
+            assertTrue("A failed terminal read must recover automatically", reads.get() >= 3)
+            assertEquals(listOf("reply-mac"), model.chat.value?.messages?.map { it.id })
+            assertEquals("Finished on the Mac", model.chat.value?.messages?.single()?.text)
+            assertEquals("", model.liveText.value)
+            assertFalse(model.canStopCurrentRun)
+        }
+    }
+
+    @Test
+    fun transientFailureBeforeFirstRunEventRetriesTheCurrentRunRoute() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
+        withForeignRunChat(initial = foreignRunChat(), route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> {
+                    if (attempts.incrementAndGet() == 1) MockResponse().setResponseCode(503)
+                    else runFeed(
+                        runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                            runFrame(2, "text_delta", """{"text":"Live after retry"}""")
+                    )
+                }
+                "/runs/run-mac/events" -> runFeed("").setHeadersDelay(5, TimeUnit.SECONDS)
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(7_000) { model.liveText.first { it == "Live after retry" } }
+            assertEquals(2, attempts.get())
+            assertTrue(model.canStopCurrentRun)
+        }
+    }
+
+    @Test
+    fun foreignRunReplayAndLiveBurstAreCompleteBeforeAToolControlAppears() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val releaseLiveBurst = CountDownLatch(1)
+        val liveFeedRequested = CountDownLatch(1)
+        val afterCursor = java.util.concurrent.atomic.AtomicReference<String?>()
+        val liveFeeds = java.util.concurrent.atomic.AtomicInteger()
+        val burst = (0 until 120).joinToString("") { index ->
+            runFrame(index + 5, "text_delta", """{"text":"word "}""")
+        }
+        withForeignRunChat(initial = foreignRunChat(), route = { path, request ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> runFeed(
+                    runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                        runFrame(2, "text_delta", """{"text":"prefix "}""") +
+                        runFrame(3, "reasoning_delta", """{"text":"first thought"}""")
+                )
+                "/runs/run-mac/events" -> {
+                    if (liveFeeds.incrementAndGet() == 1) {
+                        afterCursor.set(request.requestUrl?.queryParameter("after"))
+                        liveFeedRequested.countDown()
+                        releaseLiveBurst.await(10, TimeUnit.SECONDS)
+                        runFeed(
+                            runFrame(4, "reasoning_delta", """{"text":" and next"}""") + burst +
+                                runFrame(125, "tool_started", """{"toolId":"tool-1","name":"run_command"}""")
+                        )
+                    } else runFeed("").setHeadersDelay(5, TimeUnit.SECONDS)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            try {
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.startProgressObservation()
+                assertTrue(withContext(Dispatchers.IO) { liveFeedRequested.await(5, TimeUnit.SECONDS) })
+                withTimeout(5_000) { model.liveText.first { it == "prefix " } }
+                assertEquals("first thought", model.reasoning.value)
+                assertEquals("3", afterCursor.get())
+
+                releaseLiveBurst.countDown()
+                withTimeout(5_000) { model.tools.first { it.any { tool -> tool.id == "tool-1" } } }
+                assertEquals("prefix " + "word ".repeat(120), model.liveText.value)
+                assertEquals("first thought and next", model.reasoning.value)
+                assertTrue(model.canStopCurrentRun)
+            } finally {
+                releaseLiveBurst.countDown()
+            }
+        }
+    }
+
+    @Test
+    fun foreignRunGapSnapshotDropsPublishedAndQueuedOutputBeforeNewDeltas() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val releaseGap = CountDownLatch(1)
+        val gapRequested = CountDownLatch(1)
+        val resumedFeeds = java.util.concurrent.atomic.AtomicInteger()
+        val snapshot = """{"runId":"run-mac","chatId":"chat-mac","reason":"gap","epoch":"epoch-2","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"""
+        withForeignRunChat(initial = foreignRunChat(), route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> runFeed(
+                    runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                        runFrame(2, "text_delta", """{"text":"old prefix "}""")
+                )
+                "/runs/run-mac/events" -> {
+                    if (resumedFeeds.incrementAndGet() == 1) {
+                        gapRequested.countDown()
+                        releaseGap.await(10, TimeUnit.SECONDS)
+                        runFeed(
+                            runFrame(3, "text_delta", """{"text":"queued old "}""") +
+                                runFrame(0, "snapshot", snapshot) +
+                                runFrame(1, "text_delta", """{"text":"new prefix "}""") +
+                                runFrame(2, "tool_started", """{"toolId":"tool-new","name":"run_command"}""")
+                        )
+                    } else runFeed("").setHeadersDelay(5, TimeUnit.SECONDS)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            try {
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.startProgressObservation()
+                assertTrue(withContext(Dispatchers.IO) { gapRequested.await(5, TimeUnit.SECONDS) })
+                withTimeout(5_000) { model.liveText.first { it == "old prefix " } }
+
+                releaseGap.countDown()
+                withTimeout(5_000) { model.tools.first { it.any { tool -> tool.id == "tool-new" } } }
+                assertEquals("new prefix ", model.liveText.value)
+                assertEquals("", model.reasoning.value)
+            } finally {
+                releaseGap.countDown()
+            }
+        }
+    }
+
+    @Test
+    fun validRunProgressRestoresTheReconnectBudgetAcrossMoreThanFourDisconnects() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        val terminalGate = CountDownLatch(1)
+        val terminalRequested = CountDownLatch(1)
+        val resumed = java.util.Collections.synchronizedList(mutableListOf<Pair<String?, String?>>())
+        val ended = java.util.concurrent.atomic.AtomicBoolean(false)
+        val answer = AidenChatMessage("reply-mac", AidenChatRole.ASSISTANT, "abcdef", createdAt = Instant.EPOCH)
+        withForeignRunChat(initial = foreignRunChat(), route = { path, request ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(
+                    foreignRunChat(if (ended.get()) listOf(answer) else emptyList())
+                ))
+                "/chats/chat-mac/runs/current/events" -> {
+                    requests.incrementAndGet()
+                    runFeed(
+                        runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                            runFrame(2, "text_delta", """{"text":"a"}""")
+                    )
+                }
+                "/runs/run-mac/events" -> {
+                    resumed.add(request.requestUrl?.queryParameter("after") to request.getHeader("Last-Event-ID"))
+                    val attempt = requests.incrementAndGet()
+                    if (attempt < 7) runFeed(runFrame(attempt + 1, "text_delta", """{"text":"${"abcdef"[attempt - 1]}"}"""))
+                    else {
+                        terminalRequested.countDown()
+                        terminalGate.await(15, TimeUnit.SECONDS)
+                        ended.set(true)
+                        runFeed(
+                            runFrame(8, "done", """{"messageId":"reply-mac"}""", terminal = true) +
+                                runFrame(8, "run.ended", """{"runId":"run-mac","chatId":"chat-mac","state":"done"}""", terminal = true)
+                        )
+                    }
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            try {
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.startProgressObservation()
+                assertTrue(withContext(Dispatchers.IO) { terminalRequested.await(15, TimeUnit.SECONDS) })
+                assertTrue("A long healthy run remains controllable", model.canStopCurrentRun)
+                assertEquals("abcdef", model.liveText.value)
+                assertEquals((2..7).map { it.toString() }, resumed.map { it.first })
+                assertEquals((2..7).map { it.toString() }, resumed.map { it.second })
+            } finally {
+                terminalGate.countDown()
+            }
+            withTimeout(5_000) { model.chat.first { it?.messages?.any { message -> message.id == "reply-mac" } == true } }
+            assertEquals(listOf("reply-mac"), model.chat.value?.messages?.map { it.id })
+        }
+    }
+
+    @Test
+    fun emptyReconnectsAfterALiveRunStillExhaustTheConsecutiveFailureBudget() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        withForeignRunChat(initial = foreignRunChat(), route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> {
+                    requests.incrementAndGet()
+                    runFeed(
+                        runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                            runFrame(2, "text_delta", """{"text":"Still running"}""")
+                    )
+                }
+                "/runs/run-mac/events" -> {
+                    requests.incrementAndGet()
+                    runFeed("")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.liveText.first { it == "Still running" } }
+            withTimeout(12_000) { model.streamState.first { it == AidenStreamState.INTERRUPTED } }
+            assertEquals("The first feed and three retries precede exhaustion", 4, requests.get())
+            assertFalse(model.canStopCurrentRun)
+        }
+    }
+
+    @Test
     fun coldOpenedChatAttachesToTheRunStartedElsewhereOnceTheChatLoads() {
         val wireJson = Json(json) { explicitNulls = false }
         val chatGate = CountDownLatch(1)
