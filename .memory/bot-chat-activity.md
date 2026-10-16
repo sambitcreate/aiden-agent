@@ -1,5 +1,8 @@
 # Bot chat activity (2026-10-14)
 
+## Timeout race follow-up (2026-10-15)
+- In `AidenBotRequestRace`, publish `AidenBotRequestTimedOut` before cancelling the request. Cancelling first could let a sleeping request throw `CancellationError` and win the race, so Chat Activity cleared a choice made during a timed-out save instead of reconciling it after refresh. Hosted PR #498 run 38816353400 exposed this in `AidenBotChatActivityTests/testAPickMadeWhileASaveTimedOutGoesOutOnceTheRefreshShowsThatSaveLanded()`; the focused 23-test simulator suite passed after the ordering fix. No timeout or retry policy changed.
+
 Spec: docs/superpowers/specs/2026-10-14-bot-chat-activity-design.md (§17 lists the slice B rulings). Slice B plan: docs/superpowers/plans/2026-10-14-bot-chat-activity-b-status-line.md. Branch `claude/bot-chat-activity-b-status-line`, stacked on PR #475.
 
 ## Slice B (desktop) — what shipped
