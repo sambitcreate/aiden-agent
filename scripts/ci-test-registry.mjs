@@ -246,6 +246,13 @@ function collectDirectTestFiles(segment, scriptName) {
     }
     throw new Error(`${scriptName} uses an unregistered esbuild command: ${buildCommand}`);
   }
+  if (command === "vite") {
+    const buildCommand = segment.slice(index).join(" ");
+    if (scriptName === "build:visual-viewer" && buildCommand === "vite build --config vite.visual-viewer.config.ts") {
+      return [];
+    }
+    throw new Error(`${scriptName} uses an unregistered Vite command: ${buildCommand}`);
+  }
   if (command !== "tsx" && command !== "node") {
     throw new Error(`${scriptName} uses an unregistered test command: ${segment.slice(index).join(" ")}`);
   }
@@ -342,7 +349,7 @@ export function collectSourceTests({
       } else {
         for (const file of collectDirectTestFiles(segment, scriptName)) files.add(file);
         const direct = segment.slice(index);
-        if ((direct[0] === "node" && direct[1] !== "--test") || direct[0] === "esbuild") builds.push(direct);
+        if ((direct[0] === "node" && direct[1] !== "--test") || direct[0] === "esbuild" || direct[0] === "vite") builds.push(direct);
       }
     }
     filesByScript.set(scriptName, files);
