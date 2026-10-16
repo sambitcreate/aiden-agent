@@ -1,9 +1,10 @@
 # Managed worktree process cleanup
 
 Started 2026-10-15, pending PR #500. Started from `origin/main` `11b58367`;
-as of 2026-10-16, merged latest `origin/main` `264b537a4` into the PR branch
+as of 2026-10-16, merged latest `origin/main` `6c2b44bb0` into the PR branch
 without rebasing. The integrations include #498, #503, #506, #501, #504,
-the 0.57.0 release merge, #508, #509, #510, #511 and #512. The merged root
+the 0.57.0 release merge, #508, #509, #510, #511, #512, #496, #505, #494,
+and #499. The merged root
 `package.json` test chain matches main. The #512 integration supplies Aiden
 Remote revision 33 with synchronized iOS and fixture contracts; this PR
 changes neither that revision nor its wire shape.
@@ -114,3 +115,17 @@ passed. Focused iOS Remote client, Bot session, and phase-0 simulator suites
 returned exit 0 with 175 passing cases; Xcode then spent ten minutes trying
 to collect simulator diagnostics and reported a diagnostic timeout. The
 actual test gate passed, but hosted iOS CI remains the clean-run evidence.
+
+The `60e30da04` exact-head CI run `38951048254` completed green across all
+desktop, E2E, mobile, CLI, and Linux packaging jobs. Pullfrog passed, Hermes
+reviewed that head with no findings, and no review threads remained open.
+The coordinator then assigned #500 a delivery slot after #499 merged to
+`6c2b44bb0`; that main merged without conflicts. The root test chain matches
+main, the Remote contract remains revision 33 with no PR wire-shape change,
+and all three native manifests contain both the remover and lease-flock
+helpers with valid hashes. After refreshing root and CLI dependencies for
+Pi 1.3.0, local root typecheck, full lint and build, 36 native remover tests,
+6 native manifest tests, 160 focused desktop/Remote tests, 122 focused tests
+for new main Bot lease, coding tools and device paths, 106 CLI tests, terminal
+coverage, and 220 tool-output tests under CI Node 22.22.3 passed. Fresh
+exact-head hosted CI, Pullfrog and Hermes are required on the post-merge head.
