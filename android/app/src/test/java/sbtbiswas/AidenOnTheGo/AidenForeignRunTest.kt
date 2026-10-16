@@ -55,7 +55,7 @@ class AidenForeignRunTest {
         val projection = AidenForeignRunProjection("run_fixture_02")
         val effects = events.take(6).map { projection.apply(it) }
         // Attaching mid-run surfaces status, text and tool rows like an owned run.
-        assertEquals("Checking the build.", projection.liveText)
+        assertEquals(listOf(Effect.TextAppended("Checking the build.")), effects[2])
         assertEquals(listOf("run_command"), projection.tools.map { it.name })
         assertEquals("succeeded", projection.tools.first().status)
         assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, projection.state)
@@ -125,7 +125,7 @@ class AidenForeignRunTest {
         // The projection of a different run never absorbs these frames.
         val other = AidenForeignRunProjection("run-2")
         assertEquals(emptyList<Effect>(), other.apply(events[1]))
-        assertEquals("", other.liveText)
+        assertEquals(0, other.lastSequence)
 
         // Turn streams keep their sequence floor of 1, and run frames must
         // agree with their SSE id and event name.

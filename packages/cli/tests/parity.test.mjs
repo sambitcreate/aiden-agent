@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -600,6 +600,9 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
 
 test("Bots retain one-shot notice, exact Custom tools, revocation and independent rollback anchors", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir), requests = [];
+  const originalEntry = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (originalEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = originalEntry; });
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body); requests.push(parsed);
@@ -630,6 +633,19 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
   const write = tools.find((tool) => tool.name === "write_file");
   const result = await write.execute("one", { path: "note.txt", content: "Scoped" }); assert.ok(!result.isError);
   assert.equal(readFileSync(join(lease.authority.workingDirectory, "note.txt"), "utf8"), "Scoped");
+  const decoyDirectory = join(dir, "build", "native"), decoyMarker = join(dir, "decoy-ran");
+  mkdirSync(decoyDirectory, { recursive: true });
+  const decoy = join(decoyDirectory, "aiden-subagent-file-mutator");
+  writeFileSync(decoy, `#!/bin/sh\ntouch '${decoyMarker}'\nexit 1\n`); chmodSync(decoy, 0o755);
+  const originalCwd = process.cwd();
+  process.chdir(dir);
+  try {
+    const edit = tools.find((tool) => tool.name === "edit_file");
+    const edited = await edit.execute("edit-outside-repo", { path: "note.txt", old_string: "Scoped", new_string: "Edited" });
+    assert.ok(!edited.isError);
+  } finally { process.chdir(originalCwd); }
+  assert.equal(readFileSync(join(lease.authority.workingDirectory, "note.txt"), "utf8"), "Edited");
+  assert.equal(existsSync(decoyMarker), false);
   await assert.rejects(write.execute("escape", { path: "../escape.txt", content: "Denied" }));
   const turn = daemon.llmClient.beginChatTurn(chat.id, "bot-stream", "bot-owner"); assert.ok(turn);
   const generationEvents = [];

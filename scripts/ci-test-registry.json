@@ -12,7 +12,8 @@
         "worktree-remover-build",
         "vcc-build",
         "worktree-file-io-build",
-        "worktree-file-io-test-build"
+        "worktree-file-io-test-build",
+        "subagent-file-mutator-build"
       ],
       "files": [
         "main/handlers/assistant-parse.test.ts",
@@ -1153,6 +1154,7 @@
     {
       "id": "subagent-file-mutator-build",
       "for": [
+        "core-git",
         "runtime-subagents",
         "subagent-file-mutator-native"
       ],

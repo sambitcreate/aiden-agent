@@ -81,6 +81,30 @@ async function rootIdentity(root) {
   return { device: identity.dev.toString(), inode: identity.ino.toString() };
 }
 
+async function parentEdit(root, relativePath, fileIdentity, original, updated) {
+  const rootStat = await rootIdentity(root);
+  const args = [
+    "edit-file", root, rootStat.device, rootStat.inode, relativePath,
+    fileIdentity.device, fileIdentity.inode, sha256(original),
+    String(Buffer.byteLength(updated)),
+  ];
+  return new Promise((resolve, reject) => {
+    const child = spawn(productionBinary, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const output = [];
+    const errors = [];
+    child.stdout.on("data", (chunk) => output.push(chunk));
+    child.stderr.on("data", (chunk) => errors.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({
+      code,
+      stdout: Buffer.concat(output).toString("utf8"),
+      stderr: Buffer.concat(errors).toString("utf8"),
+    }));
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(updated);
+  });
+}
+
 function startHelper(
   t,
   root,
@@ -629,6 +653,39 @@ test("a path replacement after prepare is reported as a conflict and preserved",
   assert.equal(await readFile(target, "utf8"), "external\n");
   assert.equal(await readFile(moved, "utf8"), "original\n");
   await helper.close();
+});
+
+test("parent edit opens below the pinned root and refuses swapped symlinks", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const root = await fixture(t, "aiden-parent-edit-root-");
+  const outside = await fixture(t, "aiden-parent-edit-outside-");
+  const directory = path.join(root, "nested");
+  const target = path.join(directory, "edit.txt");
+  const outsideFile = path.join(outside, "edit.txt");
+  await mkdir(directory);
+  await writeFile(target, "before\n");
+  await writeFile(outsideFile, "outside\n");
+  const first = await stat(target, { bigint: true });
+  const identity = { device: first.dev.toString(), inode: first.ino.toString() };
+  const edited = await parentEdit(root, "nested/edit.txt", identity, "before\n", "after\n");
+  assert.deepEqual(edited, { code: 0, stdout: "edited\n", stderr: "" });
+  assert.equal(await readFile(target, "utf8"), "after\n");
+
+  await rename(target, path.join(directory, "original.txt"));
+  await symlink(outsideFile, target);
+  const rejectedTarget = await parentEdit(root, "nested/edit.txt", identity, "after\n", "changed\n");
+  assert.equal(rejectedTarget.code, 1);
+  assert.equal(rejectedTarget.stderr, "conflict\n");
+  assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
+
+  await rm(target);
+  await rename(directory, path.join(root, "original-directory"));
+  await symlink(outside, directory);
+  const rejectedAncestor = await parentEdit(root, "nested/original.txt", identity, "after\n", "changed\n");
+  assert.equal(rejectedAncestor.code, 1);
+  assert.equal(rejectedAncestor.stderr, "conflict\n");
+  assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
+  assert.equal(await readFile(path.join(root, "original-directory", "original.txt"), "utf8"), "after\n");
 });
 
 test("a replacement in the final install race is atomically rolled back", async (t) => {

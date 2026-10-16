@@ -1101,6 +1101,7 @@ class AidenChatViewModel(
         progressObservationJob?.cancel()
         foreignRunProbeJob?.cancel()
         foreignRunJob?.cancel()
+        discardForeignTranscript()
         streamJob?.cancel()
         titleRefreshJob?.cancel()
         terminalReconciliationJob?.cancel()
@@ -2334,6 +2335,7 @@ class AidenChatViewModel(
 
     private var foreignRunId: String? = null
     private var foreignProjection: AidenForeignRunProjection? = null
+    private var foreignTranscript: AidenLiveTranscriptBuffer? = null
     private var foreignRunJob: Job? = null
     private var foreignRunProbeJob: Job? = null
     /** Counts runs shown live, so the probe can tell that one was found. */
@@ -2441,6 +2443,7 @@ class AidenChatViewModel(
 
     private suspend fun observeForeignRun(client: AidenRemoteClient, retryNotFound: Boolean) {
         var projection: AidenForeignRunProjection? = null
+        var transcript: AidenLiveTranscriptBuffer? = null
         var reconnects = 0
         var notFoundRetries = if (retryNotFound) 1 else 0
         try {
@@ -2456,19 +2459,44 @@ class AidenChatViewModel(
                             throw ForeignRunSuperseded()
                         }
                         val current = projection ?: AidenForeignRunProjection(event.runId).also { projection = it }
+                        val buffer = transcript ?: run {
+                            lateinit var created: AidenLiveTranscriptBuffer
+                            created = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+                                // A delayed frame must never publish into a new local or foreign owner.
+                                if (foreignTranscript === created && foreignProjection === current &&
+                                    foreignRunId == current.runId && activeStreamId == null && !_isStarting.value
+                                ) {
+                                    liveReveal.submit(text)
+                                    _reasoning.value = reasoning
+                                }
+                            }
+                            transcript = created
+                            foreignTranscript = created
+                            created
+                        }
                         val previousSequence = current.lastSequence
                         val effects = current.apply(event)
+                        val accepted = current.lastSequence != previousSequence || effects.isNotEmpty()
                         // A connected socket or duplicate frame is not progress. Count
                         // only a frame accepted by this run's projection.
-                        if (event.runId == current.runId &&
-                            (current.lastSequence != previousSequence || effects.isNotEmpty())
-                        ) reconnects = 0
-                        handleForeignRunEffects(current, effects)
+                        if (event.runId == current.runId && accepted) reconnects = 0
+                        if (!accepted || event.runId != current.runId) return@collect
+                        val outputDelta = effects.singleOrNull()
+                        when (outputDelta) {
+                            is AidenForeignRunProjection.Effect.TextAppended -> buffer.appendText(outputDelta.text)
+                            is AidenForeignRunProjection.Effect.ReasoningAppended -> buffer.appendReasoning(outputDelta.text)
+                            else -> {
+                                // Controls and terminal state see every accepted byte first.
+                                if (AidenForeignRunProjection.Effect.Reconcile in effects) buffer.reset()
+                                else buffer.flush()
+                                if (foreignProjection === current) liveReveal.flush()
+                            }
+                        }
+                        handleForeignRunEffects(current, effects, buffer, outputDelta is AidenForeignRunProjection.Effect.TextAppended ||
+                            outputDelta is AidenForeignRunProjection.Effect.ReasoningAppended)
                     }
                 } catch (error: ForeignRunSuperseded) {
-                    foreignSettleJob?.cancel()
-                    foreignRunId = null
-                    foreignProjection = null
+                    clearForeignRunPresentation()
                     return
                 } catch (error: CancellationException) {
                     throw error
@@ -2504,13 +2532,16 @@ class AidenChatViewModel(
                 delay(progressRetryDelay(reconnects))
             }
         } finally {
+            discardForeignTranscript(transcript)
             if (foreignRunJob?.isActive != true) foreignRunJob = null
         }
     }
 
     private suspend fun handleForeignRunEffects(
         projection: AidenForeignRunProjection,
-        effects: List<AidenForeignRunProjection.Effect>
+        effects: List<AidenForeignRunProjection.Effect>,
+        transcript: AidenLiveTranscriptBuffer,
+        outputDelta: Boolean
     ) {
         if (foreignRunId == null) {
             // Settle first: attaching replays the run's retained journal. Only a
@@ -2545,11 +2576,14 @@ class AidenChatViewModel(
                 foreignRunId = projection.runId
                 foreignRunsPresented += 1
                 foreignProjection = projection
+                transcript.publishCurrent()
+                liveReveal.flush()
                 presentForeignRun(projection)
             }
             return
         }
-        presentForeignRun(projection)
+        if (outputDelta) _streamState.value = projection.state
+        else presentForeignRun(projection)
         for (effect in effects) {
             when (effect) {
                 is AidenForeignRunProjection.Effect.AnsweredElsewhere -> showRunInputReceipt(effect.resolution.notice)
@@ -2564,8 +2598,6 @@ class AidenChatViewModel(
         val canControl = foreignRunAccess(AidenRemoteCapability.RUNS_CONTROL)
         val capabilities = approvalCapabilities()
         _streamState.value = projection.state
-        liveReveal.submit(projection.liveText)
-        _reasoning.value = projection.reasoning
         _tools.value = projection.tools
         _pendingApproval.value = projection.pendingApproval?.let { approval ->
             val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
@@ -2600,7 +2632,11 @@ class AidenChatViewModel(
         val projection = endedProjection ?: return
         val wasPresented = foreignProjection != null
         // The run is over, so a word the gate was holding back is complete.
-        if (wasPresented) liveReveal.flush()
+        if (wasPresented) {
+            foreignTranscript?.flush()
+            liveReveal.flush()
+        }
+        discardForeignTranscript()
         foreignRunId = null
         foreignProjection = null
         foreignRunAccountedRunId = projection.runId
@@ -2655,6 +2691,7 @@ class AidenChatViewModel(
         val wasPresented = foreignRunId != null || foreignReconcileJob?.isActive == true
         foreignReconcileJob?.cancel()
         foreignReconcileJob = null
+        discardForeignTranscript()
         foreignRunId = null
         foreignProjection = null
         if (!wasPresented || activeStreamId != null) return
@@ -2664,6 +2701,12 @@ class AidenChatViewModel(
         _pendingApproval.value = null
         _pendingQuestion.value = null
         _streamState.value = null
+    }
+
+    private fun discardForeignTranscript(expected: AidenLiveTranscriptBuffer? = foreignTranscript) {
+        if (foreignTranscript !== expected) return
+        foreignTranscript = null
+        expected?.reset()
     }
 
     private fun handleForeignControlFailure(error: Exception, fallback: String) {
@@ -2727,6 +2770,8 @@ class AidenChatViewModel(
         }
         val client = activeClient() ?: return
         _isRespondingToApproval.value = true
+        foreignTranscript?.flush()
+        liveReveal.flush()
         projection.markAnsweredLocally(approvalId)
         presentForeignRun(projection)
         viewModelScope.launch {
@@ -2761,6 +2806,8 @@ class AidenChatViewModel(
         val question = _pendingQuestion.value?.takeIf { it.id == promptId && it.canRespond } ?: return
         val client = activeClient() ?: return
         _isRespondingToQuestion.value = true
+        foreignTranscript?.flush()
+        liveReveal.flush()
         projection.markAnsweredLocally(question.id)
         presentForeignRun(projection)
         viewModelScope.launch {
