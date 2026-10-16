@@ -195,7 +195,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     var uploads: [AidenAttachmentUpload] { locked { _uploads } }
     var removedAttachmentIds: [String] { locked { _removedAttachmentIds } }
     /// The upload at this zero-based position fails.
-    func failUpload(at index: Int) { locked { _uploadFailures.insert(index) } }
+    func failUpload(at index: Int) { locked { _ = _uploadFailures.insert(index) } }
     var connectionKeys: [UUID] { locked { _connectionKeys } }
 
     func releaseResume() { resumeGate.release() }

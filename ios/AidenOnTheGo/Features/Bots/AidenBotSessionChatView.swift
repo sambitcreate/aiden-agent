@@ -843,7 +843,7 @@ struct AidenBotSessionChatView: View {
                 ForEach(model.pendingAttachments) { attachment in
                     AidenPendingAttachmentCard(
                         attachment: attachment,
-                        loadImageData: { await model.attachmentImageData(attachment.id) },
+                        loadImageData: { model.attachmentImageData(attachment.id) },
                         onRemove: { Task { await model.removeAttachment(attachment.id) } }
                     )
                 }
