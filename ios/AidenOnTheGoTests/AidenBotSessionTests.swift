@@ -111,6 +111,10 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _sendKeys: [UUID] = []
     private var _sendTexts: [String] = []
     private var _sendModes: [AidenStreamInputMode?] = []
+    private var _sendAttachmentIds: [[String]?] = []
+    private var _uploads: [AidenAttachmentUpload] = []
+    private var _uploadFailures: Set<Int> = []
+    private var _removedAttachmentIds: [String] = []
     private var _streamErrors: [Error] = []
     private var _sendErrors: [Error] = []
     private var _keyErrors: [UUID: Error] = [:]
@@ -187,6 +191,11 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     var sendKeys: [UUID] { locked { _sendKeys } }
     var sendTexts: [String] { locked { _sendTexts } }
     var sendModes: [AidenStreamInputMode?] { locked { _sendModes } }
+    var sendAttachmentIds: [[String]?] { locked { _sendAttachmentIds } }
+    var uploads: [AidenAttachmentUpload] { locked { _uploads } }
+    var removedAttachmentIds: [String] { locked { _removedAttachmentIds } }
+    /// The upload at this zero-based position fails.
+    func failUpload(at index: Int) { locked { _uploadFailures.insert(index) } }
     var connectionKeys: [UUID] { locked { _connectionKeys } }
 
     func releaseResume() { resumeGate.release() }
@@ -231,6 +240,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             _sendKeys.append(idempotencyKey)
             _sendTexts.append(request.text)
             _sendModes.append(request.whenBusy)
+            _sendAttachmentIds.append(request.attachmentIds)
             if let replayed = _keyErrors[idempotencyKey] { return replayed }
             return _sendErrors.isEmpty ? nil : _sendErrors.removeFirst()
         }
@@ -241,6 +251,27 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             AidenBotMessageReceipt.self,
             from: Data(#"{"submissionId":"\#(id)","deduped":false,"state":"running","interrupted":false}"#.utf8)
         )
+    }
+
+    func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
+        let (index, fails) = locked { () -> (Int, Bool) in
+            _uploads.append(upload)
+            return (_uploads.count - 1, _uploadFailures.contains(_uploads.count - 1))
+        }
+        if fails { throw URLError(.networkConnectionLost) }
+        let (name, mimeType, kind, size): (String, String, String, Int) = switch upload {
+        case let .image(name, mimeType, data): (name, mimeType, "image", data.count)
+        case let .text(name, mimeType, text): (name, mimeType, "text", text.utf8.count)
+        }
+        let id = "att_" + String(repeating: Character(String(UnicodeScalar(UInt8(65 + index)))), count: 43)
+        return try AidenRemoteJSONDecoder.decode(
+            AidenAttachmentReference.self,
+            from: Data(#"{"id":"\#(id)","name":"\#(name)","mimeType":"\#(mimeType)","kind":"\#(kind)","size":\#(size),"expiresAt":"2099-01-01T00:00:00.000Z"}"#.utf8)
+        )
+    }
+
+    func removeBotAttachment(botId: String, attachmentId: String) async throws {
+        locked { _removedAttachmentIds.append(attachmentId) }
     }
 
     func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
@@ -1770,6 +1801,49 @@ final class AidenBotActivityContractTests: XCTestCase {
             let now = try XCTUnwrap(row["now"] as? NSNumber).intValue
             XCTAssertEqual(AidenBotElapsed.label(startedAt: startedAt, nowMs: now), row["label"] as? String, "\(row)")
         }
+    }
+
+    // Revision 33 (`bot-attachments-v1`).
+    func testBotAttachmentRequestsMatchTheFixtureAndBadOnesAreRefused() throws {
+        let attachments = try section("botAttachments")
+        let send = try XCTUnwrap((attachments["send"] as? [String: Any])?["request"] as? [String: Any])
+        let ids = try XCTUnwrap(send["attachmentIds"] as? [String])
+        XCTAssertEqual(
+            try encoded(try AidenBotMessageRequest(text: try XCTUnwrap(send["text"] as? String), attachmentIds: ids)),
+            send as NSDictionary
+        )
+        let only = try XCTUnwrap(attachments["attachmentsOnly"] as? [String: Any])
+        XCTAssertEqual(
+            try encoded(try AidenBotMessageRequest(text: "", attachmentIds: try XCTUnwrap(only["attachmentIds"] as? [String]))),
+            only as NSDictionary,
+            "photos alone are a message"
+        )
+        XCTAssertEqual(try decode(AidenBotMessageRequest.self, only).attachmentIds, only["attachmentIds"] as? [String])
+        for rejected in try XCTUnwrap(attachments["rejectedSends"] as? [[String: Any]]) {
+            XCTAssertThrowsError(try decode(AidenBotMessageRequest.self, rejected), "\(rejected)")
+        }
+        XCTAssertThrowsError(
+            try AidenBotMessageRequest(text: "Hi", attachmentIds: (0...AidenBotSessionWire.maxMessageAttachments).map { "att_" + String(repeating: Character(UnicodeScalar(UInt8(65 + $0))), count: 43) }),
+            "more than the Mac takes in one message"
+        )
+    }
+
+    func testBotUploadsUseTheChatAttachmentBodyAndReference() throws {
+        let attachments = try section("botAttachments")
+        let image = try XCTUnwrap(attachments["imageUpload"] as? [String: Any])
+        let imageRequest = try XCTUnwrap(image["request"] as? [String: Any])
+        let png = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(imageRequest["data"] as? String)))
+        XCTAssertEqual(try encoded(AidenAttachmentUpload.image(name: "receipt.png", mimeType: "image/png", data: png)), imageRequest as NSDictionary)
+        let text = try XCTUnwrap(attachments["textUpload"] as? [String: Any])
+        XCTAssertEqual(
+            try encoded(AidenAttachmentUpload.text(name: "notes.md", mimeType: "text/markdown", text: "# Groceries\n- oats")),
+            try XCTUnwrap(text["request"] as? NSDictionary)
+        )
+        let imageReference = try decode(AidenAttachmentReference.self, try XCTUnwrap(image["response"]))
+        XCTAssertEqual(imageReference.kind, .image)
+        XCTAssertEqual(imageReference.size, png.count)
+        XCTAssertEqual(try decode(AidenAttachmentReference.self, try XCTUnwrap(text["response"])).kind, .text)
+        _ = try decode(AidenBotMessageReceipt.self, try XCTUnwrap((attachments["send"] as? [String: Any])?["response"]))
     }
 }
 
@@ -4213,4 +4287,98 @@ final class AidenBotChatPolishTests: XCTestCase {
 extension AidenBotOutboxStore {
     /// Test seam: what a chat would restore, without the unreadable flag.
     func load(_ key: AidenBotSessionKey) async -> [AidenBotOutgoingMessage] { await restore(key).messages }
+}
+
+/// Revision 33 in the session model: photos and files staged under the +.
+@MainActor
+final class AidenBotSessionAttachmentTests: XCTestCase {
+    private let botID = "bot_fixture_attach"
+
+    private func loaded(_ transport: FakeBotSessionTransport, supported: Bool = true) async throws -> AidenBotSessionModel {
+        transport.queueSession(.success(AidenBotSession(
+            botId: botID,
+            epoch: "epoch_a",
+            seq: 4,
+            stateView: try AidenBotSessionStateView(state: .idle),
+            partial: nil,
+            entries: [],
+            hasOlder: false
+        )))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        model.attachmentsSupported = supported
+        await model.load()
+        return model
+    }
+
+    private let photo: @MainActor () async throws -> AidenAttachmentUpload = {
+        .image(name: "receipt.png", mimeType: "image/png", data: Data([0x89, 0x50, 0x4e, 0x47]))
+    }
+    private let notes: @MainActor () async throws -> AidenAttachmentUpload = {
+        .text(name: "notes.md", mimeType: "text/markdown", text: "# Groceries")
+    }
+
+    func testStagedPhotosAndFilesGoWithTheNextMessageOnly() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        XCTAssertTrue(model.canAttach)
+        let failures = await model.attach([photo, notes])
+        XCTAssertEqual(failures, 0)
+        XCTAssertEqual(transport.uploads.count, 2)
+        let staged = model.pendingAttachments.map(\.id)
+        XCTAssertEqual(staged.count, 2)
+        XCTAssertNotNil(model.attachmentImageData(staged[0]), "the photo shows as a thumbnail")
+        XCTAssertNil(model.attachmentImageData(staged[1]), "a file has no thumbnail")
+
+        let sent = await model.send("What did I spend?")
+        XCTAssertTrue(sent)
+        XCTAssertEqual(transport.sendAttachmentIds, [staged])
+        XCTAssertTrue(model.pendingAttachments.isEmpty)
+        XCTAssertEqual(model.outbox.last?.attachments.map(\.id), staged, "the bubble keeps its chips")
+
+        _ = await model.send("And yesterday?")
+        XCTAssertEqual(transport.sendAttachmentIds.last, .some(nil), "the next message carries none")
+    }
+
+    func testPhotosAloneSendButAnEmptyMessageDoesNot() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        let empty = await model.send("   ")
+        XCTAssertFalse(empty)
+        await model.attach([photo])
+        let sent = await model.send("  ")
+        XCTAssertTrue(sent)
+        XCTAssertEqual(transport.sendTexts, [""])
+        XCTAssertEqual(transport.sendAttachmentIds.first??.count, 1)
+    }
+
+    func testAFailedUploadKeepsTheOthersAndSaysSo() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.failUpload(at: 1)
+        let model = try await loaded(transport)
+        let failures = await model.attach([photo, notes, photo])
+        XCTAssertEqual(failures, 1)
+        XCTAssertEqual(model.pendingAttachments.count, 2)
+        XCTAssertNotNil(model.errorMessage)
+    }
+
+    func testRemovingAStagedFileTakesItOffTheMacToo() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        await model.attach([photo, notes])
+        let removed = try XCTUnwrap(model.pendingAttachments.first?.id)
+        await model.removeAttachment(removed)
+        XCTAssertEqual(transport.removedAttachmentIds, [removed])
+        XCTAssertFalse(model.pendingAttachments.contains { $0.id == removed })
+        _ = await model.send("Just the notes")
+        XCTAssertEqual(transport.sendAttachmentIds.first??.contains(removed), false)
+    }
+
+    func testAMacWithoutBotAttachmentsOffersNoPlus() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport, supported: false)
+        XCTAssertFalse(model.canAttach)
+        let failures = await model.attach([photo])
+        XCTAssertEqual(failures, 1)
+        XCTAssertTrue(transport.uploads.isEmpty)
+    }
 }

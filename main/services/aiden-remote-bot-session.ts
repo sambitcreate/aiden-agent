@@ -327,7 +327,8 @@ export function projectBotSessionEntries(
           id,
           role: "user",
           // A routine shows the person's prompt, not its notes block or the silence rule.
-          text: bounded(entry.type === "routine" ? botRoutinePromptOf(entry.text) : entry.text),
+          // Photos sent without words read as a caption: phones show no image there.
+          text: bounded(entry.type === "routine" ? botRoutinePromptOf(entry.text) : entry.text.trim() ? entry.text : photoCaption(entry.imageCount)),
           ...(createdAt ? { createdAt } : {}),
           ...(label ? { label } : {}),
           ...(submissionId !== undefined && WIRE_SUBMISSION_ID.test(submissionId) ? { submissionId } : {}),
@@ -1144,6 +1145,12 @@ function mapSessionError(error: unknown): never {
  * name the Mac user and Aiden's private folders), as is anything shaped like
  * an API key, and the text is cut to the wire bound.
  */
+/** What a photo-only message reads as on a phone, which draws no image in its transcript. */
+function photoCaption(imageCount: number | undefined): string {
+  if (!imageCount) return "";
+  return imageCount === 1 ? "Sent a photo" : `Sent ${imageCount} photos`;
+}
+
 /**
  * The store key for a Bot's staged uploads. A `/` never appears in a chat id,
  * so a Bot's references can't be spent in a workspace chat or the other way round.

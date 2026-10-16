@@ -437,6 +437,19 @@ const card = (id: number, pluginId: string, status = "pending"): RawEntry => ({
   id, kind: "aiden.connect-card", data: { type: "connect_card", pluginId, reason: "I can read your mail.", status },
 });
 
+test("photos sent without words read as a caption on phones, and words keep their own text", () => {
+  const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
+  const withContent = (id: number, content: unknown[]): RawEntry => ({
+    id, kind: "pi.user", model: [{ role: "user", content, timestamp: 1_700_000_000_000 }],
+  });
+  const texts = projectBotSessionEntries([
+    withContent(1, [image]),
+    withContent(2, [image, image]),
+    withContent(3, [{ type: "text", text: "What is this?" }, image]),
+  ] as never).map((entry) => (entry.type === "message" ? entry.text : entry.type));
+  assert.deepEqual(texts, ["Sent a photo", "Sent 2 photos", "What is this?"]);
+});
+
 test("phones see what the Mac shows: no self-intro prompt, no [SILENT] turn, and a failed turn surfaces", () => {
   const entries = projectBotSessionEntries([
     notice(1, { notice: "hidden_input", requestId: "intro:bot" }),

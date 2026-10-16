@@ -1,4 +1,6 @@
+import Photos
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Bot chat on a host that advertises `bot-durable-session-v1`: one
 /// durable conversation per Bot, loaded from `GET /bots/{id}/session` and kept
@@ -38,7 +40,13 @@ struct AidenBotSessionChatView: View {
     @State private var ownSendScroll = 0
     @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @FocusState private var composerFocused: Bool
+    /// The workspace chat's + picker (Files, Camera, Photos), reused as is (revision 33).
+    @State private var attachmentPicker = AidenAttachmentPickerState()
+    @State private var isFileImporterPresented = false
+    @State private var attachButtonCenter: CGPoint?
+    @Namespace private var attachmentMotionNamespace
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
@@ -67,17 +75,42 @@ struct AidenBotSessionChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .bottom) {
             transcript
-            // The composer is there at once; messages wait for the Mac (R14).
-            if let model {
-                footer(model)
-            } else if startFailed {
-                startFailureHint
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                // The composer floats on Liquid Glass and the transcript scrolls under it.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    // The composer is there at once; messages wait for the Mac (R14).
+                    if let model {
+                        footer(model)
+                    } else if startFailed {
+                        startFailureHint
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                    }
+                }
+            if let model, model.attachmentsSupported {
+                attachmentPickerOverlay(model)
             }
         }
+        .coordinateSpace(name: AidenBotComposerCoordinateSpace.name)
+        .onPreferenceChange(AidenBotAttachButtonCenterKey.self) { center in
+            attachButtonCenter = center
+        }
+        .animation(
+            AidenAttachmentPickerPresentationMotion.transition(
+                isPresented: attachmentPicker.isPresented,
+                reduceMotion: reduceMotion
+            ),
+            value: attachmentPicker.isPresented
+        )
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: [.image, .plainText, .sourceCode, .json, .xml, .commaSeparatedText],
+            allowsMultipleSelection: true
+        ) { result in
+            attachFiles(result)
+        }
+        .onDisappear { attachmentPicker.reset() }
         .background(palette.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -159,6 +192,10 @@ struct AidenBotSessionChatView: View {
         // The last-known capabilities stand in until the Mac answers (R21).
         .onChange(of: aidenBotActivitySupported(coordinator: coordinator)) { _, supported in
             model?.activitySupported = supported
+        }
+        .onChange(of: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)) { _, supported in
+            model?.attachmentsSupported = supported
+            if !supported { attachmentPicker.dismiss() }
         }
         // A first load that failed is a quiet hint while the chat keeps
         // reconnecting; once a snapshot arrives it is no longer news.
@@ -326,6 +363,7 @@ struct AidenBotSessionChatView: View {
                     .padding(.vertical, 12)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .modifier(AidenBotSoftScrollEdge())
                 // New rows follow only a reader already at the end; one reading back stays put.
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     aidenBotFollowsTranscriptEnd(
@@ -465,15 +503,21 @@ struct AidenBotSessionChatView: View {
     private func pendingBubble<Caption: View>(
         _ text: String,
         faded: Bool,
+        attachments: [AidenAttachmentReference] = [],
         @ViewBuilder caption: () -> Caption
     ) -> some View {
         VStack(alignment: .trailing, spacing: 4) {
+            if !attachments.isEmpty {
+                AidenBotAttachmentChips(attachments: attachments)
+            }
             // Waiting reads in the quieter text colour, which keeps 4.5:1 on the bubble.
-            Text(text)
-                .foregroundStyle(faded ? Color(aidenHex: aidenBotPendingTextHex(palette)) : palette.foreground)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            if !text.isEmpty {
+                Text(text)
+                    .foregroundStyle(faded ? Color(aidenHex: aidenBotPendingTextHex(palette)) : palette.foreground)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
             caption()
                 .font(.caption)
                 .foregroundStyle(palette.secondary)
@@ -504,16 +548,16 @@ struct AidenBotSessionChatView: View {
     private func outgoingBubble(_ message: AidenBotOutgoingMessage, model: AidenBotSessionModel) -> some View {
         switch model.look(of: message) {
         case .sending:
-            pendingBubble(message.text, faded: true) {
+            pendingBubble(message.text, faded: true, attachments: message.attachments) {
                 Text(AidenBotSessionCopy.sending)
             }
             .accessibilityElement(children: .combine)
         case .sent:
-            pendingBubble(message.text, faded: false) { EmptyView() }
+            pendingBubble(message.text, faded: false, attachments: message.attachments) { EmptyView() }
         case let .queued(mode):
             queuedLook(message.text, mode: mode)
         case .failed:
-            pendingBubble(message.text, faded: false) {
+            pendingBubble(message.text, faded: false, attachments: message.attachments) {
                 HStack(spacing: 6) {
                     Label(AidenBotSessionCopy.couldNotSend, systemImage: "exclamationmark.circle.fill")
                         .labelStyle(.titleAndIcon)
@@ -558,7 +602,10 @@ struct AidenBotSessionChatView: View {
     private func footer(_ model: AidenBotSessionModel) -> some View {
         VStack(spacing: 10) {
             if let hint = aidenBotConnectionHint(for: model, nowMs: Int(Date().timeIntervalSince1970 * 1_000)) {
+                // It floats over the transcript too, so it sits on glass to stay readable.
                 connectionHint(hint, model: model)
+                    .padding(.horizontal, 14)
+                    .aidenChromeGlass(in: Capsule())
             }
             if let question = model.question, !model.needsModel {
                 // The Bot's A–E quick replies. A Bot question has no deadline.
@@ -611,7 +658,8 @@ struct AidenBotSessionChatView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
     }
 
     /// A quiet line above the composer, never a blocking screen (R14).
@@ -641,10 +689,15 @@ struct AidenBotSessionChatView: View {
         draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Words or attachments: either is a message.
+    private func hasMessage(_ model: AidenBotSessionModel) -> Bool {
+        !draftIsEmpty || !model.pendingAttachments.isEmpty
+    }
+
     /// The draft clears at once and the bubble shows (R14); a refused message
     /// comes back to the composer.
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
-        guard !draftIsEmpty else { return }
+        guard hasMessage(model), !model.isAttaching else { return }
         let text = draft
         draft = ""
         // The person's own message scrolls into view wherever they were reading.
@@ -659,7 +712,7 @@ struct AidenBotSessionChatView: View {
     /// empty draft too, so the mode can be picked before typing.
     private func busyPill(_ model: AidenBotSessionModel) -> some View {
         let available = canCompose && model.canSend
-        let enabled = available && !draftIsEmpty
+        let enabled = available && hasMessage(model) && !model.isAttaching
         return Menu {
             ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
                 Button {
@@ -680,7 +733,8 @@ struct AidenBotSessionChatView: View {
                 .padding(.horizontal, 14)
                 .frame(minHeight: max(44, controlSize))
                 .foregroundStyle(enabled ? palette.onFillAccent : palette.secondary)
-                .background(enabled ? palette.fillAccent : palette.raised, in: Capsule())
+                // Inside the glass pill a quiet tint, not a second raised surface.
+                .background(enabled ? palette.fillAccent : palette.foreground.opacity(0.08), in: Capsule())
         } primaryAction: {
             submit(model, whenBusy: busyMode)
         }
@@ -691,19 +745,47 @@ struct AidenBotSessionChatView: View {
         .accessibilityHint("Touch and hold to choose Steer or Queue")
     }
 
-    /// At accessibility text sizes the controls sit under a full-width field.
-    @ViewBuilder
+    /// One Liquid Glass pill holds the +, the field and the send controls: a
+    /// capsule at rest that rounds into a card while typing or holding
+    /// attachments. At accessibility text sizes the controls sit under a
+    /// full-width field.
     private func composer(_ model: AidenBotSessionModel) -> some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            VStack(alignment: .trailing, spacing: 10) {
-                composerField
-                HStack(spacing: 10) { composerControls(model) }
+        let actionSize = max(44, controlSize)
+        let isExpanded = composerFocused || !model.pendingAttachments.isEmpty || draft.contains("\n")
+        return AidenBotComposerGlassContainer {
+            VStack(alignment: .leading, spacing: 8) {
+                if !model.pendingAttachments.isEmpty {
+                    pendingAttachments(model)
+                }
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        composerField
+                        HStack(spacing: 6) {
+                            if model.attachmentsSupported { attachButton(model) }
+                            Spacer(minLength: 0)
+                            composerControls(model)
+                        }
+                    }
+                } else {
+                    HStack(alignment: .bottom, spacing: 6) {
+                        if model.attachmentsSupported { attachButton(model) }
+                        composerField
+                        composerControls(model)
+                    }
+                }
             }
-        } else {
-            HStack(alignment: .bottom, spacing: 10) {
-                composerField
-                composerControls(model)
-            }
+            .padding(AidenBotComposerMetrics.inset)
+            .padding(.leading, model.attachmentsSupported ? 0 : 9)
+            // The pill is a stable surface around its own controls: plain, not
+            // interactive, glass, so streamed updates don't recompute it.
+            .aidenChromeGlass(in: RoundedRectangle(
+                cornerRadius: isExpanded
+                    ? AidenBotComposerMetrics.expandedCornerRadius
+                    : (actionSize + AidenBotComposerMetrics.inset * 2) / 2,
+                style: .continuous
+            ))
+            .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: isExpanded)
         }
     }
 
@@ -711,10 +793,128 @@ struct AidenBotSessionChatView: View {
         TextField("Message", text: $draft, axis: .vertical)
             .lineLimit(1...6)
             .focused($composerFocused)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(palette.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 11)
+            .frame(minHeight: max(44, controlSize))
             .disabled(!canCompose)
+    }
+
+    /// The workspace chat's +: Files, Camera and Photos.
+    private func attachButton(_ model: AidenBotSessionModel) -> some View {
+        Button {
+            toggleAttachmentPicker(model)
+        } label: {
+            Image(systemName: "plus")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(palette.foreground)
+                .frame(width: max(44, controlSize), height: max(44, controlSize))
+                .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
+                .opacity(model.isAttaching ? 0.48 : 1)
+                .overlay(alignment: .bottomTrailing) {
+                    if model.isAttaching {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .padding(3)
+                            .aidenChromeGlass(in: Circle())
+                    }
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canCompose || (!model.canAttach && !attachmentPicker.isPresented))
+        .accessibilityLabel("Add attachment")
+        .accessibilityValue(attachmentPicker.isPresented ? "Open" : "Closed")
+        .accessibilityHint("Attach a photo or a text file")
+        .background {
+            GeometryReader { proxy in
+                let frame = proxy.frame(in: .named(AidenBotComposerCoordinateSpace.name))
+                Color.clear.preference(
+                    key: AidenBotAttachButtonCenterKey.self,
+                    value: CGPoint(x: frame.midX, y: frame.midY)
+                )
+            }
+        }
+    }
+
+    /// The photos and files waiting to go with the next message.
+    private func pendingAttachments(_ model: AidenBotSessionModel) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.pendingAttachments) { attachment in
+                    AidenPendingAttachmentCard(
+                        attachment: attachment,
+                        loadImageData: { await model.attachmentImageData(attachment.id) },
+                        onRemove: { Task { await model.removeAttachment(attachment.id) } }
+                    )
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 4)
+        }
+        .scrollClipDisabled()
+    }
+
+    private func attachmentPickerOverlay(_ model: AidenBotSessionModel) -> some View {
+        AidenAttachmentPickerOverlay(
+            picker: attachmentPicker,
+            motionNamespace: attachmentMotionNamespace,
+            attachmentCapacity: model.attachmentCapacity,
+            canChoosePhotos: true,
+            isBotChat: false,
+            isBusy: model.isAttaching || !canWrite,
+            attachmentButtonCenter: attachButtonCenter,
+            onUnavailableBotPhotos: {},
+            onChooseFiles: { isFileImporterPresented = true },
+            onCaptureCameraPhoto: { data in attachCapturedPhoto(data, model: model) },
+            onCommitPhotos: { attachSelectedPhotos(model) }
+        )
+        .allowsHitTesting(attachmentPicker.isPresented)
+        .accessibilityHidden(!attachmentPicker.isPresented)
+        .zIndex(20)
+    }
+
+    private func toggleAttachmentPicker(_ model: AidenBotSessionModel) {
+        if attachmentPicker.isPresented {
+            attachmentPicker.dismiss()
+            return
+        }
+        guard model.canAttach else { return }
+        composerFocused = false
+        attachmentPicker.openMenu()
+    }
+
+    private func attachSelectedPhotos(_ model: AidenBotSessionModel) {
+        guard !model.isAttaching,
+              let commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count) else { return }
+        let items: [@MainActor () async throws -> AidenAttachmentUpload] = commit.assets.map { asset in
+            {
+                let picked = try await AidenPhotoLibraryImageLoader.pickedImage(for: asset)
+                return try await AidenAttachmentPreparation.imageUploadAsync(data: picked.data, name: picked.name)
+            }
+        }
+        Task { @MainActor in
+            await model.attach(items)
+            attachmentPicker.finishCommit(commit.id)
+        }
+    }
+
+    private func attachCapturedPhoto(_ data: Data, model: AidenBotSessionModel) {
+        attachmentPicker.dismiss()
+        Task { @MainActor in
+            await model.attach([{
+                try await AidenAttachmentPreparation.imageUploadAsync(data: data, name: "Camera Photo.jpg")
+            }])
+        }
+    }
+
+    private func attachFiles(_ result: Result<[URL], Error>) {
+        guard let model, case let .success(urls) = result, !urls.isEmpty else { return }
+        let items: [@MainActor () async throws -> AidenAttachmentUpload] = urls.map { url in
+            { try await AidenAttachmentPreparation.fileUploadAsync(url: url) }
+        }
+        Task { @MainActor in
+            await model.attach(items)
+        }
     }
 
     @ViewBuilder
@@ -728,8 +928,9 @@ struct AidenBotSessionChatView: View {
             } label: {
                 Image(systemName: "stop.fill")
                     .font(.body.weight(.semibold))
+                    .foregroundStyle(palette.danger)
                     .frame(width: max(44, controlSize), height: max(44, controlSize))
-                    .background(palette.raised, in: Circle())
+                    .background(palette.danger.opacity(0.14), in: Circle())
             }
             .buttonStyle(.plain)
             .disabled(!canWrite || model.isStopping || model.inFlight.contains(.stop))
@@ -743,7 +944,7 @@ struct AidenBotSessionChatView: View {
                     .frame(width: max(44, controlSize), height: max(44, controlSize))
             }
             .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
-            .disabled(!canCompose || !model.canSend || draftIsEmpty)
+            .disabled(!canCompose || !model.canSend || !hasMessage(model) || model.isAttaching)
             .accessibilityLabel("Send")
         }
     }
@@ -765,6 +966,7 @@ struct AidenBotSessionChatView: View {
             cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID)
         )
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
+        model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
         self.model = model
         // Nothing waits on another: the first snapshot, the Bot's detail and the
         // stream (with the outbox it sends) start together.
@@ -1149,7 +1351,12 @@ struct AidenBotNeedsModelCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        // The footer floats over the transcript: the soft fill sits on the canvas it was drawn on.
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(palette.warning.opacity(0.12))
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
         .accessibilityElement(children: .contain)
     }
 }
@@ -1213,5 +1420,76 @@ struct AidenBotConnectCardView: View {
         case .dismissed:
             EmptyView()
         }
+    }
+}
+
+// MARK: - Liquid Glass composer (revision 33 adds its +)
+
+enum AidenBotComposerMetrics {
+    /// Space between the pill's edge and the controls inside it.
+    static let inset: CGFloat = 5
+    /// The pill rounds into a card at this radius while typing or holding attachments.
+    static let expandedCornerRadius: CGFloat = 26
+}
+
+private enum AidenBotComposerCoordinateSpace {
+    static let name = "aiden-bot-composer-coordinate-space"
+}
+
+private struct AidenBotAttachButtonCenterKey: PreferenceKey {
+    static let defaultValue: CGPoint? = nil
+
+    static func reduce(value: inout CGPoint?, nextValue: () -> CGPoint?) {
+        value = nextValue() ?? value
+    }
+}
+
+/// Groups the composer's glass so nearby glass blends on iOS 26; elsewhere a plain stack.
+private struct AidenBotComposerGlassContainer<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            GlassEffectContainer(spacing: 6) { content() }
+        } else {
+            content()
+        }
+    }
+}
+
+/// Messages scroll under the floating composer: on iOS 26 the edge softens
+/// so the words stay readable; under Reduce Transparency it stays plain.
+private struct AidenBotSoftScrollEdge: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            content.scrollEdgeEffectStyle(.soft, for: .bottom)
+        } else {
+            content
+        }
+    }
+}
+
+/// The photos and files on one of the person's own messages before the Mac shows it.
+struct AidenBotAttachmentChips: View {
+    let attachments: [AidenAttachmentReference]
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(attachments) { attachment in
+                Label(attachment.name, systemImage: attachment.kind == .image ? "photo" : "doc.text")
+                    .font(.caption)
+                    .lineLimit(1)
+                    .foregroundStyle(palette.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(palette.raised, in: Capsule())
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }

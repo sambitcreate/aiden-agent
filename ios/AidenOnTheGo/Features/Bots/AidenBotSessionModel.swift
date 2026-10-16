@@ -15,6 +15,8 @@ enum AidenBotHostFeature {
     static let proactive = "bot-proactive-v1"
     /// Contract revision 30: the status line, Steer and Queue, Queued bubbles and Chat activity.
     static let activity = "bot-activity-v1"
+    /// Contract revision 33: photos and text files on a Bot message (the composer's +).
+    static let attachments = "bot-attachments-v1"
 
     static func isAdvertised(_ token: String, by features: [String]?) -> Bool {
         features?.contains(token) == true
@@ -103,6 +105,18 @@ protocol AidenBotSessionTransport: Sendable {
         request: AidenBotRoutineProposalRespondRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotRoutineProposalRespondResult
+    /// Revision 33 (`bot-attachments-v1`): stage one upload for the next message.
+    func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference
+    func removeBotAttachment(botId: String, attachmentId: String) async throws
+}
+
+extension AidenBotSessionTransport {
+    /// A transport without Bot uploads refuses them, as a Mac without the feature does.
+    func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
+        throw AidenRemoteClientError.invalidResponse
+    }
+
+    func removeBotAttachment(botId: String, attachmentId: String) async throws {}
 }
 
 extension AidenRemoteClient: AidenBotSessionTransport {}
@@ -278,6 +292,8 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     let retryOf: String?
     let createdAt: Date
     fileprivate(set) var status: Status
+    /// Revision 33: the photos and files it carries, staged on the Mac before it was sent.
+    fileprivate(set) var attachments: [AidenAttachmentReference] = []
 
     var id: String { "outgoing:\(key.uuidString)" }
 
@@ -476,6 +492,8 @@ actor AidenBotOutboxStore {
         let keepsKey: Bool
         /// Absent in records written before fix round 4.
         let foreignSubmissionIDs: [String]?
+        /// Revision 33; absent in records written before attachments.
+        let attachments: [AidenAttachmentReference]?
     }
 
     /// One record decoded on its own, so a bad one costs only itself.
@@ -584,7 +602,8 @@ actor AidenBotOutboxStore {
                 enqueuedWhileRunning: record.enqueuedWhileRunning,
                 retryOf: record.retryOf,
                 createdAt: record.createdAt,
-                status: record.failed ? .failed : record.submissionId.map { .sent(submissionId: $0) } ?? .sending
+                status: record.failed ? .failed : record.submissionId.map { .sent(submissionId: $0) } ?? .sending,
+                attachments: record.attachments ?? []
             )
             message.request = record.request
             message.baseline = Set(record.baseline)
@@ -656,7 +675,8 @@ actor AidenBotOutboxStore {
                 connectionAttempts: message.connectionAttempts,
                 keepsKey: message.keepsKey,
                 // The entry it waited on goes with it too, as adopting it in memory does.
-                foreignSubmissionIDs: message.foreignSubmissionIDs.union(message.echoSubmissionID.map { [$0] } ?? []).sorted()
+                foreignSubmissionIDs: message.foreignSubmissionIDs.union(message.echoSubmissionID.map { [$0] } ?? []).sorted(),
+                attachments: message.attachments.isEmpty ? nil : message.attachments
             )
         }
         guard !stuckFiles.contains(key) else {
@@ -950,6 +970,14 @@ final class AidenBotSessionModel {
     private(set) var respondingProposals: Set<String> = []
     /// Revision 30: the Mac announces `bot-activity-v1` and this phone holds `bot:activity`.
     var activitySupported = false
+    /// Revision 33: the Mac announces `bot-attachments-v1`, so the composer offers its +.
+    var attachmentsSupported = false
+    /// Photos and files staged on the Mac for the next message, in the order they were added.
+    private(set) var pendingAttachments: [AidenAttachmentReference] = []
+    /// Attachments are being prepared or uploaded; the + and Send wait for them.
+    private(set) var isAttaching = false
+    /// The bytes of each staged photo, for its thumbnail; never written to disk.
+    @ObservationIgnored private var attachmentImages: [String: Data] = [:]
     /// The Bot's Chat activity wording, from its detail.
     var wording: AidenBotChatActivityWording = .follows
     /// What the running turn is doing (revision 30), or nil.
@@ -1526,7 +1554,11 @@ final class AidenBotSessionModel {
             request = frozen
         } else {
             let whenBusy = offersBusyModes ? outbox[index].mode : nil
-            guard let made = try? AidenBotMessageRequest(text: outbox[index].text, whenBusy: whenBusy) else {
+            guard let made = try? AidenBotMessageRequest(
+                text: outbox[index].text,
+                whenBusy: whenBusy,
+                attachmentIds: outbox[index].attachments.map(\.id)
+            ) else {
                 outbox[index].status = .failed
                 return
             }
@@ -1747,10 +1779,72 @@ final class AidenBotSessionModel {
     @discardableResult
     func send(_ rawText: String, whenBusy mode: AidenStreamInputMode? = nil) async -> Bool {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend, (try? AidenBotMessageRequest(text: text)) != nil,
-              enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil) else { return false }
+        // The staged photos and files go with it, and only with it.
+        let attachments = pendingAttachments
+        guard canSend, !isAttaching,
+              (try? AidenBotMessageRequest(text: text, attachmentIds: attachments.map(\.id))) != nil,
+              enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil, attachments: attachments) else { return false }
+        pendingAttachments = []
+        for attachment in attachments { attachmentImages[attachment.id] = nil }
         await runFlush()
         return true
+    }
+
+    // MARK: Attachments (revision 33)
+
+    /// Room for more photos and files on the next message.
+    var attachmentCapacity: Int {
+        AidenAttachmentPickerPolicy.availableCapacity(pendingCount: pendingAttachments.count)
+    }
+
+    /// Whether the + can open now: the Mac takes attachments and nothing is uploading.
+    var canAttach: Bool { attachmentsSupported && canSend && !isAttaching && attachmentCapacity > 0 }
+
+    /// Prepares each picked item and stages it on the Mac, in order, up to the
+    /// room left. Returns how many couldn't be added; the rest stay ready to send.
+    @discardableResult
+    func attach(_ items: [@MainActor () async throws -> AidenAttachmentUpload]) async -> Int {
+        guard canAttach, !items.isEmpty else { return items.count }
+        isAttaching = true
+        defer { isAttaching = false }
+        var failures = max(0, items.count - attachmentCapacity)
+        for prepare in items.prefix(attachmentCapacity) {
+            if Task.isCancelled || released { return items.count }
+            do {
+                let upload = try await prepare()
+                // A photo can take longer than a message on a slow connection.
+                let reference = try await aidenBotWithin(max(requestLimit, .seconds(60))) { [transport, botID] in
+                    try await transport.uploadBotAttachment(botId: botID, upload: upload)
+                }
+                guard reference.isValid(now: now()) else { throw AidenRemoteClientError.invalidResponse }
+                if case let .image(_, _, data) = upload { attachmentImages[reference.id] = data }
+                pendingAttachments.append(reference)
+            } catch let error where aidenIsCancellation(error) {
+                return items.count
+            } catch {
+                failures += 1
+            }
+        }
+        if failures > 0 {
+            errorMessage = failures == 1
+                ? "One attachment couldn’t be added. The others are ready to send."
+                : "\(failures) attachments couldn’t be added. The others are ready to send."
+        }
+        return failures
+    }
+
+    /// Takes a staged photo or file off the next message, and off the Mac.
+    func removeAttachment(_ id: String) async {
+        guard pendingAttachments.contains(where: { $0.id == id }) else { return }
+        pendingAttachments.removeAll { $0.id == id }
+        attachmentImages[id] = nil
+        // Best effort: an upload left behind expires on the Mac within minutes.
+        try? await transport.removeBotAttachment(botId: botID, attachmentId: id)
+    }
+
+    /// A staged photo's bytes, for its thumbnail in the composer.
+    func attachmentImageData(_ id: String) -> Data? {
+        attachmentImages[id]
     }
 
     static let outboxFull = "Too many messages are waiting. Send or remove some, then try again."
@@ -1762,7 +1856,12 @@ final class AidenBotSessionModel {
     }
 
     /// Adds a message, unless the chat already holds as many as it can keep: then it says so.
-    private func enqueue(_ text: String, mode: AidenStreamInputMode?, retryOf: String?) -> Bool {
+    private func enqueue(
+        _ text: String,
+        mode: AidenStreamInputMode?,
+        retryOf: String?,
+        attachments: [AidenAttachmentReference] = []
+    ) -> Bool {
         let bytes = outbox.reduce(Self.storedBytes(text, baseline: entries.count)) {
             $0 + Self.storedBytes($1.text, baseline: $1.baseline.count)
         }
@@ -1777,7 +1876,8 @@ final class AidenBotSessionModel {
             enqueuedWhileRunning: isRunning,
             retryOf: retryOf,
             createdAt: now(),
-            status: .sending
+            status: .sending,
+            attachments: attachments
         ))
         return true
     }
@@ -1800,6 +1900,7 @@ final class AidenBotSessionModel {
             // Try again starts its day again.
             createdAt: now(),
             status: .sending,
+            attachments: outbox[index].attachments,
             request: outbox[index].request,
             baseline: outbox[index].baseline,
             foreignSubmissionIDs: outbox[index].foreignSubmissionIDs,
