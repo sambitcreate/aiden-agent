@@ -292,8 +292,17 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     });
 
   let hub: HubProcess | null = null;
+  let pendingHub: { child: HostChildProcess; controller: AbortController } | null = null;
+  const terminatedHubChildren = new WeakSet<HostChildProcess>();
+  const terminateHubChild = (child: HostChildProcess) => {
+    if (terminatedHubChildren.has(child)) return;
+    terminatedHubChildren.add(child);
+    child.kill("SIGTERM");
+  };
   let agentDevice: AgentDeviceEndpoint | null = null;
   let stopped = false;
+  let generation = 0;
+  let stopPromise: Promise<void> = Promise.resolve();
   let restartDelayMs = 0;
   let startLock: Promise<unknown> = Promise.resolve();
   const healthListeners = new Set<(health: DeviceHostHealth, detail?: string) => void>();
@@ -349,63 +358,92 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     await rm(hubStatePath, { force: true });
   }
 
-  async function waitForHub(child: HostChildProcess, origin: string): Promise<void> {
+  async function waitForHub(child: HostChildProcess, origin: string, signal: AbortSignal): Promise<void> {
     const deadline = deps.now() + HUB_READY_TIMEOUT_MS;
     while (deps.now() < deadline) {
+      if (signal.aborted) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
       if (child.startupError) {
         throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub", { cause: child.startupError });
       }
       if (child.exitCode !== null || child.signalCode !== null) {
         throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub");
       }
-      const response = await deps.fetch(`${origin}/readyz`).catch(() => null);
+      const response = await deps.fetch(`${origin}/readyz`, { signal }).catch(() => null);
+      if (signal.aborted) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
       if (response?.ok) return;
       await deps.sleep(READY_POLL_MS);
     }
     throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "waiting for the device hub to become ready");
   }
 
-  async function spawnHub(entryPath: string): Promise<HubProcess> {
+  const isCurrent = (startedIn: number) => !stopped && generation === startedIn;
+  const assertCurrent = (startedIn: number) => {
+    if (!isCurrent(startedIn)) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
+  };
+
+  async function spawnHub(entryPath: string, startedIn: number): Promise<HubProcess> {
+    assertCurrent(startedIn);
     await reapStaleHub();
+    assertCurrent(startedIn);
     const port = await deps.reservePort();
+    assertCurrent(startedIn);
     const origin = `http://127.0.0.1:${port}`;
     const child = deps.spawn(
       nodePath!,
       [entryPath, "--port", String(port), "--host", "127.0.0.1", "--hide-sidebar", "--hide-boot-device"],
       nodeEnv(),
     );
+    const controller = new AbortController();
+    pendingHub = { child, controller };
     try {
-      await waitForHub(child, origin);
+      await waitForHub(child, origin, controller.signal);
+      assertCurrent(startedIn);
+      if (child.pid !== undefined) {
+        await mkdir(deps.baseDir, { recursive: true });
+        assertCurrent(startedIn);
+        await writeFile(hubStatePath, JSON.stringify({ pid: child.pid, port, entryPath } satisfies HubStateFile));
+      }
+      assertCurrent(startedIn);
+      const helpers = await findDeviceHostHelpers(deviceToolPaths(deps.baseDir, DEVICE_HUB).installDir);
+      assertCurrent(startedIn);
+      const spawned: HubProcess = { child, origin, entryPath, startedAt: deps.now(), helpers };
+      child.once("exit", () => void supervise(spawned));
+      return spawned;
     } catch (error) {
-      child.kill("SIGTERM");
+      if (pendingHub?.child === child) pendingHub = null;
+      terminateHubChild(child);
+      // A late readiness or file write must not recreate an endpoint after stop.
+      // The start lock keeps a newer spawn from publishing its state until this cleanup finishes.
+      await rm(hubStatePath, { force: true }).catch(() => undefined);
       throw error;
     }
-    if (child.pid !== undefined) {
-      await mkdir(deps.baseDir, { recursive: true });
-      await writeFile(hubStatePath, JSON.stringify({ pid: child.pid, port, entryPath } satisfies HubStateFile));
-    }
-    const helpers = await findDeviceHostHelpers(deviceToolPaths(deps.baseDir, DEVICE_HUB).installDir);
-    const spawned: HubProcess = { child, origin, entryPath, startedAt: deps.now(), helpers };
-    child.once("exit", () => void supervise(spawned));
-    return spawned;
   }
 
   async function supervise(exited: HubProcess): Promise<void> {
     if (stopped || hub !== exited) return;
+    const startedIn = generation;
     hub = null;
     // agent-device drives simulators directly, so it survives a hub restart.
     restartDelayMs = nextHubRestartDelay(restartDelayMs, deps.now() - exited.startedAt);
     emitHealth("restarting");
     if (restartDelayMs > 0) await deps.sleep(restartDelayMs);
-    if (stopped || hub) return;
+    if (!isCurrent(startedIn) || hub) return;
     try {
       await withStartLock(async () => {
-        if (stopped || hub) return;
-        hub = await spawnHub(exited.entryPath);
+        if (!isCurrent(startedIn) || hub) return;
+        const replacement = await spawnHub(exited.entryPath, startedIn);
+        if (!isCurrent(startedIn) || hub) {
+          if (pendingHub?.child === replacement.child) pendingHub = null;
+          terminateHubChild(replacement.child);
+          await rm(hubStatePath, { force: true }).catch(() => undefined);
+          return;
+        }
+        hub = replacement;
+        if (pendingHub?.child === replacement.child) pendingHub = null;
       });
-      if (hub) emitHealth("ready");
+      if (isCurrent(startedIn) && hub) emitHealth("ready");
     } catch (error) {
-      emitHealth("failed", error instanceof Error ? error.message : String(error));
+      if (isCurrent(startedIn)) emitHealth("failed", error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -457,22 +495,39 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   ) {
     const current = ready();
     if (current) return current;
+    // An explicit call after stop opens a new lifecycle. Calls already queued
+    // before stop keep their old generation and cannot revive it.
+    if (stopped) stopped = false;
+    const startedIn = generation;
+    const priorStop = stopPromise;
     return withStartLock(async () => {
+      await priorStop;
+      assertCurrent(startedIn);
       const existing = ready();
       if (existing) return existing;
       // The hub serves both platforms, so it starts when either one can run.
       const [ios, android] = await Promise.all([platformAvailability("ios"), platformAvailability("android")]);
+      assertCurrent(startedIn);
       if (!ios.available && !android.available) {
         throw new DeviceHostUnavailableError(
           deps.platform === "darwin" ? [ios.reason, android.reason].filter(Boolean).join(" ") : (ios.reason ?? ""),
         );
       }
       nodePath = await deps.resolveNodePath();
+      assertCurrent(startedIn);
       const entryPath = await install(DEVICE_HUB, onPhase, options.allowInstall === true);
+      assertCurrent(startedIn);
       onPhase?.("starting");
-      stopped = false;
       restartDelayMs = 0;
-      hub = await spawnHub(entryPath);
+      const started = await spawnHub(entryPath, startedIn);
+      if (!isCurrent(startedIn)) {
+        if (pendingHub?.child === started.child) pendingHub = null;
+        terminateHubChild(started.child);
+        await rm(hubStatePath, { force: true }).catch(() => undefined);
+        assertCurrent(startedIn);
+      }
+      hub = started;
+      if (pendingHub?.child === started.child) pendingHub = null;
       return ready()!;
     });
   }
@@ -533,16 +588,20 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     agentInstalled: () => isToolInstalled(deps.baseDir, AGENT_DEVICE),
     ensureReady: ensureHub,
     async ensureAgentReady(onPhase, options = {}) {
+      const startedIn = generation;
       const hubReady = await ensureHub(onPhase, options);
+      assertCurrent(startedIn);
       if (agentDevice) return { ...hubReady, agentDevice };
       return withStartLock(async () => {
+        assertCurrent(startedIn);
         if (!agentDevice) {
           const entryPath = await install(AGENT_DEVICE, onPhase, options.allowInstall === true);
+          assertCurrent(startedIn);
           onPhase?.("starting");
           agentDevice = await startAgentDaemon(entryPath);
         }
         const current = ready();
-        if (!current) {
+        if (!isCurrent(startedIn) || !current) {
           // The hub stopped while the daemon started; never leave the daemon and its token behind.
           await stopAgent();
           throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting agent-device");
@@ -565,12 +624,23 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     },
     stopAgent,
     async stop() {
+      if (stopped) return stopPromise;
+      generation += 1;
       stopped = true;
       const running = hub;
       hub = null;
-      await stopAgent();
-      running?.child.kill("SIGTERM");
-      await rm(hubStatePath, { force: true }).catch(() => undefined);
+      const starting = pendingHub;
+      pendingHub = null;
+      starting?.controller.abort();
+      if (starting) terminateHubChild(starting.child);
+      if (running) terminateHubChild(running.child);
+      const priorStop = stopPromise;
+      stopPromise = (async () => {
+        await priorStop;
+        await stopAgent();
+        await rm(hubStatePath, { force: true }).catch(() => undefined);
+      })();
+      return stopPromise;
     },
   };
 }
