@@ -1,0 +1,5 @@
+# Lease reclaim fencing
+
+PR #499 protects CLI leases and Bot profiles with permanent native `flock` guards held through inherited descriptors. Owner JSON is diagnostic; a free guard permits stale-owner recovery, including recycled PIDs. Bot shutdown closes mutation admission, drains admitted work, and releases the profile guard last. Keep the root test-chain union and Aiden Remote revision aligned when merging main.
+
+The bounded vendor-command descendant cleanup test is adjacent CI coverage, not part of the lease implementation. Its leader deliberately delays spawning a descendant that retains stdout and ignores SIGTERM. The descendant writes its PID only after installing that handler. The test holds the parent command timer with Node's test clock until this readiness file exists, then advances the original 250 ms timeout and verifies prompt rejection and descendant exit. This separates fixture startup from timeout cleanup without relaxing the production timeout, the test deadline, or `--fail-on-flaky-tests`. The earlier CI `ENOENT` and its run link remain in the PR description as a real flaky symptom.

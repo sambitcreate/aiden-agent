@@ -1,4 +1,4 @@
-/* global Buffer, process, setTimeout, URL */
+/* global Buffer, process, URL */
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -6,6 +6,10 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import {
+  clearTimeout as nativeClearTimeout,
+  setTimeout as nativeSetTimeout,
+} from "node:timers";
 import { gzipSync } from "node:zlib";
 import {
   assertArchiveListing,
@@ -74,7 +78,7 @@ async function waitForProcessExit(pid, timeoutMs = 2_000) {
       if (error?.code === "ESRCH") return;
       throw error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => nativeSetTimeout(resolve, 20));
   }
   throw new Error(`Process ${pid} did not exit.`);
 }
@@ -88,7 +92,7 @@ async function waitForPidFile(file, timeoutMs = 2_000) {
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => nativeSetTimeout(resolve, 20));
   }
   throw new Error(`Process id was not written to ${file}.`);
 }
@@ -388,37 +392,69 @@ test("optional Sigstore verification rejects an unpinned bundle before running c
 test(
   "bounded vendor commands kill descendants that retain an exited leader's stdio",
   { skip: process.platform === "win32" },
-  async () => {
+  async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-tree-"));
     const descendantPidPath = path.join(root, "descendant.pid");
     const descendantSource = [
       "process.on('SIGTERM', () => {});",
+      "require('node:fs').writeFileSync(process.argv[1], String(process.pid));",
       "setInterval(() => {}, 1000);",
     ].join("");
     const leaderSource = [
       "const { spawn } = require('node:child_process');",
-      "const { writeFileSync } = require('node:fs');",
-      "const descendant = spawn(process.execPath, ['-e', process.argv[1]], {",
+      "setTimeout(() => {",
+      "const descendant = spawn(process.execPath, ['-e', process.argv[1], process.argv[2]], {",
       "  stdio: ['ignore', 'inherit', 'inherit']",
       "});",
-      "writeFileSync(process.argv[2], String(descendant.pid));",
       "descendant.unref();",
+      "}, 350);",
     ].join("");
+    let timedOut;
+    let descendantPid;
+    let deadlineTriggered = false;
     try {
-      const startedAt = Date.now();
-      const timedOut = assert.rejects(
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      timedOut = assert.rejects(
         runBoundedCommand(
           process.execPath,
           ["-e", leaderSource, descendantSource, descendantPidPath],
-          { timeoutMs: 2_000, terminateGraceMs: 100, killGraceMs: 100 },
+          { timeoutMs: 250, terminateGraceMs: 100, killGraceMs: 100 },
         ),
         /timed out/,
       );
-      const descendantPid = await waitForPidFile(descendantPidPath);
+      timedOut.catch(() => {});
+      descendantPid = await waitForPidFile(descendantPidPath);
+      const startedAt = Date.now();
+      deadlineTriggered = true;
+      t.mock.timers.tick(250);
+      let settleTimer;
+      try {
+        await Promise.race([
+          timedOut,
+          new Promise((resolve) => {
+            settleTimer = nativeSetTimeout(resolve, 250);
+          }),
+        ]);
+      } finally {
+        nativeClearTimeout(settleTimer);
+      }
+      t.mock.timers.tick(200);
       await timedOut;
-      assert.ok(Date.now() - startedAt < 3_500, "the bounded runner should settle promptly");
+      assert.ok(Date.now() - startedAt < 1_500, "the bounded runner should settle promptly");
       await waitForProcessExit(descendantPid);
     } finally {
+      if (timedOut && !deadlineTriggered) {
+        t.mock.timers.tick(450);
+        await timedOut.catch(() => {});
+      }
+      t.mock.timers.reset();
+      if (descendantPid) {
+        try {
+          process.kill(descendantPid, "SIGKILL");
+        } catch {
+          // Timeout cleanup normally removes the complete process group.
+        }
+      }
       await rm(root, { recursive: true, force: true });
     }
   },
