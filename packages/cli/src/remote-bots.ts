@@ -4,7 +4,7 @@ import { AidenRemoteBotFileService } from "../../../main/services/aiden-remote-b
 import { createBotInboxProjectionService, mergeBotInboxActivityPreviews } from "../../../main/services/bot-inbox-projection.js";
 import { AidenRemoteServiceError } from "../../../main/services/aiden-remote-errors.js";
 import type { AidenIdempotencyLedger, AidenIdempotencySnapshot } from "../../../main/services/aiden-remote-operation-contract.js";
-import type { createCliBots } from "./bots.ts";
+import { CLI_BOT_OWNER_AUDIENCE_ID, type createCliBots } from "./bots.ts";
 import type { createCliRemoteChats } from "./remote-chats.ts";
 import type { createDaemonChats } from "./daemon-chats.ts";
 
@@ -29,6 +29,6 @@ export function createCliRemoteBots(agentDir: string, instanceId: string, runtim
       } catch (error) { lease.release(); throw error; }
     },
   });
-  const botFiles = new AidenRemoteBotFileService({ instanceId, authority: runtime.authority, chats: daemon.chatStore });
+  const botFiles = new AidenRemoteBotFileService({ instanceId, botAudienceId: CLI_BOT_OWNER_AUDIENCE_ID, authority: runtime.authority, chats: daemon.chatStore });
   return { bots, botFiles };
 }
