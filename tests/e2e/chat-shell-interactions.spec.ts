@@ -224,6 +224,19 @@ test.describe("with a workspace", () => {
     await expect(choose).toHaveCSS("outline-style", "solid");
     await choose.press("Enter");
     await expect(page.getByRole("menu")).toBeVisible();
+    const firstItem = page.getByRole("menuitem").first();
+    await expect(firstItem).toBeFocused();
+    await expect(firstItem).toHaveCSS("outline-style", "solid");
+    await page.keyboard.press("Escape");
+    await expect(choose).toBeFocused();
+    // A menu opened and browsed with the mouse shows no keyboard ring on the
+    // row under the pointer; the next arrow key brings the ring back.
+    await choose.click();
+    await firstItem.hover();
+    await expect(firstItem).toBeFocused();
+    await expect(firstItem).toHaveCSS("outline-style", "none");
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator('[role="menuitem"]:focus')).toHaveCSS("outline-style", "solid");
     await page.keyboard.press("Escape");
     await expect(choose).toBeFocused();
     await group.screenshot({ path: test.info().outputPath("joined-editor-actions.png") });
