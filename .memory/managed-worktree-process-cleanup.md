@@ -1,8 +1,9 @@
 # Managed worktree process cleanup
 
-2026-10-15, pending PR #500. Started from `origin/main` `11b58367`;
-merged latest `origin/main` `b1e6054a` into the PR branch without rebasing.
-That integration includes #498, #503, #506 and #501. The merged root
+Started 2026-10-15, pending PR #500. Started from `origin/main` `11b58367`;
+as of 2026-10-16, merged latest `origin/main` `515de6738` into the PR branch
+without rebasing. The integrations include #498, #503, #506, #501, #504, and
+the 0.57.0 release merge. The merged root
 `package.json` test chain matches main, and this PR changes no Aiden Remote
 protocol revision or native-client fixture.
 
@@ -58,6 +59,24 @@ case repaired by #506. The root tool-output chain passed 214 tests with CI's
 Node 22.22.3; local Node 26 has different `fs.glob` symlink results. New
 exact-head CI and review gates remain pending. PR #504 has merge priority, so
 this branch may require one more `main` integration before eligibility.
+
+The subsequent `ee218d1f` merge again conflicted only on the manifest
+`builtAt` fields; retaining the newer timestamps preserved both the remover
+and file mutator records. Local checks on the merge commit passed root
+typecheck, 6 prebuilt manifest tests, 36 native remover tests, 160 focused
+desktop/Remote tests, the native file mutator suite (31 passed, 3 platform
+skips), terminal coverage, 218 tool-output tests under CI Node 22.22.3, and
+99 CLI tests. The prior-head hosted CI run `38847791193` was green, but its
+Hermes review failed twice in the engine before a verdict. Fresh exact-head
+CI and a successful bot review are required after this merge.
+
+The subsequent `515de6738` merge brought in release version and plan-index
+changes without conflicts. The root `package.json` test chain still matches
+main and the in-review lifecycle plan row remains present. The native helper
+manifest test passed on this head. Root typecheck, 36 native remover tests,
+160 focused desktop/Remote tests, the native file mutator suite (31 passed,
+3 platform skips), terminal coverage, 218 tool-output tests under CI Node
+22.22.3, and 99 CLI tests passed before the next push.
 
 This is one bounded phase. No automatic retention sweep or new owner metadata is
 enabled. Future eligibility must default old worktrees to manual, keep manual

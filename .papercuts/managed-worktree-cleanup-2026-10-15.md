@@ -17,3 +17,6 @@
 - Android's Gradle wrapper could not find a Java runtime in the shell after merging #497. Set `JAVA_HOME` to Android Studio's bundled JDK and `ANDROID_HOME` to the installed SDK before running `:app:testDebugUnitTest`.
 - Merging #501 conflicted on `builtAt` in all three native prebuilt manifests. The helper records had merged automatically; retain the later timestamp and verify both helper source/binary hashes with `scripts/native-helpers.test.mjs`.
 - The #501 `coding-tools` glob oracle fails locally with Node 26 because native `fs.glob("**/*")` handles symlink traversal differently. The identical test passes in the full tool-output chain under CI's pinned Node 22.22.3; use that runtime to check CI parity.
+- Merging #504 repeated the three manifest `builtAt` conflicts. Its timestamps are newer; retain them while preserving both helper records, then verify the checked-in hashes.
+- Running `scripts/subagent-file-mutator.test.mjs` directly skips its test-helper build and fails with `ENOENT`. Use `npm run test:subagent-file-mutator:native` for its build-first gate.
+- Hermes failed twice in its engine on `6accb4035`, without a review verdict. Record the service failure separately from code findings and require a successful review on the next head.
