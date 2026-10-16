@@ -23,6 +23,7 @@ import {
   isSafeBotCapabilityState,
   parseBotCapabilityState,
   projectBotAccessView,
+  projectBotWebSearchEnabled,
   projectBotChatAccessView,
   projectBotNoticeStatus,
   type BotCapabilityCoreDependencies,
@@ -248,6 +249,13 @@ export class BotCapabilityStore {
   async getBotPolicy(botId: string): Promise<BotAccessView> {
     this.requireInitialized();
     return this.serialized(async () => projectBotAccessView(await this.persistence.load(), botId));
+  }
+
+  async getBotWebSearchEnabled(botId: string): Promise<boolean> {
+    this.requireInitialized();
+    return this.serialized(async () =>
+      projectBotWebSearchEnabled(await this.persistence.load(), botId),
+    );
   }
 
   async getBotAuthorityStatus(botId: string): Promise<BotCapabilityAuthorityStatus> {

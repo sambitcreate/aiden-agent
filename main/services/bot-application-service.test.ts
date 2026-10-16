@@ -106,6 +106,7 @@ function fixture(options: {
   const events: string[] = [];
   const catalogTargets: Array<string | undefined> = [];
   const policyCatalogRevisions: string[] = [];
+  const policyAccesses: BotAccessUpdate[] = [];
   const bindCatalogRevisions: string[] = [];
   const catalogRetainedProviders: Array<readonly {
     sourceProviderId: string;
@@ -433,6 +434,7 @@ function fixture(options: {
         modelBinding?: { sourceProviderId: string; sourceModelId: string };
       }) {
         policyCatalogRevisions.push(input.access.catalogRevision);
+        policyAccesses.push(input.access);
         events.push(input.binding ? "policy:create:bound" : "policy:create");
         const value = botPolicy(input.botId);
         policies.set(input.botId, value);
@@ -673,6 +675,7 @@ function fixture(options: {
     catalogTargets,
     catalogRetainedProviders,
     policyCatalogRevisions,
+    policyAccesses,
     bindCatalogRevisions,
     inventoryLeaseAcquisitions: () => inventoryLeaseAcquisitions,
   };
@@ -1361,6 +1364,33 @@ test("Bot creation commits home then policy then visible identity", async () => 
     app.events.indexOf("policy:create") < app.events.indexOf("identity:create"),
   );
   assert.equal(app.pending.size, 0);
+});
+
+test("only a creator that discloses Web Search grants it to a new Full Access Bot", async () => {
+  const app = fixture();
+  await app.service.initialize();
+  const identity = (name: string) => ({
+    name,
+    instructions: "Help.",
+    avatar: { version: 1 as const, shape: "wisp" as const, color: "lilac" as const },
+  });
+  await app.service.createBot({ audienceId: "device:a", bot: identity("Phone") });
+  await app.service.createBot({
+    audienceId: "device:a",
+    botId: "bot:starter",
+    bot: identity("Starter"),
+    grantFullWebSearch: true,
+  });
+  await app.service.createBot({
+    audienceId: "device:a",
+    botId: "bot:declined",
+    bot: identity("Declined"),
+    access: { accessMode: "full", catalogRevision: "stale", confirmedForeground: true, webSearchEnabled: false },
+    grantFullWebSearch: true,
+  });
+  const web = app.policyAccesses.map((access) =>
+    access.accessMode === "full" ? access.webSearchEnabled : "custom");
+  assert.deepEqual(web, [undefined, true, false]);
 });
 
 test("Bot creation retries its policy after a runtime inventory invalidation", async () => {
