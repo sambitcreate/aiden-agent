@@ -2350,6 +2350,8 @@ class AidenChatViewModel(
     private var foreignRunTurnRetry = false
     /** Transcript reads reserved after this write token were issued once the foreign run had ended. */
     private var foreignRunEndedWriteToken = 0L
+    /** The last terminal replay already sent through durable transcript reconciliation. */
+    private var foreignRunAccountedRunId: String? = null
 
     private fun foreignRunAccess(capability: AidenRemoteCapability): Boolean {
         val installation = installationForProgress() ?: return false
@@ -2443,6 +2445,7 @@ class AidenChatViewModel(
         var notFoundRetries = if (retryNotFound) 1 else 0
         try {
             while (coroutineContext.isActive) {
+                if (activeClient() !== client || activeStreamId != null || _isStarting.value) return
                 val attached = projection
                 val feed = if (attached == null) client.currentRunEvents(chatId)
                 else client.runEvents(attached.runId, after = attached.lastSequence)
@@ -2453,7 +2456,14 @@ class AidenChatViewModel(
                             throw ForeignRunSuperseded()
                         }
                         val current = projection ?: AidenForeignRunProjection(event.runId).also { projection = it }
-                        handleForeignRunEffects(current, current.apply(event))
+                        val previousSequence = current.lastSequence
+                        val effects = current.apply(event)
+                        // A connected socket or duplicate frame is not progress. Count
+                        // only a frame accepted by this run's projection.
+                        if (event.runId == current.runId &&
+                            (current.lastSequence != previousSequence || effects.isNotEmpty())
+                        ) reconnects = 0
+                        handleForeignRunEffects(current, effects)
                     }
                 } catch (error: ForeignRunSuperseded) {
                     foreignSettleJob?.cancel()
@@ -2484,8 +2494,8 @@ class AidenChatViewModel(
                         return
                     }
                 }
-                val current = projection ?: return
-                if (current.isEnded) return
+                if (projection?.isEnded == true) return
+                if (activeClient() !== client || activeStreamId != null || _isStarting.value) return
                 reconnects += 1
                 if (reconnects > MAX_FOREIGN_RUN_RECONNECTS) {
                     finishForeignRun()
@@ -2511,6 +2521,10 @@ class AidenChatViewModel(
             foreignSettleJob?.cancel()
             if (projection.isEnded) {
                 foreignSettleDeadlineNanos = null
+                if (foreignRunAccountedRunId != projection.runId) {
+                    foreignRunAccountedRunId = projection.runId
+                    finishForeignRun(projection)
+                }
                 return
             }
             val now = System.nanoTime()
@@ -2581,17 +2595,23 @@ class AidenChatViewModel(
 
     /** The run ended (or can no longer be followed): re-read the transcript and
      * leave the terminal state for the live notification. */
-    private suspend fun finishForeignRun() {
+    private suspend fun finishForeignRun(endedProjection: AidenForeignRunProjection? = foreignProjection) {
         foreignSettleJob?.cancel()
-        val projection = foreignProjection ?: return
+        val projection = endedProjection ?: return
+        val wasPresented = foreignProjection != null
         // The run is over, so a word the gate was holding back is complete.
-        liveReveal.flush()
+        if (wasPresented) liveReveal.flush()
         foreignRunId = null
         foreignProjection = null
+        foreignRunAccountedRunId = projection.runId
         val client = activeClient()
         foreignRunEndedWriteToken = chatCache.reserveChatWrite()
         val reconciled = reconcileChat()
         if (activeStreamId != null || _isStarting.value) return
+        if (!wasPresented) {
+            if (!reconciled && client != null) scheduleForeignRunReconciliation(client)
+            return
+        }
         _pendingApproval.value = null
         _pendingQuestion.value = null
         _streamState.value = if (projection.state.isTerminal) projection.state else AidenStreamState.INTERRUPTED
