@@ -1,5 +1,5 @@
 {
-  "contractRevision": 32,
+  "contractRevision": 33,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1537,7 +1537,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 32,
+    "contractRevision": 33,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2243,6 +2243,28 @@
       "request": { "text": "Keep it vegetarian.", "whenBusy": "steer" },
       "response": { "submissionId": "19", "deduped": false, "state": "running", "interrupted": false }
     }
+  },
+  "botAttachments": {
+    "note": "Contract revision 33 (bot-attachments-v1). Uploads take the chat attachment body; a message may then carry attachmentIds and empty text.",
+    "imageUpload": {
+      "request": { "name": "receipt.png", "mimeType": "image/png", "kind": "image", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+      "response": { "id": "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "name": "receipt.png", "mimeType": "image/png", "kind": "image", "size": 70, "expiresAt": "2026-10-16T09:10:00.000Z" }
+    },
+    "textUpload": {
+      "request": { "name": "notes.md", "mimeType": "text/markdown", "kind": "text", "text": "# Groceries\n- oats" },
+      "response": { "id": "att_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "name": "notes.md", "mimeType": "text/markdown", "kind": "text", "size": 18, "expiresAt": "2026-10-16T09:10:00.000Z" }
+    },
+    "send": {
+      "request": { "text": "What did I spend?", "attachmentIds": ["att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "att_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"] },
+      "response": { "submissionId": "18", "deduped": false, "state": "running", "interrupted": false }
+    },
+    "attachmentsOnly": { "text": "", "attachmentIds": ["att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] },
+    "rejectedSends": [
+      { "text": "" },
+      { "text": "Hi", "attachmentIds": [] },
+      { "text": "Hi", "attachmentIds": ["att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] },
+      { "text": "Hi", "attachmentIds": ["att_short"] }
+    ]
   },
   "botActivityPrivacy": {
     "note": "Every decoder must refuse each sample: only phase, app and startedAt cross the wire.",
