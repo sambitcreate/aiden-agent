@@ -31,6 +31,8 @@ export function botStarter(): BotStarter {
         botId,
         bot: input,
         ...(access === undefined ? {} : { access }),
+        // The starter cards say every Bot can search the web.
+        grantFullWebSearch: true,
       }),
     session: {
       send: async (botId, input) => (await botSessionRuntime()).send(botId, input),

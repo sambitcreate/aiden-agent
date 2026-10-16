@@ -91,9 +91,15 @@ test("Full access carries the chosen model and photo model, and no model keys wh
     confirmedForeground: true,
     providerId: "prov-text",
     modelId: "model-text",
+    webSearchEnabled: true,
     visionModel: { providerId: "prov-vision", modelId: "model-vision" },
   });
   const none = botFullAccess(catalogFixture({ models: false }), {});
   assert.equal(none.hasModel, false);
-  assert.deepEqual(none.access, { accessMode: "full", catalogRevision: "catalog-1", confirmedForeground: true });
+  assert.deepEqual(none.access, {
+    accessMode: "full",
+    catalogRevision: "catalog-1",
+    confirmedForeground: true,
+    webSearchEnabled: true,
+  });
 });

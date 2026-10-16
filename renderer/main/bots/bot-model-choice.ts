@@ -102,6 +102,8 @@ export function botFullAccess(
       catalogRevision: catalog.revision,
       confirmedForeground: true,
       ...(hasModel ? { providerId: choice.providerId!, modelId: choice.modelId! } : {}),
+      // The create dialog names Web Search; creating the Bot grants it.
+      webSearchEnabled: true,
       ...(hasVision ? { visionModel: { providerId: choice.visionProviderId!, modelId: choice.visionModelId! } } : {}),
     },
   };
