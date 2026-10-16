@@ -70,7 +70,7 @@ The CLI ships without pi telemetry, enforced three ways: the entry forces `PI_TE
 
 ## Theming
 
-Eight Aiden presets ship as built-ins — Aiden, Slate, Berry, Moss × light/dark — and pi's own palettes are deliberately not shipped. The Aiden dark/light palettes replace pi's stock `dark`/`light`, so terminal background auto-detection lands on Aiden by default. The native `system` theme is also available to follow the terminal palette. Switch with `--use-theme <name>`, the `/theme` command, or first-run setup.
+Twenty Aiden themes ship as built-ins — Aiden, Slate, Berry, Moss, Paper, Calm, Graphite, Dusk, Midnight, Monochrome × light/dark — and pi's own palettes are deliberately not shipped. The Aiden dark/light palettes replace pi's stock `dark`/`light`, so terminal background auto-detection lands on Aiden by default. The native `system` theme is also available to follow the terminal palette. Switch with `--use-theme <name>`, the `/theme` command, or first-run setup.
 
 Regenerate the theme JSONs after changing `renderer/shared/appearance.ts`:
 

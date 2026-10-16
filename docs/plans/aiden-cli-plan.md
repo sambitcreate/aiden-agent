@@ -19,7 +19,7 @@ The TUI is pi's own interactive TUI customized with Aiden themes and (later) ext
 
 - `packages/cli` package: `piConfig` rebrand, esbuild bundle (ported from pi's own bundle script: same externals, lazy jiti rewrite, standalone OAuth/Bedrock/image-worker emissions), generated app-root `package.json`.
 - `src/cli.ts` entry calling pi's `main()` with theme injection; `--version`/`--help`/print/JSON/RPC all branded `aiden`.
-- Eight Aiden theme presets (4 presets × light/dark) + preserved pi originals.
+- Twenty Aiden themes (10 presets × light/dark), generated from `renderer/shared/appearance.ts`.
 - Tests: bundle structure, rebrand identity (version/help/env-dir isolation), print-mode offline semantics, RPC `get_state` handshake, theme generation fidelity, var-reference integrity. Root scripts `cli:install`/`cli:build`/`test:cli` and CI coverage via the `test` chain.
 - Docs: this plan, `packages/cli/README.md`, plans index row, AGENTS.md conventions.
 
@@ -38,7 +38,7 @@ Status: **core set shipped.** The `pi-bridge` (`src/pi-bridge/adapt-aiden-extens
 - display-image (inline TUI images via wrapped tool result + `<agentDir>/artifacts` archive)
 - `/usage`, `/voice`, `/dictate` (voice transcription settings persist to `aiden.json` in the desktop's `AppSettings` shapes; dictation uses `sox`/`ffmpeg` + Gemini/OpenAI REST; Parakeet stays desktop-only)
 
-All animation colors derive from the ACTIVE theme accent (parsed from `theme.fg`'s ANSI prefix — truecolor when available, flat accent/muted fallbacks otherwise), so they follow the user's palette. pi's own palettes are removed from the bundle; the eight Aiden presets are the only themes.
+All animation colors derive from the ACTIVE theme accent (parsed from `theme.fg`'s ANSI prefix — truecolor when available, flat accent/muted fallbacks otherwise), so they follow the user's palette. pi's own palettes are removed from the bundle; the Aiden presets are the only themes.
 
 Also in Phase 0/1: branding patch (`scripts/patch-branding.mjs`, run inside every build) removes pi's startup self-promotion line, de-Pi's the tmux hint, and makes the system prompt identify as Aiden — asserted by tests. The fullscreen TUI is the Aiden default (flag/saved-preference override respected), and startup is minimal: the loaded-resources listing (Context/Skills/Themes/Extensions) defaults off via `quietStartup`, surfacing on load errors, `--verbose`, or a `/config` override. **pi telemetry is removed**: the entry forces `PI_TELEMETRY=0` (unconditional — it gates both the pi.dev report-install ping and pi's attribution headers and overrides settings), the `enableInstallTelemetry` settings default flips to off, and the build patches the ping's call sites and endpoint out of the bundle; all three layers are test-enforced.
 

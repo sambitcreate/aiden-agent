@@ -19,10 +19,8 @@ Homebrew remains available with `brew install --cask sambitcreate/tap/aiden-agen
 Intel Mac installation will become available when a signed x64 DMG is published;
 the installer currently fails rather than selecting the incompatible arm64 DMG.
 
-The release pipeline now produces Linux x64 and arm64 AppImage, `.deb`, and
-`.rpm` packages. The current public `v0.40.0` release predates that pipeline and
-contains only the arm64 Mac build; Linux packages and the installer become
-available with the next accepted release. See the
+Each release publishes the arm64 Mac DMG plus Linux x64 and arm64 AppImage,
+`.deb`, and `.rpm` packages. See the
 [Linux install and compatibility guide](docs/linux.md).
 
 ![Aiden Agent showing a workspace chat and Personal Model Pad](docs/assets/aiden-agent-app.png)
@@ -44,7 +42,7 @@ I don't come from a coding background. I'd been bouncing between the coding agen
   | Implementer: read/search, write/edit, shell | Writes and shell run under this child run without another card | One write grant and one separate shell grant per child run, requested on first use | No write or shell tools |
 
   Web and MCP calls keep their existing per-call approval behavior. Implementer cannot delegate to another subagent. Rollout flags and the parent capability ceiling can narrow every row.
-- **Bots and Web Search** - macOS can create durable Bots with explicit capability grants, persistent conversations, image understanding, and Telegram control. Every desktop can configure explicit Web Search routes from the expanded provider catalog; Bots remain hidden on Linux until their native security bindings are supported there.
+- **Bots and Web Search** - macOS and Linux can create durable Bots with explicit capability grants, persistent conversations, image understanding, and Telegram control (Linux needs an unlocked Secret Service keyring). Every desktop can configure explicit Web Search routes from the expanded provider catalog.
 - **Workspaces and managed worktrees** - use folders, scratch workspaces, or isolated managed worktrees with three access levels, workspace-scoped tools, Ask-mode approvals, guarded creation/deletion, and crash-aware cleanup.
 - **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Arrange a personal capability-and-pace map, optionally enrich hosted models with explicitly fetched Artificial Analysis scores through a benchmark-only OpenRouter key, and keep benchmark evidence visibly separate from runtime limits and availability.
 - **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
