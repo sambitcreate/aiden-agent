@@ -404,7 +404,7 @@ Rules:
 - **Consent:** sheet naming provider, model and request count.
 - **Restart:** marks in-flight attempts as interrupted.
 
-**Status (2026-10-08):** CI-1.1 to CI-1.9 are implemented. PR A is `feature/create-images-v2` (CI-1.1 to CI-1.7, including CI-1.6a), and PR B is `feature/create-images-v2-ui` (CI-1.8 and CI-1.9). The `createImages` flag defaults off. CI-1.10 (owner-attended live acceptance) is open.
+**Status (2026-10-08):** CI-1.1 to CI-1.9 are implemented. PR A is `feature/create-images-v2` (CI-1.1 to CI-1.7, including CI-1.6a), and PR B is `feature/create-images-v2-ui` (CI-1.8 and CI-1.9). The `createImages` flag defaults off. Both PRs merged as [#382](https://github.com/sambitcreate/aiden-agent/pull/382) and [#383](https://github.com/sambitcreate/aiden-agent/pull/383), and CI-1.10 (owner-attended live OpenRouter acceptance) passed on 2026-10-08.
 
 | Task | Deliverable | Port from `ref-create-images` |
 |---|---|---|
