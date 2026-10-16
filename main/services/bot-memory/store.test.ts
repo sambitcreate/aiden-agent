@@ -44,7 +44,7 @@ test("add, replace and remove round-trip through the files on disk", async () =>
   const view = memoryView(await store.load(BOT));
   // 22 + the 3-character "\n§\n" delimiter + 34.
   assert.equal(view.user.usedChars, 59);
-  assert.equal(view.user.limitChars, 1_375);
+  assert.equal(view.user.limitChars, 2_750);
   assert.match(view.user.entries[0]!.id, /^[0-9a-f]{16}$/u);
   assert.equal(view.readable, true);
   assert.notEqual(view.updatedAt, null);
@@ -59,16 +59,16 @@ test("add, replace and remove round-trip through the files on disk", async () =>
 test("a batch is checked against the budget only on its final state", async () => {
   const p = profile();
   const store = createBotMemoryStore({ profileDir: p.root });
-  const filler = Array.from({ length: 5 }, (_, index) => `${String.fromCharCode(65 + index)} ${"x".repeat(430)}`);
+  const filler = Array.from({ length: 10 }, (_, index) => `${String.fromCharCode(65 + index)} ${"x".repeat(435)}`);
   handWrite(p.file("MEMORY.md"), filler.join("\n§\n"));
   const before = readFileSync(p.file("MEMORY.md"), "utf8");
-  assert.ok(before.length <= 2_200 && before.length > 2_100);
+  assert.ok(before.length <= 4_400 && before.length > 4_300);
 
   const alone = await store.apply(BOT, "memory", [{ action: "add", content: "Weekly meal plan is vegetarian except Fridays." }]);
   assert.equal(alone.ok, false);
   assert.equal(!alone.ok && alone.code, "over_budget");
   assert.deepEqual(!alone.ok && alone.texts, filler, "the refusal shows the current entries");
-  assert.match(!alone.ok ? alone.error : "", /over its 2,200 limit/u);
+  assert.match(!alone.ok ? alone.error : "", /over its 4,400 limit/u);
   assert.equal(readFileSync(p.file("MEMORY.md"), "utf8"), before, "nothing is written");
 
   const batch = await store.apply(BOT, "memory", [
@@ -78,7 +78,7 @@ test("a batch is checked against the budget only on its final state", async () =
   assert.equal(batch.ok, true);
   assert.equal(batch.ok && batch.changed, 2);
   const texts = (await store.load(BOT)).stores.memory.texts;
-  assert.equal(texts.length, 5);
+  assert.equal(texts.length, 10);
   assert.equal(texts[texts.length - 1], "Weekly meal plan is vegetarian except Fridays.");
 });
 
@@ -224,11 +224,11 @@ test("read validation drops blocked entries and reports a store over budget", as
   assert.deepEqual(loaded.stores.user.texts, ["Prefers short answers.", "Has a dog."]);
   assert.equal(loaded.stores.user.blockedCount, 1);
 
-  const big = Array.from({ length: 4 }, (_, index) => `${index} ${"w".repeat(480)}`);
+  const big = Array.from({ length: 6 }, (_, index) => `${index} ${"w".repeat(480)}`);
   handWrite(p.file("USER.md"), big.join("\n§\n"));
   const view = memoryView(await store.load(BOT));
   assert.equal(view.user.overBudget, true);
-  assert.equal(view.user.entries.length, 4, "the person sees every valid entry so they can clean up");
+  assert.equal(view.user.entries.length, 6, "the person sees every valid entry so they can clean up");
 
   const add = await store.apply(BOT, "user", [{ action: "add", content: "Lives in Pune." }]);
   assert.equal(!add.ok && add.code, "over_budget", "adds are refused while over budget");

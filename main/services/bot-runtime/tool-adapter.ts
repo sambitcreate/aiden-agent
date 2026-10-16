@@ -25,7 +25,7 @@ export type ToolReplay = "safe" | "unsafe";
 export interface BotToolCall {
   readonly callId: string;
   readonly signal: AbortSignal;
-  /** Committed entries of the calling conversation, oldest first. */
+  /** Committed entries of the calling conversation, newest first (the store's default scan order). */
   entries(): Promise<EntryRecord[]>;
   /** Append a display/bookkeeping entry to the calling conversation. */
   appendEntry(kind: string, data: JsonValue): Promise<void>;

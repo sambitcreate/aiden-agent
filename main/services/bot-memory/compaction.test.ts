@@ -184,7 +184,7 @@ test("a failing summarizer falls back to Pi Durable's own summary", async () => 
 
 const ROUTINE_ANSWER = `ROUTINE BRIEF: ${"Rain is expected in Pune today, carry an umbrella. ".repeat(120)}`;
 /** Compacts only once the routine's long answer is in context (~1,500 tokens), so the first compaction is attended. */
-const ROUTINE_CONTEXT = { compaction: { reserveTokens: 198_500, keepRecentTokens: 100, backgroundTokens: 0 } };
+const ROUTINE_CONTEXT = { compaction: { reserveTokens: 198_400, keepRecentTokens: 100, backgroundTokens: 0 } };
 
 test("an attended compaction never flushes routine history into memory", async () => {
   const { memory, userFile } = memoryProfile();

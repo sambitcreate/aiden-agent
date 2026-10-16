@@ -57,7 +57,7 @@ async function memoryResults(root: Conversation): Promise<Array<{ isError: boole
     .map((result) => ({ isError: result.isError, json: JSON.parse(result.content[0]!.text ?? "{}") as Record<string, unknown> }));
 }
 
-const filler = Array.from({ length: 5 }, (_, index) => `${String.fromCharCode(65 + index)} ${"x".repeat(430)}`);
+const filler = Array.from({ length: 10 }, (_, index) => `${String.fromCharCode(65 + index)} ${"x".repeat(435)}`);
 const NEW_FACT = "Weekly meal plan is vegetarian except Fridays.";
 
 test("one batch frees space and adds in a single call", async () => {

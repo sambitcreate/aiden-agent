@@ -19,6 +19,7 @@ import { BOT_MEMORY_LIMITS, type BotMemoryTarget } from "../../../renderer/share
 import { BOT_INTRO_REQUEST_PREFIX } from "../bot-runtime/bot-intro.js";
 import type { BotToolEntry } from "../bot-runtime/bot-extension.js";
 import { memoryLimit, usedChars } from "./files.js";
+import { BOT_MEMORY_NOTES_ROUTE, BOT_MEMORY_USER_ROUTE } from "./routing.js";
 import type { BotMemoryRuntime } from "./service.js";
 import type { BotMemoryApplyResult, BotMemoryOperation } from "./store.js";
 
@@ -35,7 +36,7 @@ export interface BotMemoryToolDetails {
 const DESCRIPTION = [
   "Save what will matter in future conversations with this person. Saved memory is shown to you at the start of every conversation, so keep it short and useful.",
   "",
-  "TARGETS: 'user' is about the person and their world (who they are, family, places, routines, standing preferences). 'memory' is your own notes (promises or follow-ups you committed to, how you help them best, things you learned while helping).",
+  `TARGETS: 'user' is ${BOT_MEMORY_USER_ROUTE}. 'memory' is ${BOT_MEMORY_NOTES_ROUTE}. Keep 'user' to the essentials and put the rest in 'memory'.`,
   "",
   "SAVE: durable facts, standing preferences, commitments you made. SKIP: one-off requests, anything already in your instructions, passwords or other secrets, raw dumps, progress on the current task.",
   "",

@@ -60,6 +60,7 @@ import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
+import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
 
 import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
 import { botIngressAllowsTool } from "./bot-tool-policy.js";
@@ -232,10 +233,17 @@ const extension: BotExtensionDeps = {
     });
   },
   memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
-  currentTools: async (bot, turn) => [...(await tools.currentTools(bot.id, turn)), botMemoryToolEntry(bot.id, memory)],
-  // `bot_memory` writes only this Bot's own memory: no file authority, no approval.
+  currentTools: async (bot, turn) => [
+    ...(await tools.currentTools(bot.id, turn)),
+    botMemoryToolEntry(bot.id, memory),
+    botRecallToolEntry(),
+  ],
+  // `bot_memory` writes only this Bot's own memory and `bot_recall` reads only
+  // its own conversation: no file authority, no approval.
   checkPolicy: (botId, toolName, call) =>
-    toolName === BOT_MEMORY_TOOL_NAME ? Promise.resolve({ allowed: true }) : tools.checkPolicy(botId, toolName, call),
+    toolName === BOT_MEMORY_TOOL_NAME || toolName === BOT_RECALL_TOOL_NAME
+      ? Promise.resolve({ allowed: true })
+      : tools.checkPolicy(botId, toolName, call),
   // Per run: the self-intro uses no tools; routine and Telegram turns get no
   // question card; routine and self-intro turns never save memory.
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
