@@ -277,7 +277,8 @@ test.describe("Simulator stream", () => {
     await strip.getByRole("tab", { name: "Checkout flow" }).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Float over chat" }).click();
     await expect(player).toBeVisible();
-    await expect.poll(async () => (await player.boundingBox())?.x).toBe(floated!.x);
+    // Compare whole pixels: the dragged frame can sit on a subpixel offset that the restored frame lands on as a whole pixel.
+    await expect.poll(async () => Math.round((await player.boundingBox())!.x)).toBe(Math.round(floated!.x));
     await player.getByRole("button", { name: "Dock device in its tab" }).click();
     await expect(player).toHaveCount(0);
 

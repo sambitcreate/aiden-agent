@@ -2088,11 +2088,11 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.botFiles) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(
-          response,
-          200,
-          await dependencies.botFiles.list(device.id, botConversationFilesMatch[1]!),
-        );
+        const index = await dependencies.botFiles.list(device.id, botConversationFilesMatch[1]!);
+        // Bot authority is the Mac owner's, so it does not end with this
+        // device. Cross the revocation fence again before publishing.
+        admitDevice(device.id)();
+        writeJson(response, 200, index);
         return;
       }
       const botConversationFileMatch =
@@ -2106,15 +2106,13 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.botFiles) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(
-          response,
-          200,
-          await dependencies.botFiles.read(
-            device.id,
-            botConversationFileMatch[1]!,
-            botConversationFileMatch[2]!,
-          ),
+        const file = await dependencies.botFiles.read(
+          device.id,
+          botConversationFileMatch[1]!,
+          botConversationFileMatch[2]!,
         );
+        admitDevice(device.id)();
+        writeJson(response, 200, file);
         return;
       }
       if (botConversationFileMatch && request.method === "PUT") {
