@@ -342,6 +342,7 @@ test.describe("folder workspaces", () => {
     await page.locator("[data-branch-name-row]").click();
     await page.getByRole("textbox", { name: /Branch name/u }).fill("aiden/taken");
     await page.keyboard.press("Enter");
+    await expect(page.locator("[data-branch-name-row]")).toContainText("aiden/taken");
     await page.keyboard.press("Escape");
 
     await page.locator("textarea").fill("Retry after leaving");

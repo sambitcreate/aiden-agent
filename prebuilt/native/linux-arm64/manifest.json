@@ -6,6 +6,10 @@
       "sha256": "1832482e431808d4fad7d2ce9f27b554caca716ffc44cdc43679976f367142e4",
       "source": "2d0dae7552acd391ea02189cbdcc016f04790032116e2a2c82cf15e6985178ca"
     },
+    "lease-flock": {
+      "sha256": "c3d953b03ae58a28a714ac80576d070b07d52b1e5f02b30a2a7525675660bba1",
+      "source": "cde095d4e2059b8cc252c2f63701ed279f84a6f909c7842bc36c35cdd87a0dcc"
+    },
     "subagent-run-store": {
       "sha256": "fb6530205c5638dfa26621c1f3c64ce5c98100e7927ec4ca3900dd2fa6988515",
       "source": "bc81557e2b452e62b924af03d61aa4d561b0a7b3e985b17bc7d6b1e4e2b5f989"
