@@ -38,6 +38,7 @@ test("Bot editor retries preserve only deliberate identity and access edits", ()
 
   const baselineAccess: BotEditorAccessDraft = {
     usesFullAccess: false,
+    webSearchEnabled: false,
     providerId: "provider:a",
     modelId: "model:a",
     visionProviderId: "provider:vision",

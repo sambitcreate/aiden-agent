@@ -220,6 +220,27 @@ test("Advanced saves access with the toolbar's one Save, then has nothing left t
   );
 });
 
+test("Advanced turns on web search for an Everything Bot that doesn't have it yet", async () => {
+  const store = advancedIpc();
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
+  const web = await screen.findByRole("switch", { name: "Allow web search" });
+  assert.equal(web.getAttribute("aria-checked"), "false", "an existing Bot is never opted in silently");
+  assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true);
+
+  fireEvent.click(web);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(store.accessUpdates.length, 1));
+  const sent = (store.accessUpdates[0] as { access: { accessMode: string; webSearchEnabled?: boolean } }).access;
+  assert.equal(sent.accessMode, "full");
+  assert.equal(sent.webSearchEnabled, true);
+
+  // Custom access grants web search as one of its own choices instead.
+  const access = screen.getByRole("radiogroup", { name: "What it can use" });
+  fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
+  await screen.findByRole("switch", { name: "Allow Mail" });
+  assert.equal(screen.queryByRole("switch", { name: "Allow web search" }), null);
+});
+
 test("Advanced Back with an unsaved access change asks before discarding it", async () => {
   const store = advancedIpc();
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
