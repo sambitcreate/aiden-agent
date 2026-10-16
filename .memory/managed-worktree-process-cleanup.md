@@ -1,11 +1,12 @@
 # Managed worktree process cleanup
 
 Started 2026-10-15, pending PR #500. Started from `origin/main` `11b58367`;
-as of 2026-10-16, merged latest `origin/main` `9deb63f52` into the PR branch
+as of 2026-10-16, merged latest `origin/main` `264b537a4` into the PR branch
 without rebasing. The integrations include #498, #503, #506, #501, #504,
-the 0.57.0 release merge, #508, #509, #510 and #511. The merged root
-`package.json` test chain matches main, and this PR changes no Aiden Remote
-protocol revision or native-client fixture.
+the 0.57.0 release merge, #508, #509, #510, #511 and #512. The merged root
+`package.json` test chain matches main. The #512 integration supplies Aiden
+Remote revision 33 with synchronized iOS and fixture contracts; this PR
+changes neither that revision nor its wire shape.
 
 Explicit managed-worktree removal now awaits exit of Aiden-owned PTY sessions
 after signalling them. The terminal service retains pending exits across retries;
@@ -107,3 +108,9 @@ lifecycle suite and CLI rerun also passed. Preserve these failures in the PR
 record and use fresh exact-head hosted CI to judge the new head.
 Root typecheck and 119 focused Bot access, Web Search, renderer, and input
 modality tests passed after the `9deb63f52` merge.
+The subsequent #512 merge had no conflicts. Root typecheck, 215 focused
+Remote protocol/router/Bot-session/operation tests, and Android JVM tests
+passed. Focused iOS Remote client, Bot session, and phase-0 simulator suites
+returned exit 0 with 175 passing cases; Xcode then spent ten minutes trying
+to collect simulator diagnostics and reported a diagnostic timeout. The
+actual test gate passed, but hosted iOS CI remains the clean-run evidence.
