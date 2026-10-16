@@ -1429,6 +1429,7 @@ final class AidenChatTests: XCTestCase {
         cache: AidenChatCache? = nil,
         draftStore: AidenChatDraftStore? = nil,
         modelPreferenceStore: AidenModelPreferenceStore? = nil,
+        visualDocumentCache: AidenVisualDocumentCache? = nil,
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         initialChat: AidenChat? = nil,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
@@ -1503,6 +1504,8 @@ final class AidenChatTests: XCTestCase {
             cache: cache,
             draftStore: draftStore,
             modelPreferenceStore: modelPreferenceStore,
+            visualDocumentCache: visualDocumentCache
+                ?? AidenVisualDocumentCache(root: storageRoot.appending(path: "visual-documents")),
             networkPath: networkPath ?? AidenNetworkAvailability(),
             streamingRevealTick: streamingRevealTick ?? { try await Task.sleep(for: AidenStreamingRevealGate.tick) },
             onChatUpdated: onChatUpdated
@@ -1604,6 +1607,108 @@ final class AidenChatTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
         let model = try await makeProgressLifecycleModel(mode: .denied, cache: AidenChatCache(root: root))
         XCTAssertNil(model.forkAvailability)
+    }
+
+    @MainActor
+    func testVisualViewerLoadsThePhonesThemeAndFallsBackToTheLastCopyOffline() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        final class Mac: @unchecked Sendable {
+            let lock = NSLock()
+            var reachable = true
+            var queries: [String] = []
+        }
+        let mac = Mac()
+        let html = "<!doctype html><title>Revenue</title><p>Q3 € 1.2M</p>"
+        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-visuals-v1","chat-visual-viewer-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { request in
+                switch request.url?.path {
+                case "/api/aiden/v1/server":
+                    return (200, "application/json", Data(serverJSON.utf8))
+                case "/api/aiden/v1/chats/chat-progress-lifecycle/visuals/visual-revenue/document":
+                    let reachable = mac.lock.withLock { () -> Bool in
+                        mac.queries.append(request.url?.query ?? "")
+                        return mac.reachable
+                    }
+                    guard reachable else {
+                        return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                    }
+                    return (200, "text/html; charset=utf-8", Data(html.utf8))
+                default:
+                    return nil
+                }
+            }
+        )
+        XCTAssertTrue(model.supportsVisualViewer)
+        XCTAssertEqual(
+            AidenVisualRowAction.resolve(viewerAvailable: model.supportsVisualViewer, hasSnapshot: true),
+            .openInteractive
+        )
+        let dusk = AidenVisualViewerAppearance(scheme: .dark, theme: .dusk)
+
+        guard case .live(let live) = await model.visualDocument(visualId: "visual-revenue", appearance: dusk) else {
+            return XCTFail("The Mac's document should load.")
+        }
+        XCTAssertEqual(live, html)
+
+        mac.lock.withLock { mac.reachable = false }
+        guard case .cached(let cached) = await model.visualDocument(visualId: "visual-revenue", appearance: dusk) else {
+            return XCTFail("The last copy should stand in while the Mac can't be reached.")
+        }
+        XCTAssertEqual(cached, html)
+
+        // Copies are kept per scheme and theme, so a light page has none yet.
+        let light = AidenVisualViewerAppearance(scheme: .light, theme: .dusk)
+        guard case .failed = await model.visualDocument(visualId: "visual-revenue", appearance: light) else {
+            return XCTFail("A page never loaded in this appearance has no offline copy.")
+        }
+        XCTAssertEqual(
+            mac.lock.withLock { mac.queries },
+            ["scheme=dark&theme=dusk", "scheme=dark&theme=dusk", "scheme=light&theme=dusk"]
+        )
+    }
+
+    @MainActor
+    func testVisualViewerIsOffWhenTheMacDoesNotAnnounceItAndNeverAsks() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        final class Requests: @unchecked Sendable {
+            let lock = NSLock()
+            var visualPaths: [String] = []
+        }
+        let requests = Requests()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { request in
+                let path = request.url?.path ?? ""
+                if path.contains("/visuals/") { requests.lock.withLock { requests.visualPaths.append(path) } }
+                return nil
+            }
+        )
+        XCTAssertFalse(model.supportsVisualViewer)
+        XCTAssertEqual(
+            AidenVisualRowAction.resolve(viewerAvailable: model.supportsVisualViewer, hasSnapshot: true),
+            .viewImage,
+            "Without the token a snapshot keeps opening the image viewer."
+        )
+        let result = await model.visualDocument(
+            visualId: "visual-revenue",
+            appearance: AidenVisualViewerAppearance(scheme: .light, theme: .aiden)
+        )
+        guard case .failed = result else { return XCTFail("The viewer is unavailable without the token.") }
+        XCTAssertEqual(requests.lock.withLock { requests.visualPaths }, [])
+    }
+
+    @MainActor
+    func testConfirmedVisualPromptIsAppendedToTheDraftAndNeverSent() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        model.draft = "Compare regions  \n"
+        XCTAssertTrue(model.appendVisualPrompt("  Break Q3 down by month "))
+        XCTAssertEqual(model.draft, "Compare regions\n\nBreak Q3 down by month")
+        XCTAssertFalse(model.appendVisualPrompt(" \n "), "An empty prompt changes nothing.")
+        XCTAssertEqual(model.draft, "Compare regions\n\nBreak Q3 down by month")
+        XCTAssertFalse(AidenChatProgressLifecycleURLProtocol.postPaths.contains { $0.hasSuffix("/turns") })
     }
 
     @MainActor

@@ -10,6 +10,12 @@ import {
   parseToolApprovalScope,
   type ToolApprovalScope,
 } from "../../renderer/shared/tool-approval-scope.js";
+import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
+import {
+  parseVisualViewerQuery,
+  visualViewerDocumentEtag,
+  type VisualViewerAppearance,
+} from "./visual-viewer-document.js";
 import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_CAPABILITIES,
@@ -51,6 +57,7 @@ import {
   AIDEN_REMOTE_CHAT_FORK_FEATURE,
   AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_VISUALS_FEATURE,
+  AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
@@ -182,7 +189,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -413,6 +420,7 @@ export type AidenRemoteRouteLabel =
   | "chatSkills"
   | "chatProgressEvents"
   | "chatAttachment"
+  | "chatVisualDocument"
   | "turns"
   | "models"
   | "stream"
@@ -511,6 +519,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/chats/:id/attachments/:attachmentId",
     "/chats/:id/attachments/:attachmentName/content",
   ],
+  chatVisualDocument: ["/chats/:id/visuals/:visualId/document"],
   turns: ["/chats/:id/turns"],
   models: ["/models"],
   stream: ["/streams/:streamId"],
@@ -706,6 +715,38 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
     return;
   }
   response.writeHead(200, { ...headers, "content-length": String(length) });
+  response.end(body);
+}
+
+/**
+ * The phone viewer document (revision 34). Never cached by the transport, but
+ * revalidatable by its strong ETag and gzip-compressed when the client asks,
+ * since a document inlines its whole viewer.
+ */
+function writeVisualDocument(response: ServerResponse, request: IncomingMessage, document: string): void {
+  const body = Buffer.from(document, "utf8");
+  const etag = visualViewerDocumentEtag(document);
+  const headers = {
+    ...responseHeaders("text/html; charset=utf-8"),
+    "content-security-policy": VISUAL_VIEWER_CSP,
+    etag,
+    vary: "accept-encoding",
+  };
+  if (ifNoneMatchSatisfied(request.headers["if-none-match"], etag)) {
+    const { "content-type": _contentType, ...notModified } = headers;
+    response.writeHead(304, notModified);
+    response.end();
+    return;
+  }
+  if (acceptsGzipEncoding(request.headers["accept-encoding"])) {
+    response.writeHead(200, { ...headers, "content-encoding": "gzip" });
+    const gzip = createGzip();
+    gzip.on("error", () => response.destroy());
+    gzip.pipe(response);
+    gzip.end(body);
+    return;
+  }
+  response.writeHead(200, { ...headers, "content-length": String(body.length) });
   response.end(body);
 }
 
@@ -1872,6 +1913,9 @@ export function createAidenRemoteRequestHandler(
               ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE, AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE]
               : []),
             ...(dependencies.chats ? [AIDEN_REMOTE_CHAT_VISUALS_FEATURE] : []),
+            ...(dependencies.chats?.visualDocument && dependencies.chats.supportsVisualViewer === true
+              ? [AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE]
+              : []),
             ...(dependencies.chats?.fork && dependencies.chats.supportsForks === true
               ? [AIDEN_REMOTE_CHAT_FORK_FEATURE]
               : []),
@@ -3556,6 +3600,28 @@ export function createAidenRemoteRequestHandler(
             attachmentContentMatch[1]!,
             attachmentContentMatch[2]!,
           ),
+        );
+        return;
+      }
+      const visualDocumentMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/visuals\/([A-Za-z0-9._:-]{1,256})\/document$/u.exec(path);
+      if (visualDocumentMatch && request.method === "GET") {
+        route = "chatVisualDocument";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.chats?.visualDocument || dependencies.chats.supportsVisualViewer !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        let appearance: VisualViewerAppearance;
+        try {
+          appearance = parseVisualViewerQuery(new URLSearchParams(query));
+        } catch (error) {
+          throw new AidenRemoteServiceError("invalid_request", error instanceof Error ? error.message : "The visual document query is invalid.", 400);
+        }
+        await requireChatAccess(dependencies.chats, device, visualDocumentMatch[1]!, "read");
+        writeVisualDocument(
+          response,
+          request,
+          await dependencies.chats.visualDocument(visualDocumentMatch[1]!, visualDocumentMatch[2]!, appearance),
         );
         return;
       }

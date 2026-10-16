@@ -22,6 +22,7 @@ import {
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
 import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
@@ -75,6 +76,8 @@ async function fixture(options: {
   platform?: "mac" | "linux" | "windows";
   /** The Bot service serves and accepts Chat activity (contract revision 30). */
   chatActivity?: boolean;
+  /** The host ships the phone visual viewer (contract revision 34). */
+  visualViewer?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -396,6 +399,16 @@ async function fixture(options: {
               calls.push(`messages-window:${id}:${input.before ?? ""}:${input.limit}`);
               const { id: _id, messages: _messages, revision, ...metadata } = chat;
               return { chatId: id, revision, messages: [], hasOlder: false, ...metadata };
+            },
+          }
+        : {}),
+      ...(options.visualViewer
+        ? {
+            supportsVisualViewer: true,
+            visualDocument: async (id: string, visualId: string, appearance: { scheme: string; preset: string }) => {
+              calls.push(`visual-document:${id}:${visualId}:${appearance.scheme}:${appearance.preset}`);
+              if (visualId === "missing") throw new AidenRemoteServiceError("not_found", "This visual is unavailable.", 404);
+              return `<!DOCTYPE html><title>${visualId}</title>${"<p>chart</p>".repeat(400)}`;
             },
           }
         : {}),
@@ -1065,6 +1078,87 @@ test("Bot-aware server projection separates supported capabilities from device g
     assert.notDeepEqual(server.serverCapabilities, server.capabilities);
   } finally {
     await app.close();
+  }
+});
+
+test("visual documents are served to chat readers as revalidatable, compressible HTML", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const app = await fixture({ capabilities: ["server:read", "chat:read"], visualViewer: true });
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-visual-viewer-v1"), true);
+
+    const url = `${app.base}/chats/chat-1/visuals/html-1/document`;
+    const response = await fetch(`${url}?scheme=dark&theme=moss`, { headers: { ...headers, "accept-encoding": "identity" } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.equal(response.headers.get("content-security-policy"), VISUAL_VIEWER_CSP);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("content-encoding"), null);
+    const body = await response.text();
+    assert.match(body, /^<!DOCTYPE html><title>html-1<\/title>/u);
+    assert.equal(Number(response.headers.get("content-length")), Buffer.byteLength(body));
+    assert.ok(app.calls.includes("visual-document:chat-1:html-1:dark:moss"));
+
+    const etag = response.headers.get("etag");
+    assert.ok(etag);
+    const unchanged = await fetch(`${url}?scheme=dark&theme=moss`, { headers: { ...headers, "if-none-match": etag } });
+    assert.equal(unchanged.status, 304);
+    assert.equal(await unchanged.text(), "");
+
+    // Defaults: light Aiden; an unknown preset falls back the same way.
+    await (await fetch(`${url}?theme=aurora`, { headers })).arrayBuffer();
+    assert.ok(app.calls.includes("visual-document:chat-1:html-1:light:aiden"));
+
+    const zipped = await new Promise<{ encoding: string | undefined; text: string }>((resolve, reject) => {
+      const target = new URL(url);
+      const request = httpRequest(
+        { hostname: target.hostname, port: target.port, path: target.pathname, headers: { ...headers, "accept-encoding": "gzip" } },
+        (incoming) => {
+          const chunks: Buffer[] = [];
+          incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+          incoming.on("end", () => resolve({ encoding: incoming.headers["content-encoding"], text: gunzipSync(Buffer.concat(chunks)).toString("utf8") }));
+          incoming.on("error", reject);
+        },
+      );
+      request.on("error", reject);
+      request.end();
+    });
+    assert.equal(zipped.encoding, "gzip");
+    assert.equal(zipped.text, body);
+
+    for (const query of ["scheme=sepia", "theme=Bad%20Theme", "scheme=dark&verbose=1", "scheme=dark&scheme=light"]) {
+      const invalid = await fetch(`${url}?${query}`, { headers });
+      assert.equal(invalid.status, 400, query);
+      assert.equal((await invalid.json()).error.code, "invalid_request", query);
+    }
+    const missing = await fetch(`${app.base}/chats/chat-1/visuals/missing/document`, { headers });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "not_found");
+  } finally {
+    await app.close();
+  }
+
+  const unreadable = await fixture({ capabilities: ["server:read"], visualViewer: true });
+  try {
+    const denied = await fetch(`${unreadable.base}/chats/chat-1/visuals/html-1/document`, { headers });
+    assert.equal(denied.status, 403);
+    assert.equal(unreadable.calls.some((call) => call.startsWith("visual-document:")), false);
+  } finally {
+    await unreadable.close();
+  }
+
+  const older = await fixture({ capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${older.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-visual-viewer-v1"), false);
+    const unavailable = await fetch(`${older.base}/chats/chat-1/visuals/html-1/document`, { headers });
+    assert.equal(unavailable.status, 404);
+  } finally {
+    await older.close();
   }
 });
 
@@ -4251,7 +4345,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 33,
+      contractRevision: 34,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });

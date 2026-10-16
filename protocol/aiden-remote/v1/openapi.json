@@ -1510,6 +1510,77 @@
         }
       }
     },
+    "/chats/{chatId}/visuals/{visualId}/document": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatVisualDocument",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "chat-visual-viewer-v1",
+        "description": "Contract revision 34. One self-contained HTML document that draws a visual a message in this chat projects, for phones to open full screen in a locked-down web view. Announced by `chat-visual-viewer-v1`; visual entries gain no new key. The document has no subresources and talks to its host only through the native message channel (iOS `aidenVisual` handler, Android `AidenVisualBridge`) with `ready`, `prompt` and `openUrl` messages. Served `no-store` with a strong ETag (a matching `If-None-Match` gets 304) and gzip when accepted.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "visualId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,256}$"
+            }
+          },
+          {
+            "name": "scheme",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "light",
+                "dark"
+              ],
+              "default": "light"
+            }
+          },
+          {
+            "name": "theme",
+            "in": "query",
+            "required": false,
+            "description": "A preset id from aiden-appearance-v1.json. An id this host does not know falls back to aiden.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "default": "aiden"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The viewer document",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string",
+                  "maxLength": 12582912
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The document matches If-None-Match"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bots": {
       "parameters": [
         {

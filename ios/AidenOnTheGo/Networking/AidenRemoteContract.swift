@@ -5,6 +5,10 @@ enum AidenRemoteProtocol {
     static let basePath = "/api/aiden/v1"
     static let maxIdentifierLength = 128
     static let maxBotIdentifierLength = 160
+    /// Revision 34: visual ids are listed on messages with up to 256 scalars.
+    static let maxVisualIdentifierLength = 256
+    /// Revision 34: an uncompressed visual viewer document is at most 12 MiB.
+    static let maxVisualDocumentBytes = 12 * 1_048_576
     static let maxEndpointLength = 2_048
     static let maxEndpointPort = 65_535
     static let maxEventTypeLength = 80
@@ -3741,5 +3745,15 @@ private struct AidenAppControlsInvalidation: Decodable {
         let values = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
         revision = try values.decode(Int.self, forKey: AidenDynamicCodingKey(stringValue: "revision")!)
         guard (0...AidenRemoteProtocol.maxSafeInteger).contains(revision) else { throw AidenRemoteContractError.invalidSequence }
+    }
+}
+
+extension AidenRemoteProtocol {
+    /// A `theme` query value the Mac accepts: `^[a-z][a-z0-9-]{0,31}$`.
+    /// An id the Mac does not know falls back to its default preset.
+    static func isVisualThemeIdentifier(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard (1...32).contains(bytes.count), (97...122).contains(bytes[0]) else { return false }
+        return bytes.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
     }
 }

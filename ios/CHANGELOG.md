@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Contract revision 34 (`chat-visual-viewer-v1`): when the paired Mac announces it, tapping a chart or widget in a reply opens it full screen and interactive in the phone's theme and light or dark scheme, in a locked-down web view that keeps nothing on disk and follows no links. A follow-up the visual suggests is only added to the message after **Add to message**; links ask before opening. The last copy of each opened visual stays available offline, marked as possibly out of date, and the snapshot's image viewer is still one tap away. Older Macs keep today's image viewer.
+
 - The three onboarding pages now draw their art natively: tinted, cropped slices of the workspace chat, the model menu, and Scheduled Tasks that follow light, dark, and every theme preset, with motion that holds still under Reduce Motion and Low Power Mode. The old clay images are gone.
 
 - Agent details now follow the delegated-agent ancestry: Back returns through parents to the roster, and Started by / Sub-agents links stay inside the current chat inspector.

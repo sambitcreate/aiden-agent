@@ -20,3 +20,9 @@
 -dontwarn org.bouncycastle.jsse.**
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
+
+# The interactive visual viewer's WebView bridge (contract revision 34) is called
+# by name from JavaScript, so its annotated methods must keep their names.
+-keepclassmembers class sbtbiswas.AidenOnTheGo.features.chat.** {
+    @android.webkit.JavascriptInterface <methods>;
+}
