@@ -13332,3 +13332,98 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.completed)), "Generated image")
     }
 }
+
+@MainActor
+final class AidenMessageVisualSnapshotLayoutTests: XCTestCase {
+    private static let snapshotColor = UIColor(red: 1, green: 0, blue: 0, alpha: 1)
+
+    private func solidImage(_ color: UIColor, size: CGSize, png: Bool) -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            color.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        return png ? image.pngData()! : image.jpegData(compressionQuality: 0.9)!
+    }
+
+    /// Rows of the rendered message that show the snapshot's solid colour.
+    private func snapshotRowCount(in image: UIImage) -> Int {
+        guard let cgImage = image.cgImage,
+              let data = cgImage.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data)
+        else { return 0 }
+        let bytesPerPixel = cgImage.bitsPerPixel / 8
+        let x = 40
+        var rows = 0
+        for y in 0..<cgImage.height {
+            let offset = y * cgImage.bytesPerRow + x * bytesPerPixel
+            // BGRA or RGBA: either way a pure red pixel has one channel high and two low.
+            let channels = [bytes[offset], bytes[offset + 1], bytes[offset + 2]]
+            if channels.filter({ $0 > 220 }).count == 1, channels.filter({ $0 < 35 }).count == 2,
+               (cgImage.bitmapInfo.contains(.byteOrder32Little) ? channels[2] : channels[0]) > 220 {
+                rows += 1
+            }
+        }
+        return rows
+    }
+
+    func testVisualSnapshotKeepsItsHeightAlongsideAnImageDeck() async throws {
+        let snapshotData = solidImage(Self.snapshotColor, size: CGSize(width: 400, height: 300), png: true)
+        let frameData = solidImage(.systemBlue, size: CGSize(width: 640, height: 360), png: false)
+        let snapshot = AidenMessageAttachment(
+            id: "visual-snapshot_\(String(repeating: "5", count: 64))",
+            name: "Shipped.png", mimeType: "image/png", kind: .image, size: snapshotData.count
+        )
+        let frames = (1...3).map { index in
+            AidenMessageAttachment(
+                id: "frame-\(index)", name: "frame-\(index).jpg", mimeType: "image/jpeg",
+                kind: .image, size: frameData.count
+            )
+        }
+        // The reply drew its visual mid-run: a tool step, then the closing text.
+        let opening = "Rendered the stills and a summary."
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"render_ui","label":"Draw visual","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(opening.count)}]}"#.utf8
+        ))
+        let message = AidenChatMessage(
+            id: "m", role: .assistant, text: opening + "Here is what changed.",
+            attachments: frames + [snapshot],
+            visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "What shipped", toolCallId: "call-1", snapshotAttachmentId: snapshot.id)],
+            timeline: timeline,
+            createdAt: Date()
+        )
+        let width: CGFloat = 390
+        let view = ScrollView {
+            AidenMessageView(
+                message: message,
+                presentationStyle: .workspace,
+                loadAttachmentImage: { $0.id == snapshot.id ? snapshotData : frameData }
+            )
+            .padding(.horizontal, 16)
+        }
+        .environment(AidenHapticCenter())
+        let host = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 2000))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+
+        // The snapshot draws edge to edge at its own 4:3 shape.
+        let expectedHeight = Int(((width - 32) * 3 / 4).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        var rows = 0
+        for attempt in 0..<20 {
+            try await Task.sleep(for: .milliseconds(attempt == 0 ? 1500 : 200))
+            window.layoutIfNeeded()
+            let rendered = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
+                window.layer.render(in: context.cgContext)
+            }
+            rows = snapshotRowCount(in: rendered)
+            if abs(rows - expectedHeight) <= 3 { break }
+        }
+        XCTAssertEqual(rows, expectedHeight, accuracy: 3, "the snapshot was squeezed instead of drawn at its own height")
+    }
+}
