@@ -286,7 +286,9 @@ test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home 
 
 async function httpFixture(options: {
   capabilities: readonly AidenRemoteCapability[];
-  authorizationBlocked?: () => boolean;
+  authorizationBlocked?: (deviceId: string) => boolean;
+  /** Holds a Bot Files read after the service is called and before it returns. */
+  holdRead?: () => Promise<void>;
 }) {
   const calls: string[] = [];
   const fileId = `file_${"f".repeat(43)}`;
@@ -295,14 +297,21 @@ async function httpFixture(options: {
     displayName: () => "Studio Mac",
     appVersion: "0.30.0",
     devices: {
-      authenticate: async (credential) => credential === "a".repeat(43) ? {
-        id: "device-authorized-12345678",
-        revoked: false,
-        acceptsBotCapabilities: true,
-        capabilities: new Set(options.capabilities),
-      } : null,
-      acquireDeviceAuthorization: () => {
-        if (options.authorizationBlocked?.()) {
+      authenticate: async (credential) => {
+        const id = credential === "a".repeat(43)
+          ? "device-authorized-12345678"
+          : credential === "b".repeat(43)
+            ? "device-other-87654321"
+            : undefined;
+        return id ? {
+          id,
+          revoked: false,
+          acceptsBotCapabilities: true,
+          capabilities: new Set(options.capabilities),
+        } : null;
+      },
+      acquireDeviceAuthorization: (deviceId) => {
+        if (options.authorizationBlocked?.(deviceId)) {
           throw new AidenRemoteServiceError(
             "credential_revoked",
             "This device was revoked in Aiden Settings.",
@@ -316,10 +325,12 @@ async function httpFixture(options: {
     botFiles: {
       list: async (deviceId, chatId) => {
         calls.push(`list:${deviceId}:${chatId}`);
+        await options.holdRead?.();
         return { snapshotId: "files-1", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20 };
       },
       read: async (deviceId, chatId, suppliedFileId) => {
         calls.push(`read:${deviceId}:${chatId}:${suppliedFileId}`);
+        await options.holdRead?.();
         return {
           id: suppliedFileId,
           displayPath: "note.txt",
@@ -399,6 +410,47 @@ test("Bot conversation file routes require conjunctive Bot and file grants", asy
     assert.deepEqual(denied.calls, []);
   } finally {
     await denied.close();
+  }
+});
+
+test("a Bot Files read held across device revocation publishes nothing, and other devices keep reading", async () => {
+  const revoked = new Set<string>();
+  let release: (() => void) | undefined;
+  let held: (() => void) | undefined;
+  const app = await httpFixture({
+    capabilities: ["bot:read", "files:read"],
+    authorizationBlocked: (deviceId) => revoked.has(deviceId),
+    holdRead: async () => {
+      if (revoked.size > 0 || !release) return;
+      held?.();
+      await new Promise<void>((resolve) => { release = resolve; });
+    },
+  });
+  try {
+    for (const path of ["/bot-conversations/chat-1/files", `/bot-conversations/chat-1/files/${app.fileId}`]) {
+      release = () => undefined;
+      const reached = new Promise<void>((resolve) => { held = resolve; });
+      const pending = fetch(`${app.base}${path}`, { headers: authorizationHeaders });
+      await reached;
+      // Revocation completes while the Mac-owner Bot authority is still reading.
+      revoked.add("device-authorized-12345678");
+      release();
+      const response = await pending;
+      assert.equal(response.status, 403);
+      const body = await response.json();
+      assert.equal(body.error.code, "credential_revoked");
+      assert.equal(JSON.stringify(body).includes("hello"), false);
+      revoked.clear();
+    }
+    release = undefined;
+    revoked.add("device-authorized-12345678");
+    const other = await fetch(`${app.base}/bot-conversations/chat-1/files/${app.fileId}`, {
+      headers: { ...authorizationHeaders, authorization: `Bearer ${"b".repeat(43)}` },
+    });
+    assert.equal(other.status, 200);
+    assert.equal((await other.json()).content, "hello");
+  } finally {
+    await app.close();
   }
 });
 
