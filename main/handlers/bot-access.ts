@@ -24,6 +24,7 @@ export interface BotAccessHandlerDependencies<Event> {
     | "createBot"
     | "capabilityCatalog"
     | "getBotAccess"
+    | "botWebSearchEnabled"
     | "modelSelection"
     | "visionModelSelection"
     | "updateBotAccess"
@@ -111,12 +112,13 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
   );
   deps.handle("bots:getBotAccess", async (_event, id: unknown) => {
     const botId = parseBotId(id);
-    const [access, modelSelection, visionModelSelection] = await Promise.all([
+    const [access, modelSelection, visionModelSelection, webSearchEnabled] = await Promise.all([
       service.getBotAccess(botId),
       service.modelSelection(desktopAudienceId, botId),
       service.visionModelSelection(desktopAudienceId, botId),
+      service.botWebSearchEnabled(botId),
     ]);
-    return { access, modelSelection, visionModelSelection };
+    return { access, modelSelection, visionModelSelection, webSearchEnabled };
   });
   deps.handle("bots:updateBotAccess", async (_event, input: unknown) => {
     const parsed = parseBotAccessUpdateInput(input);

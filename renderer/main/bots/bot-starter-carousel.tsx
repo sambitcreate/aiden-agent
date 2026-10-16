@@ -50,7 +50,7 @@ export function BotStarterCarousel({
           Meet your first Bot
         </Text>
         <Text as="p" color="secondary">
-          Start with a helper that’s ready to go, or make your own.
+          Start with a helper that’s ready to go, or make your own. Every Bot can search the web.
         </Text>
       </div>
       <ul aria-label="Starter Bots" className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-3 pt-1">

@@ -241,7 +241,21 @@ function AccessSection({
           </RadioGroup>
         </Field>
       </FieldSet>
-      {full ? null : (
+      {full ? (
+        <FieldSet title="More">
+          <Field
+            label="Web search"
+            description="Let it look things up with Aiden’s Web Search."
+          >
+            <Switch
+              checked={draft.webSearchEnabled}
+              disabled={disabled}
+              onCheckedChange={(webSearchEnabled) => onChange({ ...draft, webSearchEnabled })}
+              aria-label="Allow web search"
+            />
+          </Field>
+        </FieldSet>
+      ) : (
         <>
           <FieldSet title="Files and commands">
             <ToggleFields
