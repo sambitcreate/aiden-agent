@@ -15,7 +15,13 @@ import {
 import { toast } from "../components/ui";
 import { useAppCapabilities } from "./app-capabilities";
 
-export type CommandPaletteMode = "root" | "chats" | "models" | "providers" | "settings";
+export type CommandPaletteMode =
+  | "root"
+  | "chats"
+  | "newChatIn"
+  | "models"
+  | "providers"
+  | "settings";
 type CommandHandler = () => void | Promise<void>;
 
 interface CommandSystemValue {

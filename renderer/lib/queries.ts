@@ -111,6 +111,8 @@ export const queryKeys = {
   gitComparison: (workspaceId: string | undefined, targetRef: string | undefined) =>
     [...queryKeys.gitComparisons(workspaceId), targetRef ?? "none"] as const,
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
+  workspaceRepositoryIdentity: (workspaceId: string | undefined) =>
+    ["workspace-repository-identity", workspaceId ?? "none"] as const,
   chatPullRequests: (chatId: string | undefined) =>
     ["chat-pull-requests", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
@@ -519,6 +521,20 @@ export function useGitBranches(workspaceId: string | undefined, enabled = true) 
     queryFn: () => gitApi.branches(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
     staleTime: GIT_STALE_MS,
+  });
+}
+
+/**
+ * The repository's credential-free remote identity (`host/owner/name`), read
+ * locally from the cached Git info. It never contacts the remote.
+ */
+export function useWorkspaceRepositoryIdentity(workspaceId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.workspaceRepositoryIdentity(workspaceId),
+    queryFn: () => workspacesApi.repositoryIdentity(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    staleTime: 60_000,
+    retry: false,
   });
 }
 

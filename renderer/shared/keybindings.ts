@@ -11,6 +11,7 @@ export const COMMAND_IDS = [
   "commandPalette.toggle",
   "chat.new",
   "chat.search",
+  "chat.newIn",
   "chat.previous",
   "chat.next",
   "chat.jump.1",
@@ -29,6 +30,7 @@ export const COMMAND_IDS = [
   "design.open",
   "images.open",
   "workspace.openPreferredEditor",
+  "workspace.openFolder",
   "sidebar.toggle",
   "terminal.toggle",
   "environment.toggle",
@@ -138,6 +140,19 @@ export const COMMANDS = [
     defaultBinding: "Command+Shift+F",
     scope: "app",
     global: false,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "chat.newIn",
+    title: "New chat in…",
+    description: "Choose a workspace, then start a new chat there.",
+    category: "Chat",
+    keywords: ["conversation", "compose", "workspace", "folder", "project"],
+    defaultBinding: "Command+Shift+N",
+    scope: "app",
+    global: false,
+    nativeMenu: true,
     showInPalette: true,
     showInSettings: true,
   }),
@@ -261,6 +276,20 @@ export const COMMANDS = [
     category: "Tools",
     keywords: ["vscode", "cursor", "finder", "folder"],
     defaultBinding: "Command+O",
+    scope: "app",
+    global: false,
+    nativeMenu: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "workspace.openFolder",
+    title: "Open folder…",
+    description: "Choose a folder with the system dialog and start the new chat there.",
+    category: "Chat",
+    keywords: ["workspace", "folder", "project", "add", "directory"],
+    // Command+O stays Open workspace in preferred editor.
+    defaultBinding: "Command+Shift+O",
     scope: "app",
     global: false,
     nativeMenu: true,
@@ -872,6 +901,32 @@ export function migrateLegacyKeybindings(
 }
 
 /**
+ * Commands whose default shortcut arrived after users could already save
+ * custom shortcuts. A saved custom binding that already uses one of these
+ * defaults wins once: the new command is saved as disabled, as legacy values
+ * win over newly introduced defaults in `migrateLegacyKeybindings`.
+ */
+const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = ["chat.newIn", "workspace.openFolder"];
+
+function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {
+  for (const introduced of INTRODUCED_DEFAULT_COMMANDS) {
+    const binding = defaultBinding(introduced);
+    if (!binding || next.commands[introduced] !== undefined) continue;
+    const claimed = COMMAND_IDS.some((id) => {
+      const override = next.commands[id];
+      return (
+        id !== introduced &&
+        override !== undefined &&
+        !override.disabled &&
+        override.binding === binding &&
+        commandScopesOverlap(COMMAND_BY_ID[introduced], COMMAND_BY_ID[id])
+      );
+    });
+    if (claimed) next.commands[introduced] = { disabled: true };
+  }
+}
+
+/**
  * Repair persisted V1 values whose semantics became unsafe as more command
  * consumers moved into Electron's context-free native menu. Defaults and
  * global commands win; a conflicting custom local binding resets to its
@@ -879,6 +934,7 @@ export function migrateLegacyKeybindings(
  */
 export function repairKeybindingOverrides(value: unknown): KeybindingOverridesV1 {
   const next = normalizeKeybindingOverrides(value);
+  yieldIntroducedDefaults(next);
   const resetOrDisable = (commandId: CommandId, binding: string): void => {
     if (binding !== defaultBinding(commandId)) {
       const futureFields = futureKeybindingFields(next.commands[commandId]);

@@ -154,6 +154,14 @@ test("shared workspace removal never unregisters a managed worktree", async () =
   await assert.rejects(application.service.remove("workspace-1"), /Delete worktree/u);
 });
 
+test("scratch creation marks the workspace as scratch, and folder or named workspaces are not", async () => {
+  const application = fixture({ existing: null });
+  const scratch = await application.service.createScratch();
+  assert.equal(scratch.scratch, true);
+  assert.equal(application.saved[0]?.scratch, true, "the mark is persisted");
+  assert.equal((await application.service.create({ name: "Named" })).scratch, undefined);
+});
+
 test("shared scratch creation removes an empty directory when persistence fails", async () => {
   const application = fixture({
     existing: null,
