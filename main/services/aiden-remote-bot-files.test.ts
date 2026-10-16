@@ -104,6 +104,7 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
   const handles = new AidenOpaqueHandleStore();
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
+    botAudienceId: "desktop:local",
     chats: { get: async (chatId) => chats.get(chatId) ?? null },
     handles,
     authority: {
@@ -182,6 +183,73 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
   }
 });
 
+test("a device paired without its own Full Access notice opens Bot Files under the Mac owner's authority", async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-bot-files-"));
+  const root = path.join(temporary, "managed-home");
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(path.join(root, "brief.md"), "agenda\n", "utf8");
+  const chat: Chat = {
+    id: "chat-1",
+    botId: "bot-1",
+    workspaceId: "managed-workspace-1",
+    title: "Chief of Staff",
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  // Only the Mac owner accepted Full Access. The runtime resolver folds the
+  // store's missing-notice rejection for any other audience into
+  // access_unavailable, which Bot Files reports as a stale-access 409.
+  const acceptedAudiences = new Set(["desktop:local"]);
+  const service = new AidenRemoteBotFileService({
+    instanceId: "instance-1",
+    botAudienceId: "desktop:local",
+    chats: { get: async (chatId) => chatId === chat.id ? chat : null },
+    authority: {
+      admit: async ({ audienceId, botId, chatId }): Promise<BotRuntimeAuthorityAdmission> => {
+        if (!acceptedAudiences.has(audienceId)) {
+          throw new BotRuntimeAuthorityError("access_unavailable");
+        }
+        return {
+          authority: authorityFixture({
+            root,
+            botId,
+            chatId,
+            workspaceId: "managed-workspace-1",
+            epoch: "1",
+            botHome: true,
+          }),
+          signal: new AbortController().signal,
+          revalidateBeforeEffect: async () => undefined,
+          release: () => undefined,
+        };
+      },
+    },
+  });
+
+  try {
+    const index = await service.list("device-new-iphone", "chat-1");
+    assert.deepEqual(index.entries.map(({ displayPath }) => displayPath), ["brief.md"]);
+    const file = index.entries[0]!;
+    const document = await service.read("device-new-iphone", "chat-1", file.id);
+    assert.equal(document.content, "agenda\n");
+    const saved = await service.write("device-new-iphone", "chat-1", file.id, {
+      content: "agenda v2\n",
+      expectedVersion: document.version,
+    });
+    assert.equal(saved.content, "agenda v2\n");
+    assert.equal(await fs.readFile(path.join(root, "brief.md"), "utf8"), "agenda v2\n");
+    // Admitting as the Mac owner must not let another paired device use this one's handle.
+    await assert.rejects(
+      () => service.read("device-other", "chat-1", file.id),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
+    );
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home access", async () => {
   let admissions = 0;
   const chats = new Map<string, Chat>([
@@ -196,6 +264,7 @@ test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home 
   ]);
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
+    botAudienceId: "desktop:local",
     chats: { get: async (chatId) => chats.get(chatId) ?? null },
     authority: {
       admit: async () => {
@@ -380,7 +449,7 @@ async function budgetBotFixture(t: test.TestContext) {
   const handles = new AidenOpaqueHandleStore();
   let releases = 0;
   const service = new AidenRemoteBotFileService({
-    instanceId: "instance", handles,
+    instanceId: "instance", botAudienceId: "desktop:local", handles,
     chats: { get: async id => ({ id, botId: "bot", workspaceId: "home", title: "Bot", messages: [], createdAt: 1, updatedAt: 1 }) },
     authority: { admit: async ({ botId, chatId }) => ({
       authority: authorityFixture({ root, botId, chatId, workspaceId: "home", epoch: "1", botHome: true }),
