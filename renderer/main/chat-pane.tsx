@@ -5,11 +5,42 @@ import {
   finishChatDraftSend,
   getChatDraft,
   retainChatDraft,
+  chatDraftWorktreeRequest,
+  setChatDraftGitMode,
+  setChatDraftHasContent,
+  subscribeChatDraftComposerFocus,
   subscribeChatDrafts,
   updateChatDraft,
+  updateChatDraftWorktree,
 } from "../lib/chat-draft";
-import { QueuedMessages } from "../components/queued-messages";
+import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
 import {
+  draftWorkInOptions,
+  draftWorktreeHint,
+  draftWorktreeSendBlocker,
+  worktreeBaseNote,
+} from "../lib/draft-git-menu";
+import {
+  activeWorktreeSend,
+  continueWorktreeSendInView,
+  isWorktreeSendCancelled,
+  registerWorktreeSendContinuation,
+  startWorktreeFirstSend,
+  subscribeActiveWorktreeSends,
+  type WorktreeFirstSend,
+} from "../lib/draft-worktree-send";
+import { isValidBranchName, type FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
+import { DraftWorktreeSendView } from "../components/draft-worktree-send-view";
+import type { GitBranchPickerDraft } from "../components/git-branch-picker";
+import { QueuedMessages } from "../components/queued-messages";
+import { NewChatHeadline } from "../components/new-chat-headline";
+import type { WorkspaceMenuRequest } from "../components/workspace-picker";
+import { registerDraftWorkspaceMenu, type DraftWorkspaceMenuView } from "../lib/draft-workspace-menu";
+import { adoptWorkspace } from "../lib/use-workspace-path-intake";
+import { workspaceChangeBusyReason } from "../lib/workspace-menu";
+import {
+  discardComposerDraft,
+  restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
   stageComposerText,
@@ -129,6 +160,7 @@ import {
   type Attachment,
   type Chat,
   type ChatMeta,
+  type GitBranches,
   type Workspace,
   type WorkspacePermission,
 } from "../lib/types";
@@ -260,6 +292,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  const effectiveWorkspaceIdRef = React.useRef(effectiveWorkspaceId);
+  effectiveWorkspaceIdRef.current = effectiveWorkspaceId;
   // Agent-backed models need someone answering approvals in an ordinary chat.
   const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
     chat.data?.botId ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
@@ -360,8 +394,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
       documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId),
     drainingWithoutProjection: detachedGenerationDraining && !visibleDetachedProjection,
   });
-  const ready = modelReady && !chatReadinessMessage;
-  const readinessMessage = chatReadinessMessage ?? modelReadinessMessage;
+  // Until Git status is known a New worktree draft can't tell whether it can
+  // make one; it waits rather than quietly sending in this checkout. (A draft
+  // in an existing worktree always runs there as it is.)
+  const draftGitPending = draft
+    ? draftWorktreeSendBlocker({
+        gitMode: draft.gitMode,
+        sending: draft.sending,
+        baseRef: draft.worktree?.baseRef,
+        inManagedWorktree: Boolean(effectiveWorkspace?.managedWorktree),
+        gitLoading: git.isLoading,
+        isRepo: git.data?.isRepo === true,
+        unborn: git.data?.unborn === true,
+        accessOff: effectiveWorkspace?.permission === "none",
+      })
+    : undefined;
+  const ready = modelReady && !chatReadinessMessage && !draftGitPending;
+  const readinessMessage = chatReadinessMessage ?? draftGitPending ?? modelReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -425,8 +474,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
+      // New-chat entry points reuse only a draft whose composer is empty.
+      setChatDraftHasContent(chatId, Boolean(draftText || attachments));
     },
-    [contextFeed],
+    [chatId, contextFeed],
   );
   const googleThinkingSupported =
     providerId === GOOGLE_PROVIDER_ID &&
@@ -579,6 +630,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  // A new-chat entry point (⌘N, New Agent, the sidebar +, New chat in…) asks
+  // the draft's composer for focus; it may mount a few frames after navigation.
+  React.useEffect(() => {
+    let frame = 0;
+    const unsubscribe = subscribeChatDraftComposerFocus(chatId, () => {
+      let attempts = 0;
+      const attempt = () => {
+        const composer = composerRef.current;
+        if (composer && !composer.disabled) {
+          composer.focus({ preventScroll: true });
+          return;
+        }
+        if (++attempts < 30) frame = requestAnimationFrame(attempt);
+      };
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(attempt);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      unsubscribe();
+    };
+  }, [chatId]);
   useComposerTypeFocus(composerRef, questionnaire === null);
   const terminalShortcut = useShortcutLabel("terminal.toggle");
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
@@ -1253,7 +1326,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const handle = startGeneration(
         {
           chatId,
-          workspaceId: effectiveWorkspaceId,
+          // The chat's latest workspace: a New worktree first send moves it
+          // before this render has seen the new workspace.
+          workspaceId: effectiveWorkspaceIdRef.current,
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
@@ -1385,14 +1460,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     generationIntentRef.current !== generationIntent ||
                     chatIdRef.current !== chatId ||
                     snapshot.chatId !== chatId ||
-                    snapshot.workspaceId !== effectiveWorkspaceId
+                    // Read at event time: a New worktree draft's first turn
+                    // starts while the chat moves into its new workspace.
+                    snapshot.workspaceId !== effectiveWorkspaceIdRef.current
                   ) {
                     return;
                   }
                   setLiveSubagents((current) =>
                     mergeSubagentSnapshots(current, [snapshot], {
                       chatId,
-                      workspaceId: effectiveWorkspaceId,
+                      workspaceId: effectiveWorkspaceIdRef.current,
                     }),
                   );
                 },
@@ -1602,6 +1679,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  // A New worktree draft's first send: the message and a progress row show
+  // until the chat is saved in its new worktree, or the user answers a failure.
+  // The send is kept per draft outside this pane, so leaving and coming back
+  // (or sending another draft meanwhile) shows the same progress or failure.
+  const worktreeSend = React.useSyncExternalStore(subscribeActiveWorktreeSends, () =>
+    activeWorktreeSend(chatId),
+  );
+  /** The draft will send in New worktree mode; set where that mode is derived, below. */
+  const draftWorktreeModeRef = React.useRef(false);
+  /** Git status is still loading for a draft that remembers New worktree. */
+  const draftGitPendingRef = React.useRef(false);
+  /** Counts visits to a chat: the composer that started a send is gone once this changes. */
+  const chatVisitRef = React.useRef(0);
+  React.useLayoutEffect(() => {
+    chatVisitRef.current += 1;
+  }, [chatId]);
+
   const handleSend = React.useCallback(
     async (
       text: string,
@@ -1658,6 +1752,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
+      if (getChatDraft(chatId) && draftGitPendingRef.current) {
+        throw new Error("Reading Git status… Send again in a moment.");
+      }
+      let worktreeRequest: FirstMessageWorktreeRequest | undefined;
+      try {
+        worktreeRequest =
+          getChatDraft(chatId) && draftWorktreeModeRef.current
+            ? chatDraftWorktreeRequest(getChatDraft(chatId)!)
+            : undefined;
+      } catch {
+        // The base branch isn't resolved yet; the composer keeps the text.
+        throw new Error("Reading Git status… Send again in a moment.");
+      }
+      let worktreeSend: WorktreeFirstSend<Chat> | undefined;
+      /** The user answered a failed worktree send, possibly from a later view of this draft. */
+      let continuedByUser = false;
       const firstDraft = getChatDraft(chatId) ? beginChatDraftSend(chatId) : undefined;
       const generationIntent = ++generationIntentRef.current;
       const messageTurnId = createChatTurnId();
@@ -1666,8 +1776,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         let updated: Chat;
         try {
-          updated = firstDraft
-            ? await chatsApi.createWithFirstMessage({
+          const firstMessageInput = firstDraft
+            ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
                 workspaceId: firstDraft.chat.workspaceId!,
@@ -1675,27 +1785,74 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 model,
                 turnId: messageTurnId,
                 message: {
-                  role: "user",
+                  role: "user" as const,
                   content: text,
                   attachments: attachments.length ? attachments : undefined,
                 },
                 skillInvocation,
-              })
-            : await chatsApi.appendMessage(
-                chatId,
-                {
-                  role: "user",
-                  content: text,
-                  attachments: attachments.length ? attachments : undefined,
-                },
-                {
-                  providerId,
-                  model,
-                  autoTitle: true,
-                  turnId: messageTurnId,
-                  skillInvocation,
-                },
-              );
+              }
+            : undefined;
+          if (firstMessageInput && worktreeRequest) {
+            const visit = chatVisitRef.current;
+            worktreeSend = startWorktreeFirstSend({
+              api: {
+                createInWorktree: chatsApi.createWithFirstMessageInWorktree,
+                createInCheckout: chatsApi.createWithFirstMessage,
+                onProgress: chatsApi.onFirstMessageWorktreeProgress,
+              },
+              input: firstMessageInput,
+              worktree: worktreeRequest,
+              message: { text, attachments },
+            });
+            // The progress view holds the message now; a composer that opens
+            // on this draft meanwhile starts empty instead of repeating it.
+            discardComposerDraft(chatId);
+            try {
+              const outcome = await worktreeSend.result;
+              if (outcome.worktree) {
+                // List the new worktree workspace before the chat moves into it.
+                await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+                const note = worktreeBaseNote(outcome.worktree);
+                if (note) toast.info(note);
+              }
+              if (outcome.keptWorktreeBranch) {
+                void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+                toast.info(
+                  `Worktree ${outcome.keptWorktreeBranch} was kept. Delete it from the sidebar if you don’t need it.`,
+                );
+              }
+              updated = outcome.chat;
+              continuedByUser = outcome.answered;
+            } catch (error) {
+              // The composer that sent this restores its own text; any other
+              // (the user left and came back) gets the text and attachments back.
+              if (
+                isWorktreeSendCancelled(error) &&
+                !(mountedRef.current && chatVisitRef.current === visit)
+              ) {
+                restoreUnsentMessage(chatId, text, attachments);
+              }
+              throw error;
+            }
+          } else {
+            updated = firstMessageInput
+              ? await chatsApi.createWithFirstMessage(firstMessageInput)
+              : await chatsApi.appendMessage(
+                  chatId,
+                  {
+                    role: "user",
+                    content: text,
+                    attachments: attachments.length ? attachments : undefined,
+                  },
+                  {
+                    providerId,
+                    model,
+                    autoTitle: true,
+                    turnId: messageTurnId,
+                    skillInvocation,
+                  },
+                );
+          }
         } catch (appendError) {
           if (isAppendReconciliationRequired(appendError)) {
             setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
@@ -1710,6 +1867,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
           generationIntentRef.current !== generationIntent ||
           (firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))
         ) {
+          // The user came back to this draft and chose to continue its
+          // worktree send there: the view showing the chat starts the reply.
+          if (
+            continuedByUser &&
+            continueWorktreeSendInView(chatId, {
+              turnId: messageTurnId,
+              workspaceId: updated.workspaceId,
+              visualize: options?.visualize === true,
+            })
+          ) {
+            return;
+          }
           try {
             await chatsApi.abandonTurn(chatId, messageTurnId);
           } catch (error) {
@@ -1726,6 +1895,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // whatever the user steers or queues in that window. A start rejection
         // is surfaced as an error and cannot turn the committed message back
         // into an unsent composer payload.
+        // A New worktree send saved the chat in the worktree's workspace,
+        // which this render has not seen yet.
+        if (worktreeRequest) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -1733,6 +1905,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         });
       } finally {
         if (firstDraft) finishChatDraftSend(chatId, false);
+        // The saved chat (or the restored composer text) replaces the progress row.
+        worktreeSend?.release();
         if (
           mountedRef.current &&
           chatIdRef.current === chatId &&
@@ -1752,6 +1926,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       qc,
       runGeneration,
     ],
+  );
+
+  // This view starts the reply for a worktree send the user continued here
+  // after leaving the pane that sent it (that pane's send no longer owns it).
+  React.useEffect(
+    () =>
+      registerWorktreeSendContinuation(chatId, (turn) => {
+        ++generationIntentRef.current;
+        if (turn.workspaceId) effectiveWorkspaceIdRef.current = turn.workspaceId;
+        // Per-turn options the sending view kept locally (runGeneration reads
+        // the rest from the saved chat and app settings).
+        visualizeTurnRef.current = turn.visualize;
+        void runGeneration(turn.turnId).then((started) => {
+          if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
+            setError(started.error.message);
+          }
+        });
+      }),
+    [chatId, runGeneration],
   );
 
   /** Anything that makes an immediate send unsafe; refreshed below once the queue is known. */
@@ -2334,12 +2527,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
   );
 
+  // One busy signal for every way of changing a draft's workspace (chip,
+  // headline, palette Clone, ⌘⇧O): never retarget a draft mid-send.
+  const workspaceChangeBusy = workspaceChangeBusyReason({
+    sending: draft?.sending === true,
+    generating: isGenerating || isStartingGeneration,
+    gitBusy: environmentPanel.gitOperationBusy,
+  });
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before changing this chat's workspace.");
       }
       if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
+      if (workspaceChangeBusy) throw new Error(workspaceChangeBusy);
       if (environmentPanel.gitOperationBusy) {
         throw new Error(
           "Wait for the current Git operation to finish before switching workspaces.",
@@ -2372,6 +2573,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       isNewChat,
       qc,
       selectWorkspace,
+      workspaceChangeBusy,
     ],
   );
 
@@ -2380,6 +2582,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       throw new Error("Reload Aiden before creating a scratch workspace from this chat.");
     }
     if (!isNewChat) throw new Error("Start a new chat before choosing a scratch folder.");
+    if (workspaceChangeBusy) throw new Error(workspaceChangeBusy);
     if (environmentPanel.editorState.dirty)
       throw new Error("Save or discard the open file's edits before creating a scratch workspace.");
     if (environmentPanel.editorState.saving)
@@ -2401,7 +2604,49 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isNewChat,
     moveNewChatToWorkspace,
     qc,
+    workspaceChangeBusy,
   ]);
+
+  // The workspace menu's Open folder… and ⌘⇧O on a draft: the native folder
+  // picker registers the folder, then this draft (text, attachments and model
+  // included) moves there.
+  const openFolderForDraft = React.useCallback(async () => {
+    if (documentAppendReconciliationRequired) {
+      throw new Error("Reload Aiden before changing this chat's workspace.");
+    }
+    if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
+    if (workspaceChangeBusy) throw new Error(workspaceChangeBusy);
+    const workspace = await workspacesApi.createFromFolder();
+    if (!workspace) return;
+    await adoptWorkspace(qc, workspace);
+    await moveNewChatToWorkspace(workspace.id);
+  }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc, workspaceChangeBusy]);
+
+  // The headline name and app-level entry points open the composer's menu.
+  const [workspaceMenuRequest, setWorkspaceMenuRequest] = React.useState<WorkspaceMenuRequest>();
+  const openWorkspaceMenu = React.useCallback((view: DraftWorkspaceMenuView) => {
+    setWorkspaceMenuRequest((current) => ({ nonce: (current?.nonce ?? 0) + 1, view }));
+  }, []);
+  const workspaceMenuAvailable = isNewChat && !documentAppendReconciliationRequired;
+  React.useEffect(() => {
+    if (!workspaceMenuAvailable) return;
+    let frame = 0;
+    const unregister = registerDraftWorkspaceMenu(chatId, {
+      openFolder: openFolderForDraft,
+      // Let a pending composer focus request settle first, so it cannot pull
+      // focus out of (and dismiss) the menu that is opening.
+      openMenu: (view) => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          frame = requestAnimationFrame(() => openWorkspaceMenu(view));
+        });
+      },
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      unregister();
+    };
+  }, [chatId, openFolderForDraft, openWorkspaceMenu, workspaceMenuAvailable]);
 
   const createGitWorktree = React.useCallback(
     async (branchName: string) => {
@@ -2467,10 +2712,116 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  // A draft chooses New worktree in the branch menu; the worktree is created
+  // on first send, never from the Environment overview.
   React.useEffect(() => {
-    environmentPanel.setCreateWorktreeHandler(createGitWorktree);
+    environmentPanel.setCreateWorktreeHandler(isNewChat ? null : createGitWorktree);
     return () => environmentPanel.setCreateWorktreeHandler(null);
-  }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
+  }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler, isNewChat]);
+
+  // Work in, for a draft in a Git repo: this checkout, a new worktree created
+  // on first send, or one of the repository's managed worktrees.
+  const draftWorkIn = React.useMemo(
+    () => (draft ? draftWorkInOptions(workspaces, effectiveWorkspaceId) : undefined),
+    [draft, effectiveWorkspaceId, workspaces],
+  );
+  const draftCanUseWorktree =
+    Boolean(draft) && git.data?.isRepo === true && effectiveWorkspace?.permission !== "none";
+  // A draft that runs in an existing worktree uses it as it is, and a
+  // repository with no commit has nothing to start a worktree from.
+  const draftGitMode =
+    draft && draftCanUseWorktree && !git.data?.unborn && !draftWorkIn?.selectedWorktreeId
+      ? draft.gitMode
+      : ("checkout" as const);
+  const draftWorktreeBase = draftGitMode === "worktree" ? draft?.worktree?.baseRef : undefined;
+  draftWorktreeModeRef.current = draftGitMode === "worktree";
+  draftGitPendingRef.current = Boolean(draftGitPending);
+
+  /** Move the draft back to the repository checkout when it sits in a worktree. */
+  const moveDraftToRepositoryCheckout = React.useCallback(async () => {
+    const source = draftWorkIn?.source;
+    if (source && source.id !== effectiveWorkspaceId) await moveNewChatToWorkspace(source.id);
+  }, [draftWorkIn?.source, effectiveWorkspaceId, moveNewChatToWorkspace]);
+
+  const selectDraftCheckout = React.useCallback(async () => {
+    await moveDraftToRepositoryCheckout();
+    setChatDraftGitMode(chatId, "checkout");
+  }, [chatId, moveDraftToRepositoryCheckout]);
+
+  const selectDraftNewWorktree = React.useCallback(
+    async (branchName?: string) => {
+      const name = branchName?.trim();
+      if (name && !isValidBranchName(name)) throw new Error("Enter a valid Git branch name.");
+      // `/worktree` reaches here without the menu's disabled row.
+      if (git.data?.unborn) throw new Error("Create the first commit before starting a new worktree.");
+      if (draftWorkIn?.selectedWorktreeId && !draftWorkIn.source) {
+        throw new Error(
+          "This worktree's repository isn't an Aiden workspace, so a new worktree can't start from it.",
+        );
+      }
+      await moveDraftToRepositoryCheckout();
+      setChatDraftGitMode(chatId, "worktree");
+      if (!name) return;
+      const current = getChatDraft(chatId);
+      const workspaceId = current?.chat.workspaceId;
+      if (!current || !workspaceId) return;
+      let baseRef = current.worktree?.baseRef;
+      if (!baseRef) {
+        // `/worktree <name>` before the menu has read the branches: resolve
+        // the base the menu would pick (a local Git read, no network).
+        const branches = await qc.fetchQuery<GitBranches>({
+          queryKey: queryKeys.gitBranches(workspaceId),
+          queryFn: () => gitApi.branches(workspaceId),
+          staleTime: 5_000,
+        });
+        const defaults = resolveDraftWorktreeDefaults(readChatDraftGitMemory(workspaceId), branches);
+        if (!defaults) throw new Error("Create the first commit before starting a new worktree.");
+        baseRef = defaults.baseRef;
+        updateChatDraftWorktree(chatId, defaults);
+      }
+      updateChatDraftWorktree(chatId, { baseRef, branchName: name });
+    },
+    [chatId, draftWorkIn, git.data?.unborn, moveDraftToRepositoryCheckout, qc],
+  );
+
+  const selectDraftWorktree = React.useCallback(
+    async (workspaceId: string) => {
+      await moveNewChatToWorkspace(workspaceId);
+      // An existing worktree is used as it is, never as a base for another.
+      if (getChatDraft(chatId)?.gitMode === "worktree") setChatDraftGitMode(chatId, "checkout");
+    },
+    [chatId, moveNewChatToWorkspace],
+  );
+
+  const updateDraftWorktree = React.useCallback<GitBranchPickerDraft["onUpdateWorktree"]>(
+    (update) => updateChatDraftWorktree(chatId, update),
+    [chatId],
+  );
+
+  const draftGit = React.useMemo<GitBranchPickerDraft | undefined>(
+    () =>
+      draft && draftWorkIn && draftCanUseWorktree
+        ? {
+            gitMode: draftGitMode,
+            ...(draft.worktree ? { worktree: draft.worktree } : {}),
+            workIn: draftWorkIn,
+            onSelectCheckout: selectDraftCheckout,
+            onSelectNewWorktree: () => selectDraftNewWorktree(),
+            onSelectWorktree: selectDraftWorktree,
+            onUpdateWorktree: updateDraftWorktree,
+          }
+        : undefined,
+    [
+      draft,
+      draftCanUseWorktree,
+      draftGitMode,
+      draftWorkIn,
+      selectDraftCheckout,
+      selectDraftNewWorktree,
+      selectDraftWorktree,
+      updateDraftWorktree,
+    ],
+  );
 
   const pending = approvals[0];
   const showComputerUseContinue =
@@ -2640,6 +2991,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
       onRename={renameChat}
       onDuplicate={() => copyChat()}
       duplicateDisabledReason={forkDisabledReason}
+    />
+  );
+
+  const newChatHeadline = (
+    <NewChatHeadline
+      workspace={effectiveWorkspace}
+      workspaces={workspaces}
+      onChooseWorkspace={
+        workspaceMenuAvailable && !settingsBlockedReason && !workspaceChangeBusy
+          ? () => openWorkspaceMenu("list")
+          : undefined
+      }
     />
   );
 
@@ -2836,6 +3199,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onSend={handleSend}
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
+                firstSendStatus={
+                  worktreeSend?.view.status === "failed"
+                    ? "Choose how to continue above."
+                    : undefined
+                }
                 onQueue={draft ? undefined : queueMessage}
                 onSteer={draft || observedRunVisible ? undefined : steerMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
@@ -2869,6 +3237,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 gitBranch={git.data?.isRepo ? git.data.branch : undefined}
                 gitDetached={git.data?.detached}
                 gitUnborn={git.data?.unborn}
+                gitStatus={git.data?.isRepo ? git.data : undefined}
                 onOpenFolder={openFolder}
                 onChangePermission={changePermission}
                 workspacePickerEnabled={isNewChat}
@@ -2888,7 +3257,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaces={workspaces}
                 onSelectWorkspace={moveNewChatToWorkspace}
                 onCreateScratchWorkspace={createScratchWorkspace}
+                onOpenFolderAsWorkspace={openFolderForDraft}
+                workspaceMenuRequest={workspaceMenuRequest}
                 onCreateGitWorktree={createGitWorktree}
+                draftGit={draftGit}
+                onDraftNewWorktree={draftGit ? selectDraftNewWorktree : undefined}
                 onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
                 gitOperationBusy={environmentPanel.gitOperationBusy}
                 workspaceChangeBlockedReason={
@@ -3082,15 +3455,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
               }
             />
           </div>
+        ) : messages.length === 0 && displayedStreamingText === null && worktreeSend ? (
+          <DraftWorktreeSendView
+            text={worktreeSend.text}
+            attachments={worktreeSend.attachments}
+            view={worktreeSend.view}
+            onDecide={worktreeSend.decide}
+          />
         ) : messages.length === 0 && displayedStreamingText === null ? (
           <div className="flex min-h-full items-center justify-center">
             {(providers.data ?? []).some(
               (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
             ) ? (
-              <EmptyState title="What would you like to work on?" />
+              <EmptyState
+                title={newChatHeadline}
+                description={
+                  draftGitMode === "worktree" ? (
+                    <span data-draft-worktree-hint>{draftWorktreeHint(draftWorktreeBase)}</span>
+                  ) : undefined
+                }
+              />
             ) : (
               <EmptyState
-                title="What would you like to work on?"
+                title={newChatHeadline}
                 description={`${CONNECT_PROVIDER_ACTION} in ${PROVIDER_SETTINGS_LABEL} to start.`}
                 action={
                   <Button

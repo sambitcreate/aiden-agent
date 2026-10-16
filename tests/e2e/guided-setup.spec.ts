@@ -41,7 +41,8 @@ test("skipping provider setup explains the blocked Next and leaves a route to Pr
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 
-  await expect(page.getByText("What would you like to work on?")).toBeVisible();
+  // The new-chat headline names the default workspace it will run in.
+  await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in Workspace?");
   const connect = page.getByRole("button", { name: "Connect a provider", exact: true });
   await expect(connect.first()).toBeVisible();
   await connect.first().click();

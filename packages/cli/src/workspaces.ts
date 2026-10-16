@@ -7,7 +7,7 @@ import { remoteDaemonCommand } from "./daemon-control.ts";
 import { acquireLease } from "./state.ts";
 
 export type AccessTier = "full" | "ask" | "none";
-export interface CliWorkspace { id: string; name: string; folderPath: string; access: AccessTier; scratch?: boolean; createdAt?: number; updatedAt?: number; memoryEnabled?: boolean; managedWorktree?: import("../../../main/services/types.js").ManagedWorktree; }
+export interface CliWorkspace { id: string; name: string; folderPath: string; access: AccessTier; scratch?: true; createdAt?: number; updatedAt?: number; memoryEnabled?: boolean; managedWorktree?: import("../../../main/services/types.js").ManagedWorktree; }
 export const workspaceId = (folder: string) => `cli-${createHash("sha256").update(folder).digest("hex").slice(0, 24)}`;
 export const workspaceStore = (agentDir: string) => new JsonStore<CliWorkspace[]>(join(agentDir, "workspaces.json"), []);
 export function accessFor(agentDir: string, cwd: string): AccessTier {

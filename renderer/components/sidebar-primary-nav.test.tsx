@@ -21,7 +21,8 @@ function render(overrides: Partial<SidebarPrimaryNavProps> = {}) {
   const document = new DOMParser().parseFromString(`<root>${markup}</root>`, "text/xml");
   const nav = Array.from(document.getElementsByTagName("nav"));
   const rows = Array.from(document.getElementsByTagName("button")).map((button) => ({
-    title: button.textContent,
+    title: button.textContent || button.getAttribute("aria-label"),
+    shortcut: button.getAttribute("aria-keyshortcuts"),
     current: button.getAttribute("aria-current"),
     disabled: button.hasAttribute("disabled"),
   }));
@@ -79,5 +80,24 @@ test("New Agent reflects its disabled state and nothing else is disabled", () =>
   assert.deepEqual(
     rows.filter(({ disabled }) => disabled).map(({ title }) => title),
     ["New Agent"],
+  );
+});
+
+test("New chat in… sits beside New Agent only when offered, and follows its disabled state", () => {
+  assert.equal(
+    render().rows.some(({ title }) => title === "New chat in…"),
+    false,
+  );
+  const offered = render({ onNewChatIn: noop, newChatInKeyShortcut: "Meta+Shift+N" }).rows;
+  assert.deepEqual(
+    offered.slice(0, 3).map(({ title }) => title),
+    ["New Agent", "New chat in…", "Scheduled"],
+  );
+  assert.equal(offered[1]?.shortcut, "Meta+Shift+N");
+  assert.deepEqual(
+    render({ onNewChatIn: noop, newAgentDisabled: true })
+      .rows.filter(({ disabled }) => disabled)
+      .map(({ title }) => title),
+    ["New Agent", "New chat in…"],
   );
 });
