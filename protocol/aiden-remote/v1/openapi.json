@@ -1875,6 +1875,90 @@
         }
       }
     },
+    "/bots/{botId}/attachments": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "uploadBotAttachment",
+        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "chat:write"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Short-lived, single-use attachment reference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentReference"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/attachments/{attachmentId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "delete": {
+        "operationId": "removeBotAttachment",
+        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Drops a staged upload the person removed before sending; an unknown reference is already gone.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "chat:write"
+        ],
+        "parameters": [
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^att_[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Temporary attachment removed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bots/{botId}/resume": {
       "parameters": [
         {
@@ -15087,7 +15171,6 @@
         "properties": {
           "text": {
             "type": "string",
-            "minLength": 1,
             "maxLength": 32000
           },
           "whenBusy": {
@@ -15096,9 +15179,34 @@
               "steer",
               "queue"
             ]
+          },
+          "attachmentIds": {
+            "description": "Contract revision 33, only on hosts announcing bot-attachments-v1: references from POST /bots/{botId}/attachments, spent by this message. With them the text may be empty.",
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^att_[A-Za-z0-9_-]{43}$"
+            }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "properties": {
+              "text": {
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "required": [
+              "attachmentIds"
+            ]
+          }
+        ]
       },
       "BotMessageReceipt": {
         "allOf": [
