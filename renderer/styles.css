@@ -780,6 +780,25 @@ textarea {
   outline-offset: var(--keyboard-focus-offset, 2px) !important;
 }
 
+/* Rings are for keyboard navigation only. After a click, Chromium still matches
+   :focus-visible on script focus (a menu row under the pointer, a dialog's first
+   control), so hide every ring until the next navigation key (input-modality.ts). */
+:root[data-input-modality="pointer"] :focus-visible {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+
+:root[data-input-modality="pointer"] .model-pad:focus-visible {
+  box-shadow:
+    inset 0 0 0 0.5px var(--border-separator),
+    inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+:root[data-input-modality="pointer"] .model-pad-marker:focus-visible {
+  box-shadow: none;
+}
+
 .drag-region {
   -webkit-app-region: drag;
 }
