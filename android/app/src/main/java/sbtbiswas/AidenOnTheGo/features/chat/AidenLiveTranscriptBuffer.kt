@@ -46,11 +46,20 @@ class AidenLiveTranscriptBuffer(
 
     /** Publishes pending deltas now. */
     fun flush() {
+        publishPending(force = false)
+    }
+
+    /** Replays the complete prefix when an offscreen stream becomes visible. */
+    fun publishCurrent() {
+        publishPending(force = true)
+    }
+
+    private fun publishPending(force: Boolean) {
         frame?.cancel()
         frame = null
         val nextText = if (text.length == publishedText.length) publishedText else text.toString()
         val nextReasoning = if (reasoning.length == publishedReasoning.length) publishedReasoning else reasoning.toString()
-        if (nextText === publishedText && nextReasoning === publishedReasoning) return
+        if (!force && nextText === publishedText && nextReasoning === publishedReasoning) return
         publishedText = nextText
         publishedReasoning = nextReasoning
         publish(nextText, nextReasoning)

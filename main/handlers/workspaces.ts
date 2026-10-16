@@ -33,6 +33,8 @@ import {
 } from "../services/workspace-files.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { parseWorktreeCreateParams } from "./worktree-create-params.js";
+import { registerWorkspaceIntakeHandlers } from "./workspace-intake.js";
+import { workspaceIntakeService } from "../services/workspace-intake-main.js";
 import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
 import type { WorkspaceEnvironmentDirectory } from "../services/workspace-environment-application-service.js";
 import { workspaceWorktreeApplicationService } from "../services/workspace-worktree-application-service-main.js";
@@ -171,6 +173,25 @@ export function registerWorkspaceHandlers(): void {
       : await dialog.showOpenDialog(options);
     if (result.canceled || !result.filePaths[0]) return null;
     return workspaceApplicationService.createFromFolder(result.filePaths[0]);
+  });
+
+  // Workspace menu: typed paths and repository clones.
+  registerWorkspaceIntakeHandlers<IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Workspace access requires the active renderer document."),
+      );
+      return {
+        key: `${owner.id}:${owner.documentId}`,
+        isDestroyed: owner.isDestroyed,
+        onInvalidated: owner.onInvalidated,
+        send: owner.send,
+      };
+    },
+    service: () => workspaceIntakeService,
+    notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
   });
 
   ipcMain.handle("workspaces:createScratch", async () =>

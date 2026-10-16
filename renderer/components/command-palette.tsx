@@ -8,6 +8,10 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  CircleAlert,
+  Folder,
+  FolderDown,
+  FolderPlus,
   Keyboard,
   MessageSquare,
   Moon,
@@ -33,8 +37,20 @@ import {
   useCommandSystem,
   type CommandPaletteMode,
 } from "../lib/command-system";
-import { useChats, useProviders, useSettings, queryKeys } from "../lib/queries";
+import {
+  useAllRegularChats,
+  useChats,
+  useProviders,
+  useSettings,
+  queryKeys,
+} from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import { useNewChatActions } from "../lib/new-chat-actions";
+import { newChatWorkspaceChoices } from "../lib/new-chat-workspaces";
+import { useOpenWorkspacePathRow, useWorkspacePathIntake } from "../lib/use-workspace-path-intake";
+import type { WorkspacePathRow } from "../lib/workspace-menu";
+import { formatWorkspacePath, workspaceDisplayName } from "../lib/workspace-path-display";
+import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { providersApi, settingsApi } from "../lib/ipc";
 import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
 import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
@@ -69,6 +85,7 @@ import {
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
   chats: "Chats",
+  newChatIn: "New chat in",
   models: "Models",
   providers: "Providers",
   settings: "Settings",
@@ -122,8 +139,13 @@ export function AppCommandPalette({
   const capabilities = useAppCapabilities();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { activeId } = useActiveWorkspace();
+  const { activeId, workspaces } = useActiveWorkspace();
+  const { binding, canExecute, execute, palette } = useCommandSystem();
   const chats = useChats(activeId);
+  const newChat = useNewChatActions();
+  const pathPreferences = useWorkspacePathPreferences();
+  const choosingWorkspace = palette.open && palette.mode === "newChatIn";
+  const allChats = useAllRegularChats(choosingWorkspace && workspaces.length > 0);
   const providers = useProviders();
   const settings = useSettings();
   const selection = useModelSelection(
@@ -131,7 +153,6 @@ export function AppCommandPalette({
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
-  const { binding, canExecute, execute, palette } = useCommandSystem();
   const [query, setQuery] = React.useState("");
   const [activeResult, setActiveResult] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -217,6 +238,32 @@ export function AppCommandPalette({
   const newChatResult = staticPaletteResult("New chat conversation", {
     disabled: !canExecute("chat.new"),
   });
+  const workspaceResults = React.useMemo(
+    () =>
+      newChatWorkspaceChoices(workspaces, allChats.data ?? [], activeId).map((choice) => ({
+        ...choice,
+        name: workspaceDisplayName(choice.workspace, workspaces),
+        result: paletteResult(`new-chat-in:${choice.workspace.id}`, [
+          choice.workspace.name,
+          choice.workspace.folderPath ?? "",
+        ]),
+      })),
+    [activeId, allChats.data, workspaces],
+  );
+  const openFolderResult = staticPaletteResult("Open folder… add workspace directory");
+  const cloneResult = staticPaletteResult("Clone repository… git url github");
+  // A typed path (`/`, `~`, `.`) is answered by one row: select, open or create.
+  const pathIntake = useWorkspacePathIntake(query, {
+    enabled: choosingWorkspace,
+    relativeToWorkspaceId: activeId,
+    workspaces,
+  });
+  const openPathRow = useOpenWorkspacePathRow(activeId);
+  const pathRow = pathIntake.row;
+  const pathRowResult =
+    pathRow && pathRow.action !== "invalid"
+      ? paletteResult(`path:${pathRow.action}:${pathRow.input}`, [query])
+      : null;
   const chatRetryResult = staticPaletteResult("Retry loading chats", { forceMount: true });
   const modelRetryResult = staticPaletteResult("Retry loading models", { forceMount: true });
   const providerRetryResult = staticPaletteResult("Retry loading providers", { forceMount: true });
@@ -244,6 +291,9 @@ export function AppCommandPalette({
       ...(chats.isError ? [chatRetryResult] : []),
       ...chatResults.map(({ result }) => result),
     ],
+    newChatIn: pathIntake.pathQuery
+      ? pathRowResult ? [pathRowResult] : []
+      : [...workspaceResults.map(({ result }) => result), openFolderResult, cloneResult],
     models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
       : [...modelResults, ...unavailableResults].map(({ result }) => result),
     providers: [
@@ -299,6 +349,7 @@ export function AppCommandPalette({
     (commandId: CommandId) => {
       rememberCommand(commandId);
       if (commandId === "chat.search") return enterMode("chats");
+      if (commandId === "chat.newIn") return enterMode("newChatIn");
       if (commandId === "model.change") return enterMode("models");
       if (commandId === "provider.manage") return enterMode("providers");
       if (commandId === "settings.search") return enterMode("settings");
@@ -313,6 +364,53 @@ export function AppCommandPalette({
     rememberCommand("chat.search");
     close();
     await navigate({ to: "/chat/$chatId", params: { chatId } });
+  };
+
+  // ⌥↵ on a New chat in… row opens the draft with New worktree selected.
+  const newWorktreeKeyRef = React.useRef(false);
+  const startChatIn = (workspaceId: string) => {
+    const newWorktree = newWorktreeKeyRef.current;
+    newWorktreeKeyRef.current = false;
+    if (!allowNavigation()) return;
+    rememberCommand("chat.newIn");
+    close();
+    void newChat.openNewChatIn(workspaceId, newWorktree ? { newWorktree } : undefined).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Aiden could not start a chat there.");
+    });
+  };
+
+  const openFolderForChat = () => {
+    if (!allowNavigation()) return;
+    rememberCommand("chat.newIn");
+    close();
+    void newChat.openFolderForNewChat().catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Aiden could not open that folder.");
+    });
+  };
+
+  const cloneForChat = () => {
+    if (!allowNavigation()) return;
+    rememberCommand("chat.newIn");
+    close();
+    void newChat.cloneRepositoryForNewChat().catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Aiden could not start a chat there.");
+    });
+  };
+
+  const choosePathRow = (row: WorkspacePathRow) => {
+    if (row.action === "invalid") return;
+    if (row.action === "select") {
+      startChatIn(row.workspaceId);
+      return;
+    }
+    if (!allowNavigation()) return;
+    rememberCommand("chat.newIn");
+    close();
+    void openPathRow(row)
+      .then((workspace) => newChat.openNewChatIn(workspace.id))
+      .catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "Aiden could not open that folder.");
+      });
   };
 
   const selectModel = async (providerId: string, model: string) => {
@@ -526,11 +624,20 @@ export function AppCommandPalette({
               placeholder={
                 palette.mode === "root"
                   ? "Search commands, chats, models, providers, or settings…"
-                  : `Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}…`
+                  : palette.mode === "newChatIn"
+                    ? "Search workspaces or paste a path…"
+                    : `Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}…`
               }
-              aria-label={`Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}`}
+              aria-label={
+                palette.mode === "newChatIn"
+                  ? "Search workspaces"
+                  : `Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}`
+              }
               className="h-11"
               onKeyDown={(event) => {
+                // Read by the row cmdk selects for this Enter, right after this handler.
+                newWorktreeKeyRef.current =
+                  palette.mode === "newChatIn" && event.key === "Enter" && event.altKey;
                 if (
                   palette.mode !== "root" &&
                   query.length === 0 &&
@@ -542,16 +649,21 @@ export function AppCommandPalette({
               }}
             />
             <CommandList className="h-[320px] max-h-[min(320px,calc(100vh-12rem))] p-2">
-              <CommandEmpty>
+              {palette.mode === "newChatIn" && pathIntake.pathQuery ? null : <CommandEmpty>
                 <Search className="mx-auto mb-2 size-5 text-tertiary" />
-                No {MODE_LABELS[palette.mode].toLocaleLowerCase()} match “{query.trim()}”.
-              </CommandEmpty>
+                No{" "}
+                {palette.mode === "newChatIn"
+                  ? "workspaces"
+                  : MODE_LABELS[palette.mode].toLocaleLowerCase()}{" "}
+                match “{query.trim()}”.
+              </CommandEmpty>}
 
               {palette.mode === "root"
                 ? rootResults.map(({ definition, result }) => {
                     const Icon = CATEGORY_ICON[definition.category];
                     const opensMode = [
                       "chat.search",
+                      "chat.newIn",
                       "model.change",
                       "provider.manage",
                       "settings.search",
@@ -626,6 +738,88 @@ export function AppCommandPalette({
                         <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
                       </PaletteResultItem>
                     ))}
+                </>
+              ) : null}
+
+              {palette.mode === "newChatIn" && pathIntake.pathQuery ? (
+                pathRow && pathRowResult && pathRow.action !== "invalid" ? (
+                  <PaletteResultItem
+                    result={pathRowResult}
+                    onSelect={() => choosePathRow(pathRow)}
+                    data-path-row={pathRow.action}
+                    className="min-h-11 px-3"
+                  >
+                    {pathRow.action === "select" ? (
+                      <Folder className="size-4 shrink-0 text-secondary" />
+                    ) : (
+                      <FolderPlus className="size-4 shrink-0 text-secondary" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate" title={pathRow.path}>
+                      {pathRow.label}
+                    </span>
+                    {pathRow.action !== "create" && pathRow.detail ? (
+                      <ItemDetail>{pathRow.detail}</ItemDetail>
+                    ) : null}
+                  </PaletteResultItem>
+                ) : pathRow?.action === "invalid" ? (
+                  <p role="status" data-path-row="invalid" className="flex items-start gap-2 px-3 py-3 text-small text-secondary">
+                    <CircleAlert className="mt-px size-4 shrink-0 text-tertiary" />
+                    <span className="min-w-0 flex-1">{pathRow.message}</span>
+                  </p>
+                ) : (
+                  <p role="status" className="flex items-center gap-2 px-3 py-3 text-small text-tertiary">
+                    <RefreshCw className="size-4 shrink-0 animate-spin" />
+                    Checking path…
+                  </p>
+                )
+              ) : palette.mode === "newChatIn" ? (
+                <>
+                  {workspaceResults.map(({ workspace, name, current, result }) => (
+                    <PaletteResultItem
+                      key={workspace.id}
+                      result={result}
+                      onSelect={() => startChatIn(workspace.id)}
+                      aria-current={current ? "true" : undefined}
+                      className="min-h-11 px-3"
+                    >
+                      <Folder className="size-4 shrink-0 text-secondary" />
+                      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                        <span className="min-w-0 shrink truncate">{name}</span>
+                        {workspace.folderPath ? (
+                          <span
+                            className="min-w-0 flex-1 truncate text-small text-tertiary"
+                            title={workspace.folderPath}
+                          >
+                            {formatWorkspacePath(
+                              workspace.folderPath,
+                              pathPreferences.workspacePathFormat,
+                              48,
+                            )}
+                          </span>
+                        ) : null}
+                      </span>
+                      {current ? (
+                        <span className="shrink-0 text-small text-tertiary">current</span>
+                      ) : null}
+                    </PaletteResultItem>
+                  ))}
+                  <PaletteResultItem
+                    result={openFolderResult}
+                    onSelect={openFolderForChat}
+                    className="mt-1 min-h-11 px-3"
+                  >
+                    <FolderPlus className="size-4 shrink-0 text-secondary" />
+                    <span className="min-w-0 flex-1 truncate">Open folder…</span>
+                    <Shortcut commandId="workspace.openFolder" />
+                  </PaletteResultItem>
+                  <PaletteResultItem
+                    result={cloneResult}
+                    onSelect={cloneForChat}
+                    className="min-h-11 px-3"
+                  >
+                    <FolderDown className="size-4 shrink-0 text-secondary" />
+                    <span className="min-w-0 flex-1 truncate">Clone repository…</span>
+                  </PaletteResultItem>
                 </>
               ) : null}
 
@@ -799,6 +993,11 @@ export function AppCommandPalette({
                 </>
               ) : null}
             </CommandList>
+            {palette.mode === "newChatIn" ? (
+              <p className="px-5 pb-3 pt-1 text-mini text-tertiary" data-new-chat-in-footer>
+                ⌥↵ in a new worktree
+              </p>
+            ) : null}
           </Command>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

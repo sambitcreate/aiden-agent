@@ -1,7 +1,7 @@
 // Chat top bar pieces: the chat title menu, the workspace chip beside it, and
 // the compact workspace tool buttons on the trailing side.
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   Copy,
@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { workspacesApi } from "../lib/ipc";
-import { queryKeys } from "../lib/queries";
+import { queryKeys, useWorkspaceRepositoryIdentity } from "../lib/queries";
 import type { GitInfo, Workspace } from "../lib/types";
 import { cn } from "../lib/ui-utils";
 import { githubRepositoryUrl } from "../lib/workspace-chip";
@@ -189,13 +189,10 @@ export function WorkspaceChip({
   const isRepo = accessible && git?.isRepo === true;
   const branch = isRepo && git?.branch && !git.detached ? git.branch : undefined;
   // The remote identity is read only once someone opens the menu.
-  const identity = useQuery({
-    queryKey: ["workspace-repository-identity", workspace.id],
-    queryFn: () => workspacesApi.repositoryIdentity(workspace.id),
-    enabled: menuOpen && isRepo && git?.hasRemote === true,
-    staleTime: 60_000,
-    retry: false,
-  });
+  const identity = useWorkspaceRepositoryIdentity(
+    workspace.id,
+    menuOpen && isRepo && git?.hasRemote === true,
+  );
   const githubUrl = identity.data ? githubRepositoryUrl(identity.data.canonicalKey) : null;
   const Icon = isRepo ? FolderGit2 : Folder;
 

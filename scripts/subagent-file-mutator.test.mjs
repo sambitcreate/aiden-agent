@@ -81,6 +81,56 @@ async function rootIdentity(root) {
   return { device: identity.dev.toString(), inode: identity.ino.toString() };
 }
 
+async function parentEdit(root, relativePath, fileIdentity, original, updated) {
+  const rootStat = await rootIdentity(root);
+  const args = [
+    "edit-file", root, rootStat.device, rootStat.inode, relativePath,
+    fileIdentity.device, fileIdentity.inode, sha256(original),
+    String(Buffer.byteLength(updated)),
+  ];
+  return new Promise((resolve, reject) => {
+    const child = spawn(productionBinary, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const output = [];
+    const errors = [];
+    child.stdout.on("data", (chunk) => output.push(chunk));
+    child.stderr.on("data", (chunk) => errors.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({
+      code,
+      stdout: Buffer.concat(output).toString("utf8"),
+      stderr: Buffer.concat(errors).toString("utf8"),
+    }));
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(updated);
+  });
+}
+
+async function parentWrite(root, relativePath, before, updated) {
+  const rootStat = await rootIdentity(root);
+  const args = [
+    "write-file", root, rootStat.device, rootStat.inode, relativePath,
+    ...(before
+      ? ["existing", before.identity.device, before.identity.inode, sha256(before.contents)]
+      : ["new"]),
+    String(Buffer.byteLength(updated)),
+  ];
+  return new Promise((resolve, reject) => {
+    const child = spawn(productionBinary, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const output = [];
+    const errors = [];
+    child.stdout.on("data", (chunk) => output.push(chunk));
+    child.stderr.on("data", (chunk) => errors.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({
+      code,
+      stdout: Buffer.concat(output).toString("utf8"),
+      stderr: Buffer.concat(errors).toString("utf8"),
+    }));
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(updated);
+  });
+}
+
 function startHelper(
   t,
   root,
@@ -629,6 +679,84 @@ test("a path replacement after prepare is reported as a conflict and preserved",
   assert.equal(await readFile(target, "utf8"), "external\n");
   assert.equal(await readFile(moved, "utf8"), "original\n");
   await helper.close();
+});
+
+test("parent edit opens below the pinned root and refuses swapped symlinks", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const root = await fixture(t, "aiden-parent-edit-root-");
+  const outside = await fixture(t, "aiden-parent-edit-outside-");
+  const directory = path.join(root, "nested");
+  const target = path.join(directory, "edit.txt");
+  const outsideFile = path.join(outside, "edit.txt");
+  await mkdir(directory);
+  await writeFile(target, "before\n");
+  await writeFile(outsideFile, "outside\n");
+  const first = await stat(target, { bigint: true });
+  const identity = { device: first.dev.toString(), inode: first.ino.toString() };
+  const edited = await parentEdit(root, "nested/edit.txt", identity, "before\n", "after\n");
+  assert.deepEqual(edited, { code: 0, stdout: "edited\n", stderr: "" });
+  assert.equal(await readFile(target, "utf8"), "after\n");
+
+  await rename(target, path.join(directory, "original.txt"));
+  await symlink(outsideFile, target);
+  const rejectedTarget = await parentEdit(root, "nested/edit.txt", identity, "after\n", "changed\n");
+  assert.equal(rejectedTarget.code, 1);
+  assert.equal(rejectedTarget.stderr, "conflict\n");
+  assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
+
+  await rm(target);
+  await rename(directory, path.join(root, "original-directory"));
+  await symlink(outside, directory);
+  const rejectedAncestor = await parentEdit(root, "nested/original.txt", identity, "after\n", "changed\n");
+  assert.equal(rejectedAncestor.code, 1);
+  assert.equal(rejectedAncestor.stderr, "conflict\n");
+  assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
+  assert.equal(await readFile(path.join(root, "original-directory", "original.txt"), "utf8"), "after\n");
+});
+
+test("parent write creates directories and refuses changed or linked targets", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const root = await fixture(t, "aiden-parent-write-root-");
+  const outside = await fixture(t, "aiden-parent-write-outside-");
+  const relative = "nested/deeper/write.txt";
+  const target = path.join(root, relative);
+  const outsideFile = path.join(outside, "write.txt");
+  await writeFile(outsideFile, "outside\n");
+  assert.deepEqual(await parentWrite(root, relative, undefined, "created\n"),
+    { code: 0, stdout: "written\n", stderr: "" });
+  assert.equal(await readFile(target, "utf8"), "created\n");
+  const first = await stat(target, { bigint: true });
+  const before = {
+    identity: { device: first.dev.toString(), inode: first.ino.toString() },
+    contents: "created\n",
+  };
+  assert.deepEqual(await parentWrite(root, relative, before, "overwritten\n"),
+    { code: 0, stdout: "written\n", stderr: "" });
+  assert.equal(await readFile(target, "utf8"), "overwritten\n");
+  assert.equal((await stat(target, { bigint: true })).ino, first.ino);
+  const stale = await parentWrite(root, relative, before, "stale\n");
+  assert.equal(stale.stderr, "conflict\n");
+  assert.equal(await readFile(target, "utf8"), "overwritten\n");
+  const outsideLink = path.join(outside, "linked.txt");
+  await link(target, outsideLink);
+  const linked = await parentWrite(root, relative, {
+    identity: before.identity,
+    contents: "overwritten\n",
+  }, "escaped\n");
+  assert.equal(linked.stderr, "conflict\n");
+  assert.equal(await readFile(outsideLink, "utf8"), "overwritten\n");
+  await rm(outsideLink);
+
+  await rename(target, path.join(path.dirname(target), "original.txt"));
+  await symlink(outsideFile, target);
+  assert.equal((await parentWrite(root, relative, undefined, "escaped\n")).stderr, "conflict\n");
+  assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
+  await rm(target);
+  await rename(path.join(root, "nested"), path.join(root, "original-directory"));
+  await symlink(outside, path.join(root, "nested"));
+  assert.equal((await parentWrite(root, relative, undefined, "escaped\n")).stderr, "conflict\n");
+  assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
+  assert.equal(await readFile(path.join(root, "original-directory", "deeper", "original.txt"), "utf8"), "overwritten\n");
 });
 
 test("a replacement in the final install race is atomically rolled back", async (t) => {

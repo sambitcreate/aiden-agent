@@ -1,9 +1,12 @@
 package sbtbiswas.AidenOnTheGo.features.simulators
 
 import androidx.compose.ui.graphics.ImageBitmap
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -307,14 +310,26 @@ class AidenSimulatorViewerTest {
         val shutdowns = mutableListOf<String>()
         val sessions = mutableListOf<String>()
         val created = mutableListOf<AidenSimulatorStreamSession<ImageBitmap>>()
+        var nextListing: CompletableDeferred<AidenSimulatorListing>? = null
+        var nextChatListing: CompletableDeferred<AidenSimulatorListing>? = null
+        var nextOpen: CompletableDeferred<AidenSimulatorDevice>? = null
 
         override val hasAccess: Boolean get() = access
         override suspend fun simulators(chatId: String?): AidenSimulatorListing {
             listingRequests += chatId
-            return listing
+            val pending = if (chatId != null && nextChatListing != null) {
+                nextChatListing.also { nextChatListing = null }
+            } else {
+                nextListing.also { nextListing = null }
+            }
+            return pending?.await() ?: listing
         }
         override suspend fun open(deviceId: String): AidenSimulatorDevice {
             opened += deviceId
+            val pending = nextOpen
+            nextOpen = null
+            // Exercise a remote result that races past cancellation.
+            if (pending != null) return withContext(NonCancellable) { pending.await() }
             return listing.devices.single { it.id == deviceId }.copy(booted = true)
         }
         override suspend fun shutdown(deviceId: String) {
@@ -403,6 +418,109 @@ class AidenSimulatorViewerTest {
         assertNull(viewer.startingDeviceName)
         assertTrue(viewer.selectedDevice!!.booted)
         assertEquals(listOf(iphone, ipad), remote.sessions)
+    }
+
+    @Test
+    fun refreshThatReplacesTheSelectedDeviceRebindsTheViewerStream() {
+        val base = fixtureListing
+        val both = base.copy(
+            devices = base.devices.map { if (it.id == ipad) it.copy(booted = true) else it },
+            chatDeviceIds = listOf(iphone, ipad)
+        )
+        val remote = FakeRemote(both, liveSessions = true)
+        val model = AidenSimulatorsViewModel("chat_1", remote)
+        model.refreshChatDevices()
+        model.openViewer()
+        val oldSession = model.session.value
+        assertNotNull(oldSession)
+
+        val refreshed = CompletableDeferred<AidenSimulatorListing>()
+        remote.nextListing = refreshed
+        model.refreshChatDevices()
+        assertEquals(iphone, model.viewer.value.selectedDeviceId)
+        assertTrue(model.session.value === oldSession)
+
+        // A is still known to the host, but no longer attached to this chat.
+        refreshed.complete(both.copy(chatDeviceIds = listOf(ipad)))
+        assertEquals(ipad, model.viewer.value.selectedDeviceId)
+        assertEquals(listOf(iphone, ipad), remote.sessions)
+        assertTrue(model.session.value === remote.created.last())
+        assertFalse(model.session.value === oldSession)
+        assertFalse(oldSession!!.send(byteArrayOf(0)))
+        model.closeViewer()
+    }
+
+    @Test
+    fun hostRetryThatReplacesSelectionOpensOnlyTheReplacementStream() {
+        val base = fixtureListing
+        val both = base.copy(
+            devices = base.devices.map { if (it.id == ipad) it.copy(booted = true) else it },
+            chatDeviceIds = listOf(iphone, ipad)
+        )
+        val remote = FakeRemote(both, liveSessions = true)
+        val model = AidenSimulatorsViewModel("chat_1", remote)
+        model.refreshChatDevices()
+        model.openViewer()
+
+        remote.listing = both.copy(chatDeviceIds = listOf(ipad))
+        model.retryHost()
+
+        assertEquals(ipad, model.viewer.value.selectedDeviceId)
+        assertEquals(listOf(iphone, ipad), remote.sessions)
+        assertTrue(model.session.value === remote.created.last())
+        model.closeViewer()
+    }
+
+    @Test
+    fun hostRetryUsesTheSelectionAtListingApplicationAfterAPickerChange() {
+        val base = fixtureListing
+        val both = base.copy(
+            devices = base.devices.map { if (it.id == ipad) it.copy(booted = true) else it },
+            chatDeviceIds = listOf(iphone, ipad)
+        )
+        val remote = FakeRemote(both, liveSessions = true)
+        val model = AidenSimulatorsViewModel("chat_1", remote)
+        model.refreshChatDevices()
+        model.openViewer()
+
+        val delayedListing = CompletableDeferred<AidenSimulatorListing>()
+        remote.nextChatListing = delayedListing
+        model.retryHost()
+        model.selectDevice(ipad)
+        assertEquals(listOf(iphone, ipad), remote.sessions)
+
+        // Retry began on A, but B was selected when the fetched listing removed it.
+        delayedListing.complete(both.copy(chatDeviceIds = listOf(iphone)))
+        assertEquals(iphone, model.viewer.value.selectedDeviceId)
+        assertEquals(listOf(iphone, ipad, iphone), remote.sessions)
+        assertTrue(model.session.value === remote.created.last())
+        model.closeViewer()
+    }
+
+    @Test
+    fun oldBootFailureCannotHideTheStreamAfterSwitchingDevices() {
+        val remote = FakeRemote(fixtureListing.copy(chatDeviceIds = listOf(iphone, ipad)), liveSessions = true)
+        val model = AidenSimulatorsViewModel("chat_1", remote)
+        model.refreshChatDevices()
+        model.openViewer()
+        val delayedBoot = CompletableDeferred<AidenSimulatorDevice>()
+        remote.nextOpen = delayedBoot
+        model.selectDevice(ipad)
+        assertEquals(ipad, model.viewer.value.selectedDeviceId)
+        assertNotNull(model.viewer.value.startingDeviceName)
+
+        model.selectDevice(iphone)
+        val currentSession = model.session.value
+        assertNotNull(currentSession)
+        assertNull(model.viewer.value.error)
+        delayedBoot.completeExceptionally(IllegalStateException("old boot failed"))
+
+        assertEquals(iphone, model.viewer.value.selectedDeviceId)
+        assertNull(model.viewer.value.startingDeviceName)
+        assertNull(model.viewer.value.error)
+        assertTrue(model.session.value === currentSession)
+        assertEquals(listOf(iphone, iphone), remote.sessions)
+        model.closeViewer()
     }
 
     @Test
