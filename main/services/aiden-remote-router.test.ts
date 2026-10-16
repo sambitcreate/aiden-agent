@@ -5233,7 +5233,7 @@ test("bot-attachments-v1 is offered only while Bot uploads are wired, and its ro
     const sessions = {
       ...base,
       supportsAttachments: wired,
-      uploadAttachment: async (deviceId: string, botId: string, body: { name: string }) => {
+      uploadAttachment: async (_deviceId: string, botId: string, body: { name: string }) => {
         seen.push(`upload:${botId}:${body.name}`);
         return { id: attachmentId, name: body.name, mimeType: "text/plain", kind: "text", size: 2, expiresAt: "2026-10-16T09:10:00.000Z" };
       },
