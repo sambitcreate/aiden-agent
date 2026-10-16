@@ -5,3 +5,9 @@ Unix `run_command` owns its detached process group until requested termination f
 The existing coding-tools suite now runs a Node worker that ignores SIGTERM and writes a heartbeat. It covers early shell closure, a resistant foreground process, timeout, and output overflow. The cancellation case fails against `11b58367` because the heartbeat continues after the command settles. The test has fallback PID cleanup and skips Windows, whose process-tree behavior is outside this issue. No Remote, UI, native-client, or onboarding contract changed; no plan status changed.
 
 Local verification on macOS Node 26.10.0: focused process regression, root type-check, focused ESLint, and `npm run test:cli` (99 tests) pass. The full coding-tools suite is 58/59 because an unrelated native-glob comparison fails identically on unchanged production source; its one targeted rerun also fails. Linux verification was unavailable because the configured Docker daemon is stopped.
+
+## Latest-main integration, 2026-10-16
+
+Merged `origin/main` at `ee218d1f` into PR #494 with merge commit `555fdfd26`. The sole conflict was `CodingToolOptions`: retain this PR's test deadline seam and main's native `fileMutatorBinary` together. `package.json` matches main exactly, so its test scripts are preserved. The merged coding-tools file runs both the native edit/write helper and the process-group cleanup.
+
+After building the native file mutator, eight focused `run_command`/`edit_file` cases passed. Full coding-tools passed 66/67; only the pre-existing native-glob symlink comparison failed. Root and CLI type checks, focused ESLint, and the full bundled CLI suite (99/99) passed. Hosted exact-head checks are pending.
