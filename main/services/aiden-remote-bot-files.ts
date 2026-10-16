@@ -197,6 +197,14 @@ export class AidenRemoteBotFileService {
   constructor(
     private readonly options: {
       instanceId: string;
+      /**
+       * The audience Bot authority is admitted for: the Mac owner, as the Bot
+       * session that writes these files runs. A paired device never accepts
+       * its own Full Access notice, so admitting as the device would deny
+       * every device paired after that notice was retired. The device stays
+       * bound to every handle it receives.
+       */
+      botAudienceId: string;
       authority: BotRuntimeAuthorityPort;
       chats: Pick<ChatStore, "get">;
       handles?: AidenOpaqueHandleStore;
@@ -223,14 +231,17 @@ export class AidenRemoteBotFileService {
   }
 
   private async withAuthority<Result>(
-    deviceId: string,
     botId: string,
     chatId: string,
     action: (authority: BotFileAuthorityContext) => Promise<Result>,
   ): Promise<Result> {
     let admission: BotRuntimeAuthorityAdmission | undefined;
     try {
-      admission = await this.options.authority.admit({ audienceId: deviceId, botId, chatId });
+      admission = await this.options.authority.admit({
+        audienceId: this.options.botAudienceId,
+        botId,
+        chatId,
+      });
       requireManagedHome(admission);
       return await action(this.activeContext(admission));
     } catch (error) {
@@ -279,7 +290,7 @@ export class AidenRemoteBotFileService {
 
   async list(deviceId: string, chatId: string): Promise<AidenRemoteFileIndex> {
     const botId = await this.botIdForChat(chatId);
-    return this.withAuthority(deviceId, botId, chatId, async (authority) => {
+    return this.withAuthority(botId, chatId, async (authority) => {
       try {
         await authority.revalidateBeforeEffect();
         const index = await listWorkspaceFiles(authority.workingDirectory, authority.signal);
@@ -363,7 +374,7 @@ export class AidenRemoteBotFileService {
       mapHandleError(error);
     }
     const botId = await this.botIdForChat(chatId);
-    return this.withAuthority(deviceId, botId, chatId, async (authority) => {
+    return this.withAuthority(botId, chatId, async (authority) => {
       try {
         if (!stored.displayPath) throw new AidenOpaqueHandleError("handle_invalid");
         const displayPath = safeDisplayPath(stored.displayPath);
