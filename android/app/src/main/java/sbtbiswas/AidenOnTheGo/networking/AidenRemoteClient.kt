@@ -1028,6 +1028,86 @@ class AidenRemoteClient(
         throw error
     }
 
+    /**
+     * The self-contained viewer page for one inline visual (contract revision 34,
+     * `chat-visual-viewer-v1`), drawn in [scheme] and the [theme] preset. The body
+     * is `text/html; charset=utf-8`, at most [AidenVisualDocumentRequest.MAXIMUM_BYTES]
+     * once OkHttp has transparently undone any gzip encoding.
+     */
+    suspend fun visualDocument(
+        chatId: String,
+        visualId: String,
+        scheme: AidenVisualDocumentScheme,
+        theme: String
+    ): String = try {
+        if (!AidenVisualDocumentRequest.isValidIdentifier(chatId) ||
+            !AidenVisualDocumentRequest.isValidIdentifier(visualId) ||
+            !AidenVisualDocumentRequest.isValidTheme(theme)
+        ) {
+            throw AidenRemoteClientException.InvalidResponse("Invalid visual document request.")
+        }
+        withContext(Dispatchers.IO) {
+        if (credential.isNullOrEmpty()) {
+            AidenDiagnostics.record(AidenDiagnosticArea.AUTHENTICATION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
+            throw AidenRemoteClientException.MissingCredential
+        }
+        // Ids are limited to unreserved path characters above; the query values are fixed tokens.
+        val url = "$endpoint/chats/$chatId/visuals/$visualId/document?scheme=${scheme.wire}&theme=$theme"
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Aiden-Protocol-Version", "1")
+            .addHeader("Accept", "text/html")
+            .addHeader("Authorization", "Bearer $credential")
+            .get()
+            .build()
+
+        val documentResponse = try {
+            httpClient.newCall(request).await()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
+            throw error
+        }
+        documentResponse.use { response ->
+            if (!response.isSuccessful) {
+                val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                AidenDiagnostics.record(
+                    if (response.code == 401 || response.code == 403) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION,
+                    AidenDiagnosticEvent.REQUEST_FAILED,
+                    AidenDiagnosticOutcome.FAILED,
+                    if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
+                )
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+            }
+            val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
+            if (contentType != "text/html") {
+                AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            val bytes = try {
+                response.body.readBounded(AidenVisualDocumentRequest.MAXIMUM_BYTES)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: ResponseBodyLimitExceededException) {
+                AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                throw AidenRemoteClientException.InvalidResponse()
+            } catch (error: IOException) {
+                AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
+                throw error
+            }
+            if (bytes.isEmpty()) {
+                AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            String(bytes, Charsets.UTF_8)
+        }
+        }
+    } catch (error: CancellationException) {
+        AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.CANCELLED, AidenDiagnosticCode.NETWORK)
+        throw error
+    }
+
     suspend fun startTurn(
         chatId: String,
         request: AidenTurnStart,

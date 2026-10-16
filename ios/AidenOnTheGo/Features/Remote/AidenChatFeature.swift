@@ -1174,6 +1174,7 @@ final class AidenChatViewModel {
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
+    private let visualDocumentCache: AidenVisualDocumentCache
     private let modelPreferenceStore: AidenModelPreferenceStore
     @ObservationIgnored private let modelPreferenceContext: AidenRemoteRequestContext?
     /// Set once the user picks a model in this chat; from then on the
@@ -1462,6 +1463,7 @@ final class AidenChatViewModel {
         cache: AidenChatCache = .shared,
         draftStore: AidenChatDraftStore = .shared,
         modelPreferenceStore: AidenModelPreferenceStore = .shared,
+        visualDocumentCache: AidenVisualDocumentCache = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         networkPath: AidenNetworkPathSource? = nil,
         allowsMutations: Bool = true,
@@ -1484,6 +1486,7 @@ final class AidenChatViewModel {
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
+        self.visualDocumentCache = visualDocumentCache
         self.modelPreferenceStore = modelPreferenceStore
         self.hapticScope = hapticScope
         self.onChatUpdated = onChatUpdated
@@ -1514,6 +1517,7 @@ final class AidenChatViewModel {
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
+        visualDocumentCache = .shared
         modelPreferenceStore = .shared
         hapticScope = UUID()
         onChatUpdated = { _ in }
@@ -3322,6 +3326,66 @@ final class AidenChatViewModel {
             _ = await coordinator.handleCredentialRevocation(error, context: context)
             return nil
         }
+    }
+
+    // MARK: - Visual viewer (contract revision 34)
+
+    /// The paired Mac announces `chat-visual-viewer-v1`, so a visual opens
+    /// full screen and interactive instead of in the image viewer.
+    var supportsVisualViewer: Bool {
+        guard !isReadOnlyFixture, !isRemoved,
+              coordinator.activeInstanceId == instanceId else { return false }
+        return coordinator.server?.supportsChatVisualViewer == true
+    }
+
+    /// The viewer page for one visual in the phone's scheme and theme. A
+    /// fresh page refreshes the offline copy; when the Mac can't be reached,
+    /// the last copy stands in.
+    func visualDocument(
+        visualId: String,
+        appearance: AidenVisualViewerAppearance
+    ) async -> AidenVisualDocumentLoad {
+        let unavailable = AidenVisualDocumentLoad.failed(
+            String(localized: "This visual can't be opened right now.")
+        )
+        guard supportsVisualViewer,
+              let context = try? coordinator.requestContext(for: instanceId) else { return unavailable }
+        let key = AidenVisualDocumentCache.Key(
+            instanceId: instanceId,
+            deviceId: context.deviceId,
+            chatId: chat.id,
+            visualId: visualId,
+            appearance: appearance
+        )
+        do {
+            let html = try await coordinator.remoteClient(for: context).visualDocument(
+                chatId: chat.id,
+                visualId: visualId,
+                scheme: appearance.scheme.rawValue,
+                theme: appearance.theme.rawValue
+            )
+            guard !isRemoved, coordinator.isCurrent(context) else { return unavailable }
+            await visualDocumentCache.store(html, for: key)
+            return .live(html)
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return unavailable }
+            guard !isRemoved, coordinator.isCurrent(context) else { return unavailable }
+            if AidenVisualDocumentLoad.fallsBackToCache(after: error),
+               let cached = await visualDocumentCache.load(key) {
+                return .cached(cached)
+            }
+            return .failed(AidenVisualDocumentLoad.failureMessage(for: error))
+        }
+    }
+
+    /// Adds a follow-up the person confirmed in the viewer to the composer.
+    /// It is never sent by itself.
+    @discardableResult
+    func appendVisualPrompt(_ prompt: String) -> Bool {
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isReadOnlyPresentation, !text.isEmpty else { return false }
+        draft = AidenVisualViewerMessage.draft(appending: text, to: draft)
+        return true
     }
 
     func pendingAttachmentImageData(for attachment: AidenAttachmentReference) async -> Data? {
@@ -5476,7 +5540,11 @@ struct AidenChatDetailView: View {
                     }
                 },
                 canSettleForkSummary: model.canSettleForkSummary,
-                isSettlingForkSummary: model.isSettlingForkSummary
+                isSettlingForkSummary: model.isSettlingForkSummary,
+                visualViewerAvailable: model.supportsVisualViewer,
+                onVisualPrompt: model.isReadOnlyPresentation ? nil : { (prompt: String) -> Void in
+                    _ = model.appendVisualPrompt(prompt)
+                }
             )
             .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
@@ -5973,9 +6041,15 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// Value snapshots for the fork summary card's actions.
     var canSettleForkSummary = false
     var isSettlingForkSummary = false
+    /// The Mac announces `chat-visual-viewer-v1` (revision 34).
+    var visualViewerAvailable = false
+    /// Adds a follow-up confirmed in the visual viewer to the composer.
+    var onVisualPrompt: ((String) -> Void)? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
+        lhs.visualViewerAvailable == rhs.visualViewerAvailable &&
+        (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil) &&
         (lhs.onFork == nil) == (rhs.onFork == nil) &&
         lhs.forkAvailability == rhs.forkAvailability &&
         lhs.canSettleForkSummary == rhs.canSettleForkSummary &&
@@ -6052,7 +6126,13 @@ private struct AidenSettledMessageRows: View, Equatable {
             appControlsAvailable: appControlsAvailable,
             appControlsCache: model.appControlsCache,
             loadAppControls: { try await model.loadAppControls($0) },
-            applyAppControl: { try await model.applyAppControl($0, operation: $1) }
+            applyAppControl: { try await model.applyAppControl($0, operation: $1) },
+            loadVisualDocument: visualViewerAvailable
+                ? { (visualID: String, appearance: AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad in
+                    await model.visualDocument(visualId: visualID, appearance: appearance)
+                }
+                : nil,
+            onVisualPrompt: onVisualPrompt
         )
         .equatable()
         .padding(.top, topPadding)
@@ -6077,6 +6157,9 @@ private struct AidenMessageView: View, Equatable {
     var appControlsCache: AidenAppControlCache? = nil
     var loadAppControls: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)? = nil
     var applyAppControl: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)? = nil
+    /// Present while the Mac announces `chat-visual-viewer-v1` (revision 34).
+    var loadVisualDocument: ((String, AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad)? = nil
+    var onVisualPrompt: ((String) -> Void)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -6091,7 +6174,9 @@ private struct AidenMessageView: View, Equatable {
             lhs.forkActions == rhs.forkActions &&
             (lhs.onFork == nil) == (rhs.onFork == nil) &&
             lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID &&
-            lhs.appControlsAvailable == rhs.appControlsAvailable
+            lhs.appControlsAvailable == rhs.appControlsAvailable &&
+            (lhs.loadVisualDocument == nil) == (rhs.loadVisualDocument == nil) &&
+            (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil)
     }
 
     private var selectableText: String {
@@ -6330,7 +6415,13 @@ private struct AidenMessageView: View, Equatable {
         AidenVisualRowView(
             visual: visual,
             snapshot: AidenChatVisualPresentation.snapshotAttachment(for: visual, in: message),
-            loadData: loadAttachmentImage
+            loadData: loadAttachmentImage,
+            loadDocument: loadVisualDocument.map { load in
+                { (appearance: AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad in
+                    await load(visual.id, appearance)
+                }
+            },
+            onAddToMessage: onVisualPrompt
         )
     }
 
@@ -8255,19 +8346,32 @@ private struct AidenTrailingFractionLayout: Layout {
 /// One inline visual in a committed reply: the Mac's snapshot image when the
 /// message carries it, then the visual's text description; the description
 /// alone without a snapshot; and the title alone when there is neither.
+/// When the Mac announces `chat-visual-viewer-v1` (revision 34), tapping the
+/// snapshot opens the visual full screen and interactive; the image viewer
+/// stays one step away from there.
 private struct AidenVisualRowView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let visual: AidenChatVisual
     let snapshot: AidenMessageAttachment?
     let loadData: (AidenMessageAttachment) async -> Data?
+    /// Present while the Mac announces the interactive viewer.
+    var loadDocument: ((AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad)? = nil
+    var onAddToMessage: ((String) -> Void)? = nil
     @State private var imageAspectRatio: CGFloat?
     @State private var gallerySelection: AidenAttachmentGallerySelection?
+    @State private var isViewerPresented = false
+    /// The viewer asked for the image viewer; it opens once the viewer is gone.
+    @State private var opensGalleryAfterViewer = false
     @State private var isDescriptionExpanded = false
     @State private var limitedDescriptionHeight: CGFloat = 0
     @State private var fullDescriptionHeight: CGFloat = 0
 
     private static let collapsedDescriptionLines = 6
+
+    private var action: AidenVisualRowAction {
+        AidenVisualRowAction.resolve(viewerAvailable: loadDocument != nil, hasSnapshot: snapshot != nil)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -8284,9 +8388,50 @@ private struct AidenVisualRowView: View {
                     .padding(10)
                     .background(palette.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            if snapshot == nil, action == .openInteractive {
+                openInteractiveButton
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        .fullScreenCover(isPresented: $isViewerPresented, onDismiss: {
+            guard opensGalleryAfterViewer else { return }
+            opensGalleryAfterViewer = false
+            if let snapshot {
+                gallerySelection = AidenAttachmentGallerySelection(id: snapshot.id)
+            }
+        }) {
+            if let loadDocument {
+                AidenVisualViewer(
+                    title: visual.title,
+                    loadDocument: loadDocument,
+                    onAddToMessage: onAddToMessage,
+                    onViewImage: snapshot == nil ? nil : { opensGalleryAfterViewer = true }
+                )
+            }
+        }
+    }
+
+    private var openInteractiveButton: some View {
+        Button {
+            isViewerPresented = true
+        } label: {
+            Label("Open interactive", systemImage: "hand.tap")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(palette.accent)
+                .frame(minHeight: 32)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(visual.title) interactively")
+    }
+
+    private func openSnapshot(_ attachment: AidenMessageAttachment) {
+        switch action {
+        case .openInteractive:
+            isViewerPresented = true
+        case .viewImage, .textOnly:
+            gallerySelection = AidenAttachmentGallerySelection(id: attachment.id)
+        }
     }
 
     private func snapshotImage(_ attachment: AidenMessageAttachment) -> some View {
@@ -8306,12 +8451,22 @@ private struct AidenVisualRowView: View {
         .frame(maxWidth: visual.layout == .wide ? .infinity : 560, alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius, style: .continuous))
         .contentShape(Rectangle())
-        .onTapGesture { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
+        .onTapGesture { openSnapshot(attachment) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(visual.title)
-        .accessibilityHint("Double-tap to open the image viewer")
+        .accessibilityHint(action == .openInteractive
+            ? Text("Double-tap to open the interactive visual")
+            : Text("Double-tap to open the image viewer"))
         .accessibilityAddTraits([.isImage, .isButton])
-        .accessibilityAction { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
+        .accessibilityAction { openSnapshot(attachment) }
+        .accessibilityActions {
+            if action == .openInteractive {
+                Button("Open interactive") { isViewerPresented = true }
+                Button("View image") {
+                    gallerySelection = AidenAttachmentGallerySelection(id: attachment.id)
+                }
+            }
+        }
         .fullScreenCover(item: $gallerySelection) { selection in
             AidenAttachmentGalleryView(
                 attachments: [attachment],

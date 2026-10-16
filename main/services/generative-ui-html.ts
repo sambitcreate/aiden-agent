@@ -450,34 +450,42 @@ button, input, select, textarea {
 `;
 }
 
+/**
+ * Swaps a wrapped guest's `aiden-genui:` library tags for the sources
+ * themselves, so it runs with no custom protocol (exports, the phone viewer).
+ * Libraries `include` rejects are dropped instead, which keeps a phone document
+ * free of the large ones a visual never calls.
+ */
+export function inlineGenerativeUiHostLibraries(
+  guestDocument: string,
+  libraries: Readonly<Record<string, string>>,
+  include: (name: (typeof GENERATIVE_UI_HOST_LIBS)[number]) => boolean = () => true,
+): string {
+  let inlined = guestDocument.replace(GENERATIVE_UI_GUEST_CSP, GENERATIVE_UI_EXPORT_CSP);
+  for (const name of GENERATIVE_UI_HOST_LIBS) {
+    const href = `${GENERATIVE_UI_PROTOCOL_SCHEME}://${name}`;
+    const tag = name.endsWith(".css") ? `<link rel="stylesheet" href="${href}">` : `<script src="${href}"></script>`;
+    if (!include(name)) {
+      inlined = inlined.replace(tag, "");
+      continue;
+    }
+    const source = name === GENERATIVE_UI_KIT_LIB ? generativeUiKitCss() : libraries[name];
+    if (!source) {
+      throw new Error(`Export is missing host library ${name}.`);
+    }
+    // A function replacement, so `$&` and friends in library source stay literal.
+    inlined = inlined.replace(tag, () => (name.endsWith(".css") ? `<style>\n${source}\n</style>` : `<script>\n${source}\n</script>`));
+  }
+  return inlined;
+}
+
 export function generativeUiExportDocument(
   html: string,
   title: string,
   libraries: Readonly<Record<string, string>>,
   theme?: GenerativeUiThemeTokens,
 ): string {
-  let guestDocument = wrapGenerativeUiHtml(html, title, theme).replace(
-    GENERATIVE_UI_GUEST_CSP,
-    GENERATIVE_UI_EXPORT_CSP,
-  );
-  for (const name of GENERATIVE_UI_HOST_LIBS) {
-    const href = `${GENERATIVE_UI_PROTOCOL_SCHEME}://${name}`;
-    const source = name === GENERATIVE_UI_KIT_LIB ? generativeUiKitCss() : libraries[name];
-    if (!source) {
-      throw new Error(`Export is missing host library ${name}.`);
-    }
-    if (name.endsWith(".css")) {
-      guestDocument = guestDocument.replace(
-        `<link rel="stylesheet" href="${href}">`,
-        `<style>\n${source}\n</style>`,
-      );
-    } else {
-      guestDocument = guestDocument.replace(
-        `<script src="${href}"></script>`,
-        `<script>\n${source}\n</script>`,
-      );
-    }
-  }
+  const guestDocument = inlineGenerativeUiHostLibraries(wrapGenerativeUiHtml(html, title, theme), libraries);
   const safeTitle = escapeHtml(title);
   return `<!DOCTYPE html>
 <html lang="en">

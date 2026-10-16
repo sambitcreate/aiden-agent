@@ -162,6 +162,10 @@ data class AidenServer(
     val supportsChatVisuals: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_VISUALS_FEATURE)
 
+    /** A tapped visual snapshot opens the Mac's interactive viewer document (revision 34). */
+    val supportsChatVisualViewer: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_VISUAL_VIEWER_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

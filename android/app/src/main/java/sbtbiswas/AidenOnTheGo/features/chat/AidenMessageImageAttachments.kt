@@ -259,7 +259,9 @@ internal object AidenVisualSnapshotFrame {
 
 /**
  * A visual's snapshot, described by the visual's [title] rather than the
- * attachment's file name. Tapping opens the same full-screen viewer as photos.
+ * attachment's file name. Tapping opens the same full-screen viewer as photos,
+ * or, when the Mac serves interactive visuals ([onOpenInteractive], revision 34),
+ * the interactive viewer; the image viewer then stays one accessibility action away.
  */
 @Composable
 internal fun AidenVisualSnapshotImage(
@@ -267,7 +269,8 @@ internal fun AidenVisualSnapshotImage(
     title: String,
     wide: Boolean,
     loadData: suspend (AidenMessageAttachment) -> ByteArray?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenInteractive: (() -> Unit)? = null
 ) {
     var galleryOpen by remember { mutableStateOf(false) }
     // An image this session already decoded sizes the row on its first frame.
@@ -279,6 +282,15 @@ internal fun AidenVisualSnapshotImage(
     }
     val snapshotState = stringResource(R.string.chat_visual_snapshot_description)
     val openLabel = stringResource(R.string.chat_visual_snapshot_open)
+    val openInteractiveLabel = stringResource(R.string.chat_visual_open_interactive)
+    val interactiveSemantics = if (onOpenInteractive != null) {
+        Modifier.semantics {
+            customActions = listOf(
+                CustomAccessibilityAction(openInteractiveLabel) { onOpenInteractive(); true },
+                CustomAccessibilityAction(openLabel) { galleryOpen = true; true }
+            )
+        }
+    } else Modifier
     AidenAttachmentImage(
         attachment = attachment,
         maximumPixelSize = AidenVisualSnapshotFrame.MAXIMUM_PIXEL_SIZE,
@@ -289,7 +301,17 @@ internal fun AidenVisualSnapshotImage(
             .fillMaxWidth()
             .aspectRatio(AidenVisualSnapshotFrame.aspectRatio(imageSize?.first, imageSize?.second, wide))
             .semantics { stateDescription = snapshotState }
-            .clickable(onClickLabel = openLabel, role = Role.Button) { galleryOpen = true },
+            .then(interactiveSemantics)
+            .clickable(
+                onClickLabel = if (onOpenInteractive != null) openInteractiveLabel else openLabel,
+                role = Role.Button
+            ) {
+                if (onOpenInteractive != null) {
+                    onOpenInteractive()
+                } else {
+                    galleryOpen = true
+                }
+            },
         alignment = Alignment.CenterStart,
         imageCornerRadius = 16.dp
     )
@@ -572,7 +594,7 @@ private fun AidenAttachmentImage(
 }
 
 @Composable
-private fun AidenAttachmentGallery(
+internal fun AidenAttachmentGallery(
     attachments: List<AidenMessageAttachment>,
     initialPage: Int,
     loadData: suspend (AidenMessageAttachment) -> ByteArray?,

@@ -593,6 +593,7 @@ private struct AidenPaletteEnvironmentKey: EnvironmentKey {
     static let defaultValue = AidenThemeCatalog.palette(preset: .aiden, scheme: .light)
 }
 
+private struct AidenThemePresetEnvironmentKey: EnvironmentKey { static let defaultValue = AidenThemePresetID.aiden }
 private struct AidenReduceMotionEnvironmentKey: EnvironmentKey { static let defaultValue = false }
 private struct AidenLowPowerModeEnvironmentKey: EnvironmentKey { static let defaultValue = false }
 private struct AidenDiffMarkerEnvironmentKey: EnvironmentKey { static let defaultValue = AidenDiffMarkerPreference.symbols }
@@ -614,6 +615,13 @@ extension EnvironmentValues {
     var aidenPalette: AidenPalette {
         get { self[AidenPaletteEnvironmentKey.self] }
         set { self[AidenPaletteEnvironmentKey.self] = newValue }
+    }
+
+    /// The preset behind `aidenPalette` for the effective scheme, so pages the
+    /// Mac draws (the visual viewer) can follow the phone's theme.
+    var aidenThemePreset: AidenThemePresetID {
+        get { self[AidenThemePresetEnvironmentKey.self] }
+        set { self[AidenThemePresetEnvironmentKey.self] = newValue }
     }
 
     var aidenReduceMotion: Bool {
@@ -664,6 +672,7 @@ struct AidenAppearanceRoot<Content: View>: View {
         )
         content()
             .environment(\.aidenPalette, palette)
+            .environment(\.aidenThemePreset, effectiveScheme == .dark ? appearance.darkPreset : appearance.lightPreset)
             .environment(\.aidenReduceMotion, appearance.resolvedReduceMotion(system: systemReduceMotion))
             .environment(\.aidenLowPowerMode, lowPowerMode)
             .environment(\.aidenDiffMarkers, appearance.diffMarkers)

@@ -142,7 +142,7 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 33);
+  assert.equal(fixture.contractRevision, 34);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -560,6 +560,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
     "/chats/{chatId}/attachments/{attachmentId}/content",
+    "/chats/{chatId}/visuals/{visualId}/document",
     "/bots",
     "/bots/{botId}",
     "/bot-presets",

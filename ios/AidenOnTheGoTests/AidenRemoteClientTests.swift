@@ -2336,6 +2336,141 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testVisualDocumentRequestsThePhonesAppearanceAndReturnsTheHTML() async throws {
+        let client = makeClient()
+        let html = "<!doctype html><meta charset=\"utf-8\"><title>Revenue</title><p>Q3 € 1.2M</p>"
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat-1/visuals/visual_chart:01/document")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            XCTAssertEqual(query, [
+                URLQueryItem(name: "scheme", value: "dark"),
+                URLQueryItem(name: "theme", value: "dusk"),
+            ])
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Protocol-Version"), "1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/html")
+            XCTAssertNil(request.httpBody)
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "text/html; charset=utf-8",
+                        "Cache-Control": "no-store",
+                        "ETag": "\"visual-etag\"",
+                    ]
+                )!,
+                Data(html.utf8)
+            )
+        }
+
+        let document = try await client.visualDocument(
+            chatId: "chat-1",
+            visualId: "visual_chart:01",
+            scheme: "dark",
+            theme: "dusk"
+        )
+        XCTAssertEqual(document, html)
+    }
+
+    func testVisualDocumentMapsErrorsAndRejectsWhatIsNotADocument() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            Self.response(
+                for: request,
+                status: 404,
+                json: #"{"error":{"code":"not_found","message":"Visual not found.","requestId":"request-1","retryable":false}}"#
+            )
+        }
+        do {
+            _ = try await client.visualDocument(chatId: "chat-1", visualId: "visual-1", scheme: "light", theme: "aiden")
+            XCTFail("A missing visual must fail.")
+        } catch let AidenRemoteClientError.server(statusCode, body) {
+            XCTAssertEqual(statusCode, 404)
+            XCTAssertEqual(body.code.rawValue, "not_found")
+        }
+
+        // A 200 that is not HTML, or not UTF-8, is a contract violation.
+        let wrongBodies: [(String, Data)] = [
+            ("application/json", Data("{}".utf8)),
+            ("text/html; charset=utf-8", Data([0xff, 0xfe, 0xfd])),
+            ("text/html; charset=utf-8", Data()),
+        ]
+        for (contentType, body) in wrongBodies {
+            AidenRemoteMockURLProtocol.handler = { request in
+                (
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": contentType])!,
+                    body
+                )
+            }
+            do {
+                _ = try await client.visualDocument(chatId: "chat-1", visualId: "visual-1", scheme: "light", theme: "aiden")
+                XCTFail("Expected \(contentType) with \(body.count) bytes to fail closed.")
+            } catch {
+                XCTAssertTrue(error is AidenRemoteClientError, "\(error)")
+            }
+        }
+
+        // A document over 12 MiB is refused before it is read.
+        AidenRemoteMockURLProtocol.handler = { request in
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "text/html; charset=utf-8",
+                        "Content-Length": "\(AidenRemoteProtocol.maxVisualDocumentBytes + 1)",
+                    ]
+                )!,
+                Data("<p>".utf8)
+            )
+        }
+        do {
+            _ = try await client.visualDocument(chatId: "chat-1", visualId: "visual-1", scheme: "light", theme: "aiden")
+            XCTFail("An oversized document must be refused.")
+        } catch {
+            XCTAssertEqual(error as? AidenRemoteContractError, .payloadTooLarge)
+        }
+    }
+
+    func testVisualDocumentRefusesUnsafeInputsWithoutCallingTheMac() async {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTFail("No request may leave for \(request.url?.absoluteString ?? "")")
+            return Self.response(for: request, status: 500, json: "{}")
+        }
+        let unsafe: [(chatId: String, visualId: String, scheme: String, theme: String)] = [
+            ("chat-1", "../attachments", "light", "aiden"),
+            ("chat-1", "visual 1", "light", "aiden"),
+            ("chat-1", String(repeating: "v", count: 257), "light", "aiden"),
+            ("chat/1", "visual-1", "light", "aiden"),
+            ("", "visual-1", "light", "aiden"),
+            ("chat-1", "visual-1", "sepia", "aiden"),
+            ("chat-1", "visual-1", "Dark", "aiden"),
+            ("chat-1", "visual-1", "light", "Dusk"),
+            ("chat-1", "visual-1", "light", "1dusk"),
+            ("chat-1", "visual-1", "light", ""),
+            ("chat-1", "visual-1", "light", String(repeating: "a", count: 33)),
+            ("chat-1", "visual-1", "light", "dusk&scheme=dark"),
+        ]
+        for input in unsafe {
+            do {
+                _ = try await client.visualDocument(
+                    chatId: input.chatId,
+                    visualId: input.visualId,
+                    scheme: input.scheme,
+                    theme: input.theme
+                )
+                XCTFail("Expected \(input) to be refused.")
+            } catch {
+                XCTAssertTrue(error is AidenRemoteClientError, "\(error)")
+            }
+        }
+    }
+
     func testForeignRunControlUsesRunScopedRoutesBodiesAndIdempotencyKeys() async throws {
         let client = makeClient()
         var requests: [(method: String?, path: String?, key: String?, body: [String: Any])] = []

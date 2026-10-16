@@ -392,6 +392,7 @@
         "main/services/aiden-remote-chat-progress.test.ts",
         "main/services/aiden-remote-chat-summaries.test.ts",
         "main/services/aiden-remote-chats.test.ts",
+        "main/services/visual-viewer-document.test.ts",
         "main/services/aiden-remote-files.test.ts",
         "main/services/aiden-remote-git.test.ts",
         "main/services/aiden-remote-host-feed.test.ts",
@@ -1203,6 +1204,18 @@
       "reason": "VCC tests and child compaction budget recovery require the built worker."
     },
     {
+      "id": "visual-viewer-build",
+      "for": [
+        "generative-ui-chromium"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:visual-viewer"
+      ],
+      "reason": "pretest:generative-ui phone visual viewer bundle."
+    },
+    {
       "id": "worktree-file-io-build",
       "command": [
         "npm",
@@ -1245,6 +1258,9 @@
         "npm",
         "run",
         "test:generative-ui"
+      ],
+      "requires": [
+        "visual-viewer-build"
       ],
       "reason": "Preserve the Playwright Chromium containment and fail-on-flaky gate."
     },
