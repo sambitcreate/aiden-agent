@@ -740,3 +740,13 @@ The desktop owner must explicitly allow **Paired-device chat controls** in Appea
 `GET /chats/{chatId}/controls/{panelId}` requires `chat:read`, `app-controls:read`, current canonical chat access and owner consent. It returns bounded, current host-owned labels, options, values, revisions and disabled reasons. `POST` on that same path additionally requires `app-controls:respond` and the exact four-field `AppControlOperation` in OpenAPI. Memory writes retain the existing `workspace:manage` requirement. Bot panels and changed workspace targets are unavailable. Preferences always affect the paired host; phone appearance remains device-local.
 
 The host persists an operation intent before entering its domain service and returns a verified receipt after persistence/effects. Repeating the same actor/target/operation ID returns its original receipt, including `outcome_unknown`; it cannot repeat an uncertain effect. A changed request under the same ID is rejected. Failed/offline clients do not queue writes. Re-read current state after a conflict or uncertain receipt. The revision represents the control's current value and policy, not an ordered event sequence. Confirmed receipts expire after 30 days; unresolved intents remain, and the ledger rejects new operations at 500 records instead of silently discarding replay protection.
+
+## Bot message attachments, revision 33 (`bot-attachments-v1`, provisional)
+
+A host announces `bot-attachments-v1` only while it stages phone uploads for Bots. A phone then attaches images and text files to a Bot message the same way it does in a workspace chat:
+
+- `POST /bots/{botId}/attachments` takes the chat `AttachmentUpload` body (PNG or JPEG images, or the listed text types) and returns a single-use `AttachmentReference` that expires after ten minutes. It needs `bot:read`, `bot:write` and `chat:write`, like sending a message.
+- `DELETE /bots/{botId}/attachments/{attachmentId}` drops an upload the person removed before sending. An unknown reference is already gone.
+- `POST /bots/{botId}/messages` accepts `attachmentIds` (1–10 unique references). With them the text may be empty. The references are spent once inside the idempotency ledger, so a retried request replays its receipt without spending them again.
+
+References are scoped to the uploading device and Bot: another device's send is `handle_wrong_device`, and a Bot reference can never be spent in a workspace chat (or a chat reference in a Bot). Images reach the Bot as image input, exactly as the desktop Bot chat sends them; text files follow the words as `name:` and their contents. A host without the feature refuses `attachmentIds` as `invalid_request` and answers the upload routes with `not_found`.
