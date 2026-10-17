@@ -974,8 +974,9 @@ final class AidenRemoteCoordinator {
               let saved = await chatCache.loadWorkspaces(instanceId: installationId),
               isCurrentContext(installationId: installationId, generation: generation),
               workspaces.isEmpty else { return }
+        // Not a live snapshot, so `workspaceSnapshotRevision` stays put and
+        // archive pruning waits for the Mac's own answer.
         workspaces = saved
-        workspaceSnapshotRevision &+= 1
     }
 
     private func persistWorkspaces() {

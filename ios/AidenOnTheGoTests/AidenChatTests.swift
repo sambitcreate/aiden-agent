@@ -7653,8 +7653,14 @@ final class AidenChatTests: XCTestCase {
             let reopened = AidenChatCache(root: root)
             let bytes = await reopened.attachmentImage(instanceId: "instance-progress-lifecycle", deviceId: "device-progress-lifecycle", chatId: model.chat.id, attachment: attachment)
             XCTAssertNil(bytes)
+            // The paired Mac's saved workspace list is not chat content, and a
+            // single chat's removal rightly keeps it.
+            let workspaceList = root.appending(path: "workspaces", directoryHint: .isDirectory).standardizedFileURL.path
             let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])?.allObjects as? [URL] ?? []
-            XCTAssertFalse(files.contains { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true })
+            XCTAssertFalse(files.contains {
+                (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+                    && !$0.standardizedFileURL.path.hasPrefix(workspaceList)
+            })
         }
     }
 
@@ -13399,6 +13405,14 @@ final class AidenCacheFirstHomeTests: XCTestCase {
             trust: AidenRemoteContractFixture.PairingTrust(mode: .system),
             name: "Cache First Mac"
         )
+        // What an earlier successful connection left on the installation.
+        let server = try AidenRemoteJSONDecoder.decode(AidenServer.self, from: Data("""
+        {"protocolVersion":1,"instanceId":"\(instanceId)","name":"Cache First Mac",
+        "appVersion":"1.0.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],
+        "serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],
+        "connectionMode":"lan","serverTime":"2026-10-16T07:00:00.000Z"}
+        """.utf8))
+        try store.updateServer(server)
         return AidenRemoteCoordinator(
             installationStore: store,
             chatCache: cache,
