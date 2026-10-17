@@ -33,6 +33,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     if (clients.size >= 64) { socket.destroy(); return; }
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
     let buffer = "", handled = false;
+    socket.setEncoding("utf8");
     socket.setTimeout(30_000, () => socket.destroy());
     socket.on("data", (data) => {
       if (handled) return;

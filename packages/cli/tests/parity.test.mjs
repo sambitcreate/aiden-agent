@@ -6,6 +6,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { createServer as createNetServer, createConnection } from "node:net";
 import { once } from "node:events";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { request as httpsRequest } from "node:https";
@@ -248,6 +249,53 @@ test("serve routes concurrent CLI commands and releases its lease on shutdown", 
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
   controller.abort(); await promise;
   const release = api.acquireLease(join(dir, "serve")); release();
+});
+
+test("daemon control socket decodes multi-byte UTF-8 split across chunks on both sides", async (t) => {
+  // Client side: a fake daemon streams a 2-byte-character reply in odd-sized chunks.
+  const fake = temporary(t);
+  const text = "é".repeat(300_000);
+  const server = createNetServer((socket) => {
+    socket.on("data", () => {
+      const bytes = Buffer.from(JSON.stringify({ result: { text } }) + "\n", "utf8");
+      let offset = 0;
+      const step = () => {
+        if (offset >= bytes.length) { socket.end(); return; }
+        const next = Math.min(bytes.length, offset + 65_537);
+        socket.write(bytes.subarray(offset, next), step);
+        offset = next;
+      };
+      step();
+    });
+  });
+  await new Promise((resolve) => server.listen(api.daemonSocket(fake), resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const received = await api.remoteDaemonCommand(fake, "schedule", ["list"]);
+  assert.equal(received.text.includes("\uFFFD"), false);
+  assert.equal(received.text, text);
+
+  // Server side: a request whose non-ASCII argument straddles two socket writes.
+  const dir = temporary(t), controller = new AbortController();
+  const promise = api.serve(dir, controller.signal);
+  t.after(async () => { controller.abort(); await promise; });
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { if (statSync(api.daemonSocket(dir)).isSocket()) break; } catch { /* starting */ }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const folder = join(dir, "wörkspace-☕"); mkdirSync(folder);
+  const request = Buffer.from(JSON.stringify({ command: "workspace", args: ["add", folder] }) + "\n", "utf8");
+  const cut = request.indexOf(Buffer.from("☕", "utf8")) + 1; // inside the 3-byte coffee cup
+  const reply = await new Promise((resolve, reject) => {
+    const socket = createConnection(api.daemonSocket(dir));
+    const chunks = [];
+    socket.on("error", reject);
+    socket.on("data", (chunk) => chunks.push(chunk));
+    socket.on("end", () => resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
+    socket.on("connect", () => socket.write(request.subarray(0, cut), () => setTimeout(() => socket.write(request.subarray(cut)), 20)));
+  });
+  assert.equal(reply.error, undefined, JSON.stringify(reply));
+  const listed = await api.remoteDaemonCommand(dir, "workspace", ["list"]);
+  assert.ok(listed.some((workspace) => workspace.folderPath.endsWith("wörkspace-☕")), JSON.stringify(listed));
 });
 
 test("foreground serve recovers a legacy stale lease naming a recycled foreign pid", async (t) => {
