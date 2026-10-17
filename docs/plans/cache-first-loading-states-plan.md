@@ -1,6 +1,6 @@
 # Cache-first loading states for every client
 
-Status: Proposed (2026-10-16). Plan only; nothing here is implemented yet.
+Status: Approved (2026-10-17); implementation not started. Decisions are recorded at the end.
 
 ## Problem
 
@@ -217,8 +217,10 @@ Per `AGENTS.md`, behavioral tests only, extending existing suites:
 - `.memory/android-optimistic-loading.md`: correct the stale "remaining indicators" note (Pairing and Appearance no longer have read spinners) and add the new caches.
 - `docs/plans/README.md`: status row for this plan.
 
-## Open questions
+## Decisions (2026-10-17)
 
-1. Should the desktop persist renderer data at all (D1, D3), or is it enough to fix the placeholders? This plan recommends persisting the small set above in main, not localStorage, because a blank sidebar on launch is the desktop's version of the screenshot.
-2. Should Recents prefetch the top transcripts on the phone (I2)? Recommended, capped at five chats and skipped in Low Data Mode.
-3. Should sending from a cold launch queue before the connection is up (I1, A2)? Recommended, through the existing pending-send stores, with the queued state visible on the message.
+The user approved these defaults:
+
+1. **Desktop persists a small read snapshot.** The workspaces list, the active workspace's chat list, the bots list and the last peer-host feeds are saved in main (not localStorage) and seed the renderer before the first read (D1, D3).
+2. **Phones prefetch recent transcripts.** After Recents refresh, the top five chats are prefetched into the transcript cache, skipped in Low Data Mode / on metered data saver (I2).
+3. **Sends queue while connecting.** Sending from a cold launch, before the connection is up, goes through the existing pending-send stores and is delivered once connected; the message shows its queued state (I1, A2).
