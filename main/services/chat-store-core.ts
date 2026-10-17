@@ -481,7 +481,18 @@ export function createChatStore(
   async function beginChatTransaction(id: string): Promise<void> {
     const target = await transactionPath(id);
     const directory = path.dirname(target);
-    const handle = await fs.open(target, "wx", 0o600);
+    let handle: fs.FileHandle;
+    try {
+      handle = await fs.open(target, "wx", 0o600);
+    } catch (error) {
+      // The per-chat lock guarantees no live writer owns this marker, so an
+      // existing one is an orphan from an earlier failed begin. Reconcile it
+      // before the next operation instead of failing this chat until restart.
+      if ((error as NodeJS.ErrnoException).code === "EEXIST" && initialized) {
+        reconcileNeeded = true;
+      }
+      throw error;
+    }
     try {
       await handle.writeFile("1\n", "utf8");
       await handle.sync();
@@ -999,8 +1010,8 @@ export function createChatStore(
     beforeRename: () => void = () => undefined,
   ): Promise<void> {
     chat.summaryRevision = newChatSummaryRevision();
-    await beginChatTransaction(chat.id);
     try {
+      await beginChatTransaction(chat.id);
       await writeChat(chat, beforeRename);
       await updateMeta(chat);
       await clearChatTransaction(chat.id);
