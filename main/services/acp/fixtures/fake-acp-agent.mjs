@@ -185,7 +185,7 @@ const connection = new AgentSideConnection(
         .filter((block) => block.type === "text")
         .map((block) => block.text)
         .at(-1) ?? "";
-      log({ method: "prompt", sessionId: session.id, model: session.model, mode: session.mode, blocks: params.prompt.map((b) => b.type), text });
+      log({ method: "prompt", sessionId: session.id, model: session.model, mode: session.mode, blocks: params.prompt.map((b) => b.type), contextText: params.prompt[0]?.resource?.text, text });
       const say = (value) =>
         connection.sessionUpdate({
           sessionId: session.id,

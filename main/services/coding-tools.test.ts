@@ -1601,6 +1601,73 @@ test("run_command cancellation kills the shell process group", async () => {
   }
 });
 
+test("run_command waits for resistant process-group cleanup after cancellation, timeout, and output overflow", async () => {
+  if (process.platform === "win32") return;
+  for (const trigger of ["cancel", "timeout", "output", "foreground"] as const) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `aiden-command-${trigger}-`));
+    const controller = new AbortController();
+    let running: Promise<unknown> | undefined;
+    try {
+      await fs.writeFile(path.join(root, "worker.cjs"), `
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+fs.writeFileSync("ready", String(process.pid));
+setInterval(() => fs.appendFileSync("heartbeat", "x"), 25);
+`);
+      if (trigger === "output") {
+        await fs.writeFile(path.join(root, "output.cjs"), 'process.stdout.write("x".repeat(11 * 1024 * 1024));');
+      }
+      const command = trigger === "foreground"
+        ? "node worker.cjs"
+        : trigger === "output"
+          ? "node worker.cjs >/dev/null 2>&1 & while [ ! -f ready ]; do sleep 0.01; done; node output.cjs; wait"
+          : "node worker.cjs >/dev/null 2>&1 & wait";
+      const runCommand = buildCodingTools(root, undefined, {
+        commandTimeoutMs: trigger === "timeout" ? 2_000 : undefined,
+      }).find((tool) => tool.name === "run_command")!;
+      running = runCommand.execute(trigger, { command }, controller.signal);
+
+      let pid = 0;
+      const readyDeadline = Date.now() + 5_000;
+      while (Date.now() < readyDeadline) {
+        pid = Number(await fs.readFile(path.join(root, "ready"), "utf8").catch(() => "0"));
+        const heartbeat = await fs.readFile(path.join(root, "heartbeat")).catch(() => Buffer.alloc(0));
+        if (pid > 0 && heartbeat.length >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(pid > 0, `${trigger}: worker did not become ready`);
+      if (trigger === "cancel" || trigger === "foreground") {
+        controller.abort(new Error(`${trigger} cancellation`));
+        await assert.rejects(running, new RegExp(`${trigger} cancellation`, "u"));
+      } else {
+        const result = await running as Awaited<ReturnType<typeof runCommand.execute>>;
+        assert.equal(result.isError, true);
+        assert.match(
+          result.content[0].type === "text" ? result.content[0].text : "",
+          trigger === "timeout" ? /^Command timed out\./u : /^Command exceeded the output limit\./u,
+        );
+      }
+
+      const before = (await fs.readFile(path.join(root, "heartbeat"))).length;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const after = (await fs.readFile(path.join(root, "heartbeat"))).length;
+      assert.equal(after, before, `${trigger}: descendant kept writing after the command settled`);
+      const status = await execFileAsync("ps", ["-o", "stat=", "-p", String(pid)])
+        .then(({ stdout }) => stdout.trim())
+        .catch(() => "");
+      assert.ok(!status || status.startsWith("Z"), `${trigger}: descendant is still executing (${status})`);
+    } finally {
+      controller.abort(new Error("fixture cleanup"));
+      await running?.catch(() => {});
+      const pid = Number(await fs.readFile(path.join(root, "ready"), "utf8").catch(() => "0"));
+      if (pid > 0) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ }
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("agent commands find user CLIs from a macOS GUI launch PATH", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agent-path-"));
   try {

@@ -157,6 +157,11 @@ actor AidenChatCache {
         let snapshot: CachedSummarySnapshot
     }
 
+    private struct WorkspaceListEnvelope: Codable {
+        let instanceId: String
+        let workspaces: [AidenWorkspace]
+    }
+
     private struct StreamEnvelope: Codable {
         let instanceId: String
         let chatId: String
@@ -256,6 +261,13 @@ actor AidenChatCache {
             value += 1
             return value
         }
+
+        func retainsInstance(_ token: UInt64, instanceId: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard token > (purged[instanceId] ?? 0) else { return false }
+            return !pending.values.contains { $0.instanceId == instanceId && $0.chatId == nil }
+        }
     }
 
     private nonisolated let chatWriteClock = ChatWriteClock()
@@ -283,6 +295,8 @@ actor AidenChatCache {
     private var admittedChats: [String: [String: AidenChat]] = [:]
     private var removedChatIDs: [String: Set<String>] = [:]
     private var chatPurgeGenerations: [String: UInt64] = [:]
+    private var workspaceListTokens: [String: UInt64] = [:]
+    private var admittedWorkspaceListSnapshots: [String: [AidenWorkspace]] = [:]
 
     nonisolated func reserveSummaryWrite(instanceId: String) -> UInt64 {
         chatWriteClock.reserveSummary(instanceId: instanceId)
@@ -617,11 +631,11 @@ actor AidenChatCache {
     }
 
     @discardableResult
-    func saveFetchedChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws -> Bool {
+    func saveFetchedChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64, updatesSummary: Bool = true) async throws -> Bool {
         // Check receipt authority after the write as well: an overlay can be
         // installed while this actor is suspended at the IO boundary.
         let accepted: Bool
-        do { accepted = try await saveChat(chat, instanceId: instanceId, writeToken: writeToken) }
+        do { accepted = try await saveChat(chat, instanceId: instanceId, writeToken: writeToken, updatesSummary: updatesSummary) }
         catch {
             if chatWriteGenerations[instanceId]?[chat.id] == writeToken {
                 fetchedChatTokens[instanceId, default: [:]][chat.id] = max(writeToken, fetchedChatTokens[instanceId]?[chat.id] ?? 0)
@@ -654,7 +668,7 @@ actor AidenChatCache {
     }
 
     @discardableResult
-    func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws -> Bool {
+    func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64, updatesSummary: Bool = true) async throws -> Bool {
         await beforeChatWrite?()
         guard !chatWriteClock.isPending(instanceId: instanceId, chatId: chat.id),
               isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id),
@@ -666,7 +680,7 @@ actor AidenChatCache {
         var canonical = chat
         canonical.localTitleOverride = nil
         admittedChats[instanceId, default: [:]][chat.id] = canonical
-        if !canonical.isBotChat, writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) {
+        if updatesSummary, !canonical.isBotChat, writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) {
             let cached = loadChatSummaries(instanceId: instanceId)
             let activity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
             let rows = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: [AidenChatSummary(chat: presenting(canonical, instanceId: instanceId), preservingActivity: activity)])
@@ -706,6 +720,42 @@ actor AidenChatCache {
             return nil
         }
         return SummarySnapshot(summaries: includingRemoved ? summaries : summaries.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }, nextCursor: envelope.snapshot.nextCursor)
+    }
+
+    /// Last authoritative `GET /workspaces` answer for one paired Mac, so Home
+    /// can project saved Recents before the connection is up.
+    func loadWorkspaces(instanceId: String) -> [AidenWorkspace]? {
+        if let admitted = admittedWorkspaceListSnapshots[instanceId] { return admitted }
+        guard (chatPurgeGenerations[instanceId] ?? 0) == 0 else { return nil }
+        guard let envelope: WorkspaceListEnvelope = load(
+            WorkspaceListEnvelope.self,
+            from: fileURL(kind: "workspaces", instanceId)
+        ), envelope.instanceId == instanceId,
+              Set(envelope.workspaces.map(\.id)).count == envelope.workspaces.count else {
+            return nil
+        }
+        return envelope.workspaces
+    }
+
+    /// Saves a workspace list reserved with `reserveChatWrite()` on the caller's
+    /// actor. Older reservations and reservations made before a purge lose.
+    @discardableResult
+    func saveWorkspaces(_ workspaces: [AidenWorkspace], instanceId: String, writeToken: UInt64) -> Bool {
+        guard chatWriteClock.retainsInstance(writeToken, instanceId: instanceId),
+              writeToken > (workspaceListTokens[instanceId] ?? 0) else { return false }
+        workspaceListTokens[instanceId] = writeToken
+        admittedWorkspaceListSnapshots[instanceId] = workspaces
+        do {
+            try save(
+                WorkspaceListEnvelope(instanceId: instanceId, workspaces: workspaces),
+                to: fileURL(kind: "workspaces", instanceId)
+            )
+        } catch {
+            try? fileManager.removeItem(at: fileURL(kind: "workspaces", instanceId))
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
+            return false
+        }
+        return true
     }
 
     func summaryState(instanceId: String) -> (snapshot: SummarySnapshot?, fullToken: UInt64, rowTokens: [String: UInt64]) {
@@ -939,6 +989,7 @@ actor AidenChatCache {
         admittedChats.removeValue(forKey: instanceId)
         renameTitles.removeValue(forKey: instanceId)
         summaryWriteGenerations.removeValue(forKey: instanceId)
+        admittedWorkspaceListSnapshots.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)
         for legacyRoot in legacyRoots where legacyRoot.standardizedFileURL != root.standardizedFileURL {
             purgeNamespace(legacyRoot, instanceId: instanceId)
@@ -1150,6 +1201,9 @@ actor AidenChatCache {
             $0.instanceId
         }
         purgeFiles(root: cacheRoot, kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) {
+            $0.instanceId
+        }
+        purgeFiles(root: cacheRoot, kind: "workspaces", instanceId: instanceId, as: WorkspaceListEnvelope.self) {
             $0.instanceId
         }
         try? fileManager.removeItem(at: attachmentInstanceDirectory(

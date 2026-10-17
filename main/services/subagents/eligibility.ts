@@ -1,3 +1,11 @@
+import type { WorkspacePermission } from "../types.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+
+/** The isolated child inference worker accepts model requests, not ACP sessions. */
+export function canDispatchSubagentModel(providerId: string): boolean {
+  return !isAcpHarnessProvider(providerId);
+}
+
 export interface SubagentEligibilityInput {
   assistantMode: boolean;
   /** The parent's provider; children inherit it. */
@@ -15,7 +23,7 @@ export function subagentsAllowedForGeneration(input: SubagentEligibilityInput): 
   return (
     !input.assistantMode &&
     // Agent harnesses have their own subagents and cannot run unattended children.
-    !(input.providerId && isAcpHarnessProvider(input.providerId)) &&
+    !(input.providerId && !canDispatchSubagentModel(input.providerId)) &&
     input.allowSubagents === true &&
     input.usageSource === "chat" &&
     !input.excludedToolNames?.has("subagent") &&
@@ -44,5 +52,3 @@ export function subagentWorkspaceWriteAllowedForGeneration(
     (input.generationPermission === "ask" || input.generationPermission === "full")
   );
 }
-import type { WorkspacePermission } from "../types.js";
-import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";

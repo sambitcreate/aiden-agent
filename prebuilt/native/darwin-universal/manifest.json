@@ -3,8 +3,12 @@
   "builtAt": "2026-10-16T03:49:05.251Z",
   "helpers": {
     "worktree-remover": {
-      "sha256": "72f46591d67614b8125feb58a0d8ac11e794ad83ae917076bb135a49396cb7be",
-      "source": "2d0dae7552acd391ea02189cbdcc016f04790032116e2a2c82cf15e6985178ca"
+      "sha256": "0425f2b33785009177a40bab2524f8db840fc7aa5be6da25d59401360b136fda",
+      "source": "bae1c9565939f0bbab15a5562685d17a41156733a0703ad0836e4b0294a45e48"
+    },
+    "lease-flock": {
+      "sha256": "a9dd128955b87813b235edf08e8fe23e3e307ed2300cf78f09ffb3523a8352be",
+      "source": "cde095d4e2059b8cc252c2f63701ed279f84a6f909c7842bc36c35cdd87a0dcc"
     },
     "subagent-run-store": {
       "sha256": "f7b4c84443e2b443f59b315fdd892b89d0f21ef35c8709c563a6070337b18988",

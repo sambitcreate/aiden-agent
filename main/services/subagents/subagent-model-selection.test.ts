@@ -297,6 +297,69 @@ test("the child resolver resolves each distinct model once and reuses the parent
   await assert.rejects(resolve({ role: "scout", model: "openai/gpt-mini", effort: "high" }, signal), /Supported efforts: off/);
 });
 
+test("ACP models cannot be offered, requested, or selected by saved child defaults", () => {
+  const providers = [
+    {
+      id: "openai", label: "OpenAI", needsKey: true, hasKey: true,
+      models: ["gpt-mini"], defaultModel: "gpt-mini",
+    },
+    {
+      id: "antigravity", label: "Antigravity", needsKey: true, hasKey: true,
+      models: ["gemini-3-flash"], defaultModel: "gemini-3-flash",
+    },
+  ];
+  const acpKey = "antigravity/gemini-3-flash";
+  const settings: SubagentModelSettings = {
+    defaultModel: acpKey,
+    roles: { planner: { model: acpKey, locked: true } },
+    allowedModels: [acpKey],
+  };
+  const candidates = subagentModelCandidatesFromSettings(providers, settings);
+  assert.deepEqual(candidates.map(subagentModelKey), ["openai/gpt-mini"]);
+  const current: SubagentModelPolicy = {
+    parent: { ...mini, effort: "off" }, candidates, overridesAllowed: true, settings,
+  };
+  assert.deepEqual(requestableSubagentModels(current).map(subagentModelKey), ["openai/gpt-mini"]);
+  const stalePolicy = {
+    ...current,
+    candidates: [...candidates, {
+      providerId: "antigravity", providerLabel: "Antigravity",
+      modelId: "gemini-3-flash", modelLabel: "Gemini 3 Flash",
+    }],
+  };
+  assert.deepEqual(requestableSubagentModels(stalePolicy).map(subagentModelKey), ["openai/gpt-mini"]);
+  const requested = planSubagentModel(current, { role: "scout", model: acpKey });
+  assert.equal(requested.ok, false);
+  assert.match(requested.ok ? "" : requested.error, /overrides are not available/u);
+  const staleDefault = planSubagentModel(stalePolicy, { role: "scout" });
+  assert.equal(staleDefault.ok && subagentModelKey(staleDefault.value.candidate), "openai/gpt-mini");
+  for (const role of ["scout", "planner"] as const) {
+    const configured = planSubagentModel(current, { role });
+    assert.equal(configured.ok, true);
+    assert.equal(configured.ok && subagentModelKey(configured.value.candidate), "openai/gpt-mini");
+    assert.match(configured.ok ? configured.value.warnings.join(" ") : "", /cannot run as a subagent/u);
+  }
+});
+
+test("child resolution rejects an ACP runtime before child dispatch", async () => {
+  const parentRuntime = runtime("openai", "gpt-mini", false);
+  const resolve = createSubagentChildModelResolver({
+    policy: {
+      parent: { ...mini, effort: "off" },
+      candidates: [mini, haiku],
+      overridesAllowed: true,
+      settings: { allowedModels: ["anthropic/claude-haiku"] },
+    },
+    parentRuntime,
+    savedEffort: () => undefined,
+    resolveRuntime: async () => runtime("antigravity", "gemini-3-flash", false),
+  });
+  await assert.rejects(
+    resolve({ role: "scout", model: "anthropic/claude-haiku" }, new AbortController().signal),
+    /Subagents are not available for agent-backed providers/u,
+  );
+});
+
 test("a large earlier catalog does not erase a later provider or its allowlisted model", () => {
   const firstModels = Array.from({ length: 150 }, (_, index) => `catalog-${index}`);
   const lateKey = "second/late-default";

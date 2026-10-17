@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Home opens from what this iPhone saved: the workspace list is now kept per paired Mac, so Recents and Workspaces show at once while the Mac connects instead of "No Chats Yet" behind a "Connecting to Aiden Agent…" overlay. A first read with nothing saved shows shaped skeleton rows, empty states appear only after the Mac answers, and an unreachable Mac with nothing saved says so. Connecting is a quiet one-line hint, Scheduled Tasks and Usage are no longer greyed out while connecting, and New chat waits for the connection instead of being disabled. Recents rows with a saved transcript open immediately and refresh once the Mac connects, and the five newest transcripts are saved in the background after each refresh (skipped in Low Data Mode) without changing their unread or needs-approval state. A failed Usage read says so with Try Again instead of loading forever.
+
 - The three onboarding pages now draw their art natively: tinted, cropped slices of the workspace chat, the model menu, and Scheduled Tasks that follow light, dark, and every theme preset, with motion that holds still under Reduce Motion and Low Power Mode. The old clay images are gone.
 
 - Agent details now follow the delegated-agent ancestry: Back returns through parents to the roster, and Started by / Sub-agents links stay inside the current chat inspector.

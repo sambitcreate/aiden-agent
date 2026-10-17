@@ -123,7 +123,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   workspaceIsChanging: (workspaceId) => workspaceMutationGate.isChanging(workspaceId),
   cancelWorkspaceOperations: (workspaceId, exceptSignal) =>
     workspaceOperationRegistry.cancelAndSettle(workspaceId, { exceptSignal }),
-  closeWorkspaceTerminals: (workspaceId) => terminalService.closeForWorkspace(workspaceId),
+  closeWorkspaceTerminals: (workspaceId) => terminalService.closeForWorkspaceAndWait(workspaceId),
   cancelWorkspaceGeneration: (workspaceId) => llmClient.cancelWorkspaceAndSettle(workspaceId),
   cancelWorkspaceSchedules: (workspaceId) => scheduleService.cancelWorkspace(workspaceId),
   resumeWorkspaceSchedules: (workspaceId) => scheduleService.resumeWorkspace(workspaceId),

@@ -1,7 +1,6 @@
 /* global Buffer, process */
 /**
- * Shared helpers for the four Aiden native binaries (worktree-remover,
- * subagent-run-store, subagent-shell-runner, subagent-file-mutator):
+ * Shared helpers for the Aiden native binaries:
  * platform/arch target naming and cheap binary-architecture verification so a
  * prebuilt directory can never silently install the wrong architecture.
  */
@@ -12,6 +11,7 @@ import { join } from "node:path";
 
 export const NATIVE_HELPERS = [
   "worktree-remover",
+  "lease-flock",
   "subagent-run-store",
   "subagent-shell-runner",
   "subagent-file-mutator",

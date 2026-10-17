@@ -46,14 +46,14 @@ function ownerState(documentId = "document-1", id = 42) {
   };
 }
 
-function fakePty() {
+function fakePty(pid = 999_999) {
   let killed = false;
   let dataListener: ((data: string) => void) | undefined;
   let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
   const writes: string[] = [];
   const resizes: Array<{ cols: number; rows: number }> = [];
   const pty = {
-    pid: 999_999,
+    pid,
     kill: () => {
       killed = true;
     },
@@ -81,6 +81,31 @@ function fakePty() {
     emitExit: (exitCode = 0, signal?: number) => exitListener?.({ exitCode, signal }),
   };
 }
+
+test("invalid PTY identities never signal a process group or bypass the removal hold", async () => {
+  for (const pid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const owner = ownerState();
+    const child = fakePty(pid);
+    const signaled: number[] = [];
+    const service = new TerminalService({
+      prepareSpawnHelper: async () => undefined,
+      spawnPty: (() => child.pty) as typeof spawn,
+      signalProcess: (target) => { signaled.push(target); },
+    });
+    await assert.rejects(
+      service.create("managed-workspace", "/tmp", owner.owner),
+      /terminal process identity could not be verified/u,
+    );
+    assert.deepEqual(signaled, []);
+    assert.equal(child.killed(), false, "node-pty kill also signals its reported PID");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(
+        service.closeForWorkspaceAndWait("managed-workspace", 10),
+        /cannot safely remove it in this session/u,
+      );
+    }
+  }
+});
 
 test("renderer destruction during terminal revalidation prevents spawn", async () => {
   const owner = ownerState();
@@ -126,6 +151,36 @@ test("renderer destruction at the synchronous spawn boundary kills the new PTY",
   );
   assert.equal(child.killed(), true);
   assert.throws(() => service.workspaceId("missing", owner.owner), /unavailable/u);
+  child.emitExit(0);
+  await service.closeForWorkspaceAndWait("workspace-1", 10);
+});
+
+test("synchronous owner invalidation during terminal subscription still permits a later drain", async () => {
+  const stableOwner = ownerState();
+  const child = fakePty();
+  const owner: RendererDocumentOwner = {
+    ...stableOwner.owner,
+    onInvalidated: (listener) => {
+      listener();
+      return () => undefined;
+    },
+  };
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+  });
+
+  await assert.rejects(
+    service.create("workspace-1", "/tmp", owner),
+    /renderer document changed before the terminal could start/u,
+  );
+  assert.equal(child.killed(), true);
+  await assert.rejects(
+    service.closeForWorkspaceAndWait("workspace-1", 10),
+    /terminal process is still exiting/u,
+  );
+  child.emitExit(0);
+  await service.closeForWorkspaceAndWait("workspace-1", 10);
 });
 
 test("renderer reload invalidates a pending terminal before helper preparation can spawn", async () => {
@@ -778,6 +833,75 @@ test("terminal teardown is scoped by workspace and renderer web contents", async
     channel: "terminal:exit",
     payload: { sessionId: third.id, exitCode: null, signal: "SIGHUP" },
   });
+});
+
+test("managed worktree removal waits for owned terminal exit and reports a stuck shell", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+  });
+  await service.create("managed-workspace", "/tmp", owner.owner);
+
+  let settled = false;
+  const closing = service.closeForWorkspaceAndWait("managed-workspace", 100)
+    .then(() => { settled = true; });
+  assert.equal(child.killed(), true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "signalling the PTY is not proof that it exited");
+  child.emitExit(0);
+  await closing;
+  assert.equal(settled, true);
+
+  const stuck = fakePty();
+  const stuckService = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => stuck.pty) as typeof spawn,
+  });
+  await stuckService.create("managed-workspace", "/tmp", owner.owner);
+  await assert.rejects(
+    stuckService.closeForWorkspaceAndWait("managed-workspace", 10),
+    /terminal process is still exiting/u,
+  );
+  await assert.rejects(
+    stuckService.closeForWorkspaceAndWait("managed-workspace", 10),
+    /terminal process is still exiting/u,
+  );
+  stuck.emitExit(0);
+  await stuckService.closeForWorkspaceAndWait("managed-workspace", 10);
+});
+
+test("managed worktree removal refuses a surviving job in the PTY session after shell exit", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  let sessionHasSurvivor = true;
+  let inventoryAvailable = false;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    // The job has a different PID and process group but retains the shell's
+    // POSIX session ID after the shell and controlling PTY disappear.
+    sessionHasMembers: async (sessionId) => {
+      assert.equal(sessionId, child.pty.pid);
+      if (!inventoryAvailable) throw new Error("process inventory unavailable");
+      return sessionHasSurvivor;
+    },
+  });
+  await service.create("managed-workspace", "/tmp", owner.owner);
+  child.emitExit(0);
+
+  await assert.rejects(
+    service.closeForWorkspaceAndWait("managed-workspace", 10),
+    /could not verify terminal jobs/u,
+  );
+  inventoryAvailable = true;
+  await assert.rejects(
+    service.closeForWorkspaceAndWait("managed-workspace", 10),
+    /terminal job is still running/u,
+  );
+  sessionHasSurvivor = false;
+  await service.closeForWorkspaceAndWait("managed-workspace", 10);
 });
 
 test("terminal enforces the per-document session cap and history initialization order", async () => {

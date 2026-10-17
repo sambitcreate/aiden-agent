@@ -23,6 +23,8 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     updatedAt: 2,
   };
   let managed: Workspace | undefined;
+  let releaseTerminals: () => void = () => undefined;
+  let terminalDrain: Promise<void> = Promise.resolve();
   const signal = new AbortController().signal;
   const service = createWorkspaceWorktreeApplicationService({
     environment: {
@@ -114,7 +116,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     },
     workspaceIsChanging: () => false,
     cancelWorkspaceOperations: async () => { events.push("cancel-operations"); },
-    closeWorkspaceTerminals: () => { events.push("close-terminals"); },
+    closeWorkspaceTerminals: async () => {
+      events.push("close-terminals");
+      await terminalDrain;
+    },
     cancelWorkspaceGeneration: async () => { events.push("cancel-generation"); },
     cancelWorkspaceSchedules: async () => { events.push("cancel-schedules"); },
     resumeWorkspaceSchedules: async () => { events.push("resume-schedules"); },
@@ -135,9 +140,19 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   ]);
 
   events.length = 0;
-  const removed = await service.remove(owner, created.id, (workspace) => {
+  terminalDrain = new Promise<void>((resolve) => { releaseTerminals = resolve; });
+  const removal = service.remove(owner, created.id, (workspace) => {
     events.push(`validate:${workspace.id}`);
   });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, [
+    "validate:workspace-managed",
+    "begin-mutation",
+    "cancel-operations",
+    "close-terminals",
+  ], "Git deletion must wait for terminal exit");
+  releaseTerminals();
+  const removed = await removal;
   assert.equal(removed.branchDeleted, true);
   assert.deepEqual(events, [
     "validate:workspace-managed",
@@ -287,7 +302,7 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     beginWorkspaceMutation: () => () => undefined,
     workspaceIsChanging: () => false,
     cancelWorkspaceOperations: async () => undefined,
-    closeWorkspaceTerminals: () => undefined,
+    closeWorkspaceTerminals: async () => undefined,
     cancelWorkspaceGeneration: async () => undefined,
     cancelWorkspaceSchedules: async () => undefined,
     resumeWorkspaceSchedules: async () => undefined,
