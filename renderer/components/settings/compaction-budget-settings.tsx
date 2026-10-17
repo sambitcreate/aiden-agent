@@ -18,10 +18,11 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
   const suggestions = React.useMemo(() => [...new Set([...Object.keys(overrides), ...modelKeys])], [overrides, modelKeys]);
   const choose = (key: string) => {
     setModelKey(key);
-    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
-      setReserve(overrides[key]?.reserveTokens?.toString() ?? "");
-      setRecent(overrides[key]?.keepRecentTokens?.toString() ?? "");
-    }
+    // Always replace both fields: a model with no override must start blank
+    // rather than inherit the numbers of the model chosen before it.
+    const budget = Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : undefined;
+    setReserve(budget?.reserveTokens?.toString() ?? "");
+    setRecent(budget?.keepRecentTokens?.toString() ?? "");
     setError(undefined);
   };
   const save = async (reset: boolean) => {
