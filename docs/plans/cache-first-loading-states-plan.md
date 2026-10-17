@@ -1,6 +1,9 @@
 # Cache-first loading states for every client
 
-Status: Approved (2026-10-17); implementation not started. Decisions are recorded at the end.
+Status: Approved (2026-10-17); in progress. Decisions are recorded at the end.
+
+Progress:
+- 2026-10-17: I1 (iOS Home and Recents) and the cache-hit half of I2 implemented on the plan PR: saved workspace list in `AidenChatCache` (seeded on connect, purged on unpair), Home hydrates saved Recents before the connection guard, `AidenReadPresentation` with `AidenChatListSkeleton`, quiet connecting hint, Usage skeleton sheet, Scheduled Tasks enabled from cache, New chat waits for the connection, cache-first open of Recents rows, and top-five transcript prefetch (off in Low Data Mode). Needs a simulator build and test run on the Mac. Remaining iOS work: cold-cache transcript skeleton in the chat view, usage disk cache, I3 onward.
 
 ## Problem
 

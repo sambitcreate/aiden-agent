@@ -13332,3 +13332,220 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.completed)), "Generated image")
     }
 }
+
+/// Cold launch shows what this iPhone saved instead of an empty Home while
+/// the Mac is still being reached.
+@MainActor
+final class AidenCacheFirstHomeTests: XCTestCase {
+    private let instanceId = "instance-cache-first"
+
+    private func workspace(_ id: String, name: String) -> AidenWorkspace {
+        let base = Date(timeIntervalSince1970: 1_787_000_000)
+        return AidenWorkspace(
+            id: id,
+            name: name,
+            permission: .ask,
+            hasFolder: true,
+            isManagedWorktree: false,
+            branchName: nil,
+            repositoryName: nil,
+            git: nil,
+            createdAt: base,
+            updatedAt: base.addingTimeInterval(10),
+            revision: "\(id)-r1"
+        )
+    }
+
+    private func chat(_ id: String, workspaceId: String, updatedAt: TimeInterval) -> AidenChat {
+        AidenChat(
+            id: id,
+            workspaceId: workspaceId,
+            title: "Chat \(id)",
+            providerId: nil,
+            modelId: nil,
+            messages: [
+                AidenChatMessage(
+                    id: "\(id)-message",
+                    role: .user,
+                    text: "Hello",
+                    createdAt: Date(timeIntervalSince1970: 1_787_100_000)
+                ),
+            ],
+            createdAt: Date(timeIntervalSince1970: 1_787_100_000),
+            updatedAt: Date(timeIntervalSince1970: updatedAt),
+            revision: "revision-1"
+        )
+    }
+
+    private func makeCache() -> (AidenChatCache, URL) {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-cache-first-\(UUID())")
+        return (AidenChatCache(root: root, legacyRoots: []), root)
+    }
+
+    /// A paired installation whose Mac cannot be reached: every client the
+    /// coordinator builds fails, as an offline network would.
+    private func makeUnreachableCoordinator(cache: AidenChatCache) throws -> AidenRemoteCoordinator {
+        let store = AidenInstallationStore(keychain: AidenCacheFirstMemoryKeychain())
+        _ = try store.savePairing(
+            AidenRemoteContractFixture.PairingExchange(
+                protocolVersion: 1,
+                instanceId: instanceId,
+                deviceId: "device-cache-first",
+                credential: "credential-cache-first",
+                capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite],
+                endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,
+                serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            ),
+            trust: AidenRemoteContractFixture.PairingTrust(mode: .system),
+            name: "Cache First Mac"
+        )
+        return AidenRemoteCoordinator(
+            installationStore: store,
+            chatCache: cache,
+            clientFactory: { _, _ in throw URLError(.notConnectedToInternet) }
+        )
+    }
+
+    func testSavedWorkspaceListSurvivesRelaunchUntilPurged() async throws {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let saved = [workspace("alpha", name: "Alpha"), workspace("beta", name: "Beta")]
+
+        let accepted = await cache.saveWorkspaces(saved, instanceId: instanceId, writeToken: cache.reserveChatWrite())
+        XCTAssertTrue(accepted)
+        let relaunched = AidenChatCache(root: root, legacyRoots: [])
+        let restored = await relaunched.loadWorkspaces(instanceId: instanceId)
+        XCTAssertEqual(restored, saved)
+        let otherMac = await relaunched.loadWorkspaces(instanceId: "another-instance")
+        XCTAssertNil(otherMac)
+
+        await relaunched.purge(instanceId: instanceId)
+        let afterPurge = AidenChatCache(root: root, legacyRoots: [])
+        let purged = await afterPurge.loadWorkspaces(instanceId: instanceId)
+        XCTAssertNil(purged)
+    }
+
+    func testWorkspaceListWritesReservedBeforeAPurgeOrANewerWriteLose() async throws {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let older = cache.reserveChatWrite()
+        let newer = cache.reserveChatWrite()
+        let current = await cache.saveWorkspaces([workspace("new", name: "New")], instanceId: instanceId, writeToken: newer)
+        XCTAssertTrue(current)
+        let stale = await cache.saveWorkspaces([workspace("old", name: "Old")], instanceId: instanceId, writeToken: older)
+        XCTAssertFalse(stale)
+        let kept = await cache.loadWorkspaces(instanceId: instanceId)
+        XCTAssertEqual(kept?.map(\.id), ["new"])
+
+        let reservedBeforePurge = cache.reserveChatWrite()
+        await cache.purge(instanceId: instanceId)
+        let late = await cache.saveWorkspaces(
+            [workspace("revoked", name: "Revoked")],
+            instanceId: instanceId,
+            writeToken: reservedBeforePurge
+        )
+        XCTAssertFalse(late)
+        let relaunched = AidenChatCache(root: root, legacyRoots: [])
+        let afterPurge = await relaunched.loadWorkspaces(instanceId: instanceId)
+        XCTAssertNil(afterPurge)
+    }
+
+    func testUnreachableMacStillShowsSavedWorkspaces() async throws {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let saved = [workspace("alpha", name: "Alpha")]
+        _ = await cache.saveWorkspaces(saved, instanceId: instanceId, writeToken: cache.reserveChatWrite())
+        let coordinator = try makeUnreachableCoordinator(cache: cache)
+
+        await coordinator.start()
+
+        guard case .offline = coordinator.connectionState else {
+            return XCTFail("Expected offline, got \(coordinator.connectionState)")
+        }
+        XCTAssertEqual(coordinator.workspaces, saved)
+    }
+
+    func testHomeShowsSavedRecentsBeforeTheMacAnswers() async throws {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = [
+            AidenChatSummary(chat: chat("newer", workspaceId: "alpha", updatedAt: 1_787_100_020)),
+            AidenChatSummary(chat: chat("older", workspaceId: "alpha", updatedAt: 1_787_100_010)),
+        ]
+        _ = try await cache.saveChatSummaries(
+            .init(summaries: rows, nextCursor: nil),
+            instanceId: instanceId,
+            writeToken: cache.reserveChatWrite()
+        )
+        let coordinator = try makeUnreachableCoordinator(cache: cache)
+        XCTAssertEqual(coordinator.connectionState, .connecting)
+        let home = AidenHomeModel(chatCache: cache)
+
+        await home.load(coordinator: coordinator)
+
+        XCTAssertEqual(home.chats.map(\.id), ["newer", "older"])
+        XCTAssertEqual(
+            aidenHomeChatListPresentation(
+                hasRows: !home.chats.isEmpty,
+                connectionState: coordinator.connectionState,
+                loadState: home.chatListLoadState
+            ),
+            .content
+        )
+    }
+
+    func testOpeningASavedRecentUsesItsTranscriptWithoutTheNetwork() async throws {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let saved = chat("saved", workspaceId: "alpha", updatedAt: 1_787_100_020)
+        _ = try await cache.saveChat(saved, instanceId: instanceId, writeToken: cache.reserveChatWrite())
+        let home = AidenHomeModel(chatCache: cache)
+
+        let opened = await home.cachedWorkspaceChat(id: "saved", workspaceId: "alpha", instanceId: instanceId)
+        XCTAssertEqual(opened?.messages.map(\.id), ["saved-message"])
+        let movedWorkspace = await home.cachedWorkspaceChat(id: "saved", workspaceId: "beta", instanceId: instanceId)
+        XCTAssertNil(movedWorkspace)
+    }
+
+    func testRecentsNeverClaimEmptyBeforeTheMacAnswers() {
+        typealias Load = AidenHomeModel.ChatListLoadState
+        let cases: [(Bool, AidenRemoteConnectionState, Load, AidenReadPresentation)] = [
+            (false, .connecting, .unresolved, .skeleton),
+            (false, .connected, .loading, .skeleton),
+            (false, .connected, .loaded, .empty),
+            (false, .offline(message: "Offline"), .unresolved, .failed),
+            (false, .connected, .failed("Boom"), .failed),
+            (true, .connecting, .unresolved, .content),
+            (true, .offline(message: "Offline"), .unresolved, .content),
+            (true, .connected, .failed("Boom"), .content),
+        ]
+        for (hasRows, connection, load, expected) in cases {
+            XCTAssertEqual(
+                aidenHomeChatListPresentation(hasRows: hasRows, connectionState: connection, loadState: load),
+                expected,
+                "rows: \(hasRows), connection: \(connection), load: \(load)"
+            )
+        }
+        XCTAssertEqual(aidenHomeWorkspaceListPresentation(hasWorkspaces: false, connectionState: .connecting), .skeleton)
+        XCTAssertEqual(aidenHomeWorkspaceListPresentation(hasWorkspaces: false, connectionState: .connected), .empty)
+        XCTAssertEqual(aidenHomeWorkspaceListPresentation(hasWorkspaces: false, connectionState: .offline(message: "x")), .failed)
+        XCTAssertEqual(aidenHomeWorkspaceListPresentation(hasWorkspaces: true, connectionState: .offline(message: "x")), .content)
+    }
+}
+
+private final class AidenCacheFirstMemoryKeychain: KeychainStoring {
+    private var values: [String: String] = [:]
+
+    func save(_ value: String, forKey key: KeychainStore.Key) throws { values[key.rawValue] = value }
+    func load(_ key: KeychainStore.Key) throws -> String? { values[key.rawValue] }
+    func delete(_ key: KeychainStore.Key) throws { values[key.rawValue] = nil }
+    func save(_ value: String, forKey key: KeychainStore.Key, scope: String) throws {
+        values[KeychainStore.scopedKey(key, scope: scope)] = value
+    }
+    func load(_ key: KeychainStore.Key, scope: String) throws -> String? {
+        values[KeychainStore.scopedKey(key, scope: scope)]
+    }
+    func delete(_ key: KeychainStore.Key, scope: String) throws {
+        values[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
