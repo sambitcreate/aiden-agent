@@ -21,6 +21,7 @@ import { createTelegramServiceCore, telegramCompactionCallback } from "./telegra
 import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 import { telegramChatId } from "./telegram-turn.js";
 import { TelegramApiError } from "./telegram-bot-api.js";
+import { BotSessionError } from "../bot-runtime/bot-session-service.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -1226,6 +1227,106 @@ test("a Bot message whose admission fails keeps the offset so Telegram redeliver
   await service.start();
   await waitFor(() => attempts === 1 && logs.errors.length > 0);
   assert.equal(config.persistOffsetCalls(), 0);
+});
+
+test("a Bot message that keeps failing is retried with a growing pause, not in a hot loop", async () => {
+  const owner = person(42, "owner");
+  const update = makeUpdate(7, makeMessage(10, owner, "plan dinner"));
+  let attempts = 0;
+  const { service, api, config, sleepMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    // Telegram redelivers the same update on every poll while it stays unacknowledged.
+    batches: [[update], [update], [update]],
+    autoStop: false,
+    botIngress: {
+      admit: async () => {
+        attempts += 1;
+        throw new Error("Bots are open in another Aiden window.");
+      },
+    },
+  });
+
+  await service.start();
+  await waitFor(() => api.getUpdatesCalls() === 4);
+  service.stop();
+
+  assert.equal(attempts, 3, "each redelivery is retried once");
+  assert.equal(sleepMock.calls(), 3, "every failed attempt waits before the next poll");
+  const pauses = sleepMock.lastArgs();
+  assert.ok(pauses.every((ms, index) => ms > 0 && (index === 0 || ms >= pauses[index - 1]!)), `pauses grow: ${pauses.join(", ")}`);
+  assert.equal(config.persistOffsetCalls(), 0, "the offset is kept so Telegram redelivers");
+  assert.equal(api.sentMessages.length, 0, "no error is sent while the failure may still be transient");
+});
+
+test("a Bot message that fails the same way on every redelivery is reported to the chat and skipped", async () => {
+  const owner = person(42, "owner");
+  const poison = makeUpdate(7, makeMessage(10, owner, "plan dinner"));
+  const next = makeUpdate(8, makeMessage(11, owner, "plan lunch"));
+  let attempts = 0;
+  const admitted: string[] = [];
+  const { service, api, config } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[poison], [poison], [poison], [poison], [poison], [poison, next]],
+    autoStop: true,
+    botIngress: {
+      admit: async (message) => {
+        if (message.text === "plan dinner") {
+          attempts += 1;
+          throw new Error("The Bot's storage is unreadable.");
+        }
+        admitted.push(message.text);
+        return { requestId: "r", deduped: false };
+      },
+    },
+  });
+
+  await service.start();
+  await waitFor(() => admitted.length === 1);
+
+  assert.equal(attempts, 5, "the poison update is given a bounded number of attempts");
+  assert.deepEqual(
+    api.sentMessages.filter(({ chatId }) => chatId === durableBinding.chatId).map(({ text }) => text),
+    ["⚠️ Error: The Bot's storage is unreadable."],
+  );
+  assert.ok(config.persistOffsetCalls() >= 2, "the offset moves past the poison update and the one after it");
+  assert.deepEqual(admitted, ["plan lunch"], "later updates on the profile are no longer blocked");
+});
+
+test("a Bot that cannot take messages at all is told once and the update is not redelivered", async () => {
+  const owner = person(42, "owner");
+  let attempts = 0;
+  const { service, api, config } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
+    autoStop: true,
+    botIngress: {
+      admit: async () => {
+        attempts += 1;
+        throw new BotSessionError("needs_model");
+      },
+    },
+  });
+
+  await service.start();
+  await waitFor(() => config.persistOffsetCalls() === 1);
+
+  assert.equal(attempts, 1, "a Bot without a model is not retried");
+  assert.deepEqual(
+    api.sentMessages.filter(({ chatId }) => chatId === durableBinding.chatId).map(({ text }) => text),
+    ["⚠️ Error: This Bot needs an AI model."],
+  );
 });
 
 test("an ordinary unbound route never enters Bot validation or changes fallback routing", async () => {
