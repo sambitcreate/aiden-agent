@@ -5236,6 +5236,11 @@ struct AidenChatDetailView: View {
             guard scenePhase != .background else { return }
             await model.load(observeProgress: true)
         }
+        .onChange(of: coordinator?.connectionState) { old, new in
+            // A chat opened from its saved copy while connecting reloads once
+            // the Mac answers, so the transcript and read state reconcile.
+            if new == .connected, old != .connected { chatLoadEpoch &+= 1 }
+        }
         .task(id: coordinator?.server?.serverTime) {
             guard scenePhase == .active else { return }
             model.startProgressObservation()

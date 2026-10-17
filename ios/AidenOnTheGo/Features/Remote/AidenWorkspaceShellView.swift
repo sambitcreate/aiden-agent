@@ -176,6 +176,8 @@ final class AidenHomeModel {
     var chats: [AidenChatSummary] = []
     var scheduledTasks: [AidenScheduledTask] = []
     var usage: AidenUsageSummary?
+    /// The last Usage read failed with nothing saved to show.
+    var usageLoadFailed = false
     var modelCatalog: AidenModelCatalog?
     var isLoading = false
     var errorMessage: String?
@@ -362,12 +364,13 @@ final class AidenHomeModel {
             chatListLoadState = .loaded
         }
         if !plan.loadsScheduledTasks { scheduledTasks = [] }
-        if !plan.loadsUsage { usage = nil }
+        if !plan.loadsUsage { usage = nil; usageLoadFailed = false }
         guard isConnected else { return }
         guard !plan.loadsChats || latestSummaryRequestToken == writeToken else { return }
         loadingAttempt = attempt
         isLoading = true
         errorMessage = nil
+        usageLoadFailed = false
         if plan.loadsChats { chatListLoadState = .loading }
         defer {
             if loadingAttempt == attempt {
@@ -459,7 +462,9 @@ final class AidenHomeModel {
             switch usageResult {
             case .success(let loadedUsage):
                 if let loadedUsage { usage = loadedUsage }
-            case .failure(let error): failures.append(error)
+            case .failure(let error):
+                failures.append(error)
+                usageLoadFailed = usage == nil
             }
             errorMessage = failures.first?.localizedDescription
         } catch let error where aidenIsCancellation(error) {
@@ -503,7 +508,9 @@ final class AidenHomeModel {
                 guard let chat = try? await client.chat(id: summary.id),
                       chat.id == summary.id, !chat.isBotChat,
                       !Task.isCancelled, coordinator.isCurrent(context) else { continue }
-                _ = try? await cache.saveFetchedChat(chat, instanceId: context.instanceId, writeToken: writeToken)
+                // The list row stays as the Mac sent it: a prefetch is not a
+                // view, so unread and attention state must survive.
+                _ = try? await cache.saveFetchedChat(chat, instanceId: context.instanceId, writeToken: writeToken, updatesSummary: false)
             }
         }
     }
@@ -634,12 +641,14 @@ struct AidenChatListSkeleton: View {
 }
 
 /// Usage before its first read: the dashboard's outline, or an explanation
-/// when the Mac can't be reached.
+/// when the Mac can't be reached or the read failed.
 private struct AidenUsagePendingView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let isOffline: Bool
+    let failed: Bool
+    let retry: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -650,6 +659,14 @@ private struct AidenUsagePendingView: View {
                         systemImage: "chart.bar.xaxis",
                         description: Text("Usage appears once your Mac is reachable.")
                     )
+                } else if failed {
+                    ContentUnavailableView {
+                        Label("Usage Couldn't Load", systemImage: "chart.bar.xaxis")
+                    } description: {
+                        Text("Your Mac didn't return usage this time.")
+                    } actions: {
+                        Button("Try Again", action: retry)
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: 20) {
                         HStack(spacing: 12) {
@@ -1263,10 +1280,14 @@ struct AidenWorkspaceShellView: View {
                 if let usage = homeModel.usage {
                     AidenUsageView(usage: usage, providers: homeModel.modelCatalog?.providers ?? [])
                 } else {
-                    AidenUsagePendingView(isOffline: {
-                        if case .offline = coordinator.connectionState { return true }
-                        return false
-                    }())
+                    AidenUsagePendingView(
+                        isOffline: {
+                            if case .offline = coordinator.connectionState { return true }
+                            return false
+                        }(),
+                        failed: homeModel.usageLoadFailed,
+                        retry: { Task { await homeModel.load(coordinator: coordinator) } }
+                    )
                 }
             }
             .presentationDetents([.large])

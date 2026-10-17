@@ -631,11 +631,11 @@ actor AidenChatCache {
     }
 
     @discardableResult
-    func saveFetchedChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws -> Bool {
+    func saveFetchedChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64, updatesSummary: Bool = true) async throws -> Bool {
         // Check receipt authority after the write as well: an overlay can be
         // installed while this actor is suspended at the IO boundary.
         let accepted: Bool
-        do { accepted = try await saveChat(chat, instanceId: instanceId, writeToken: writeToken) }
+        do { accepted = try await saveChat(chat, instanceId: instanceId, writeToken: writeToken, updatesSummary: updatesSummary) }
         catch {
             if chatWriteGenerations[instanceId]?[chat.id] == writeToken {
                 fetchedChatTokens[instanceId, default: [:]][chat.id] = max(writeToken, fetchedChatTokens[instanceId]?[chat.id] ?? 0)
@@ -668,7 +668,7 @@ actor AidenChatCache {
     }
 
     @discardableResult
-    func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws -> Bool {
+    func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64, updatesSummary: Bool = true) async throws -> Bool {
         await beforeChatWrite?()
         guard !chatWriteClock.isPending(instanceId: instanceId, chatId: chat.id),
               isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id),
@@ -680,7 +680,7 @@ actor AidenChatCache {
         var canonical = chat
         canonical.localTitleOverride = nil
         admittedChats[instanceId, default: [:]][chat.id] = canonical
-        if !canonical.isBotChat, writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) {
+        if updatesSummary, !canonical.isBotChat, writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) {
             let cached = loadChatSummaries(instanceId: instanceId)
             let activity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
             let rows = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: [AidenChatSummary(chat: presenting(canonical, instanceId: instanceId), preservingActivity: activity)])

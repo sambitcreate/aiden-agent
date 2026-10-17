@@ -13508,6 +13508,31 @@ final class AidenCacheFirstHomeTests: XCTestCase {
         )
     }
 
+    func testPrefetchedTranscriptKeepsTheMacsUnreadAndAttentionState() async throws {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var row = AidenChatSummary(chat: chat("waiting", workspaceId: "alpha", updatedAt: 1_787_100_020))
+        row.unread = true
+        row.rowState = .needsApproval
+        _ = try await cache.saveChatSummaries(
+            .init(summaries: [row], nextCursor: nil),
+            instanceId: instanceId,
+            writeToken: cache.reserveChatWrite()
+        )
+        var fetched = chat("waiting", workspaceId: "alpha", updatedAt: 1_787_100_030)
+        fetched.revision = "revision-2"
+
+        _ = try await cache.saveFetchedChat(fetched, instanceId: instanceId, writeToken: cache.reserveChatWrite(), updatesSummary: false)
+
+        let reopened = AidenChatCache(root: root, legacyRoots: [])
+        let summaries = await reopened.loadChatSummaries(instanceId: instanceId)
+        let saved = try XCTUnwrap(summaries?.summaries.first { $0.id == "waiting" })
+        XCTAssertTrue(saved.unread)
+        XCTAssertEqual(saved.rowState, .needsApproval)
+        let transcript = await reopened.loadChat(instanceId: instanceId, chatId: "waiting")
+        XCTAssertEqual(transcript?.revision, "revision-2")
+    }
+
     func testOpeningASavedRecentUsesItsTranscriptWithoutTheNetwork() async throws {
         let (cache, root) = makeCache()
         defer { try? FileManager.default.removeItem(at: root) }
