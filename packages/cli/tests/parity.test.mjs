@@ -155,6 +155,21 @@ test("portable export and context projection include only the active branch", as
   assert.deepEqual(api.liveMessages({ sessionManager: manager }).map((message) => message.content), ["Keep this", "Active branch"]);
 });
 
+test("headless command output survives a pipe when it exceeds the kernel pipe buffer", async (t) => {
+  const dir = temporary(t), cwd = join(dir, "project"); mkdirSync(cwd);
+  const manager = api.SessionManager.create(cwd, join(dir, "sessions"));
+  const preview = "needle " + "x".repeat(1_500_000);
+  manager.appendMessage({ role: "user", content: preview, timestamp: 100 });
+  const result = spawnSync(process.execPath, [join(pkg, "dist", "app", "cli.js"), "search", "needle"], {
+    encoding: "utf8", stdio: "pipe", maxBuffer: 64 * 1024 * 1024, timeout: 60_000,
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: dir, PI_OFFLINE: "1" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(Buffer.byteLength(result.stdout) > 1_500_000, `received ${Buffer.byteLength(result.stdout)} bytes`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.length, 1); assert.equal(parsed[0].preview, preview);
+});
+
 test("title generation preserves manual renames and seeds offline sessions", async (t) => {
   const dir = temporary(t), harness = extension(api.createSessionParityExtension(dir));
   const manager = api.SessionManager.inMemory(dir);
