@@ -24,6 +24,28 @@ export const DEFAULT_RECONSTRUCTION_CHARS = 96_000;
 /** Aiden's system prompt is sent whole up to this size. */
 const MAX_INSTRUCTION_CHARS = 64_000;
 
+function deliveredInstructions(instructions: string | undefined): string {
+  return instructions?.trim().slice(0, MAX_INSTRUCTION_CHARS) ?? "";
+}
+
+// The AGENTS refresher gives each generation a new nonce in its outer tags.
+// Match only its complete host-authored frame; keep the header and JSON records
+// in the hash so a real guidance or policy change still replaces the session.
+const AGENTS_FRAME = /(^|\n\n)<agents-instructions-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})>\n(User-authored AGENTS\.md instructions follow as JSON records\.[\s\S]*?)\n<\/agents-instructions-\2>(?=\n\n|$)/gu;
+const STABLE_AGENTS_NONCE = "00000000-0000-0000-0000-000000000000";
+
+/** Identity of delivered host guidance, ignoring only generated AGENTS tag nonces. */
+export function hostInstructionsFingerprint(instructions: string | undefined): string {
+  // Keep the replacement exactly as long as the original UUID. The same raw
+  // 64,000-character prefix must be hashed as buildPrompt actually delivers.
+  const stable = (instructions?.trim() ?? "").replace(
+    AGENTS_FRAME,
+    (_frame, separator: string, _nonce: string, body: string) =>
+      `${separator}<agents-instructions-${STABLE_AGENTS_NONCE}>\n${body}\n</agents-instructions-${STABLE_AGENTS_NONCE}>`,
+  );
+  return createHash("sha256").update(stable.slice(0, MAX_INSTRUCTION_CHARS)).digest("hex");
+}
+
 export interface PromptCapabilities {
   image: boolean;
   embeddedContext: boolean;
@@ -127,8 +149,8 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
   // body is bounded, keeping its newest part.
   if (input.fresh) {
     const sections: string[] = [];
-    const instructions = input.hostInstructions?.trim();
-    if (instructions) sections.push(`# Instructions from Aiden\n\n${instructions.slice(0, MAX_INSTRUCTION_CHARS)}`);
+    const instructions = deliveredInstructions(input.hostInstructions);
+    if (instructions) sections.push(`# Instructions from Aiden\n\n${instructions}`);
     const history = messages.slice(0, historyEnd).map(formatMessage).filter(Boolean);
     if (history.length > 0) {
       reconstructed = true;

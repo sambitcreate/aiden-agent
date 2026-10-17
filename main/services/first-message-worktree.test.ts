@@ -184,7 +184,7 @@ async function harness(
     beginWorkspaceMutation: () => () => undefined,
     workspaceIsChanging: () => false,
     cancelWorkspaceOperations: async () => undefined,
-    closeWorkspaceTerminals: () => undefined,
+    closeWorkspaceTerminals: async () => undefined,
     cancelWorkspaceGeneration: async () => undefined,
     cancelWorkspaceSchedules: async () => undefined,
     resumeWorkspaceSchedules: async () => undefined,

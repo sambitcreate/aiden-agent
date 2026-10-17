@@ -22,7 +22,7 @@ test("Linux package targets common distro formats and includes native helpers", 
   assert.doesNotThrow(() => assertLinuxBuildConfiguration(packageJson));
 });
 
-test("Linux package requires the Bot inbox helper and shared Generative UI libraries", () => {
+test("Linux package requires its lease and Bot inbox helpers and shared Generative UI libraries", () => {
   const missingHelper = JSON.parse(JSON.stringify(packageJson));
   missingHelper.build.linux.extraFiles = missingHelper.build.linux.extraFiles.filter(
     (entry) => !String(entry.to).includes("aiden-bot-inbox-writer"),
@@ -30,6 +30,15 @@ test("Linux package requires the Bot inbox helper and shared Generative UI libra
   assert.throws(
     () => assertLinuxBuildConfiguration(missingHelper),
     /aiden-bot-inbox-writer/u,
+  );
+
+  const missingLeaseHelper = JSON.parse(JSON.stringify(packageJson));
+  missingLeaseHelper.build.linux.extraFiles = missingLeaseHelper.build.linux.extraFiles.filter(
+    (entry) => !String(entry.to).includes("aiden-lease-flock"),
+  );
+  assert.throws(
+    () => assertLinuxBuildConfiguration(missingLeaseHelper),
+    /aiden-lease-flock/u,
   );
 
   const missingLibraries = JSON.parse(JSON.stringify(packageJson));

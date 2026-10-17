@@ -1,7 +1,11 @@
 # Aiden CLI standalone (PR #121, target 0.50.0)
 
-- `packages/cli` is its own npm package. It is not included in the desktop
-  electron-builder `files` (`build/**` only), so desktop packaging is unaffected.
+## Lease ownership (issues #405 and #392, 2026-10-15)
+
+CLI `acquireLease` holds an OS `flock` on a permanent `<resource>.lease.lock` file until release. A short native helper locks a duplicate of the parent's descriptor, then exits; the parent keeps the lock through async work, and process death releases it. A raw read of the guard cannot cancel the lock. The former `<resource>.lock/owner.json` is diagnostic metadata, published and removed only under the guard; malformed values including JSON `null` are stale. Serve recovery, including foreground startup, and stop cleanup acquire that same guard, recheck the owner, and remove stale metadata and socket only while holding it. New metadata carries `protocol: "flock-v1"`, so a recycled live PID cannot wedge recovery after the guard is free; legacy live metadata remains protected unless its PID is verifiably foreign. The daemon child removes a stale socket after it acquires the serve lease. Never unlink, rename, or copy over guard files. Stop older CLI processes and daemons before upgrading a shared agent directory; mixed-version writers do not share this protocol.
+
+- `packages/cli` is its own npm package. The shared lease helper is copied into
+  `dist/app/native/` for CLI bundles and `Helpers/` by desktop electron-builder.
 - Several desktop services are split into portable `*-core.ts` modules
   (schedule-store, subagent-supervisor, vision-analysis-tool, local-speech-downloads,
   aiden-remote-speech, subagent-mcp-mutation-host). When main changes one of

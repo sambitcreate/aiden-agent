@@ -34,6 +34,18 @@ test("CI registry assigns the complete deduplicated serial test union", () => {
   }
 });
 
+test("Bot lease consumers stage the native guard before their CI lanes", () => {
+  const lanes = new Map(readRegistry().lanes.map((lane) => [lane.name, lane]));
+  for (const [name, consumer] of [
+    ["runtime-subagents", "main/services/bot-runtime/harness-host.test.ts"],
+    ["renderer-other", "main/services/telegram/bot-reply-outbox.test.ts"],
+  ]) {
+    const lane = lanes.get(name);
+    assert.ok(lane?.files.includes(consumer), `${consumer} must be assigned to ${name}`);
+    assert.ok(lane.prerequisites.includes("lease-flock-build"), `${name} must stage the guard helper`);
+  }
+});
+
 test("malformed npm multi-script invocations fail closed", () => {
   const packageManifest = structuredClone(readPackageManifest());
   packageManifest.scripts["test:serial"] = packageManifest.scripts["test:serial"].replace(
