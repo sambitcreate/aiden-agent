@@ -345,8 +345,11 @@ final class AidenHomeModel {
             chats = []
             nextChatCursor = nil
             paginationState = .idle
+            chatListLoadState = .unresolved
+            errorMessage = nil
             scheduledTasks = []
             usage = nil
+            usageLoadFailed = false
             modelCatalog = nil
             if plan.loadsChats,
                let cached = await chatCache.loadChatSummaries(instanceId: context.instanceId),

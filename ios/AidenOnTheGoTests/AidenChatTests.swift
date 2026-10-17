@@ -13533,6 +13533,28 @@ final class AidenCacheFirstHomeTests: XCTestCase {
         XCTAssertEqual(transcript?.revision, "revision-2")
     }
 
+    func testSwitchingToAnUnsavedMacShowsSkeletonsNotTheLastMacsEmptyState() async throws {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let coordinator = try makeUnreachableCoordinator(cache: cache)
+        let home = AidenHomeModel(chatCache: cache)
+        // The previous Mac answered with no chats.
+        home.chatListLoadState = .loaded
+
+        await home.load(coordinator: coordinator)
+
+        XCTAssertTrue(home.chats.isEmpty)
+        // While this Mac is still being reached, nothing has said it is empty.
+        XCTAssertEqual(
+            aidenHomeChatListPresentation(
+                hasRows: !home.chats.isEmpty,
+                connectionState: .connecting,
+                loadState: home.chatListLoadState
+            ),
+            .skeleton
+        )
+    }
+
     func testOpeningASavedRecentUsesItsTranscriptWithoutTheNetwork() async throws {
         let (cache, root) = makeCache()
         defer { try? FileManager.default.removeItem(at: root) }
