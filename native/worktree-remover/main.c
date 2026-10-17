@@ -14,6 +14,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 
 #define EXIT_IDENTITY_CHANGED 20
 #define EXIT_MUTATION_DETECTED 21
@@ -33,6 +36,7 @@
 #define MANIFEST_MAGIC_LENGTH 26
 #define SHA256_HEX_LENGTH 64
 #define MAX_CAPTURE_ATTEMPTS 32
+#define MAX_PROCESS_PIDS 262144
 
 typedef struct EntryList EntryList;
 
@@ -1419,6 +1423,122 @@ static void print_error(int code) {
     fputs("invalid_input\n", stderr);
 }
 
+static int audit_pid_session(pid_t pid, pid_t expected_session) {
+  if (pid <= 0) return 0;
+  errno = 0;
+  pid_t actual_session = getsid(pid);
+  if (actual_session < 0) return errno == ESRCH ? 0 : -1;
+  return actual_session == expected_session ? 1 : 0;
+}
+
+#ifndef __APPLE__
+static int proc_mount_is_complete(void) {
+  const char *mounts_path = "/proc/self/mounts";
+#ifdef AIDEN_REMOVER_TESTING
+  const char *test_mounts = getenv("AIDEN_REMOVER_TEST_MOUNTS");
+  if (test_mounts != NULL && test_mounts[0] != '\0') mounts_path = test_mounts;
+#endif
+  FILE *mounts = fopen(mounts_path, "r");
+  if (!mounts) return 0;
+  int found = 0;
+  int complete = 1;
+  char line[8192];
+  while (fgets(line, sizeof(line), mounts) != NULL) {
+    if (strchr(line, '\n') == NULL) { complete = 0; break; }
+    char *save = NULL;
+    char *source = strtok_r(line, " \t\n", &save);
+    char *target = strtok_r(NULL, " \t\n", &save);
+    char *type = strtok_r(NULL, " \t\n", &save);
+    char *options = strtok_r(NULL, " \t\n", &save);
+    char *dump = strtok_r(NULL, " \t\n", &save);
+    char *pass = strtok_r(NULL, " \t\n", &save);
+    if (!source || !target || !type || !options || !dump || !pass ||
+        strtok_r(NULL, " \t\n", &save) != NULL) { complete = 0; break; }
+    if (strcmp(target, "/proc") != 0) continue;
+    found = 1;
+    if (strcmp(type, "proc") != 0) { complete = 0; break; }
+    char *option_save = NULL;
+    for (char *option = strtok_r(options, ",", &option_save);
+         option != NULL; option = strtok_r(NULL, ",", &option_save)) {
+      if (strncmp(option, "hidepid=", 8) == 0 &&
+          strcmp(option + 8, "0") != 0 &&
+          strcmp(option + 8, "off") != 0) {
+        complete = 0;
+        break;
+      }
+      if (strncmp(option, "pidns=", 6) == 0) {
+        complete = 0;
+        break;
+      }
+    }
+    if (!complete) break;
+  }
+  if (ferror(mounts)) complete = 0;
+  if (fclose(mounts) != 0) complete = 0;
+  if (!found || !complete) return 0;
+  // A procfs mounted for another PID namespace cannot enumerate our session.
+  char self_pid[32];
+  ssize_t length = readlink("/proc/self", self_pid, sizeof(self_pid) - 1);
+  if (length <= 0 || length >= (ssize_t)sizeof(self_pid)) return 0;
+  self_pid[length] = '\0';
+  uint64_t visible_pid = 0;
+  return parse_uint64(self_pid, &visible_pid) && visible_pid == (uint64_t)getpid();
+}
+#endif
+
+static int audit_session_command(int argc, char **argv) {
+  uint64_t requested = 0;
+  if (argc != 3 || !parse_uint64(argv[2], &requested) || requested == 0 ||
+      requested > INT_MAX) return EXIT_INVALID_INPUT;
+  pid_t expected_session = (pid_t)requested;
+  int found = 0;
+#ifdef __APPLE__
+  int needed = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
+  if (needed <= 0 || needed > (int)(MAX_PROCESS_PIDS * sizeof(pid_t)))
+    return EXIT_IO_FAILED;
+  size_t capacity = (size_t)needed + 4096U * sizeof(pid_t);
+  if (capacity > MAX_PROCESS_PIDS * sizeof(pid_t)) return EXIT_IO_FAILED;
+  pid_t *pids = calloc(capacity / sizeof(pid_t), sizeof(pid_t));
+  if (!pids) return EXIT_IO_FAILED;
+  int bytes = proc_listpids(PROC_ALL_PIDS, 0, pids, (int)capacity);
+  if (bytes <= 0 || (size_t)bytes >= capacity) {
+    free(pids);
+    return EXIT_IO_FAILED;
+  }
+  for (int index = 0; index < bytes / (int)sizeof(pid_t); index++) {
+    int observed = audit_pid_session(pids[index], expected_session);
+    if (observed < 0) { free(pids); return EXIT_IO_FAILED; }
+    if (observed > 0) { found = 1; break; }
+  }
+  free(pids);
+#else
+  if (!proc_mount_is_complete()) return EXIT_IO_FAILED;
+  DIR *processes = opendir("/proc");
+  if (!processes) return EXIT_IO_FAILED;
+  struct dirent *entry;
+  size_t count = 0;
+  for (;;) {
+    errno = 0;
+    entry = readdir(processes);
+    if (entry == NULL) {
+      if (errno != 0) { closedir(processes); return EXIT_IO_FAILED; }
+      break;
+    }
+    if (++count > MAX_PROCESS_PIDS) { closedir(processes); return EXIT_IO_FAILED; }
+    uint64_t value = 0;
+    if (!parse_uint64(entry->d_name, &value) || value == 0 ||
+        value > INT_MAX) continue;
+    int observed = audit_pid_session((pid_t)value, expected_session);
+    if (observed < 0) { closedir(processes); return EXIT_IO_FAILED; }
+    if (observed > 0) { found = 1; break; }
+  }
+  if (closedir(processes) != 0) return EXIT_IO_FAILED;
+  if (!proc_mount_is_complete()) return EXIT_IO_FAILED;
+#endif
+  if (fputs(found ? "active\n" : "empty\n", stdout) == EOF) return EXIT_IO_FAILED;
+  return 0;
+}
+
 static int finalize_manifest_command(int argc, char **argv) {
   if (argc != 8 || strcmp(argv[2], "--parent") != 0 ||
       strcmp(argv[4], "--token") != 0 || strcmp(argv[6], "--digest") != 0 ||
@@ -1448,6 +1568,8 @@ static int finalize_manifest_command(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+  if (argc > 1 && strcmp(argv[1], "audit-session") == 0)
+    return audit_session_command(argc, argv);
   if (argc > 1 && strcmp(argv[1], "finalize-manifest") == 0)
     return finalize_manifest_command(argc, argv);
   if (argc != 12 || strcmp(argv[1], "remove") != 0 ||

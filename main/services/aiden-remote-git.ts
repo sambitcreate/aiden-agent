@@ -1,10 +1,12 @@
 import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
+import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
   AidenOperationContractError,
+  AidenOperationNotExecutedError,
   assertRevision,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
@@ -165,6 +167,9 @@ function requireConfirmation(record: Record<string, unknown>): void {
 
 function mapGitError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
+  if (error instanceof ManagedWorktreeProcessActiveError) {
+    throw new AidenRemoteServiceError("git_capability_denied", error.message, 409);
+  }
   if (error instanceof InsufficientDiskSpaceError || error instanceof WorktreeCapacityUnavailableError) {
     throw new AidenRemoteServiceError("git_capability_denied",
       error instanceof InsufficientDiskSpaceError
@@ -776,7 +781,16 @@ export class AidenRemoteGitService {
               workspaceId,
             },
           };
-        } catch (error) { mapGitError(error); }
+        } catch (error) {
+          if (error instanceof ManagedWorktreeProcessActiveError) {
+            // The terminal drain refused before Git or workspace metadata changed.
+            // Forget this admission so the same key can retry after process exit.
+            throw new AidenOperationNotExecutedError(
+              new AidenRemoteServiceError("git_capability_denied", error.message, 409),
+            );
+          }
+          mapGitError(error);
+        }
       },
     );
   }

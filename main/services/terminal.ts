@@ -10,6 +10,8 @@ import { spawn, type IPty } from "node-pty";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
+import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
+import { managedWorktreeSessionHasMembers } from "./managed-worktree-remover.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -44,6 +46,8 @@ export interface TerminalSnapshot {
 
 interface TerminalSession extends TerminalSessionInfo {
   pty: IPty;
+  exited: Promise<void>;
+  settleExit: () => void;
   ownerWebContentsId: number;
   ownerDocumentId: string;
   owner: RendererDocumentOwner;
@@ -78,6 +82,10 @@ export interface TerminalServiceOptions {
    * app restart. Defaults to none (in-memory only) for tests and legacy paths.
    */
   historyStore?: TerminalHistoryStoreLike;
+  /** POSIX session liveness seam for deletion tests. */
+  sessionHasMembers?: (sessionId: number) => Promise<boolean>;
+  /** Test seam for process-group signaling. */
+  signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
 /**
@@ -231,6 +239,9 @@ export class TerminalService {
     this.outputObserver = observer;
   }
   private readonly sessions = new Map<string, TerminalSession>();
+  private readonly pendingWorkspaceExits = new Map<string, Set<Promise<void>>>();
+  private readonly workspaceSessionIds = new Map<string, Set<number>>();
+  private readonly unverifiableWorkspaces = new Set<string>();
   private readonly webContentsEpochs = new Map<number, number>();
   private spawnHelperReady: Promise<void> | undefined;
   private historyStore: TerminalHistoryStoreLike | undefined;
@@ -320,10 +331,25 @@ export class TerminalService {
         env: { ...agentCommandEnvironment(), TERM: "xterm-256color" } as Record<string, string>,
       },
     );
-    if (ownerInvalidated()) {
+    if (!Number.isSafeInteger(pty.pid) || pty.pid <= 0) {
+      // There is no session identity to audit, and node-pty's kill() also
+      // signals its reported PID. With 0, either signal would hit our own
+      // process group. Keep a hard removal hold; a retry has no new proof.
+      this.unverifiableWorkspaces.add(workspaceId);
       this.terminatePty(pty);
-      throw new Error("The workspace changed before the terminal could start.");
+      throw new Error("The terminal process identity could not be verified.");
     }
+    let sessionIds = this.workspaceSessionIds.get(workspaceId);
+    if (!sessionIds) {
+      sessionIds = new Set();
+      this.workspaceSessionIds.set(workspaceId, sessionIds);
+    }
+    // forkpty makes its shell the POSIX session leader. Job-control background
+    // groups retain that session ID even when the shell and PTY have exited.
+    sessionIds.add(pty.pid);
+    const invalidatedAtSpawnBoundary = ownerInvalidated();
+    let settleExit: () => void = () => undefined;
+    const exited = new Promise<void>((resolve) => { settleExit = resolve; });
     const session: TerminalSession = {
       id,
       workspaceId,
@@ -331,6 +357,8 @@ export class TerminalService {
       resolvedShell,
       preferredShellSkipped,
       pty,
+      exited,
+      settleExit,
       ownerWebContentsId: owner.id,
       ownerDocumentId: owner.documentId,
       owner,
@@ -341,20 +369,24 @@ export class TerminalService {
       pendingOutput: "",
     };
     this.sessions.set(id, session);
-    const removeOwnerInvalidation = owner.onInvalidated(() => {
+    // Observe exit before any owner callback can synchronously terminate the
+    // session. A retained pending exit must always have a way to settle.
+    pty.onExit(({ exitCode, signal }) => {
+      session.settleExit();
       const current = this.sessions.get(id);
-      if (current === session) this.terminate(id, session);
+      if (current !== session) return;
+      // Deliver the final output before the exit notification.
+      this.flushOutput(id, current);
+      this.sessions.delete(id);
+      current.removeOwnerInvalidation();
+      // Flush the final chunk before the session goes away.
+      void this.historyStore?.flush(workspaceId);
+      try {
+        owner.send("terminal:exit", { sessionId: id, exitCode, signal });
+      } catch {
+        // The exact renderer document already disappeared.
+      }
     });
-    session.removeOwnerInvalidation = removeOwnerInvalidation;
-    if (!this.sessions.has(id)) {
-      removeOwnerInvalidation();
-      throw new Error("The renderer document changed before the terminal could start.");
-    }
-    if (ownerInvalidated()) {
-      this.terminate(id, session);
-      throw new Error("The renderer document changed before the terminal could start.");
-    }
-
     pty.onData((data) => {
       const current = this.sessions.get(id);
       if (!current) return;
@@ -377,21 +409,23 @@ export class TerminalService {
         current.outputTimer.unref?.();
       }
     });
-    pty.onExit(({ exitCode, signal }) => {
+
+    let invalidatedDuringSubscription = false;
+    const removeOwnerInvalidation = owner.onInvalidated(() => {
+      invalidatedDuringSubscription = true;
       const current = this.sessions.get(id);
-      if (current !== session) return;
-      // Deliver the final output before the exit notification.
-      this.flushOutput(id, current);
-      this.sessions.delete(id);
-      current.removeOwnerInvalidation();
-      // Flush the final chunk before the session goes away.
-      void this.historyStore?.flush(workspaceId);
-      try {
-        owner.send("terminal:exit", { sessionId: id, exitCode, signal });
-      } catch {
-        // The exact renderer document already disappeared.
-      }
+      if (current === session) this.terminate(id, session);
     });
+    session.removeOwnerInvalidation = removeOwnerInvalidation;
+    if (invalidatedDuringSubscription || ownerInvalidated()) {
+      if (this.sessions.get(id) === session) this.terminate(id, session);
+      removeOwnerInvalidation();
+      throw new Error(invalidatedAtSpawnBoundary
+        ? "The workspace changed before the terminal could start."
+        : "The renderer document changed before the terminal could start.");
+    }
+    // A shell can exit while the owner subscription is being installed.
+    if (this.sessions.get(id) !== session) removeOwnerInvalidation();
 
     return { id, workspaceId, cwd, resolvedShell, preferredShellSkipped };
   }
@@ -441,6 +475,55 @@ export class TerminalService {
     }
   }
 
+  /** Stop Aiden-owned shells and wait for their exit before removing a workspace. */
+  async closeForWorkspaceAndWait(workspaceId: string, timeoutMs = 5_000): Promise<void> {
+    const sessions = [...this.sessions].filter(([, session]) => session.workspaceId === workspaceId);
+    for (const [id, session] of sessions) this.terminate(id, session);
+    const pending = [...(this.pendingWorkspaceExits.get(workspaceId) ?? [])];
+    if (this.unverifiableWorkspaces.has(workspaceId)) {
+      throw new ManagedWorktreeProcessActiveError(
+        "A terminal started without a verifiable process identity. Keep this worktree for manual inspection; Aiden cannot safely remove it in this session.",
+      );
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    if (pending.length > 0) {
+      try {
+        await Promise.race([
+          Promise.all(pending),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new ManagedWorktreeProcessActiveError()), timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }
+    const sessionIds = [...(this.workspaceSessionIds.get(workspaceId) ?? [])];
+    if (sessionIds.length === 0) return;
+    for (const sessionId of sessionIds) {
+      let active: boolean;
+      try {
+        active = await (this.options.sessionHasMembers ?? managedWorktreeSessionHasMembers)(sessionId);
+      } catch {
+        throw new ManagedWorktreeProcessActiveError(
+          "Aiden could not verify terminal jobs. Keep this worktree and try again after checking its processes.",
+        );
+      }
+      if (active) {
+        throw new ManagedWorktreeProcessActiveError(
+          "A terminal job is still running. Stop it, then retry worktree removal.",
+        );
+      }
+    }
+    const currentIds = this.workspaceSessionIds.get(workspaceId);
+    if (currentIds && (currentIds.size !== sessionIds.length || sessionIds.some((id) => !currentIds.has(id)))) {
+      throw new ManagedWorktreeProcessActiveError(
+        "Terminal processes changed during cleanup. Retry worktree removal.",
+      );
+    }
+    this.workspaceSessionIds.delete(workspaceId);
+  }
+
   workspaceId(id: string, owner: RendererDocumentOwner): string {
     return this.getOwned(id, owner).workspaceId;
   }
@@ -481,6 +564,16 @@ export class TerminalService {
     session.pendingOutput = "";
     this.sessions.delete(id);
     session.removeOwnerInvalidation();
+    let pending = this.pendingWorkspaceExits.get(session.workspaceId);
+    if (!pending) {
+      pending = new Set();
+      this.pendingWorkspaceExits.set(session.workspaceId, pending);
+    }
+    pending.add(session.exited);
+    void session.exited.then(() => {
+      pending.delete(session.exited);
+      if (pending.size === 0) this.pendingWorkspaceExits.delete(session.workspaceId);
+    });
     this.terminatePty(session.pty);
     // Best-effort flush so the last output chunk is on disk before the session
     // is torn down (window close, workspace switch, quit). Never block on it.
@@ -497,12 +590,14 @@ export class TerminalService {
   }
 
   private terminatePty(pty: IPty): void {
+    const pid = pty.pid;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return;
     // A PTY shell is normally its own process group. Signalling the group
     // cleans up ordinary foreground/background descendants as well as the
     // shell; deliberately detached processes retain normal Unix semantics.
     if (process.platform !== "win32") {
       try {
-        process.kill(-pty.pid, "SIGHUP");
+        (this.options.signalProcess ?? process.kill)(-pid, "SIGHUP");
       } catch {
         // The process may have exited between lookup and termination.
       }

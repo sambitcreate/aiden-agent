@@ -89,6 +89,65 @@ test("(a2) an idle harness closes by itself and reopens mid-conversation", async
   }
 });
 
+test("open waits for an overlapping close and returns a usable new session", async () => {
+  const profile = tempProfile();
+  const host = await hostFor(profile, createFauxModels());
+  const first = await host.open("bot-overlap");
+  const originalClose = first.harness.close.bind(first.harness);
+  let closeStarted!: () => void;
+  let finishClose!: () => void;
+  const entered = new Promise<void>((resolve) => { closeStarted = resolve; });
+  const gate = new Promise<void>((resolve) => { finishClose = resolve; });
+  first.harness.close = async (context) => {
+    closeStarted();
+    await gate;
+    return originalClose(context);
+  };
+  const closing = host.close("bot-overlap");
+  try {
+    await entered;
+    let reopened = false;
+    const reopening = host.open("bot-overlap").then((result) => {
+      reopened = true;
+      return result;
+    });
+    await Promise.resolve();
+    assert.equal(reopened, false, "open must wait for the old session to close");
+    finishClose();
+    await closing;
+    const second = await reopening;
+    assert.notEqual(second.harness, first.harness);
+    assert.equal(second.conversation.id, first.conversation.id);
+    await second.conversation.context(ctx);
+  } finally {
+    finishClose();
+    await closing.catch(() => undefined);
+    await host.shutdown();
+  }
+});
+
+test("failed close retains the profile guard and open retries teardown", async () => {
+  const profile = tempProfile();
+  const host = await hostFor(profile, createFauxModels());
+  const first = await host.open("bot-close-retry");
+  const originalClose = first.harness.close.bind(first.harness);
+  let attempts = 0;
+  first.harness.close = async (context) => {
+    if (++attempts === 1) throw new Error("teardown failed");
+    return originalClose(context);
+  };
+  try {
+    await assert.rejects(host.close("bot-close-retry"), /teardown failed/);
+    const contender = spawnHarnessChild("lock", [path.join(profile, "bots")]);
+    try {
+      assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false);
+    } finally { await contender.kill(); }
+    const reopened = await host.open("bot-close-retry");
+    assert.notEqual(reopened.harness, first.harness);
+    await reopened.conversation.context(ctx);
+  } finally { await host.shutdown(); }
+});
+
 test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the provider", async () => {
   const profile = tempProfile();
   const child = spawnHarnessChild("stream", [profile, "bot:killed", "req-1"]);
@@ -162,7 +221,7 @@ test("(d) sweepOrphans removes directories with no known Bot", async () => {
     writeFileSync(path.join(profile, "bots", "bot-orphan", BOT_SESSION_FILE), "");
     const removed = await host.sweepOrphans(new Set(["bot:known"]));
     assert.deepEqual(removed, ["bot-orphan"]);
-    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lock"]);
+    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lease.lock", "runtime.lock"]);
   } finally {
     await host.shutdown();
   }
@@ -193,6 +252,54 @@ test("(e2) the profile is available again after shutdown", async () => {
   } finally {
     await child.kill();
   }
+});
+
+test("a shut down host cannot delete a replacement host's Bot", async () => {
+  const profile = tempProfile();
+  const oldHost = await hostFor(profile, createFauxModels());
+  await oldHost.shutdown();
+  const replacement = await hostFor(profile, createFauxModels());
+  try {
+    await replacement.open("bot-replacement");
+    const session = path.join(profile, "bots", "bot-replacement", BOT_SESSION_FILE);
+    assert.equal(existsSync(session), true);
+    await assert.rejects(oldHost.destroy("bot-replacement"), /shut down/);
+    await assert.rejects(oldHost.sweepOrphans(new Set()), /shut down/);
+    await assert.rejects(oldHost.close("bot-replacement"), /shut down/);
+    assert.throws(() => oldHost.touch("bot-replacement"), /shut down/);
+    assert.equal(existsSync(session), true);
+    assert.equal(replacement.isOpen("bot-replacement"), true);
+  } finally { await replacement.shutdown(); }
+});
+
+test("shutdown holds the profile guard until an admitted inspection finishes", async () => {
+  const profile = tempProfile();
+  const host = await hostFor(profile, createFauxModels());
+  const entry = await host.open("bot-inspected");
+  const inspect = entry.harness.inspect.bind(entry.harness);
+  let started!: () => void;
+  let resume!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  entry.harness.inspect = async (context) => {
+    started();
+    await gate;
+    return inspect(context);
+  };
+  const pending = host.inspect("bot-inspected");
+  await entered;
+  const shutdown = host.shutdown();
+  const contender = spawnHarnessChild("lock", [path.join(profile, "bots")]);
+  try {
+    assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false);
+  } finally {
+    resume();
+    await contender.kill();
+  }
+  await pending;
+  await shutdown;
+  const replacement = await hostFor(profile, createFauxModels());
+  await replacement.shutdown();
 });
 
 test("(f) a corrupt session file is moved aside and a fresh conversation opens", async () => {
