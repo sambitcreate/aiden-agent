@@ -91,7 +91,8 @@ return createWorkspaceWorktreeApplicationService({
   workspaceIsChanging: (workspaceId) => workspace.mutationGate.isChanging(workspaceId),
   cancelWorkspaceOperations: (workspaceId, exceptSignal) =>
     workspace.operationRegistry.cancelAndSettle(workspaceId, { exceptSignal }),
-  closeWorkspaceTerminals: () => {},
+  // The headless CLI has no renderer-owned PTYs to drain.
+  closeWorkspaceTerminals: async () => {},
   cancelWorkspaceGeneration: (workspaceId) => cancelGeneration(workspaceId),
   cancelWorkspaceSchedules: (workspaceId) => scheduler.service.cancelWorkspace(workspaceId),
   resumeWorkspaceSchedules: (workspaceId) => scheduler.service.resumeWorkspace(workspaceId),

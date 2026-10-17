@@ -1,7 +1,7 @@
 /* global Buffer, process, setTimeout */
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
@@ -20,10 +20,82 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const binary = path.join(repositoryRoot, "build", "native", "aiden-worktree-remover-test");
 const productionBinary = path.join(repositoryRoot, "build", "native", "aiden-worktree-remover");
+const execFileAsync = promisify(execFile);
+
+test("native session audit sees a surviving member and clears after exit", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const child = spawn("/bin/sleep", ["10"], { detached: true, stdio: "ignore" });
+  t.after(() => { try { child.kill("SIGKILL"); } catch { /* Already reaped. */ } });
+  assert.ok(Number.isSafeInteger(child.pid) && child.pid > 0);
+  const active = await execFileAsync(binary, ["audit-session", String(child.pid)], { encoding: "utf8" });
+  assert.equal(active.stdout, "active\n");
+  child.kill("SIGKILL");
+  await new Promise((resolve) => child.once("exit", resolve));
+  const empty = await execFileAsync(binary, ["audit-session", String(child.pid)], { encoding: "utf8" });
+  assert.equal(empty.stdout, "empty\n");
+});
+
+test("Linux session audit refuses a hidden process inventory instead of reporting empty", async (t) => {
+  if (process.platform !== "linux") return;
+  const absentSession = "2147483647";
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-proc-audit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const mounts = path.join(root, "mounts");
+  const hiddenOrIncomplete = [
+    ...["2", "invisible", "1", "ptraceable"].map((hidepid) =>
+      `proc /proc proc rw,relatime,hidepid=${hidepid} 0 0\n`),
+    "tmpfs /proc tmpfs rw 0 0\n",
+    "proc /other proc rw 0 0\n",
+    "proc /proc proc rw,pidns=/proc/1/ns/pid 0 0\n",
+    "proc /proc proc rw 0\n",
+  ];
+  for (const fixture of hiddenOrIncomplete) {
+    await writeFile(mounts, fixture);
+    await assert.rejects(
+      execFileAsync(binary, ["audit-session", absentSession], {
+        encoding: "utf8",
+        env: { AIDEN_REMOVER_TEST_MOUNTS: mounts },
+      }),
+      (error) => error.code === 22 && error.stdout === "",
+    );
+  }
+  const member = spawn("/bin/sleep", ["10"], { detached: true, stdio: "ignore" });
+  t.after(() => { try { member.kill("SIGKILL"); } catch { /* Already reaped. */ } });
+  assert.ok(Number.isSafeInteger(member.pid) && member.pid > 0);
+  await writeFile(mounts, "proc /proc proc rw,relatime,hidepid=2 0 0\n");
+  await assert.rejects(
+    execFileAsync(binary, ["audit-session", String(member.pid)], {
+      encoding: "utf8",
+      env: { AIDEN_REMOVER_TEST_MOUNTS: mounts },
+    }),
+    (error) => error.code === 22 && error.stdout === "",
+  );
+  member.kill("SIGKILL");
+  await new Promise((resolve) => member.once("exit", resolve));
+  for (const fixture of [
+    "proc /proc proc rw,relatime,hidepid=off 0 0\n",
+    "proc /proc proc rw,relatime,hidepid=0 0 0\n",
+    "proc /proc proc rw,relatime 0 0\n",
+  ]) {
+    await writeFile(mounts, fixture);
+    const complete = await execFileAsync(binary, ["audit-session", absentSession], {
+      encoding: "utf8",
+      env: { AIDEN_REMOVER_TEST_MOUNTS: mounts },
+    });
+    assert.equal(complete.stdout, "empty\n");
+  }
+  await writeFile(mounts, "proc /proc proc rw,relatime,hidepid=2 0 0\n");
+  const production = await execFileAsync(productionBinary, ["audit-session", absentSession], {
+    encoding: "utf8",
+    env: { AIDEN_REMOVER_TEST_MOUNTS: mounts },
+  });
+  assert.equal(production.stdout, "empty\n", "production ignores fixture controls");
+});
 
 async function fixture(t, name) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-remover-test-"));
