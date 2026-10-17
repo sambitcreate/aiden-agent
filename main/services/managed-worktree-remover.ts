@@ -1,7 +1,10 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { syncDirectory } from "./durable-fs.js";
+
+const execFileAsync = promisify(execFile);
 
 export type ManagedWorktreeRemovalFailure =
   | "identity_changed"
@@ -181,6 +184,31 @@ function defaultRemoverBinary(): string {
     return path.resolve(process.resourcesPath, "..", "Helpers", "aiden-worktree-remover");
   }
   return path.resolve(process.cwd(), "build", "native", "aiden-worktree-remover");
+}
+
+/** Inspect the actual POSIX session, including job-control background groups. */
+export async function managedWorktreeSessionHasMembers(
+  sessionId: number,
+  binary = defaultRemoverBinary(),
+): Promise<boolean> {
+  if (!Number.isSafeInteger(sessionId) || sessionId <= 0) {
+    throw new ManagedWorktreeRemoverError("invalid_input");
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync(binary, ["audit-session", String(sessionId)], {
+      env: removerEnvironment(binary, undefined),
+      encoding: "utf8",
+      timeout: 2_000,
+      maxBuffer: 256,
+      windowsHide: true,
+    });
+    if (stderr !== "") throw new ManagedWorktreeRemoverError("io_failed");
+    if (stdout === "active\n") return true;
+    if (stdout === "empty\n") return false;
+  } catch {
+    throw new ManagedWorktreeRemoverError("io_failed");
+  }
+  throw new ManagedWorktreeRemoverError("io_failed");
 }
 
 function removerEnvironment(
