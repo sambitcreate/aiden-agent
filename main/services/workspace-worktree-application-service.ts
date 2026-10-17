@@ -140,7 +140,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   beginWorkspaceMutation(workspaceId: string): () => void;
   workspaceIsChanging(workspaceId: string): boolean;
   cancelWorkspaceOperations(workspaceId: string, exceptSignal: AbortSignal): Promise<void>;
-  closeWorkspaceTerminals(workspaceId: string): void;
+  closeWorkspaceTerminals(workspaceId: string): Promise<void>;
   cancelWorkspaceGeneration(workspaceId: string): Promise<void>;
   cancelWorkspaceSchedules(workspaceId: string): Promise<void>;
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
@@ -464,7 +464,7 @@ export function createWorkspaceWorktreeApplicationService(
             ),
           },
           async ({ keepPaused }) => {
-            dependencies.closeWorkspaceTerminals(workspaceId);
+            await dependencies.closeWorkspaceTerminals(workspaceId);
             await dependencies.cancelWorkspaceGeneration(workspaceId);
             await dependencies.cancelWorkspaceSchedules(workspaceId);
 

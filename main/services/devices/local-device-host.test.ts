@@ -138,11 +138,17 @@ async function withHost(
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 /** Bounded by wall time, not turns: restarts do real file I/O that a loaded CI lane can slow down. */
-async function waitFor(predicate: () => boolean) {
+async function waitFor(predicate: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 5_000;
-  while (!predicate() && Date.now() < deadline) await settle();
-  assert.ok(predicate(), "condition never held");
+  while (!(await predicate()) && Date.now() < deadline) await settle();
+  assert.ok(await predicate(), "condition never held");
 }
 
 test("the hub starts under standalone Node on a reserved loopback port", async () => {
@@ -186,6 +192,27 @@ test("concurrent ensureReady calls share one spawn", async () => {
     const results = await Promise.all([host.ensureReady(), host.ensureReady(), host.ensureReady()]);
     assert.equal(harness.spawns.length, 1);
     assert.equal(new Set(results.map((result) => result.hub.origin)).size, 1);
+    await host.stop();
+  });
+});
+
+test("starts queued before stop cannot revive a stopped host", async () => {
+  await withHost(async (harness) => {
+    const readyGate = deferred();
+    const originalFetch = harness.deps.fetch;
+    harness.deps.fetch = async (url, init) => {
+      if (url.startsWith("http://127.0.0.1:52000/")) await readyGate.promise;
+      return originalFetch(url, init);
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    const oldStarts = Promise.allSettled([host.ensureReady(), host.ensureReady()]);
+    await waitFor(() => harness.children.length === 1);
+    await host.stop();
+    const fresh = host.ensureReady();
+    readyGate.resolve();
+    assert.deepEqual((await oldStarts).map((result) => result.status), ["rejected", "rejected"]);
+    assert.equal((await fresh).hub.origin, "http://127.0.0.1:52001");
+    assert.deepEqual(harness.children[0]!.killed, ["SIGTERM"]);
     await host.stop();
   });
 });
@@ -372,6 +399,7 @@ test("stop kills helpers, never shuts simulators down, and does not respawn", as
     const host = createLocalDeviceHost(harness.deps);
     await host.ensureAgentReady();
     await host.stop();
+    await host.stop();
     await settle();
     assert.deepEqual(harness.children[0].killed, ["SIGTERM"]);
     assert.equal(harness.spawns.length, 1);
@@ -379,6 +407,7 @@ test("stop kills helpers, never shuts simulators down, and does not respawn", as
     await assert.rejects(readFile(path.join(harness.baseDir, "hub.json"), "utf8"));
     assert.ok(!harness.commands.some((entry) => entry.args.includes("shutdown")));
     const stop = harness.commands.find((entry) => entry.args.includes("daemon"));
+    assert.equal(harness.commands.filter((entry) => entry.args.includes("daemon")).length, 1);
     assert.deepEqual(stop?.args.slice(1), [
       "daemon",
       "stop",
@@ -386,6 +415,255 @@ test("stop kills helpers, never shuts simulators down, and does not respawn", as
       path.join(harness.baseDir, "agent-state"),
     ]);
   });
+});
+
+test("a replacement that becomes ready after stop is killed without republishing the hub", async () => {
+  await withHost(async (harness) => {
+    const readyGate = deferred();
+    const originalFetch = harness.deps.fetch;
+    harness.deps.fetch = async (url, init) => {
+      if (url.startsWith("http://127.0.0.1:52001/")) await readyGate.promise;
+      return originalFetch(url, init);
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    const health: string[] = [];
+    host.onHealth((value) => health.push(value));
+    await host.ensureReady();
+    harness.children[0]!.exit(1);
+    await waitFor(() => harness.children.length === 2);
+    await host.stop();
+    await host.stop();
+    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], "stop signals the in-flight child before readiness returns");
+    readyGate.resolve();
+    await waitFor(() => harness.children[1]!.killed.length > 0);
+    await waitFor(async () => {
+      try { await readFile(path.join(harness.baseDir, "hub.json")); return false; }
+      catch { return true; }
+    });
+    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"]);
+    assert.equal(host.current(), null);
+    assert.deepEqual(health, ["restarting"], "a stale completion sends no ready or failed health");
+
+    const fresh = await host.ensureReady();
+    assert.equal(fresh.hub.origin, "http://127.0.0.1:52002");
+    assert.equal(harness.children.length, 3);
+    assert.deepEqual(harness.children[2]!.killed, []);
+    await host.stop();
+  });
+});
+
+test("stop aborts in-flight readiness so a later explicit start can proceed", async () => {
+  await withHost(async (harness) => {
+    const originalFetch = harness.deps.fetch;
+    harness.deps.fetch = async (url, init) => {
+      if (url.startsWith("http://127.0.0.1:52001/")) {
+        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("readiness aborted");
+      }
+      return originalFetch(url, init);
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    await host.ensureReady();
+    harness.children[0]!.exit(1);
+    await waitFor(() => harness.children.length === 2);
+    await host.stop();
+    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"]);
+    const fresh = await host.ensureReady();
+    assert.equal(fresh.hub.origin, "http://127.0.0.1:52002");
+    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], "cleanup does not signal the old child twice");
+    await host.stop();
+  });
+});
+
+test("stop during restart backoff prevents a late spawn, including after a fresh start", async () => {
+  await withHost(async (harness) => {
+    const backoffGate = deferred();
+    let backoffStarted = false;
+    const originalSleep = harness.deps.sleep;
+    harness.deps.sleep = async (ms) => {
+      if (ms >= 1_000) {
+        backoffStarted = true;
+        await backoffGate.promise;
+      }
+      await originalSleep(ms);
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    await host.ensureReady();
+    harness.children[0]!.exit(1);
+    await waitFor(() => backoffStarted);
+    await host.stop();
+    const fresh = await host.ensureReady();
+    assert.equal(fresh.hub.origin, "http://127.0.0.1:52001");
+    backoffGate.resolve();
+    await settle();
+    assert.equal(harness.children.length, 2, "the old restart cannot displace the fresh hub");
+    assert.equal(host.current()?.hub.origin, fresh.hub.origin);
+    await host.stop();
+  });
+});
+
+test("a restart failure after stop cannot emit stale health", async () => {
+  await withHost(async (harness) => {
+    const readyGate = deferred();
+    const originalFetch = harness.deps.fetch;
+    harness.deps.fetch = async (url, init) => {
+      if (url.startsWith("http://127.0.0.1:52001/")) {
+        await readyGate.promise;
+        throw new Error("late readiness failure");
+      }
+      return originalFetch(url, init);
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    const health: string[] = [];
+    host.onHealth((value) => health.push(value));
+    await host.ensureReady();
+    harness.children[0]!.exit(1);
+    await waitFor(() => harness.children.length === 2);
+    await host.stop();
+    readyGate.resolve();
+    await waitFor(() => harness.children[1]!.killed.length > 0);
+    assert.equal(host.current(), null);
+    assert.deepEqual(health, ["restarting"]);
+  });
+});
+
+test("streaming revocation and service shutdown fence a late local-host restart", async () => {
+  for (const action of ["revoke", "shutdown"] as const) {
+    await withHost(async (harness) => {
+      await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true }));
+      const readyGate = deferred();
+      const originalFetch = harness.deps.fetch;
+      harness.deps.fetch = async (url, init) => {
+        if (url.startsWith("http://127.0.0.1:52001/")) await readyGate.promise;
+        return originalFetch(url, init);
+      };
+      const host = createLocalDeviceHost(harness.deps);
+      const statuses: string[] = [];
+      const payload = Buffer.from(JSON.stringify({ simulators: [], emulators: [], errors: [] }));
+      const service = createDeviceService({
+        baseDir: harness.baseDir,
+        host,
+        startProxy: async () => { throw new Error("no stream was opened"); },
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/json" },
+          arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+        }),
+      });
+      service.onState((state) => statuses.push(state.hostStatus));
+      try {
+        assert.equal((await service.refresh()).hostStatus, "ready");
+        harness.children[0]!.exit(1);
+        await waitFor(() => harness.children.length === 2);
+        if (action === "revoke") {
+          const state = await service.revokeConsent("streaming");
+          assert.equal(state.consent.streaming, false);
+          assert.deepEqual(state.devices, []);
+          assert.deepEqual(state.sessions, []);
+          await assert.rejects(service.shareHost().open("missing"), /sharing is off/u);
+        } else {
+          await service.stop();
+          assert.equal(service.state().consent.streaming, true, "shutdown does not revoke saved consent");
+        }
+        assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], `${action} signals the in-flight child immediately`);
+        const statusCount = statuses.length;
+        readyGate.resolve();
+        await waitFor(() => harness.children[1]!.killed.length > 0);
+        assert.equal(host.current(), null);
+        await assert.rejects(readFile(path.join(harness.baseDir, "hub.json")), { code: "ENOENT" });
+        assert.equal(statuses.length, statusCount, "late readiness never updates service health");
+        assert.equal((await host.ensureReady()).hub.origin, "http://127.0.0.1:52002");
+      } finally {
+        readyGate.resolve();
+        await service.stop();
+      }
+    });
+  }
+});
+
+test("streaming revocation keeps needs-consent when an initial local-host start is cancelled", async () => {
+  await withHost(async (harness) => {
+    await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true }));
+    const resolving = deferred();
+    const releaseResolution = deferred();
+    harness.deps.resolveNodePath = async () => {
+      resolving.resolve();
+      await releaseResolution.promise;
+      return "/opt/node/bin/node";
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    const service = createDeviceService({
+      baseDir: harness.baseDir,
+      host,
+      startProxy: async () => { throw new Error("no stream was opened"); },
+      fetch: async () => { throw new Error("a cancelled start must not list devices"); },
+    });
+    try {
+      const refresh = service.refresh();
+      await resolving.promise;
+      const revoked = await service.revokeConsent("streaming");
+      assert.equal(revoked.hostStatus, "needs-consent");
+      releaseResolution.resolve();
+      const settled = await refresh;
+      assert.equal(settled.hostStatus, "needs-consent");
+      assert.equal(service.state().consent.streaming, false);
+      assert.equal(service.state().hostStatuses.local.status, "needs-consent");
+      assert.equal(host.current(), null);
+      assert.equal(harness.children.length, 0);
+
+      harness.deps.resolveNodePath = async () => { throw new Error("current runtime failure"); };
+      const retried = await service.grantConsent("streaming");
+      assert.equal(retried.hostStatus, "error", "a current start still reports its failure");
+      assert.match(retried.hostStatuses.local.detail ?? "", /current runtime failure/u);
+    } finally {
+      releaseResolution.resolve();
+      await service.stop();
+    }
+  });
+});
+
+test("sharing-only revocation keeps a held local-host start running", async () => {
+  for (const kind of ["peerSharing", "mobileSharing"] as const) {
+    await withHost(async (harness) => {
+      await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true, [kind]: true }));
+      const readyGate = deferred();
+      const originalFetch = harness.deps.fetch;
+      harness.deps.fetch = async (url, init) => {
+        if (url.endsWith("/readyz")) await readyGate.promise;
+        return originalFetch(url, init);
+      };
+      const host = createLocalDeviceHost(harness.deps);
+      const payload = Buffer.from(JSON.stringify({ simulators: [], emulators: [], errors: [] }));
+      const service = createDeviceService({
+        baseDir: harness.baseDir,
+        host,
+        startProxy: async () => { throw new Error("no stream was opened"); },
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/json" },
+          arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+        }),
+      });
+      try {
+        const refresh = service.refresh();
+        await waitFor(() => harness.children.length === 1);
+        assert.equal(service.state().hostStatus, "starting");
+        const revoked = await service.revokeConsent(kind);
+        assert.equal(revoked.consent.streaming, true);
+        assert.equal(revoked.consent[kind], false);
+        readyGate.resolve();
+        const settled = await refresh;
+        assert.equal(settled.hostStatus, "ready", `${kind} must not cancel local streaming`);
+        assert.ok(host.current());
+        assert.deepEqual(harness.children[0]!.killed, []);
+      } finally {
+        readyGate.resolve();
+        await service.stop();
+      }
+    });
+  }
 });
 
 test("agent-device starts in HTTP mode only when agent access is requested", async () => {
