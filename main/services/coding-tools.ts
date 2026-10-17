@@ -1234,9 +1234,17 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
       } finally {
         await handle.close();
       }
+      if (old_string.length === 0) throw new Error("old_string must not be empty.");
       const original = source.toString("utf8");
+      // Decoding is lossy for invalid sequences; never rewrite bytes we cannot round-trip.
+      if (!Buffer.from(original, "utf8").equals(source)) {
+        throw new Error(`edit_file only edits valid UTF-8 text files; ${p} contains bytes that are not UTF-8.`);
+      }
       throwIfAborted(signal, "File edit cancelled.");
-      const count = original.split(old_string).length - 1;
+      let count = 0;
+      for (let at = original.indexOf(old_string); at !== -1; at = original.indexOf(old_string, at + old_string.length)) {
+        count += 1;
+      }
       if (count === 0) throw new Error(`old_string not found in ${p}.`);
       if (count > 1)
         throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
