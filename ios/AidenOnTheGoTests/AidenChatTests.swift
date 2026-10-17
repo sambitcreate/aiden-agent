@@ -1044,6 +1044,37 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testReloadAfterACancelledLoadStillReadsTheTranscript() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func increment() { lock.withLock { value += 1 } }
+            var count: Int { lock.withLock { value } }
+        }
+        let chatReads = Counter()
+        let hostChat = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-2"}"#
+        let model = try await makeProgressLifecycleModel(mode: .denied, responseOverride: { request in
+            guard request.url?.path == "/api/aiden/v1/chats/chat-progress-lifecycle" else { return nil }
+            chatReads.increment()
+            return (200, "application/json", Data(hostChat.utf8))
+        })
+        let arrived = expectation(description: "first transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/chat-progress-lifecycle") { arrived.fulfill() }
+        // The view's first load, superseded when the Mac finishes connecting.
+        let first = Task { await model.reload(observeProgress: false) }
+        await fulfillment(of: [arrived], timeout: 5)
+        first.cancel()
+        let second = Task { await model.reload(observeProgress: false) }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await first.value
+        await second.value
+
+        // The superseded read was cancelled; the newer epoch still read again.
+        XCTAssertEqual(chatReads.count, 2)
+    }
+
+    @MainActor
     func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }

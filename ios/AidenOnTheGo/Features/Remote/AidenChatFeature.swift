@@ -1863,6 +1863,17 @@ final class AidenChatViewModel {
         await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: state)
     }
 
+    /// Loads once any earlier load has unwound. A newer load epoch cancels
+    /// the old task, but cancellation is cooperative, so a plain `load` would
+    /// see `isLoading` and drop the refresh the new epoch asked for.
+    func reload(observeProgress: Bool = true) async {
+        while isLoading {
+            try? await Task.sleep(for: .milliseconds(50))
+            if Task.isCancelled { return }
+        }
+        await load(observeProgress: observeProgress)
+    }
+
     func load(observeProgress: Bool = true) async {
         guard !isReadOnlyFixture else { return }
         guard !isRemoved else { return }
@@ -5234,7 +5245,7 @@ struct AidenChatDetailView: View {
             // Loads on appear and after each return from the background. A
             // newer epoch cancels an older load still in flight.
             guard scenePhase != .background else { return }
-            await model.load(observeProgress: true)
+            await model.reload(observeProgress: true)
         }
         .onChange(of: coordinator?.connectionState) { old, new in
             // A chat opened from its saved copy while connecting reloads once
