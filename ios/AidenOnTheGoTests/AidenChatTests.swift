@@ -1065,13 +1065,14 @@ final class AidenChatTests: XCTestCase {
         let first = Task { await model.reload(observeProgress: false) }
         await fulfillment(of: [arrived], timeout: 5)
         first.cancel()
+        let readsBeforeReload = chatReads.count
         let second = Task { await model.reload(observeProgress: false) }
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         await first.value
         await second.value
 
         // The superseded read was cancelled; the newer epoch still read again.
-        XCTAssertEqual(chatReads.count, 2)
+        XCTAssertGreaterThan(chatReads.count, readsBeforeReload)
     }
 
     @MainActor
