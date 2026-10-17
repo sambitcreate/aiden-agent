@@ -106,6 +106,7 @@ function call(appended: Array<{ kind: string; data: unknown }>): BotToolCall {
     callId: "call_1",
     signal: new AbortController().signal,
     entries: async () => [],
+    submissions: async (requestIds) => requestIds.map(() => undefined),
     appendEntry: async (kind, data) => void appended.push({ kind, data }),
     memo: async (_name, candidate) => candidate,
   };

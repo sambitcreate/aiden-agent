@@ -470,6 +470,7 @@
         "main/services/bot-memory/tool.test.ts",
         "main/services/bot-memory/compaction.test.ts",
         "main/services/bot-memory/review.test.ts",
+        "main/services/bot-memory/recall.test.ts",
         "main/services/bot-runtime/profile-lock.test.ts",
         "main/services/bot-runtime/tool-adapter.test.ts",
         "main/services/bot-share-image-tool.test.ts",
