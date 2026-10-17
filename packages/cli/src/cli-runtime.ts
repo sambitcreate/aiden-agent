@@ -13,7 +13,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { main, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createAidenInlineExtensions } from "./extensions/index.ts";
-import { desktopSkillInjectionPaths } from "./skill-paths.ts";
 import { dispatchCommand } from "./commands.ts";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
@@ -66,14 +65,6 @@ function tuiSettingsPaths(appDir: string): string[] {
 	return paths;
 }
 
-/**
- * Desktop-shared Agent Skills injection (see src/skill-paths.ts for the
- * priority/dedup rules that keep pi's native discovery conflict-free).
- */
-function desktopSkillPaths(): string[] {
-	return desktopSkillInjectionPaths(homedir(), process.cwd());
-}
-
 export async function runCli(argv: string[], appDir: string): Promise<void> {
 	try {
 		migrateCliAzureConfig(getAgentDir());
@@ -95,9 +86,6 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 	if (argv.includes("--help")) process.stdout.write(CLI_COMMAND_HELP + "\n");
 	for (const themePath of bundledThemePaths(appDir)) {
 		argv.push("--theme", themePath);
-	}
-	for (const skillPath of desktopSkillPaths()) {
-		argv.push("--skill", skillPath);
 	}
 	if (shouldDefaultToFullscreenTui(argv, tuiSettingsPaths(appDir))) {
 		argv.push("--tui-mode", "fullscreen");
