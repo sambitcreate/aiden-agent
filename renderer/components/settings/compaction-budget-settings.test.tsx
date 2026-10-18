@@ -78,3 +78,23 @@ test("numbers typed before finishing the model name survive each keystroke of th
   await waitFor(() => assert.equal(saves.length, 1));
   assert.deepEqual(saves, [["fixture/exact-model", { reserveTokens: 8192, keepRecentTokens: 0 }]]);
 });
+
+test("after saving a new override, choosing another unconfigured model starts blank", async () => {
+  const saves: Array<[string, CompactionModelOverrides[string] | undefined]> = [];
+  const props = { modelKeys: ["b/y"], disabled: false };
+  const onSave = async (modelKey: string, budget: CompactionModelOverrides[string] | undefined) => {
+    saves.push([modelKey, budget]);
+  };
+  const view = render(<CompactionBudgetSettings overrides={{}} onSave={onSave} {...props} />);
+
+  fireEvent.change(modelInput(), { target: { value: "a/x" } });
+  fireEvent.change(reserveInput(), { target: { value: "9000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  // The parent refreshes its overrides without remounting the form.
+  view.rerender(<CompactionBudgetSettings overrides={{ "a/x": { reserveTokens: 9000 } }} onSave={onSave} {...props} />);
+
+  fireEvent.change(modelInput(), { target: { value: "b/y" } });
+  assert.equal(reserveInput().value, "", "a/x's saved numbers do not carry over to b/y");
+  assert.equal(recentInput().value, "");
+});

@@ -46,6 +46,8 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
       parseCompactionModelOverrides({ [key]: reset ? {} : budget });
       await onSave(key, reset || Object.keys(budget).length === 0 ? undefined : budget);
       if (reset) { setReserve(""); setRecent(""); loadedKeyRef.current = null; }
+      // The fields now show this model's saved budget, so another model must not inherit them.
+      else loadedKeyRef.current = Object.keys(budget).length === 0 ? null : key;
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Couldn't save model budgets.");
