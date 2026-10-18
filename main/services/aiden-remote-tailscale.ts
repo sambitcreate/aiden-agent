@@ -241,6 +241,38 @@ function preservedServeFingerprint(status: AidenTailscaleStatus): string {
   return serveFingerprint(aidenTailscaleCanonicalRouteSnapshot(status).preservedStatus);
 }
 
+interface AidenReconciliationRoute {
+  target?: string;
+  funnel: boolean;
+  https: boolean;
+}
+
+/**
+ * Only the part of Serve that Aiden's exact route mutation writes: the API
+ * handler on the HTTPS 443 listener, that listener's Funnel flag and its TCP
+ * HTTPS state. Unrelated Serve edits never enter a reconciliation decision.
+ */
+function aidenReconciliationRoute(status: AidenTailscaleStatus): AidenReconciliationRoute {
+  let snapshot: ReturnType<typeof aidenTailscaleCanonicalRouteSnapshot>;
+  try {
+    snapshot = aidenTailscaleCanonicalRouteSnapshot(status);
+  } catch {
+    throw new Error("tailscale_reconciliation_conflict");
+  }
+  return {
+    ...(snapshot.target ? { target: snapshot.target } : {}),
+    funnel: snapshot.funnel,
+    https: status.TCP?.["443"]?.HTTPS === true,
+  };
+}
+
+function sameAidenReconciliationRoute(
+  left: AidenReconciliationRoute,
+  right: AidenReconciliationRoute,
+): boolean {
+  return left.target === right.target && left.funnel === right.funnel && left.https === right.https;
+}
+
 function preservedServeFingerprintForListenerTransition(status: AidenTailscaleStatus): string {
   const preservedStatus = structuredClone(
     aidenTailscaleCanonicalRouteSnapshot(status).preservedStatus,
@@ -935,45 +967,37 @@ export class AidenRemoteTailscaleController {
     return this.withRouteLock(async () => {
       const pending = await this.outcomeStore?.snapshot();
       if (!pending || !this.outcomeStore) throw new Error("tailscale_reconciliation_unavailable");
-      const status = await this.serveStatus();
-      if (serveFingerprint(status) === pending.beforeFingerprint) {
-        const confirmed = await this.serveStatus();
-        if (serveFingerprint(confirmed) !== pending.beforeFingerprint) {
+      // Settle from Aiden's own route alone. Comparing the whole Serve document
+      // let any unrelated edit or `serve status` format change refuse forever.
+      // Reconciliation never mutates Serve, and every later route action
+      // re-plans from a fresh read with its own preserved-state checks.
+      const route = aidenReconciliationRoute(await this.serveStatus());
+      if (route.funnel) throw new Error("tailscale_reconciliation_conflict");
+      const confirmUnchanged = async () => {
+        const confirmed = aidenReconciliationRoute(await this.serveStatus());
+        if (!sameAidenReconciliationRoute(confirmed, route)) {
           throw new Error("tailscale_reconciliation_conflict");
         }
-        await this.outcomeStore.clear();
-        return "not_applied";
-      }
-      const snapshot = aidenTailscaleCanonicalRouteSnapshot(status);
-      const expectedTarget = pending.operation === "disconnect" ? undefined : pending.target;
-      const preserved = pending.normalizeListenerScaffolding
-        ? preservedServeFingerprintForListenerTransition(status)
-        : preservedServeFingerprint(status);
-      if (
-        snapshot.funnel
-        || snapshot.target !== expectedTarget
-        || preserved !== pending.preservedFingerprint
-        || (expectedTarget !== undefined && status.TCP?.["443"]?.HTTPS !== true)
-      ) {
-        throw new Error("tailscale_reconciliation_conflict");
-      }
-      if (expectedTarget !== undefined) {
-        if (!await this.probeHealth(expectedTarget)) {
+      };
+      if (pending.operation !== "disconnect" && route.target === pending.target) {
+        if (!route.https) throw new Error("tailscale_reconciliation_conflict");
+        if (!await this.probeHealth(pending.target)) {
           throw new Error("tailscale_reconciliation_unhealthy");
         }
-        const confirmed = await this.serveStatus();
-        if (serveFingerprint(confirmed) !== serveFingerprint(status)) {
-          throw new Error("tailscale_reconciliation_conflict");
-        }
-        await this.outcomeStore.commit({ path: "/api/aiden/v1", target: expectedTarget });
+        await confirmUnchanged();
+        await this.outcomeStore.commit({ path: "/api/aiden/v1", target: pending.target });
         return "connected";
       }
-      const confirmed = await this.serveStatus();
-      if (serveFingerprint(confirmed) !== serveFingerprint(status)) {
-        throw new Error("tailscale_reconciliation_conflict");
+      await confirmUnchanged();
+      if (pending.operation === "disconnect" && route.target !== pending.target) {
+        // The owned route being removed is gone; Aiden owns nothing here now.
+        await this.outcomeStore.commit(undefined);
+        return "disconnected";
       }
-      await this.outcomeStore.commit(undefined);
-      return "disconnected";
+      // Aiden's new route never appeared, or the owned route it was removing
+      // is still exactly in place: the ownership from before stands.
+      await this.outcomeStore.clear();
+      return "not_applied";
     });
   }
 }

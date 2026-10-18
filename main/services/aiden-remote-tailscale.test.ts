@@ -774,6 +774,96 @@ test("applied-disconnect reconciliation retains its record when a route reappear
   assert.equal(app.pendingOutcome()?.operation, "disconnect");
 });
 
+type TakeoverServeStatus = ReturnType<typeof takeoverFixture>["serveStatus"];
+
+function sharedHttpsHandlers(serveStatus: TakeoverServeStatus): Record<string, { Proxy: string }> {
+  return serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>;
+}
+
+function editUnrelatedServeRoutes(serveStatus: TakeoverServeStatus): void {
+  // The owner edits their own Serve routes, and a newer Tailscale release adds
+  // a field to `serve status --json`. None of it touches Aiden's route.
+  sharedHttpsHandlers(serveStatus)["/other"] = { Proxy: "http://127.0.0.1:10" };
+  (serveStatus.TCP as Record<string, { HTTPS?: boolean }>)["8443"] = { HTTPS: true };
+  (serveStatus.Web as Record<string, unknown>)["aiden.tailnet.ts.net:8443"] = {
+    Handlers: { "/": { Proxy: "http://127.0.0.1:3000" } },
+  };
+  (serveStatus as Record<string, unknown>).NewerReleaseField = { enabled: true };
+}
+
+function serveMutationCount(calls: readonly string[][]): number {
+  return calls.filter((args) => args[0] === "serve" && args[1] !== "status").length;
+}
+
+test("reconciliation settles Aiden's applied route after unrelated Serve edits", async () => {
+  const app = takeoverFixture();
+  delete sharedHttpsHandlers(app.serveStatus)["/api/aiden/v1"];
+  app.failNextPostMutationStatusReads(3);
+  await assert.rejects(app.controller.connect(target), /tailscale_route_outcome_unknown/u);
+  assert.equal(app.pendingOutcome()?.operation, "connect");
+  editUnrelatedServeRoutes(app.serveStatus);
+  app.setHealthy(true);
+  const mutations = serveMutationCount(app.calls);
+
+  // A Funnel on the shared listener is genuinely ambiguous: keep refusing.
+  (app.serveStatus.Web["aiden.tailnet.ts.net:443"] as { Funnel?: boolean }).Funnel = true;
+  await assert.rejects(
+    app.controller.reconcilePendingOutcome(),
+    /tailscale_reconciliation_conflict/u,
+  );
+  assert.equal(app.pendingOutcome()?.operation, "connect");
+
+  delete (app.serveStatus.Web["aiden.tailnet.ts.net:443"] as { Funnel?: boolean }).Funnel;
+  assert.equal(await app.controller.reconcilePendingOutcome(), "connected");
+  assert.deepEqual(app.reconciledOwnership(), { path: "/api/aiden/v1", target });
+  assert.equal(app.pendingOutcome(), undefined);
+  assert.equal(serveMutationCount(app.calls), mutations);
+  assert.equal(sharedHttpsHandlers(app.serveStatus)["/other"]?.Proxy, "http://127.0.0.1:10");
+});
+
+test("reconciliation discards an unapplied route after unrelated Serve edits and allows a new connect", async () => {
+  const app = takeoverFixture();
+  delete sharedHttpsHandlers(app.serveStatus)["/api/aiden/v1"];
+  app.failNextPostMutationStatusReads(3);
+  await assert.rejects(app.controller.connect(target), /tailscale_route_outcome_unknown/u);
+  // The daemon restarted without Aiden's route while the owner edited theirs.
+  delete sharedHttpsHandlers(app.serveStatus)["/api/aiden/v1"];
+  editUnrelatedServeRoutes(app.serveStatus);
+
+  assert.equal(await app.controller.reconcilePendingOutcome(), "not_applied");
+  assert.equal(app.pendingOutcome(), undefined);
+  assert.equal(app.reconciledOwnership(), undefined);
+
+  assert.deepEqual(await app.controller.connect(target), { path: "/api/aiden/v1", target });
+  assert.equal(sharedHttpsHandlers(app.serveStatus)["/api/aiden/v1"]?.Proxy, target);
+  assert.equal(sharedHttpsHandlers(app.serveStatus)["/other"]?.Proxy, "http://127.0.0.1:10");
+});
+
+test("reconciliation settles an unknown disconnect from Aiden's route alone", async () => {
+  const removed = takeoverFixture({ incumbent: target });
+  removed.failNextPostMutationStatusReads(3);
+  await assert.rejects(
+    removed.controller.disconnect(target, { path: "/api/aiden/v1", target }),
+    /tailscale_route_outcome_unknown/u,
+  );
+  editUnrelatedServeRoutes(removed.serveStatus);
+  assert.equal(await removed.controller.reconcilePendingOutcome(), "disconnected");
+  assert.equal(removed.pendingOutcome(), undefined);
+
+  const retained = takeoverFixture({ incumbent: target });
+  retained.failNextPostMutationStatusReads(3);
+  await assert.rejects(
+    retained.controller.disconnect(target, { path: "/api/aiden/v1", target }),
+    /tailscale_route_outcome_unknown/u,
+  );
+  // The owned route is back exactly as it was; ownership must stand.
+  retained.setRouteTarget(target);
+  editUnrelatedServeRoutes(retained.serveStatus);
+  assert.equal(await retained.controller.reconcilePendingOutcome(), "not_applied");
+  assert.equal(retained.pendingOutcome(), undefined);
+  assert.equal(sharedHttpsHandlers(retained.serveStatus)["/api/aiden/v1"]?.Proxy, target);
+});
+
 test("takeover verification rejects removal of TCP 443 needed by unrelated handlers", async () => {
   const app = takeoverFixture();
   const review = await app.controller.reviewTakeover(target);
