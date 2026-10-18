@@ -321,3 +321,72 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
     await fs.rm(temporary, { recursive: true, force: true });
   }
 });
+
+test("a changed filename that cannot be projected is omitted instead of failing Git review and comparison", async (t) => {
+  const repository = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-git-names-")));
+  t.after(() => fs.rm(repository, { recursive: true, force: true }));
+  await git(repository, "init", "-b", "main");
+  await git(repository, "config", "user.email", "aiden@example.test");
+  await git(repository, "config", "user.name", "Aiden Test");
+  await fs.writeFile(path.join(repository, "ok.txt"), "one\n", "utf8");
+  await git(repository, "add", "ok.txt");
+  await git(repository, "commit", "-m", "Initial");
+  await git(repository, "switch", "-c", "feature");
+  // Tabs are legal in macOS and Linux file names.
+  await fs.writeFile(path.join(repository, "notes\tdraft.md"), "draft\n", "utf8");
+  await fs.writeFile(path.join(repository, "ok.txt"), "two\n", "utf8");
+  await git(repository, "add", "-A");
+  await git(repository, "commit", "-m", "Feature");
+  await fs.writeFile(path.join(repository, "more\tnotes.md"), "more\n", "utf8");
+  await fs.writeFile(path.join(repository, "ok.txt"), "three\n", "utf8");
+
+  const workspace: Workspace = {
+    id: "workspace-names", name: "Names", folderPath: repository, permission: "ask", createdAt: 1, updatedAt: 2,
+  };
+  const service = new AidenRemoteGitService({
+    application: createWorkspaceEnvironmentApplicationService({
+      configStore: { getWorkspace: async (id) => id === workspace.id ? workspace : undefined },
+      workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+      assertManagedWorktreeAdmission: async () => undefined,
+      realpath: fs.realpath,
+      stat: fs.stat,
+    }),
+    owners: new AidenRemoteWorkspaceOwnerRegistry(),
+    git: {
+      review: gitReview, diff: gitDiff, branches: gitBranches, checkout: gitCheckout, createBranch: gitCreateBranch,
+      commit: gitCommit, pushCapability: gitPushCapability, push: gitPush, compare: gitCompare,
+      comparisonDiff: gitComparisonDiff, worktrees: gitWorktrees,
+    },
+    listWorkspaces: async () => [workspace],
+  });
+
+  const review = await service.review("device-1", workspace.id);
+  if (review.result?.kind !== "review" || !review.snapshotId) throw new Error("missing review");
+  assert.deepEqual(review.result.files.map((file) => file.displayPath), ["ok.txt"]);
+  assert.equal(review.result.uncommitted, 2, "the omitted change still counts as uncommitted");
+  const diff = await service.diff("device-1", workspace.id, {
+    snapshotId: review.snapshotId, fileId: review.result.files[0]!.id,
+  });
+  assert.match(diff.result?.kind === "diff" ? diff.result.diff : "", /\+three/u);
+  // Committing "all reviewed" would include the change the device never showed.
+  assert.equal(review.capability?.allowed, false);
+  const head = await git(repository, "rev-parse", "HEAD");
+  for (const scope of ["all-reviewed", "staged-reviewed"]) {
+    await assert.rejects(
+      service.commit("device-1", workspace.id, `commit-key-names-${scope}`, {
+        snapshotId: review.snapshotId, message: "Hidden", scope, confirmedForeground: true,
+      }),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "git_capability_denied",
+    );
+  }
+  assert.equal(await git(repository, "rev-parse", "HEAD"), head);
+
+  const comparison = await service.compare("device-1", workspace.id, { baseRef: "refs/heads/main" });
+  if (comparison.result?.kind !== "comparison") throw new Error("missing comparison");
+  assert.deepEqual(comparison.result.files.map((file) => file.displayPath), ["ok.txt"]);
+  const comparisonDiff = await service.comparisonDiff("device-1", workspace.id, {
+    comparisonId: comparison.result.comparisonId, fileId: comparison.result.files[0]!.id,
+  });
+  assert.match(comparisonDiff.result?.kind === "diff" ? comparisonDiff.result.diff : "", /\+two/u);
+});
