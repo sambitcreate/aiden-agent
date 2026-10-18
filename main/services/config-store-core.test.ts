@@ -42,6 +42,10 @@ function fakeSecrets(initial: Record<string, unknown> = {}) {
       delete keys[id];
       delete keys[bindingId(id)];
     },
+    async deleteProviderKeyWithQuarantine(id) {
+      delete keys[id];
+      delete keys[bindingId(id)];
+    },
     async migrateKeys(migrate) {
       migrateCalls += 1;
       migrate(keys);
@@ -190,6 +194,7 @@ test("listProviders recombines intent with this machine's cache", async (t) => {
   assert.deepEqual(listed.modelMetadata, provider.modelMetadata);
   assert.equal(listed.hasKey, false);
   assert.equal(await h.store.providerLegacyCredentialMigrationReady(), true);
+  assert.equal(await h.store.legacyProviderKeyOwnedByBuiltin("openai"), true, "no alias claims the legacy id");
   assert.equal(h.secrets.migrateCalls, 1);
 });
 
@@ -1161,6 +1166,11 @@ test("a string legacy key cannot bypass a future-shaped custom destination", asy
   assert.equal(secrets.keys.openai, "legacy-ciphertext");
   assert.deepEqual(secrets.keys["custom:openai-legacy"], futureTarget);
   assert.equal(await store.providerLegacyCredentialMigrationReady(), false);
+  assert.equal(
+    await store.legacyProviderKeyOwnedByBuiltin("openai"),
+    false,
+    "a deferred custom alias may own the legacy openai key, so logout must keep it",
+  );
 });
 
 test("a future-shaped custom alias source stays unresolved when its destination is absent", async (t) => {
@@ -3027,6 +3037,7 @@ test("a failed secret migration never blocks startup reads and retries later", a
       return false;
     },
     async deleteKey() {},
+    async deleteProviderKeyWithQuarantine() {},
     async migrateKeys() {
       calls += 1;
       if (calls === 1) throw new Error("keychain locked");
@@ -3045,6 +3056,46 @@ test("a failed secret migration never blocks startup reads and retries later", a
   assert.match(String(reports[0]?.error), /keychain locked/u);
   assert.deepEqual(await store.listSkills(), [], "a retry gets through");
   assert.equal(calls, 2);
+});
+
+test("a legacy gemini key beside a current google key converges instead of re-running per read", async (t) => {
+  const h = await harness(t);
+  const secrets = fakeSecrets({ gemini: "legacy-ciphertext", google: "current-ciphertext" });
+  const reports: string[] = [];
+  const store = createConfigStore(h.stores, secrets.port, (area) => reports.push(area));
+
+  await store.getSettings();
+  for (let i = 0; i < 5; i += 1) await store.getCompactionSettings();
+  for (let i = 0; i < 5; i += 1) await store.listProviders();
+
+  assert.equal(secrets.keys.google, "current-ciphertext", "the current google key wins");
+  assert.equal(secrets.keys.gemini, undefined);
+  assert.equal(
+    secrets.keys["__aiden_internal_provider_legacy_quarantine_key_v1__:gemini"],
+    "legacy-ciphertext",
+    "the superseded key stays recoverable",
+  );
+  assert.equal(secrets.migrateCalls, 1);
+  assert.deepEqual(reports, []);
+  assert.equal(await store.providerLegacyCredentialMigrationReady(), true);
+});
+
+test("an unresolvable legacy secret is migrated and reported once per process", async (t) => {
+  const h = await harness(t);
+  const futureGoogle = { version: 2, ciphertext: "future" };
+  const secrets = fakeSecrets({ gemini: "legacy-ciphertext", google: futureGoogle });
+  const reports: string[] = [];
+  const store = createConfigStore(h.stores, secrets.port, (area) => reports.push(area));
+
+  await store.getSettings();
+  for (let i = 0; i < 5; i += 1) await store.getCompactionSettings();
+  for (let i = 0; i < 5; i += 1) await store.listProviders();
+
+  assert.equal(secrets.keys.gemini, "legacy-ciphertext");
+  assert.deepEqual(secrets.keys.google, futureGoogle);
+  assert.equal(secrets.migrateCalls, 1);
+  assert.deepEqual(reports, ["provider-secret-migration"]);
+  assert.equal(await store.providerLegacyCredentialMigrationReady(), false);
 });
 
 test("compaction preference defaults to LLM and survives a restart independently of memory", async (t) => {
