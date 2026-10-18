@@ -135,7 +135,8 @@ test("an admission whose outbox write fails is retried from what is on disk, so 
     assert.deepEqual(await ingress.rows(), []);
     // A directory at the outbox path makes the atomic write fail after the session accepted the message.
     mkdirSync(file);
-    await assert.rejects(ingress.admit(message));
+    // The failure says the session already accepted the turn, so the update must not be skipped.
+    await assert.rejects(ingress.admit(message), { name: "BotReplyAdmittedUnrecordedError" });
     rmSync(file, { recursive: true, force: true });
     assert.deepEqual(await ingress.rows(), [], "the cache does not report a row that never reached disk");
 

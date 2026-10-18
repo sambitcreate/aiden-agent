@@ -102,6 +102,11 @@ export interface DeviceRecorder {
   /** Stops if needed and deletes the temp file. */
   discard(id: string): Promise<void>;
   discardWhere(match: (info: DeviceRecordingInfo) => boolean): Promise<void>;
+  /**
+   * Quit's deadline: SIGKILLs every recorder child still running so none outlives the app.
+   * A pending discard then deletes the device copy, without pulling it, and the local file.
+   */
+  terminate(): void;
   list(): DeviceRecordingInfo[];
   get(id: string): DeviceRecordingInfo | null;
   onChange(listener: (recordings: DeviceRecordingInfo[]) => void): () => void;
@@ -329,6 +334,16 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         if (match({ ...pending.info })) pending.cancelled = true;
       }
       await Promise.all([...entries.values()].filter((entry) => match(entry.info)).map(removeEntry));
+    },
+    terminate() {
+      for (const pending of starting.values()) pending.cancelled = true;
+      for (const entry of entries.values()) {
+        const child = entry.child;
+        if (!child || child.exitCode !== null || child.signalCode !== null) continue;
+        // A killed recorder's file is unfinished, so nothing is pulled from the device.
+        entry.stopUnconfirmed = true;
+        child.kill("SIGKILL");
+      }
     },
     list,
     get: (id) => {
