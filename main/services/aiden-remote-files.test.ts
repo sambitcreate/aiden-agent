@@ -68,10 +68,13 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     const rootPage = await service.children("device-1", workspace.id);
     assert.deepEqual(rootPage.entries.map(entry => entry.displayPath), ["Sources"]);
     assert.equal(rootPage.directoryPath, "");
+    // A replacement root lists afresh, but handles issued under the old root stay refused.
     await fs.rename(root, originalRoot);
-    await fs.mkdir(root);
+    await fs.mkdir(path.join(root, "Sources"), { recursive: true });
     await fs.writeFile(path.join(root, "replacement.txt"), "outside replacement");
-    await assert.rejects(() => service.children("device-1", workspace.id),
+    assert.deepEqual((await service.children("device-1", workspace.id)).entries.map(entry => entry.displayPath),
+      ["Sources", "replacement.txt"]);
+    await assert.rejects(() => service.children("device-1", workspace.id, rootPage.entries[0]!.id),
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
     await fs.rm(root, { recursive: true });
     await fs.rename(originalRoot, root);
@@ -295,6 +298,71 @@ test("lazy save reserves capacity before mutation and renews the returned handle
   const saved = await service.write("device", workspace.id, file.id, { content: "new", expectedVersion: opened.version });
   now += 2;
   assert.equal((await service.read("device", workspace.id, saved.id)).content, "new");
+});
+
+function lazyFixture(root: string) {
+  const workspace: Workspace = { id: "lazy", name: "Lazy", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
+  const service = new AidenRemoteFileService({ instanceId: "instance", handles: new AidenOpaqueHandleStore(),
+    owners: new AidenRemoteWorkspaceOwnerRegistry(),
+    application: createWorkspaceEnvironmentApplicationService({
+      configStore: { getWorkspace: async () => workspace }, workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(), assertManagedWorktreeAdmission: async () => undefined,
+      realpath: fs.realpath, stat: fs.stat,
+    }),
+  });
+  return { workspace, service };
+}
+
+const identityChanged = (error: unknown) =>
+  error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed";
+
+test("a workspace folder re-created at the same path lists again without a restart", { skip: process.platform !== "darwin" }, async (t) => {
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-recreated-root-")));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "workspace");
+  const populate = async (content: string) => {
+    await fs.mkdir(path.join(root, "Sources"), { recursive: true });
+    await fs.writeFile(path.join(root, "Sources", "App.swift"), content);
+  };
+  await populate("let value = 1\n");
+  const { workspace, service } = lazyFixture(root);
+  const sources = (await service.children("device", workspace.id)).entries[0]!;
+  const file = (await service.children("device", workspace.id, sources.id)).entries[0]!;
+  assert.equal((await service.read("device", workspace.id, file.id)).content, "let value = 1\n");
+
+  // Deleting and re-cloning the project: the same path and layout, with new inodes.
+  await fs.rm(root, { recursive: true });
+  await populate("let value = 2\n");
+  await assert.rejects(service.children("device", workspace.id, sources.id), identityChanged);
+  await assert.rejects(service.read("device", workspace.id, file.id), identityChanged);
+
+  const recreated = await service.children("device", workspace.id);
+  assert.deepEqual(recreated.entries.map(entry => entry.displayPath), ["Sources"]);
+  const recreatedFile = (await service.children("device", workspace.id, recreated.entries[0]!.id)).entries[0]!;
+  assert.equal((await service.read("device", workspace.id, recreatedFile.id)).content, "let value = 2\n");
+});
+
+test("a lazy page fails closed when the root is replaced while the page is prepared", { skip: process.platform !== "darwin" }, async (t) => {
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-swapped-root-")));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "workspace");
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "a.txt"), "a");
+  const { workspace, service } = lazyFixture(root);
+  const original = fsPromises.lstat;
+  let rootChecks = 0;
+  fsPromises.lstat = (async (...args: Parameters<typeof fsPromises.lstat>) => {
+    // The second root check runs after the page's handles are issued.
+    if (String(args[0]) === root && ++rootChecks === 2) {
+      await fs.rename(root, path.join(temporary, "original"));
+      await fs.mkdir(root);
+    }
+    return original(...args);
+  }) as typeof fsPromises.lstat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.lstat = original; syncBuiltinESMExports(); });
+  await assert.rejects(service.children("device", workspace.id), identityChanged);
+  assert.equal(rootChecks, 2);
 });
 
 async function legacyFixture(t: test.TestContext, count: number, capacity = 10_000) {
