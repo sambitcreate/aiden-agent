@@ -586,6 +586,13 @@ test("unrelated handlers and Funnel conflicts never offer takeover", async () =>
   assert.deepEqual(await funnel.controller.assessRoute(target), { state: "funnel_conflict" });
   await assert.rejects(funnel.controller.reviewTakeover(target), /tailscale_takeover_unavailable/u);
   assert.equal(funnel.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
+
+  // The same exposure as Tailscale actually reports it: connect refuses without touching Serve.
+  const allowed = takeoverFixture();
+  (allowed.serveStatus as Record<string, unknown>).AllowFunnel = { "aiden.tailnet.ts.net:443": true };
+  assert.deepEqual(await allowed.controller.assessRoute(target), { state: "funnel_conflict" });
+  await assert.rejects(allowed.controller.connect(target));
+  assert.equal(allowed.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
 });
 
 test("stale Aiden route requires a one-use review and preserves unrelated Serve state", async () => {
@@ -814,6 +821,14 @@ test("reconciliation settles Aiden's applied route after unrelated Serve edits",
   assert.equal(app.pendingOutcome()?.operation, "connect");
 
   delete (app.serveStatus.Web["aiden.tailnet.ts.net:443"] as { Funnel?: boolean }).Funnel;
+  // Tailscale reports public exposure in the top-level AllowFunnel map, keyed by host:port.
+  (app.serveStatus as Record<string, unknown>).AllowFunnel = { "aiden.tailnet.ts.net:443": true };
+  await assert.rejects(
+    app.controller.reconcilePendingOutcome(),
+    /tailscale_reconciliation_conflict/u,
+  );
+  assert.equal(app.pendingOutcome()?.operation, "connect");
+  delete (app.serveStatus as Record<string, unknown>).AllowFunnel;
   assert.equal(await app.controller.reconcilePendingOutcome(), "connected");
   assert.deepEqual(app.reconciledOwnership(), { path: "/api/aiden/v1", target });
   assert.equal(app.pendingOutcome(), undefined);
