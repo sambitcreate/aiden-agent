@@ -317,6 +317,7 @@
         "main/services/pi-thinking-disclosure.integration.test.ts",
         "main/services/provider-config-migration-core.test.ts",
         "main/services/provider-credential-rotation-core.test.ts",
+        "main/services/provider-registry-legacy-migration-core.test.ts",
         "main/services/renderer-readiness-core.test.ts",
         "main/services/schedule-notification.test.ts",
         "main/services/schedule-script.test.ts",

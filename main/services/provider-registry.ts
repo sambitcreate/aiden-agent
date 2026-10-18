@@ -22,6 +22,10 @@ import {
 } from "./pi-models-store.js";
 import { isCustomProviderId } from "./custom-provider-id.js";
 import { secrets } from "./secrets.js";
+import {
+  deleteLegacyApiKeysForPiProvider,
+  migrateLegacyApiKeysToPi,
+} from "./provider-registry-legacy-migration-core.js";
 import type { Provider, StoredProvider } from "./types.js";
 import type { ProviderAuthBackend, ProviderLogoutBackend } from "./provider-auth-flow-core.js";
 import { registerAidenBuiltinProviders } from "./concentrate-provider.js";
@@ -51,15 +55,6 @@ function registerDesktopHarnessProviders(models: MutableModels): MutableModels {
 const getProviderLoginDeviceId = createProviderLoginDeviceId(
   () => join(app.getPath("userData"), "provider-login-device-id"),
 );
-
-/** IDs used by Aiden before Pi became the provider authority. */
-const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
-  openai: "openai",
-  anthropic: "anthropic",
-  google: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-};
 
 function catalogRefreshWarning(errors: ReadonlyMap<string, Error>): string | undefined {
   if (errors.size === 0) return undefined;
@@ -248,6 +243,7 @@ export class ProviderRegistry {
       // Pi's marker always goes, so a failed agent sign-out cannot leave the
       // provider looking signed in.
       await this.credentials.delete(providerId);
+      await deleteLegacyApiKeysForPiProvider(providerId, (legacyId) => secrets.deleteKey(legacyId));
     }
   }
 
@@ -441,24 +437,16 @@ export class ProviderRegistry {
     this.models.streamSimple(model, context, options);
 
   /**
-   * Copy one-release legacy key records into Pi's credential store. The old
-   * encrypted file remains untouched for rollback; a current Pi credential
-   * always wins. Repeated calls share one in-flight migration.
+   * Move one-release legacy key records into Pi's credential store; a current
+   * Pi credential always wins. Repeated calls share one in-flight migration.
    */
   migrateLegacyApiKeys(): Promise<void> {
     if (!this.legacyCredentialMigration) {
-      this.legacyCredentialMigration = Promise.all(
-        Object.entries(LEGACY_API_KEY_PROVIDER_IDS).map(async ([legacyId, piId]) => {
-          if (await this.credentials.read(piId)) return;
-          const key = await secrets.getKey(legacyId);
-          if (!key?.trim()) return;
-          await this.credentials.modify(
-            piId,
-            async (current) => current ?? { type: "api_key", key: key.trim() },
-          );
-        }),
-      )
-        .then(() => undefined)
+      this.legacyCredentialMigration = migrateLegacyApiKeysToPi({
+        readLegacy: (legacyId) => secrets.getKey(legacyId),
+        deleteLegacy: (legacyId) => secrets.deleteKey(legacyId),
+        credentials: this.credentials,
+      })
         .catch((error) => {
           // A transient keychain error must not permanently poison future
           // migration attempts in this process.
