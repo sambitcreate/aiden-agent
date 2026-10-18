@@ -2,6 +2,7 @@ import Foundation
 import ImageIO
 import UIKit
 import XCTest
+import zlib
 @testable import AidenOnTheGo
 
 final class AidenRemoteClientTests: XCTestCase {
@@ -508,6 +509,7 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenBotHostFeature.presets,
             AidenBotHostFeature.memory,
             AidenBotHostFeature.proactive,
+            AidenServer.speechRequestGzipFeature,
             "chat-ui-panels-v1",
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
@@ -1893,6 +1895,7 @@ final class AidenRemoteClientTests: XCTestCase {
             case ("POST", "/api/aiden/v1/speech/models/parakeet-v3/download"):
                 return Self.response(for: request, status: 202, json: statusJSON)
             case ("POST", "/api/aiden/v1/speech/transcriptions"):
+                XCTAssertNil(request.value(forHTTPHeaderField: "Content-Encoding"))
                 let body = try XCTUnwrap(
                     JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any]
                 )
@@ -1919,6 +1922,34 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(downloadStatus.selectedModelId, "parakeet-v3")
         let transcript = try await client.transcribeSpeech(pcm16: Data([0, 0]), modelId: "parakeet-v3")
         XCTAssertEqual(transcript.text, "Hello from the Mac")
+    }
+
+    func testSpeechTranscriptionGzipsOnlyAfterServerAdvertisesSupport() async throws {
+        let client = makeClient()
+        let pcm = Data(repeating: 0, count: 32_000)
+        AidenRemoteMockURLProtocol.handler = { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(for: request, status: 200, json: #"{"protocolVersion":1,"instanceId":"instance-1","name":"Home","appVersion":"1","capabilities":["server:read","chat:write"],"serverCapabilities":["server:read","chat:write"],"connectionMode":"lan","serverTime":"2026-10-18T00:00:00Z","features":["speech-request-gzip-v1"]}"#)
+            case ("POST", "/api/aiden/v1/speech/transcriptions"):
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Encoding"), "gzip")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                let encoded = try Self.bodyData(request)
+                XCTAssertEqual(Array(encoded.prefix(2)), [0x1f, 0x8b])
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.gunzip(encoded)) as? [String: Any])
+                XCTAssertEqual(body["pcmBase64"] as? String, pcm.base64EncodedString())
+                XCTAssertEqual(body["encoding"] as? String, "pcm_s16le")
+                XCTAssertEqual(body["modelId"] as? String, "parakeet-v3")
+                XCTAssertLessThan(encoded.count, pcm.base64EncodedString().utf8.count)
+                return Self.response(for: request, status: 200, json: #"{"text":"Hello","modelId":"parakeet-v3"}"#)
+            default:
+                XCTFail("Unexpected speech request")
+                return Self.response(for: request, status: 404, json: #"{}"#)
+            }
+        }
+        _ = try await client.server()
+        let result = try await client.transcribeSpeech(pcm16: pcm, modelId: "parakeet-v3")
+        XCTAssertEqual(result.text, "Hello")
     }
 
     func testSpeechStatusDecodesSixModelsWithAdditiveFieldsAndVerifyPhase() async throws {
@@ -5247,6 +5278,27 @@ final class AidenRemoteClientTests: XCTestCase {
             data.append(buffer, count: count)
         }
         return data
+    }
+
+    private static func gunzip(_ input: Data) throws -> Data {
+        var stream = z_stream()
+        guard inflateInit2_(&stream, MAX_WBITS + 16, ZLIB_VERSION,
+            Int32(MemoryLayout<z_stream>.size)) == Z_OK else { throw URLError(.cannotDecodeRawData) }
+        defer { inflateEnd(&stream) }
+        let capacity = 128 * 1_024
+        var output = Data(count: capacity)
+        let written = try input.withUnsafeBytes { source in
+            try output.withUnsafeMutableBytes { destination in
+                stream.next_in = UnsafeMutablePointer<Bytef>(mutating: source.bindMemory(to: Bytef.self).baseAddress)
+                stream.avail_in = uInt(input.count)
+                stream.next_out = destination.bindMemory(to: Bytef.self).baseAddress
+                stream.avail_out = uInt(capacity)
+                guard inflate(&stream, Z_FINISH) == Z_STREAM_END else { throw URLError(.cannotDecodeRawData) }
+                return Int(stream.total_out)
+            }
+        }
+        output.count = written
+        return output
     }
 
     private static func workspaceResponse(

@@ -1,13 +1,14 @@
 /* global Buffer */
 
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { build } from "esbuild";
 import { electronBuildOptions } from "./build-electron.mjs";
+import { compactModelCatalog, preparePackagedModelCatalog } from "./prepare-packaged-model-catalog.mjs";
 import {
   assertByteForByteMatch,
   assertComputerUseBundleExecutable,
@@ -157,7 +158,7 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
     await Promise.all([
       writeFile(
         path.join(resources, "model-capabilities.json"),
-        `${JSON.stringify(modelCatalogFixture())}\n`,
+        JSON.stringify(modelCatalogFixture()),
         "utf8",
       ),
       writeFile(path.join(resources, "artificial-analysis-models.json"), "{}\n", "utf8"),
@@ -174,6 +175,18 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
 
     await writeFile(
       path.join(resources, "model-capabilities.json"),
+      `${JSON.stringify(modelCatalogFixture(), null, 2)}\n`,
+      "utf8",
+    );
+    const uncompactAsar = path.join(root, "uncompact.asar");
+    await createPackage(source, uncompactAsar);
+    await assert.rejects(
+      verifyPackagedModelCatalogResources(uncompactAsar),
+      /must be compact JSON/u,
+    );
+
+    await writeFile(
+      path.join(resources, "model-capabilities.json"),
       JSON.stringify({
         openai: { models: { broken: { name: "Broken", modalities: { input: { length: 1 } } } } },
       }),
@@ -184,6 +197,34 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
       verifyPackagedModelCatalogResources(malformedAsar),
       /modalities\.input must be a string array/u,
     );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("packaging compacts the validated snapshot without changing its model data or source", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-packaged-model-catalog-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "model-capabilities.json");
+  const destination = path.join(root, "build", "model-capabilities.json");
+  const pretty = `${JSON.stringify(modelCatalogFixture(), null, 2)}\n`;
+  try {
+    await writeFile(source, pretty, "utf8");
+    const sizes = await preparePackagedModelCatalog({ source, destination });
+    const compact = await readFile(destination, "utf8");
+    assert.deepEqual(JSON.parse(compact), JSON.parse(pretty));
+    assert.equal(compact, JSON.stringify(modelCatalogFixture()));
+    assert.equal(await readFile(source, "utf8"), pretty);
+    assert.equal(sizes.sourceBytes, Buffer.byteLength(pretty));
+    assert.equal(sizes.packagedBytes, Buffer.byteLength(compact));
+
+    await writeFile(source, "{}", "utf8");
+    await assert.rejects(
+      preparePackagedModelCatalog({ source, destination }),
+      /empty catalog/u,
+    );
+    assert.equal(await readFile(destination, "utf8"), compact);
+    assert.throws(() => compactModelCatalog("not JSON"), SyntaxError);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
