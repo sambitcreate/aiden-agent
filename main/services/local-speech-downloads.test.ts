@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,6 +167,41 @@ test("progress passes through verify before extract", async (t) => {
   assert.deepEqual(phases, ["download", "verify", "extract"]);
 });
 
+test("replacing an installed model keeps it when the swap fails, and swaps it cleanly otherwise", async (t) => {
+  const { bytes, sha256 } = fixtureArchive();
+  const state = { mode: "normal" as Mode, requests: [] as Array<string | undefined> };
+  const { server, url } = await serve(bytes, state);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const root = mkdtempSync(join(tmpdir(), "speech-root-"));
+  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  await manager.downloadModel("fixture");
+  const installed = join(root, "fixture");
+  const tokensBefore = readFileSync(join(installed, "tokens.txt"), "utf8");
+
+  // Renaming the new files into place fails (EIO, a locked directory): the installed model must survive.
+  const rename = fs.promises.rename;
+  fs.promises.rename = async (from, to) => {
+    if (String(from).endsWith(".extracting") && String(to) === installed) {
+      throw Object.assign(new Error("EIO: i/o error, rename"), { code: "EIO" });
+    }
+    return rename(from, to);
+  };
+  try {
+    await assert.rejects(manager.downloadModel("fixture"), /EIO/u);
+  } finally {
+    fs.promises.rename = rename;
+  }
+  assert.equal(manager.isModelInstalled("fixture"), true, "the previous install is still there");
+  assert.deepEqual(readdirSync(installed).sort(), ["model.int8.onnx", "tokens.txt"]);
+  assert.equal(readFileSync(join(installed, "tokens.txt"), "utf8"), tokensBefore);
+  assert.deepEqual(readdirSync(root).filter((name) => name !== ".partial").sort(), ["fixture"], "no staging or aside copies are left behind");
+
+  // A swap that goes through replaces the files and leaves no aside copy.
+  await manager.downloadModel("fixture");
+  assert.equal(manager.isModelInstalled("fixture"), true);
+  assert.deepEqual(readdirSync(root).filter((name) => name !== ".partial").sort(), ["fixture"]);
+});
+
 test("cleanupLeftovers removes stale staging and unknown partials", async () => {
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
   mkdirSync(join(root, ".partial"), { recursive: true });
@@ -174,6 +210,14 @@ test("cleanupLeftovers removes stale staging and unknown partials", async () => 
   writeFileSync(join(root, ".partial", "big.tar.bz2.part"), "x".repeat(11)); // larger than its 10-byte archive
   mkdirSync(join(root, "fixture.extracting"));
   mkdirSync(join(root, ".fixture.staging-123"));
+  // A replacement finished but its aside copy was not removed: the install stays, the copy goes.
+  mkdirSync(join(root, "fixture"));
+  writeFileSync(join(root, "fixture", "tokens.txt"), "new");
+  mkdirSync(join(root, "fixture.replaced-1700000000000"));
+  writeFileSync(join(root, "fixture.replaced-1700000000000", "tokens.txt"), "old");
+  // A replacement stopped between its renames: the moved-aside install is the only copy and comes back.
+  mkdirSync(join(root, "big.replaced-1700000000000"));
+  writeFileSync(join(root, "big.replaced-1700000000000", "tokens.txt"), "kept");
   const manager = createSpeechModelManager({
     root: () => root,
     catalog: [
@@ -187,6 +231,10 @@ test("cleanupLeftovers removes stale staging and unknown partials", async () => 
   assert.equal(readFileSync(join(root, ".partial", "fixture.tar.bz2.part"), "utf8"), "12345");
   assert.equal(existsSync(join(root, "fixture.extracting")), false);
   assert.equal(existsSync(join(root, ".fixture.staging-123")), false);
+  assert.equal(existsSync(join(root, "fixture.replaced-1700000000000")), false);
+  assert.equal(readFileSync(join(root, "fixture", "tokens.txt"), "utf8"), "new");
+  assert.equal(existsSync(join(root, "big.replaced-1700000000000")), false);
+  assert.equal(readFileSync(join(root, "big", "tokens.txt"), "utf8"), "kept");
 });
 
 test("listModels projects catalog metadata and derived size labels", () => {
