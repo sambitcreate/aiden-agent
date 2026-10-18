@@ -56,9 +56,9 @@ import { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import {
   AidenIdempotencyLedger,
-  MAX_DURABLE_LEDGER_SNAPSHOT_BYTES,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
+import { aidenRemoteOperationStoreOptions, openAidenRemoteOperationLedger } from "./aiden-remote-operation-store.js";
 import {
   AidenRemoteChatService,
   type AidenRemoteRetainedBotChatAuthorizationRequest,
@@ -209,19 +209,6 @@ async function computerDisplayName(): Promise<string> {
   }
 }
 
-function normalizeIdempotency(value: unknown): AidenIdempotencySnapshot {
-  return new AidenIdempotencyLedger(value as AidenIdempotencySnapshot).snapshot();
-}
-
-function safeIdempotency(value: unknown): boolean {
-  try {
-    normalizeIdempotency(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function remoteRouteCategory(value: unknown): string {
   if (typeof value !== "string") return "unknown";
   if (value === "health") return "health";
@@ -369,14 +356,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     OPERATIONS_FILE,
     new AidenIdempotencyLedger().snapshot(),
     () => userData,
-    {
-      maxBytes: MAX_DURABLE_LEDGER_SNAPSHOT_BYTES,
-      fileMode: 0o600,
-      normalize: normalizeIdempotency,
-      isSafe: safeIdempotency,
-      rejectCorruptWrite: true,
-      rejectUnsafeWrite: true,
-    },
+    aidenRemoteOperationStoreOptions(),
   );
   const streamStore = new DataStore<AidenRemoteStreamSnapshot>(
     STREAMS_FILE,
@@ -480,10 +460,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       const api = await workspaceApis(
         instanceId,
         async () => {
-          const idempotency = new AidenIdempotencyLedger(
-            await operationStore.load(),
-          );
-          await operationStore.save(idempotency.snapshot());
+          const idempotency = await openAidenRemoteOperationLedger(operationStore);
           const workspaceBrowser = new AidenRemoteWorkspaceBrowserService({
             instanceId,
             state,

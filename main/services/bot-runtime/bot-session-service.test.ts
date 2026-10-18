@@ -11,6 +11,7 @@ import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { ToolResultEntry, type ModelRef } from "@earendil-works/pi-durable";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 import { createBotQuestions } from "./bot-questions.js";
 import {
@@ -350,6 +351,34 @@ test("a reply whose session fails on a storage error and cannot reopen is failed
       blocker.close();
     }
   } finally {
+    await service.shutdown();
+  }
+});
+
+test("a reply whose answer committed just before a storage failure is delivered, not reported lost", async () => {
+  const profile = tempProfile();
+  const fauxModels = createFauxModels([fauxAssistantMessage("Dinner is pasta.")]);
+  const service = await serviceFor(profile, fauxModels);
+  const original = SqliteStorage.prototype.commit;
+  let failed = false;
+  // The batch that settles the input lands on disk, then its commit reports a failure.
+  SqliteStorage.prototype.commit = async function (this: SqliteStorage, ...args: Parameters<typeof original>) {
+    const seq = await original.apply(this, args);
+    const [writes] = args;
+    if (!failed && /"type":"input"/u.test(JSON.stringify(writes)) && /"status":"done"/u.test(JSON.stringify(writes))) {
+      failed = true;
+      throw new Error("disk I/O error");
+    }
+    return seq;
+  };
+  try {
+    const sent = await service.send("bot:a", { text: "plan dinner", requestId: "desk-commit-landed" });
+    const outcome = await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    assert.equal(failed, true, "the storage failure was injected");
+    assert.deepEqual(outcome, { kind: "completed", text: "Dinner is pasta." });
+    assert.equal(fauxModels.calls(), 1, "the answer is read back, not regenerated");
+  } finally {
+    SqliteStorage.prototype.commit = original;
     await service.shutdown();
   }
 });

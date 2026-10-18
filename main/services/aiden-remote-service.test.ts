@@ -2351,3 +2351,24 @@ for (const stalledStage of ["inspection", "pin"] as const) {
     }
   });
 }
+
+test("a Remote enable that failed on a torn operations ledger succeeds once the file is repaired", async (t) => {
+  const { DataStore } = await import("./data-store.js");
+  const { AidenIdempotencyLedger } = await import("./aiden-remote-operation-contract.js");
+  const { aidenRemoteOperationStoreOptions, openAidenRemoteOperationLedger } = await import("./aiden-remote-operation-store.js");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-operations-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "operations.json");
+  await fs.writeFile(file, '{"version":1,"entries":[', "utf8");
+  const store = new DataStore("operations.json", new AidenIdempotencyLedger().snapshot(), () => dir, aidenRemoteOperationStoreOptions());
+
+  await assert.rejects(openAidenRemoteOperationLedger(store), "a torn ledger is never overwritten");
+  assert.equal(await fs.readFile(file, "utf8"), '{"version":1,"entries":[', "the torn file is kept for repair");
+
+  // The owner repairs the file; the next enable in the same process reads it again.
+  const repaired = new AidenIdempotencyLedger().snapshot();
+  await fs.writeFile(file, JSON.stringify(repaired), "utf8");
+  const ledger = await openAidenRemoteOperationLedger(store);
+  assert.deepEqual(ledger.snapshot().entries, repaired.entries);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).version, 1, "the repaired ledger is written back");
+});

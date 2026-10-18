@@ -16,13 +16,21 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
   const [saving, setSaving] = React.useState(false);
   const savingRef = React.useRef(false);
   const suggestions = React.useMemo(() => [...new Set([...Object.keys(overrides), ...modelKeys])], [overrides, modelKeys]);
+  /** The model whose saved numbers the fields were filled from, if any. */
+  const loadedKeyRef = React.useRef<string | null>(null);
   const choose = (key: string) => {
     setModelKey(key);
-    // Always replace both fields: a model with no override must start blank
-    // rather than inherit the numbers of the model chosen before it.
-    const budget = Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : undefined;
-    setReserve(budget?.reserveTokens?.toString() ?? "");
-    setRecent(budget?.keepRecentTokens?.toString() ?? "");
+    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+      setReserve(overrides[key]?.reserveTokens?.toString() ?? "");
+      setRecent(overrides[key]?.keepRecentTokens?.toString() ?? "");
+      loadedKeyRef.current = key;
+    } else if (loadedKeyRef.current !== null) {
+      // Another model's saved numbers must not carry over to a model with no
+      // override; numbers the user typed for this entry are kept.
+      setReserve("");
+      setRecent("");
+      loadedKeyRef.current = null;
+    }
     setError(undefined);
   };
   const save = async (reset: boolean) => {
@@ -37,7 +45,9 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
       };
       parseCompactionModelOverrides({ [key]: reset ? {} : budget });
       await onSave(key, reset || Object.keys(budget).length === 0 ? undefined : budget);
-      if (reset) { setReserve(""); setRecent(""); }
+      if (reset) { setReserve(""); setRecent(""); loadedKeyRef.current = null; }
+      // The fields now show this model's saved budget, so another model must not inherit them.
+      else loadedKeyRef.current = Object.keys(budget).length === 0 ? null : key;
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Couldn't save model budgets.");

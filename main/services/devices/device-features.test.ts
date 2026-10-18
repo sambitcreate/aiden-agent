@@ -14,9 +14,13 @@ class Child implements RecorderChild {
   signalCode: NodeJS.Signals | null = null;
   signals: NodeJS.Signals[] = [];
   private listeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
-  constructor(private readonly finalize: () => void) {}
+  constructor(
+    private readonly finalize: () => void,
+    private readonly hangOnSigint = false,
+  ) {}
   kill(signal: NodeJS.Signals) {
     this.signals.push(signal);
+    if (signal === "SIGINT" && this.hangOnSigint) return true;
     this.finalize();
     queueMicrotask(() => {
       this.exitCode = 0;
@@ -34,7 +38,13 @@ class Child implements RecorderChild {
 }
 
 function harness(
-  options: { booted?: boolean; hostText?: string; hostFormats?: string[]; beforeTarget?: () => Promise<void> } = {},
+  options: {
+    booted?: boolean;
+    hostText?: string;
+    hostFormats?: string[];
+    beforeTarget?: () => Promise<void>;
+    hangOnSigint?: boolean;
+  } = {},
 ) {
   const device: DeviceSummary = {
     hostId: "local",
@@ -98,7 +108,7 @@ function harness(
   const recorder = createDeviceRecorder({
     spawn: (_command, args) => {
       const file = args[args.length - 1]!;
-      const child = new Child(() => files.set(file, "mp4"));
+      const child = new Child(() => files.set(file, "mp4"), options.hangOnSigint);
       children.push(child);
       return child;
     },
@@ -306,4 +316,23 @@ test("a framed 3D screenshot saves the renderer's image under a distinct name an
   assert.deepEqual(await h.features.saveFramedScreenshot({ hostId: "local", deviceId: UDID }, png, async () => null), {
     status: "cancelled",
   });
+});
+
+test("quit kills a recorder that ignores SIGINT once its deadline passes, and deletes the recording", async () => {
+  const h = harness({ hangOnSigint: true });
+  await h.features.startRecording("chat-1", TARGET);
+  let expire!: () => void;
+  let stopped = false;
+  const quitting = h.features
+    .stop({ deadline: () => new Promise<void>((resolve) => (expire = resolve)) })
+    .then(() => (stopped = true));
+  await settle();
+  assert.equal(stopped, false, "quit waits for the recorder until the deadline");
+  assert.deepEqual(h.children[0]!.signals, ["SIGINT"]);
+
+  expire();
+  await quitting;
+  assert.deepEqual(h.children[0]!.signals, ["SIGINT", "SIGKILL"], "the deadline force-kills the recorder");
+  assert.deepEqual(h.features.recordings(), []);
+  assert.equal(h.files.size, 0);
 });

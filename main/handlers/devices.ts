@@ -162,18 +162,19 @@ const RECORDINGS_SHUTDOWN_BUDGET_MS = 2_000;
 
 /** Stops helpers and recordings the Simulator tab started. Simulators keep running. */
 export async function shutdownDevices(): Promise<void> {
-  const recordings = deviceFeatures?.stop().catch(() => undefined);
-  if (recordings) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      recordings,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, RECORDINGS_SHUTDOWN_BUDGET_MS);
-        timer.unref();
-      }),
-    ]);
-    clearTimeout(timer);
-  }
+  const timers: Array<ReturnType<typeof setTimeout>> = [];
+  // A recorder still running at the deadline is force-killed rather than left behind.
+  await deviceFeatures
+    ?.stop({
+      deadline: () =>
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, RECORDINGS_SHUTDOWN_BUDGET_MS);
+          timer.unref();
+          timers.push(timer);
+        }),
+    })
+    .catch(() => undefined);
+  for (const timer of timers) clearTimeout(timer);
   // The service bounds its own helpers' stop, and always runs so they never outlive the app.
   await deviceService?.stop();
 }
