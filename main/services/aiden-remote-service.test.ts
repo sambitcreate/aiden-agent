@@ -14,6 +14,8 @@ import {
   aidenRemoteBonjourBackend,
   aidenRemoteBonjourServiceName,
   aidenRemotePortCandidates,
+  memoizeAidenRemoteWorkspaceApi,
+  type AidenRemoteServiceOptions,
 } from "./aiden-remote-service.js";
 
 import {
@@ -151,6 +153,7 @@ interface FixtureOptions {
   now?: () => number;
   /** Wire the persisted "Accept connection requests" setting (in memory). */
   pairingRequests?: { accept?: boolean };
+  workspaceApi?: AidenRemoteServiceOptions["workspaceApi"];
 }
 
 async function fixture(
@@ -314,6 +317,7 @@ async function fixture(
     ...(options.afterListenerBound === undefined
       ? {}
       : { afterListenerBound: options.afterListenerBound }),
+    ...(options.workspaceApi ? { workspaceApi: options.workspaceApi } : {}),
     ...(options.pairingRequests
       ? {
           pairingRequestSettings: {
@@ -1088,6 +1092,44 @@ test("unexpected Bonjour termination stops the transport and exposes safe recove
     assert.equal(status.running, false);
     assert.equal(status.error, "Local network discovery stopped unexpectedly. Restart Remote Access to try again.");
     assert.equal(status.error?.includes("private dns-sd detail"), false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("a failed workspace API build is retried by the next enable instead of wedging Remote Access", async () => {
+  type WorkspaceApi = Awaited<ReturnType<NonNullable<AidenRemoteServiceOptions["workspaceApi"]>>>;
+  const workspaceApis = memoizeAidenRemoteWorkspaceApi<WorkspaceApi>();
+  const builds: string[] = [];
+  let failNextBuild = true;
+  const app = await fixture({
+    workspaceApi: (instanceId) => workspaceApis(instanceId, async () => {
+      builds.push(instanceId);
+      if (failNextBuild) {
+        failNextBuild = false;
+        throw new Error("operations journal unavailable");
+      }
+      return {
+        workspaces: {} as WorkspaceApi["workspaces"],
+        workspaceBrowser: {} as WorkspaceApi["workspaceBrowser"],
+      };
+    }),
+  });
+  try {
+    await app.service.initialize();
+    await assert.rejects(app.service.setEnabled(true), /operations journal unavailable/u);
+    assert.equal((await app.service.status()).running, false);
+
+    await app.service.setEnabled(true);
+    assert.equal((await app.service.status()).running, true);
+    assert.equal(builds.length, 2);
+
+    // A successful build is shared by later starts of the same instance.
+    await app.service.setEnabled(false);
+    await app.service.setEnabled(true);
+    assert.equal((await app.service.status()).running, true);
+    assert.equal(builds.length, 2);
+    assert.equal(new Set(builds).size, 1);
   } finally {
     await app.cleanup();
   }

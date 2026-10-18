@@ -29,6 +29,7 @@ import {
 import {
   AidenRemoteService,
   createAidenRemoteBonjourPublisher,
+  memoizeAidenRemoteWorkspaceApi,
   type AidenRemoteServiceLogEntry,
 } from "./aiden-remote-service.js";
 import {
@@ -424,30 +425,27 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       },
     },
   );
-  let workspaceApi:
-    | Promise<{
-        instanceId: string;
-        workspaces: AidenRemoteWorkspaceService;
-        workspaceBrowser: AidenRemoteWorkspaceBrowserService;
-        chats: AidenRemoteChatService;
-        chatProgress: AidenRemoteChatProgressService;
-        models: AidenRemoteModelService;
-        streams: AidenRemoteStreamService;
-        files: AidenRemoteFileService;
-        botFiles?: AidenRemoteBotFileService;
-        git: AidenRemoteGitService;
-        schedules: AidenRemoteScheduleService;
-        appControls: typeof remoteAppControls;
-        providers: AidenRemoteProviderService;
-        memorySettings: AidenRemoteMemorySettingsService;
-        usage: typeof usageStore;
-        speech: AidenRemoteSpeechService;
-        readAloud: AidenRemoteTtsService;
-        bots?: AidenRemoteBotService;
-        botSessions?: AidenRemoteBotSessionService;
-      }>
-    | undefined;
-  let workspaceApiInstanceId: string | undefined;
+  const workspaceApis = memoizeAidenRemoteWorkspaceApi<{
+    instanceId: string;
+    workspaces: AidenRemoteWorkspaceService;
+    workspaceBrowser: AidenRemoteWorkspaceBrowserService;
+    chats: AidenRemoteChatService;
+    chatProgress: AidenRemoteChatProgressService;
+    models: AidenRemoteModelService;
+    streams: AidenRemoteStreamService;
+    files: AidenRemoteFileService;
+    botFiles?: AidenRemoteBotFileService;
+    git: AidenRemoteGitService;
+    schedules: AidenRemoteScheduleService;
+    appControls: typeof remoteAppControls;
+    providers: AidenRemoteProviderService;
+    memorySettings: AidenRemoteMemorySettingsService;
+    usage: typeof usageStore;
+    speech: AidenRemoteSpeechService;
+    readAloud: AidenRemoteTtsService;
+    bots?: AidenRemoteBotService;
+    botSessions?: AidenRemoteBotSessionService;
+  }>();
   let activeReadAloud: AidenRemoteTtsService | undefined;
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
@@ -494,9 +492,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     simulators: simulatorShareRelay,
     hostPlatform: aidenRemoteHostPlatform(process.platform),
     workspaceApi: async (instanceId) => {
-      if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
-        workspaceApiInstanceId = instanceId;
-        workspaceApi = (async () => {
+      // A failed build is retried by the next start rather than replayed.
+      const api = await workspaceApis(
+        instanceId,
+        async () => {
           const idempotency = new AidenIdempotencyLedger(
             await operationStore.load(),
           );
@@ -1071,9 +1070,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
             }),
           };
-        })();
-      }
-      const api = await workspaceApi;
+        },
+      );
       api.readAloud.resume();
       return api;
     },
