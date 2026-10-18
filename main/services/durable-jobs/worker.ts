@@ -7,8 +7,8 @@ export class DurableJobWorker {
   readonly owner = randomUUID();
   private timer?: ReturnType<typeof setInterval>;
   private stopping = false;
-  private ticking?: Promise<void>;
-  private active = new Map<string, AbortController>();
+  /** Running jobs; stop() waits on these, a later tick never does. */
+  private active = new Map<string, { controller: AbortController; done: Promise<void> }>();
   constructor(
     private readonly service: DurableJobService,
     private readonly onError: (error: unknown) => void,
@@ -22,16 +22,14 @@ export class DurableJobWorker {
     }, 1_000);
     void this.tick().catch(this.onError);
   }
-  tick(): Promise<void> {
-    if (this.stopping) return Promise.resolve();
-    if (this.ticking) return this.ticking;
-    this.ticking = this.drain().finally(() => {
-      this.ticking = undefined;
-    });
-    return this.ticking;
-  }
-  private async drain() {
-    const pending: Promise<void>[] = [];
+  /**
+   * Claim what the store admits now and resolve once those jobs settle.
+   * Claiming is synchronous, so a later tick claims more while earlier jobs
+   * still run; only the store's transactional cap limits concurrency.
+   */
+  async tick(): Promise<void> {
+    if (this.stopping) return;
+    const claimed: Promise<void>[] = [];
     // Store admission is transactional across workers, including the global cap.
     for (let index = 0; index < 16 && !this.stopping; index++) {
       let claim;
@@ -42,8 +40,8 @@ export class DurableJobWorker {
         break;
       }
       if (!claim) break;
+      const jobId = claim.job.id;
       const controller = new AbortController();
-      this.active.set(claim.job.id, controller);
       const heartbeat = setInterval(() => {
         try {
           this.service.store.heartbeat(claim.lease);
@@ -51,20 +49,24 @@ export class DurableJobWorker {
           controller.abort();
         }
       }, HEARTBEAT_MS);
-      pending.push(
-        this.service.run(claim.lease, controller.signal).finally(() => {
-          clearInterval(heartbeat);
-          this.active.delete(claim.job.id);
-        }),
-      );
+      const entry = {
+        controller,
+        done: this.service
+          .run(claim.lease, controller.signal)
+          .catch(this.onError)
+          .finally(() => {
+            clearInterval(heartbeat);
+            if (this.active.get(jobId) === entry) this.active.delete(jobId);
+          }),
+      };
+      this.active.set(jobId, entry);
+      claimed.push(entry.done);
     }
-    const results = await Promise.allSettled(pending);
-    for (const result of results)
-      if (result.status === "rejected") this.onError(result.reason);
+    await Promise.all(claimed);
   }
   /** Call after a committed control to promptly abort its exact old attempt. */
   notifyControl(jobId: string): void {
-    this.active.get(jobId)?.abort();
+    this.active.get(jobId)?.controller.abort();
   }
 
   /** Bounded shutdown; false retains live reservations until runtime settlement. */
@@ -74,12 +76,13 @@ export class DurableJobWorker {
     this.stopping = true;
     clearInterval(this.timer);
     this.timer = undefined;
-    for (const controller of this.active.values()) controller.abort();
-    if (!this.ticking) return true;
+    const running = [...this.active.values()];
+    for (const { controller } of running) controller.abort();
+    if (running.length === 0) return true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        this.ticking.then(() => true),
+        Promise.all(running.map(({ done }) => done)).then(() => true),
         new Promise<false>((resolve) => {
           timer = setTimeout(() => resolve(false), timeoutMs);
         }),
