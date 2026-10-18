@@ -101,6 +101,26 @@ test("logout keeps a legacy key a custom alias owns, and the next launch still d
   assert.equal(stores.legacyKeys.get("openai"), "sk-custom-endpoint");
 });
 
+test("an unreadable sign-out marker skips the import this run instead of resurrecting the key", async () => {
+  const stores = durableStores({ openai: "sk-custom-endpoint" }, {}, { customOwned: ["openai"] });
+  await stores.logout("openai");
+  let failures = 1;
+  const launch = stores.launch();
+  await migrateLegacyApiKeysToPi({
+    ...launch,
+    // One launch cannot decrypt the marker.
+    signedOut: async (id) => {
+      if (failures-- > 0) throw new Error("decryption failed");
+      return launch.signedOut(id);
+    },
+  });
+  assert.equal(stores.piCredentials.has("openai"), false, "an unreadable marker fails closed");
+  assert.equal(stores.legacyKeys.get("openai"), "sk-custom-endpoint");
+
+  await migrateLegacyApiKeysToPi(stores.launch());
+  assert.equal(stores.piCredentials.has("openai"), false, "the marker still holds once it reads");
+});
+
 test("a current Pi credential wins over the legacy record", async () => {
   const oauth = { type: "oauth", access: "a", refresh: "r", expires: 1 } as unknown as Credential;
   const stores = durableStores({ anthropic: "sk-stale" }, { anthropic: oauth });

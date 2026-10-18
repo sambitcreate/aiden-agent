@@ -453,7 +453,7 @@ export class ProviderRegistry {
       this.legacyCredentialMigration = migrateLegacyApiKeysToPi({
         readLegacy: (legacyId) => secrets.getKey(legacyId),
         deleteLegacy: (legacyId) => secrets.deleteKey(legacyId),
-        signedOut: async (legacyId) => (await secrets.getKey(legacySignedOutMarker(legacyId))) !== null,
+        signedOut: async (legacyId) => (await secrets.getKeyStrict(legacySignedOutMarker(legacyId))) !== null,
         credentials: this.credentials,
       })
         .catch((error) => {

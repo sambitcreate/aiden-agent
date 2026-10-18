@@ -12,7 +12,10 @@ export const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
 export interface LegacyApiKeyMigrationDependencies {
   readLegacy: (legacyId: string) => Promise<string | null>;
   deleteLegacy: (legacyId: string) => Promise<void>;
-  /** A built-in signed out while its legacy record was kept for a custom alias; never import it. */
+  /**
+   * A built-in signed out while its legacy record was kept for a custom alias; never import it.
+   * Must reject when the marker cannot be read, not report it absent.
+   */
   signedOut: (legacyId: string) => Promise<boolean>;
   credentials: Pick<CredentialStore, "read" | "modify">;
 }
@@ -28,7 +31,8 @@ export async function migrateLegacyApiKeysToPi(
   await Promise.all(
     Object.entries(LEGACY_API_KEY_PROVIDER_IDS).map(async ([legacyId, piId]) => {
       if (await dependencies.credentials.read(piId)) return;
-      if (await dependencies.signedOut(legacyId)) return;
+      // A marker that cannot be read fails closed: skip this run rather than undo a logout.
+      if (await dependencies.signedOut(legacyId).catch(() => true)) return;
       const key = await dependencies.readLegacy(legacyId);
       if (!key?.trim()) return;
       await dependencies.credentials.modify(
