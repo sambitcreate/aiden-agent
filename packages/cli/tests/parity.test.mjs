@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,6 +168,34 @@ test("headless command output survives a pipe when it exceeds the kernel pipe bu
   assert.ok(Buffer.byteLength(result.stdout) > 1_500_000, `received ${Buffer.byteLength(result.stdout)} bytes`);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.length, 1); assert.equal(parsed[0].preview, preview);
+});
+
+test("CLI display_image limits are per agent run and per session journal", async (t) => {
+  const dir = temporary(t); mkdirSync(join(dir, "workspace")); const workspaceRoot = realpathSync(join(dir, "workspace"));
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  writeFileSync(join(workspaceRoot, "dot.png"), png);
+  const handlers = []; let tool;
+  api.createDisplayImageInlineExtension({ agentDir: join(dir, "agent"), workspaceRoot }).factory({
+    registerTool: (candidate) => { tool = candidate; },
+    on: (event, handler) => { if (event === "before_agent_start") handlers.push(handler); },
+  });
+  let session = api.SessionManager.inMemory(dir);
+  const startRun = async () => { for (const handler of handlers) await handler({ type: "before_agent_start", systemPrompt: "" }, { sessionManager: session }); };
+  // Like pi, persist each tool result into the session journal.
+  const display = async () => {
+    const toolCallId = `call-${Math.random()}`;
+    const result = await tool.execute(toolCallId, { path: "dot.png" }, new AbortController().signal);
+    session.appendMessage({ role: "toolResult", toolCallId, toolName: "display_image", content: result.content, isError: false, timestamp: Date.now() });
+    return result;
+  };
+  // One image per answer for more than 20 answers: the per-response cap must not accumulate.
+  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await display()).content.some((part) => part.type === "image"), `run ${run}`); }
+  // The per-chat ceiling still counts every image already in this session.
+  await startRun();
+  await assert.rejects(display(), /100-image/);
+  // A different session starts from its own (empty) history.
+  session = api.SessionManager.inMemory(dir); await startRun();
+  assert.ok((await display()).content.some((part) => part.type === "image"));
 });
 
 test("title generation preserves manual renames and seeds offline sessions", async (t) => {
