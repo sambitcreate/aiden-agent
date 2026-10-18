@@ -993,3 +993,33 @@ test("route lock cannot collide with a retained Aiden TCP listener on the same p
     await new Promise<void>((resolve) => listener.close(() => resolve()));
   }
 });
+
+test("a busy route lock closes every socket whose bind failed", async () => {
+  const port = await availableLoopbackPort();
+  const holder = createSocket({ type: "udp4", reuseAddr: false });
+  await new Promise<void>((resolve, reject) => {
+    holder.once("error", reject);
+    holder.bind({ address: "127.0.0.1", port, exclusive: true }, resolve);
+  });
+  const attempts: Array<{ closed: boolean }> = [];
+  try {
+    await assert.rejects(
+      withAidenTailscaleRouteLock(async () => undefined, {
+        port,
+        attempts: 3,
+        retryMs: 1,
+        createSocket: (options) => {
+          const socket = createSocket(options);
+          const attempt = { closed: false };
+          socket.once("close", () => { attempt.closed = true; });
+          attempts.push(attempt);
+          return socket;
+        },
+      }),
+      /tailscale_route_busy/u,
+    );
+  } finally {
+    await new Promise<void>((resolve) => holder.close(() => resolve()));
+  }
+  assert.deepEqual(attempts, [{ closed: true }, { closed: true }, { closed: true }]);
+});

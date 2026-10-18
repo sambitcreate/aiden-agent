@@ -1,6 +1,6 @@
 import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createSocket } from "node:dgram";
+import { createSocket, type Socket, type SocketOptions } from "node:dgram";
 import * as fs from "node:fs/promises";
 import { get as httpGet } from "node:http";
 import { performance } from "node:perf_hooks";
@@ -138,6 +138,7 @@ export interface AidenTailscaleRouteLockOptions {
   port?: number;
   attempts?: number;
   retryMs?: number;
+  createSocket?: (options: SocketOptions) => Socket;
 }
 
 interface AidenTailscaleNodeStatus {
@@ -368,16 +369,25 @@ export async function withAidenTailscaleRouteLock<T>(
   const port = options.port ?? ROUTE_LOCK_PORT;
   const attempts = options.attempts ?? ROUTE_LOCK_ATTEMPTS;
   const retryMs = options.retryMs ?? ROUTE_LOCK_RETRY_MS;
-  let lockSocket: ReturnType<typeof createSocket> | undefined;
+  const openSocket = options.createSocket ?? ((socketOptions) => createSocket(socketOptions));
+  let lockSocket: Socket | undefined;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     // The UDP namespace cannot collide with Aiden's retained TCP listener
     // ports, while the kernel still releases this process-owned mutex on exit.
-    const candidate = createSocket({ type: "udp4", reuseAddr: false });
+    const candidate = openSocket({ type: "udp4", reuseAddr: false });
     candidate.unref();
     const acquired = await new Promise<boolean>((resolve, reject) => {
       candidate.once("error", (error: NodeJS.ErrnoException) => {
-        if (error.code === "EADDRINUSE") resolve(false);
-        else reject(error);
+        // A socket whose bind failed still holds a descriptor until closed.
+        const settle = () => {
+          if (error.code === "EADDRINUSE") resolve(false);
+          else reject(error);
+        };
+        try {
+          candidate.close(settle);
+        } catch {
+          settle();
+        }
       });
       candidate.bind({ address: "127.0.0.1", port, exclusive: true }, () => resolve(true));
     });
