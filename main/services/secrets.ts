@@ -408,6 +408,31 @@ export const secrets = {
     });
   },
 
+  /**
+   * Explicit provider removal: drop the active pair and both recovery
+   * quarantines in one write, so re-adding the same ID cannot reattach an old
+   * key. Rotation keeps using `deleteKey`, which preserves the quarantines.
+   */
+  async deleteProviderKeyWithQuarantine(
+    providerId: string,
+    isCurrent: MutationGuard = () => true,
+  ): Promise<void> {
+    return serialized(async () => {
+      assertMutationCurrent(isCurrent);
+      const map = await readMap();
+      assertMutationCurrent(isCurrent);
+      const removed = [
+        providerId,
+        `${PROVIDER_BINDING_PREFIX}${providerId}`,
+        `${PROVIDER_QUARANTINE_KEY_PREFIX}${providerId}`,
+        `${PROVIDER_QUARANTINE_BINDING_PREFIX}${providerId}`,
+        `${PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX}${providerId}`,
+        `${PROVIDER_LEGACY_QUARANTINE_BINDING_PREFIX}${providerId}`,
+      ].map((id) => deleteSecretKeyEntry(map, id));
+      if (removed.some(Boolean)) await writeMap(map, isCurrent);
+    });
+  },
+
   /** Remove one namespaced credential and every colon-delimited child in one map write. */
   async deleteKeyFamily(providerId: string, isCurrent: MutationGuard = () => true): Promise<void> {
     return serialized(async () => {

@@ -42,6 +42,10 @@ function fakeSecrets(initial: Record<string, unknown> = {}) {
       delete keys[id];
       delete keys[bindingId(id)];
     },
+    async deleteProviderKeyWithQuarantine(id) {
+      delete keys[id];
+      delete keys[bindingId(id)];
+    },
     async migrateKeys(migrate) {
       migrateCalls += 1;
       migrate(keys);
@@ -3027,6 +3031,7 @@ test("a failed secret migration never blocks startup reads and retries later", a
       return false;
     },
     async deleteKey() {},
+    async deleteProviderKeyWithQuarantine() {},
     async migrateKeys() {
       calls += 1;
       if (calls === 1) throw new Error("keychain locked");

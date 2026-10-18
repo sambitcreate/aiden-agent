@@ -97,6 +97,8 @@ export interface SecretsPort {
   hasKey(providerId: string): Promise<boolean>;
   getProviderKey?(providerId: string, binding: string): Promise<string | null>;
   deleteKey(providerId: string, isCurrent?: () => boolean): Promise<void>;
+  /** Explicit removal: also drops the provider's recovery quarantines. */
+  deleteProviderKeyWithQuarantine(providerId: string): Promise<void>;
   migrateKeys(migrate: (keys: Record<string, unknown>) => boolean): Promise<void>;
   migrateProviderKeysWithBindings(
     migrations: ReadonlyArray<{
@@ -830,7 +832,7 @@ export function createConfigStore(
         const recentModels = withoutProviderRecentModels(config.settings.recentModels, id);
         if (recentModels) config.settings.recentModels = recentModels;
       });
-      await secrets.deleteKey(id);
+      await secrets.deleteProviderKeyWithQuarantine(id);
     },
 
     /** Resolve a historical provider identity without ever falling through to a new Pi provider. */
