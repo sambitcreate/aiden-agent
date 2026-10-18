@@ -5,7 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createCurrentPiSessionRepository } from "../../../main/services/pi-session-repository-port.js";
 import { parseAttachments } from "../../../main/services/attachment-contract.js";
 import type { Message } from "@earendil-works/pi-ai";
-import { exportSession } from "./sessions.ts";
+import { exportSession, IMPORTED_ASSISTANT_ATTACHMENTS } from "./sessions.ts";
 
 function importContext(messages: readonly { role: string }[]): Message[] {
   return messages.map((message) => {
@@ -42,6 +42,7 @@ export async function exportSessionFile(agentDir: string, source: string, target
 export async function importSession(agentDir: string, cwd: string, source: string) {
   const text = snapshot(resolve(source));
   let messages: Message[] = [], name: string | undefined;
+  const assistantAttachments = new Map<Message, NonNullable<ReturnType<typeof parseAttachments>>>();
   let first: Record<string, unknown>;
   try { first = JSON.parse(text); } catch { first = JSON.parse(text.split("\n").find((line) => line.trim()) ?? "null"); }
   // pi 0.87 storage v1 headers carry `v: 4`; 0.84.4 journals carry `version: 4`
@@ -78,13 +79,20 @@ export async function importSession(agentDir: string, cwd: string, source: strin
         ? { type: "image" as const, data: attachment.data!, mimeType: attachment.mimeType }
         : { type: "text" as const, text: `File: ${attachment.name}\n${attachment.text}` })];
       if (message.role === "user") return { role: "user", content, timestamp: message.createdAt };
-      return { role: "assistant", content: [{ type: "text", text: message.content }], timestamp: message.createdAt,
+      const assistant: Message = { role: "assistant", content: [{ type: "text", text: message.content }], timestamp: message.createdAt,
         api: "openai-completions", provider: "imported", model: typeof message.model === "string" ? message.model : "imported", stopReason: "stop",
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+      if (attachments?.length) assistantAttachments.set(assistant, attachments);
+      return assistant;
     });
   }
   const manager = SessionManager.create(cwd, join(agentDir, "sessions", `import-${randomUUID()}`));
-  for (const message of messages) manager.appendMessage(message);
+  for (const message of messages) {
+    const messageId = manager.appendMessage(message);
+    // Pi assistant content cannot hold images or files: keep them beside the message, outside model context.
+    const attachments = assistantAttachments.get(message);
+    if (attachments) manager.appendCustomEntry(IMPORTED_ASSISTANT_ATTACHMENTS, { messageId, attachments });
+  }
   if (name) manager.appendSessionInfo(name);
   // Pi defers persistence until an assistant response; imported user-only chats must also survive exit.
   const file = manager.getSessionFile()!;

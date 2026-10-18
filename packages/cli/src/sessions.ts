@@ -2,6 +2,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolve, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { writeAidenChatExport } from "../../../main/services/chat-export.js";
+import { safeStoredAttachments } from "../../../main/services/attachment-contract.js";
 import type { Chat, ChatMessage } from "../../../main/services/types.js";
 
 export function messageText(content: unknown): string {
@@ -10,10 +11,20 @@ export function messageText(content: unknown): string {
   return content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
 }
 
+/** Custom journal entry holding an imported assistant message's attachments (see session-import.ts). */
+export const IMPORTED_ASSISTANT_ATTACHMENTS = "aiden-imported-attachments";
+
 export function sessionChat(manager: Pick<SessionManager, "getBranch" | "getSessionId" | "getSessionName" | "getHeader">): Chat {
   const messages: ChatMessage[] = [];
   let providerId: string | undefined, model: string | undefined;
   for (const entry of manager.getBranch()) {
+    if (entry.type === "custom" && entry.customType === IMPORTED_ASSISTANT_ATTACHMENTS) {
+      const data = entry.data as { messageId?: unknown; attachments?: unknown } | undefined;
+      const target = messages.find((message) => message.role === "assistant" && message.id === data?.messageId);
+      const attachments = safeStoredAttachments(data?.attachments);
+      if (target && attachments?.length) target.attachments = [...(target.attachments ?? []), ...attachments];
+      continue;
+    }
     if (entry.type !== "message") continue;
     const message = entry.message;
     if (message.role !== "user" && message.role !== "assistant") continue;

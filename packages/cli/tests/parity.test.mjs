@@ -613,6 +613,26 @@ test("portable chat import persists user-only conversations and never changes it
   assert.deepEqual(readFileSync(source), before);
 });
 
+test("portable chat import keeps assistant attachments through a CLI export round trip", async (t) => {
+  const dir = temporary(t), source = join(dir, "source.aiden-chat.json"), target = join(dir, "again.aiden-chat.json");
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const image = { id: "generated-dot", kind: "image", name: "Generated image.png", mimeType: "image/png", size: Buffer.from(data, "base64").length, data };
+  api.atomicJson(source, { schema: "aiden.chat.export", version: 1, chat: { title: "Images", messages: [
+    { id: "one", role: "user", content: "Draw a dot", createdAt: 100 },
+    { id: "two", role: "assistant", content: "Here it is", createdAt: 200, attachments: [image] },
+    { id: "three", role: "user", content: "Thanks", createdAt: 300 },
+  ] } });
+  const result = await api.importSession(join(dir, "agent"), dir, source);
+  assert.equal(result.messages, 3);
+  const imported = api.SessionManager.open(result.path);
+  assert.deepEqual(imported.buildSessionContext().messages.map((message) => [message.role, api.messageText(message.content)]),
+    [["user", "Draw a dot"], ["assistant", "Here it is"], ["user", "Thanks"]]);
+  await api.exportSession(imported, target);
+  const messages = JSON.parse(readFileSync(target, "utf8")).chat.messages;
+  assert.deepEqual(messages.map((message) => [message.role, message.content]), [["user", "Draw a dot"], ["assistant", "Here it is"], ["user", "Thanks"]]);
+  assert.deepEqual(messages[1].attachments, [image]);
+});
+
 test("desktop v4 import reads through the repository port into an independent CLI journal", async (t) => {
   const dir = temporary(t), repository = api.createCurrentPiSessionRepository(join(dir, "desktop"));
   const session = await repository.create({ id: "desktop-chat", cwd: dir, metadata: { title: "Desktop chat" } });
