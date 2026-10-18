@@ -2599,6 +2599,12 @@ class AidenChatViewModel(
         val capabilities = approvalCapabilities()
         _streamState.value = projection.state
         _tools.value = projection.tools
+        _activityTimeline.value = projection.timeline
+        projection.timeline?.let { timeline ->
+            _imageArrivalRevealGenerationIds.update {
+                AidenImageGenerationPlaceholderState.armedArrivalReveals(it, timeline)
+            }
+        }
         _pendingApproval.value = projection.pendingApproval?.let { approval ->
             val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
             val hasWrite = !isAutomation || capabilities.canWriteSchedules
@@ -2664,6 +2670,7 @@ class AidenChatViewModel(
         liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
+        _activityTimeline.value = null
     }
 
     private fun scheduleForeignRunReconciliation(client: AidenRemoteClient) {
