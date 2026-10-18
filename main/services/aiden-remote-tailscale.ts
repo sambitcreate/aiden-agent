@@ -60,6 +60,8 @@ export interface AidenTailscaleSystemRunnerOptions {
   execute?: AidenTailscaleCommandExecutor;
   resolveBinary?: () => Promise<string | null>;
   platform?: NodeJS.Platform;
+  /** Output bound in bytes; defaults to the Serve status bound. */
+  maxBuffer?: number;
 }
 
 export interface AidenTailscaleConnectionStatus {
@@ -443,7 +445,7 @@ export async function createSystemTailscaleCommandRunner(
             ...environment,
             ...(platform === "darwin" ? { TAILSCALE_BE_CLI: "1" } : {}),
           },
-          maxBuffer: MAX_STATUS_BYTES,
+          maxBuffer: options.maxBuffer ?? MAX_STATUS_BYTES,
           timeout: 15_000,
           windowsHide: true,
         });
