@@ -820,9 +820,12 @@ export class BrowserService {
           event.preventDefault();
         }
       });
-      wc.once("destroyed", () => {
+      const destroyPopup = () => {
         if (!window.isDestroyed()) window.destroy();
-      });
+      };
+      wc.once("destroyed", destroyPopup);
+      // A long-lived tab can open many popups; drop each one's parent listener when it closes.
+      window.once("closed", () => wc.removeListener("destroyed", destroyPopup));
     });
     wc.debugger.on("message", (_event, method, params) => {
       if (method === "Network.responseReceived") {
