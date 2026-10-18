@@ -22,6 +22,8 @@ import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 import { telegramChatId } from "./telegram-turn.js";
 import { TelegramApiError } from "./telegram-bot-api.js";
 import { BotSessionError } from "../bot-runtime/bot-session-service.js";
+import { createTelegramBotIngress, type TelegramBotReply } from "./bot-reply-outbox.js";
+import { mkdirSync, rmSync } from "node:fs";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -1298,6 +1300,96 @@ test("a Bot message that fails the same way on every redelivery is reported to t
   );
   assert.ok(config.persistOffsetCalls() >= 2, "the offset moves past the poison update and the one after it");
   assert.deepEqual(admitted, ["plan lunch"], "later updates on the profile are no longer blocked");
+});
+
+test("a Bot turn accepted before its reply row could be written is never skipped at the retry cutoff", async () => {
+  const owner = person(42, "owner");
+  const accepted = makeUpdate(7, makeMessage(10, owner, "plan dinner"));
+  let attempts = 0;
+  const { service, api, config } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[accepted], [accepted], [accepted], [accepted], [accepted], [accepted], [accepted]],
+    autoStop: true,
+    botIngress: {
+      admit: async () => {
+        attempts += 1;
+        if (attempts <= 6) {
+          const error = new Error("ENOSPC: no space left on device");
+          error.name = "BotReplyAdmittedUnrecordedError";
+          throw error;
+        }
+        return { requestId: "r", deduped: true };
+      },
+    },
+  });
+
+  await service.start();
+  await waitFor(() => attempts === 7 && config.persistOffsetCalls() >= 1);
+
+  assert.equal(
+    api.sentMessages.filter(({ chatId }) => chatId === durableBinding.chatId).length,
+    0,
+    "no error is sent for a turn the Bot already accepted",
+  );
+});
+
+test("an accepted Bot turn stays unskippable when later redeliveries fail on the outbox read instead", async () => {
+  const owner = person(42, "owner");
+  const accepted = makeUpdate(7, makeMessage(10, owner, "plan dinner"));
+  const dir = await mkdtemp(join(tmpdir(), "aiden-tg-accepted-"));
+  const outbox = join(dir, "outbox.json");
+  const delivered: TelegramBotReply[] = [];
+  let sends = 0;
+  const ingress = createTelegramBotIngress({
+    file: outbox,
+    session: {
+      send: async () => {
+        // The session accepts the turn, then the outbox path breaks and stays broken.
+        sends += 1;
+        if (sends === 1) mkdirSync(outbox);
+        return { submissionId: "77", deduped: sends > 1 };
+      },
+      awaitReply: async () => ({ kind: "completed", text: "Pasta." }),
+    },
+    deliver: async (reply) => void delivered.push(reply),
+  });
+  let attempts = 0;
+  const { service, api } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: Array.from({ length: 8 }, () => [accepted]),
+    autoStop: true,
+    botIngress: {
+      admit: async (message) => {
+        attempts += 1;
+        // Storage recovers only after the retry cutoff has passed.
+        if (attempts === 8) rmSync(outbox, { recursive: true, force: true });
+        return ingress.admit(message);
+      },
+    },
+  });
+  try {
+    await service.start();
+    await waitFor(() => delivered.length === 1, 5_000);
+    assert.equal(attempts, 8, "the update is redelivered past the cutoff until its row is written");
+    assert.equal(
+      api.sentMessages.filter(({ text }) => text.startsWith("⚠️")).length,
+      0,
+      "no error is sent for a turn the Bot accepted",
+    );
+    assert.equal(delivered[0]!.text, "Pasta.");
+  } finally {
+    service.stop();
+    ingress.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("a Bot that cannot take messages at all is told once and the update is not redelivered", async () => {

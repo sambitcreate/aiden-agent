@@ -26,6 +26,7 @@ import {
   HarnessInspection,
   HarnessSettings,
   ModelRef,
+  type SettledSubmissionRecord,
   SubmissionId,
   SubmissionRecord,
   UserInput,
@@ -460,7 +461,29 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     if (inspection.scheduling === "paused" && inspection.submissions.some((record) => record.id === id)) {
       return { kind: "interrupted" };
     }
+    // A failed storage call may still have committed the settlement, which `inspect` no
+    // longer lists: read it back from the reopened session before calling the reply lost.
+    if (!inspection.submissions.some((record) => record.id === id)) {
+      try {
+        const reopened = await requireHost().open(botId);
+        const record = await (await reopened.harness.submission(id, ctx))?.status(ctx);
+        if (record?.status === "done" || record?.status === "unanswered") {
+          return await settledOutcome(reopened.conversation, record as SettledSubmissionRecord);
+        }
+      } catch {
+        // Still unreadable: the reply is lost.
+      }
+    }
     return { kind: "failed", error: REPLY_LOST_MESSAGE };
+  }
+
+  async function settledOutcome(conversation: Conversation, settled: SettledSubmissionRecord): Promise<BotReplyOutcome> {
+    if (settled.status === "done" && settled.type === "input") {
+      const answer = await conversation.commit((tx) => tx.entry(AssistantEntry, settled.answer!), ctx);
+      return { kind: "completed", text: assistantText(answer?.model?.[0] as AssistantMessage | undefined) };
+    }
+    if (settled.reason === "aborted") return { kind: "interrupted", settled: true };
+    return { kind: "failed", error: settled.reason ?? "The reply failed." };
   }
 
   async function lookupRequest(conversation: Conversation, requestId: string) {
@@ -658,12 +681,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
-      if (settled.status === "done" && settled.type === "input") {
-        const answer = await opened.conversation.commit((tx) => tx.entry(AssistantEntry, settled.answer!), ctx);
-        return { kind: "completed", text: assistantText(answer?.model?.[0] as AssistantMessage | undefined) };
-      }
-      if (settled.reason === "aborted") return { kind: "interrupted", settled: true };
-      return { kind: "failed", error: settled.reason ?? "The reply failed." };
+      return settledOutcome(opened.conversation, settled);
     },
 
     compact(botId) {
