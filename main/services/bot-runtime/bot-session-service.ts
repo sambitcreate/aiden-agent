@@ -22,6 +22,7 @@ import type { AssistantMessage, ImageContent, Models, TextContent } from "@earen
 import {
   AssistantEntry,
   type Conversation,
+  type Harness,
   HarnessInspection,
   HarnessSettings,
   ModelRef,
@@ -38,6 +39,7 @@ import {
 import { writeFileAtomic } from "../durable-fs.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 import {
+  BotHarnessHostClosedError,
   createBotHarnessHost,
   isBotHarnessHostUnavailable,
   type BotHarnessHost,
@@ -156,7 +158,8 @@ export interface BotSessionService {
   deleteBot(botId: string): Promise<void>;
   /**
    * Wait for a submission's answer. Never starts a paused Bot: a turn that is
-   * interrupted (or becomes so when the app quits) reports `interrupted`.
+   * interrupted (or becomes so when the app quits) reports `interrupted`. A
+   * wait cut short any other way (a storage failure) reports `failed`.
    * Aborting `signal` stops waiting only.
    */
   awaitReply(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome>;
@@ -232,6 +235,7 @@ export interface BotSessionServiceDeps {
 
 const ctx = BACKGROUND_CONTEXT;
 const REQUEST_MEMORY = 1_000;
+const REPLY_LOST_MESSAGE = "The Bot stopped before it could answer this. Send it again.";
 
 function userContent(input: BotSendInput): UserInput {
   if (input.attachments === undefined || input.attachments.length === 0) return input.text;
@@ -429,6 +433,36 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     await writeNotice(conversation, { notice: "interrupted", submissionId });
   }
 
+  /**
+   * The outcome of a reply wait that ended before its submission settled. A
+   * wait ends early only when its harness closes: a quit, a delete, or a
+   * storage failure (pi-durable then closes the session for good, and the host
+   * reopens it from what was committed). Only a turn that is still there,
+   * paused, can be answered by a Resume; anything else is a failed reply, so
+   * it is reported instead of waiting for a Resume that cannot come.
+   */
+  async function replyAfterFailedWait(botId: string, id: SubmissionId, harness: Harness): Promise<BotReplyOutcome> {
+    let inspection: HarnessInspection;
+    try {
+      inspection = await harness.inspect(ctx);
+    } catch {
+      // Closing: once it has closed, the host has dropped a failed session.
+      await harness.closed;
+      if (deleted.has(botId)) return { kind: "interrupted", settled: true };
+      try {
+        inspection = await requireHost().inspect(botId);
+      } catch (error) {
+        // A runtime shut down by a quit re-checks the reply at the next start.
+        if (error instanceof BotHarnessHostClosedError) return { kind: "interrupted" };
+        return { kind: "failed", error: REPLY_LOST_MESSAGE };
+      }
+    }
+    if (inspection.scheduling === "paused" && inspection.submissions.some((record) => record.id === id)) {
+      return { kind: "interrupted" };
+    }
+    return { kind: "failed", error: REPLY_LOST_MESSAGE };
+  }
+
   async function lookupRequest(conversation: Conversation, requestId: string) {
     return conversation.commit((tx) => tx.submissionByRequest(conversation.id, requestId), ctx);
   }
@@ -620,7 +654,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         settled = await submission.wait(context);
       } catch (error) {
         if (signal.aborted) throw error;
-        return { kind: "interrupted" };
+        return await replyAfterFailedWait(botId, id, opened.harness);
       } finally {
         signal.removeEventListener("abort", onAbort);
       }

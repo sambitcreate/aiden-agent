@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
@@ -20,7 +21,7 @@ import {
   type BotSessionServiceDeps,
 } from "./bot-session-service.js";
 import { createBotRuntimeModels } from "./bot-models.js";
-import { botDirectoryName } from "./harness-host.js";
+import { BOT_SESSION_FILE, botDirectoryName } from "./harness-host.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority } from "./test-support/assembly-fixtures.js";
 import { blockingUntilAborted, countingTool, recordingDeps } from "./test-support/fixtures.js";
@@ -320,6 +321,34 @@ test("deleteBot during a running turn erases the session and every owned record"
     assert.equal(fauxModels.calls(), 1);
     await assert.rejects(service.send("bot:a", { text: "again", requestId: "desk-after" }), BotSessionError);
     assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:a"))), false);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a reply whose session fails on a storage error and cannot reopen is failed, not left waiting for Resume", async () => {
+  const profile = tempProfile();
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
+  const service = await serviceFor(profile, fauxModels);
+  try {
+    const sent = await service.send("bot:a", { text: "write a lot", requestId: "desk-storage" });
+    await waitFor(async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
+      what: "turn start",
+    });
+    const waiting = service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    // Another connection holds the write lock past SQLite's busy timeout: the
+    // next commit fails the session, and reopening it fails the same way.
+    const blocker = new DatabaseSync(path.join(profile, "bots", botDirectoryName("bot:a"), BOT_SESSION_FILE));
+    try {
+      blocker.exec("BEGIN EXCLUSIVE");
+      await assert.rejects(service.send("bot:a", { text: "and this", requestId: "desk-storage-2" }));
+      const outcome = await waiting;
+      assert.equal(outcome.kind, "failed");
+      assert.ok(outcome.kind === "failed" && outcome.error.length > 0, "the failure has a message for the person");
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+    }
   } finally {
     await service.shutdown();
   }

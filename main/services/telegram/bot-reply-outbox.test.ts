@@ -521,3 +521,21 @@ test("an interrupted turn delivers nothing", async () => {
   await ingress.idle();
   assert.deepEqual((await ingress.rows()).map((row) => row.state), ["interrupted"]);
 });
+
+test("a reply that failed reaches the chat once as an error and is settled", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  seed(file, [{ state: "awaiting" }]);
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: {
+      send: async () => assert.fail("no resubmission"),
+      awaitReply: async () => ({ kind: "failed", error: "The Bot stopped before it could answer this." }),
+    },
+    deliver: async (reply) => void delivered.push(reply),
+  });
+  await ingress.recover();
+  await ingress.idle();
+  assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "⚠️ Error: The Bot stopped before it could answer this." }]);
+  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+});
