@@ -22,7 +22,7 @@ import {
   listWorkspaceFiles,
   readWorkspaceFile,
   WorkspaceFileError,
-  writeWorkspaceFile,
+  writeWorkspaceFileInstalling,
   type WorkspaceFileDocument,
   type WorkspaceFileEntry,
 } from "./workspace-files.js";
@@ -437,14 +437,14 @@ export class AidenRemoteBotFileService {
     const input = parseWrite(value);
     return this.withResolvedFile(deviceId, chatId, fileId, async (resolved) => {
       try {
-        const document = await writeWorkspaceFile(
+        const { document, installed } = await writeWorkspaceFileInstalling(
           resolved.folderPath,
           resolved.displayPath,
           input.content,
           input.expectedVersion,
           resolved.signal,
         );
-        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath);
+        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
         if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {

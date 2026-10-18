@@ -22,7 +22,7 @@ import {
   decodeWorkspaceFileText,
   readWorkspaceFile,
   WorkspaceFileError,
-  writeWorkspaceFile,
+  writeWorkspaceFileInstalling,
   type WorkspaceFileDocument,
   type WorkspaceFileEntry,
 } from "./workspace-files.js";
@@ -499,14 +499,14 @@ export class AidenRemoteFileService {
             throw error;
           }
         }
-        const document = await writeWorkspaceFile(
+        const { document, installed } = await writeWorkspaceFileInstalling(
           resolved.folderPath,
           resolved.displayPath,
           input.content,
           input.expectedVersion,
           resolved.signal,
         );
-        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath);
+        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
         if (error instanceof ManagedWorktreeFileIoError && error.code === "recovery_limit") {

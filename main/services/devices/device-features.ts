@@ -114,8 +114,11 @@ export interface DeviceFeatures {
   isSavedPath(file: string): boolean;
   /** A deleted chat's recordings are stopped and deleted. */
   discardForChat(chatId: string): Promise<void>;
-  /** App quit: stops and deletes every recording. */
-  stop(): Promise<void>;
+  /**
+   * App quit: stops and deletes every recording. With a `deadline`, a recorder still running
+   * when it fires is force-killed, and the cleanup that follows is bounded by a second one.
+   */
+  stop(options?: { deadline?: () => Promise<void> }): Promise<void>;
 }
 
 const MAX_REMEMBERED_SAVES = 64;
@@ -217,7 +220,9 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
     return {
       async stop() {
         const stop = androidStopScreenrecordCommand(serial, remotePath);
-        await step(stop);
+        const result = await step(stop);
+        // An unreached device never stopped its recorder, so its file may still be unfinished.
+        if (result.code !== 0) throw new Error("The emulator's recorder could not be stopped.");
       },
       async collect(file) {
         const pull = androidPullCommand(serial, remotePath, file);
@@ -351,10 +356,22 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       cancelResolvingStarts((pendingChat) => pendingChat === chatId);
       return recorder.discardWhere((info) => info.chatId === chatId);
     },
-    async stop() {
+    async stop(options) {
       unsubscribe();
       cancelResolvingStarts(() => true);
-      await recorder.discardWhere(() => true);
+      const discarding = recorder.discardWhere(() => true).then(
+        () => true,
+        () => true,
+      );
+      const deadline = options?.deadline;
+      if (!deadline) {
+        await discarding;
+        return;
+      }
+      if (await Promise.race([discarding, deadline().then(() => false)])) return;
+      // No recorder may outlive the app: kill the rest, then give their cleanup one more bound.
+      recorder.terminate();
+      await Promise.race([discarding, deadline()]);
     },
   };
 }

@@ -175,11 +175,12 @@ test("CLI display_image limits are per agent run and per session journal", async
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
   writeFileSync(join(workspaceRoot, "dot.png"), png);
   const handlers = []; let tool;
+  let session = api.SessionManager.inMemory(dir);
   api.createDisplayImageInlineExtension({ agentDir: join(dir, "agent"), workspaceRoot }).factory({
     registerTool: (candidate) => { tool = candidate; },
     on: (event, handler) => { if (event === "before_agent_start") handlers.push(handler); },
+    appendEntry: (customType, data) => { session.appendCustomEntry(customType, data); },
   });
-  let session = api.SessionManager.inMemory(dir);
   const startRun = async () => { for (const handler of handlers) await handler({ type: "before_agent_start", systemPrompt: "" }, { sessionManager: session }); };
   // Like pi, persist each tool result into the session journal.
   const display = async () => {
@@ -196,6 +197,20 @@ test("CLI display_image limits are per agent run and per session journal", async
   // A different session starts from its own (empty) history.
   session = api.SessionManager.inMemory(dir); await startRun();
   assert.ok((await display()).content.some((part) => part.type === "image"));
+
+  // Through codemode or ctx.executeTool, pi journals only the outer tool's result, with the
+  // display_image call in its nestedCalls; those images count toward the same session ceiling.
+  session = api.SessionManager.inMemory(dir);
+  const nested = async () => {
+    const outerId = `outer-${Math.random()}`, innerId = `inner-${Math.random()}`;
+    const inner = await tool.execute(innerId, { path: "dot.png" }, new AbortController().signal);
+    session.appendMessage({ role: "toolResult", toolCallId: outerId, toolName: "codemode", content: inner.content, isError: false, timestamp: Date.now(),
+      nestedCalls: { calls: [{ id: innerId, name: "display_image", isError: false }], complete: true } });
+    return inner;
+  };
+  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await nested()).content.some((part) => part.type === "image"), `nested run ${run}`); }
+  await startRun();
+  await assert.rejects(nested(), /100-image/);
 });
 
 test("title generation preserves manual renames and seeds offline sessions", async (t) => {
@@ -631,6 +646,26 @@ test("portable chat import keeps assistant attachments through a CLI export roun
   const messages = JSON.parse(readFileSync(target, "utf8")).chat.messages;
   assert.deepEqual(messages.map((message) => [message.role, message.content]), [["user", "Draw a dot"], ["assistant", "Here it is"], ["user", "Thanks"]]);
   assert.deepEqual(messages[1].attachments, [image]);
+
+  // Re-importing the CLI journal keeps the assistant's attachment, still outside model context.
+  const journalBefore = readFileSync(result.path);
+  const again = await api.importSession(join(dir, "agent"), dir, result.path);
+  assert.deepEqual(readFileSync(result.path), journalBefore, "the source journal is unchanged");
+  const reimported = api.SessionManager.open(again.path);
+  assert.equal(reimported.buildSessionContext().messages.some((message) => Array.isArray(message.content) && message.content.some((part) => part.type === "image")), false);
+  const second = join(dir, "second.aiden-chat.json");
+  await api.exportSession(reimported, second);
+  assert.deepEqual(JSON.parse(readFileSync(second, "utf8")).chat.messages[1].attachments, [image]);
+
+  // Branching at the assistant keeps its attachment; the abandoned continuation is gone.
+  const assistantEntry = imported.getBranch().find((entry) => entry.type === "message" && entry.message.role === "assistant");
+  imported.branch(assistantEntry.id);
+  imported.appendMessage({ role: "user", content: "Make it bigger", timestamp: 400 });
+  const branched = join(dir, "branched.aiden-chat.json");
+  await api.exportSession(imported, branched);
+  const branchedMessages = JSON.parse(readFileSync(branched, "utf8")).chat.messages;
+  assert.deepEqual(branchedMessages.map((message) => message.content), ["Draw a dot", "Here it is", "Make it bigger"]);
+  assert.deepEqual(branchedMessages[1].attachments, [image]);
 });
 
 test("desktop v4 import reads through the repository port into an independent CLI journal", async (t) => {

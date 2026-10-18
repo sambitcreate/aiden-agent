@@ -79,6 +79,11 @@ const TERMINAL_BOT_SESSION_REASONS: ReadonlySet<BotSessionErrorReason> = new Set
 ]);
 
 /** Duck-typed so this module does not load the Bot runtime (the CLI bundles it without one). */
+/** An accepted Bot turn whose reply row is not yet durable; skipping its update would lose the answer. */
+function isAdmittedUnrecordedError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "BotReplyAdmittedUnrecordedError";
+}
+
 function isTerminalBotSessionError(cause: unknown): boolean {
   return (
     cause instanceof Error &&
@@ -497,8 +502,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
 
     let offset = await deps.config.getOffset();
-    /** Consecutive failures of the update Telegram keeps redelivering. */
-    let failing: { updateId: number; attempts: number } | undefined;
+    /**
+     * Consecutive failures of the update Telegram keeps redelivering. `admitted` sticks once the
+     * Bot accepted its turn without a reply row: from then on only a successful admission settles it.
+     */
+    let failing: { updateId: number; attempts: number; admitted: boolean } | undefined;
 
     while (started && !signal.aborted) {
       let updates: TelegramUpdate[];
@@ -529,9 +537,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
             handled = true;
           } else {
             deps.error(`Telegram handleUpdate failed for ${update.update_id}.`, cause);
-            const attempts = failing?.updateId === update.update_id ? failing.attempts + 1 : 1;
-            failing = { updateId: update.update_id, attempts };
-            if (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause)) {
+            const same = failing?.updateId === update.update_id ? failing : undefined;
+            const attempts = (same?.attempts ?? 0) + 1;
+            const admitted = (same?.admitted ?? false) || isAdmittedUnrecordedError(cause);
+            failing = { updateId: update.update_id, attempts, admitted };
+            if (!admitted && (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause))) {
               // The update fails the same way every time: tell the chat and move
               // past it, so one poison update cannot block the whole profile.
               const message = update.message ?? update.edited_message ?? update.callback_query?.message;
