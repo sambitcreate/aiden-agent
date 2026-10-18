@@ -49,15 +49,24 @@ async function recordWav(stopSignal: Promise<void>): Promise<Buffer> {
 			"No audio recorder found. Install sox (`brew install sox` / `apt install sox`) or ffmpeg to dictate from the terminal.",
 		);
 	}
-	const dir = await mkdtempSync(join(tmpdir(), "aiden-dictate-"));
+	const dir = mkdtempSync(join(tmpdir(), "aiden-dictate-"));
 	const wavPath = join(dir, "dictation.wav");
-	const child = spawn(recorder.command, recorder.args(wavPath), { stdio: "ignore" });
-	const kill = setTimeout(() => child.kill("SIGTERM"), 120_000);
-	await stopSignal;
-	child.kill("SIGTERM");
-	clearTimeout(kill);
-	await new Promise((resolve) => child.once("exit", resolve));
 	try {
+		const child = spawn(recorder.command, recorder.args(wavPath), { stdio: "ignore" });
+		// Subscribe before the recorder can exit or fail to spawn: a later `once("exit")`
+		// on an already-exited child never settles, and an unobserved "error" event throws.
+		const exited = new Promise<void>((resolve, reject) => {
+			child.once("exit", () => resolve());
+			child.once("error", reject);
+		});
+		const kill = setTimeout(() => child.kill("SIGTERM"), 120_000);
+		try {
+			await Promise.race([stopSignal, exited]);
+			if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+			await exited;
+		} finally {
+			clearTimeout(kill);
+		}
 		return await readFile(wavPath);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
@@ -170,8 +179,14 @@ export function createVoiceInlineExtension(options: { agentDir: string }): { nam
 						resolveStop = resolve;
 					});
 					const recording = recordWav(stopSignal);
+					// When the recorder stops on its own (missing, exited early, 120 s cap), dismiss the
+					// prompt instead of waiting for Enter; the outcome is reported below either way.
+					const dismiss = new AbortController();
+					recording.then(() => dismiss.abort(), () => dismiss.abort());
 					try {
-						await ctx.ui.input("Recording…", "press Enter to stop and transcribe");
+						await ctx.ui.input("Recording…", "press Enter to stop and transcribe", { signal: dismiss.signal });
+					} catch {
+						// A dismissed prompt is not an error; the recording result decides below.
 					} finally {
 						resolveStop();
 					}

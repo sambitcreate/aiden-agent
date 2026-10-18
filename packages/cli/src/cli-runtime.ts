@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { main, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createAidenInlineExtensions } from "./extensions/index.ts";
 import { dispatchCommand } from "./commands.ts";
+import { exitAfterFlush } from "./exit-after-flush.ts";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { migrateAidenMcpConfigOnce } from "./mcp.ts";
@@ -79,9 +80,9 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 			await main(["mcp", ...argv.slice(1)]);
 			return;
 		}
-		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) process.exit(0);
+		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(0);
 	} catch (error) {
-		console.error(error instanceof Error ? error.message : String(error)); process.exit(1);
+		console.error(error instanceof Error ? error.message : String(error)); await exitAfterFlush(1);
 	}
 	if (argv.includes("--help")) process.stdout.write(CLI_COMMAND_HELP + "\n");
 	for (const themePath of bundledThemePaths(appDir)) {
