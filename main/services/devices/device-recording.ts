@@ -30,6 +30,8 @@ export interface RecorderChild {
   signalCode: NodeJS.Signals | null;
   kill(signal: NodeJS.Signals): boolean;
   once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  /** A spawn failure: Node emits `error` (with the errno already in `exitCode`) and never `exit`. */
+  once(event: "error", listener: (error: Error) => void): unknown;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -231,6 +233,8 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
           resolveExit = resolve;
         });
+        // A child that could not be spawned emits only `error`, so it settles the recording as an exit.
+        child.once("error", () => resolveExit({ code: child.exitCode ?? 127, signal: null }));
         if (child.exitCode !== null || child.signalCode !== null) {
           resolveExit({ code: child.exitCode, signal: child.signalCode });
         } else {

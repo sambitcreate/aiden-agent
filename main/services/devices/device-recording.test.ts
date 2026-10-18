@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn as nodeSpawn } from "node:child_process";
 import test from "node:test";
 import type { DeviceRecordingInfo } from "../../../renderer/shared/device-features.js";
 import { createDeviceRecorder, type RecorderChild } from "./device-recording.js";
@@ -11,6 +12,7 @@ class FakeChild implements RecorderChild {
   signalCode: NodeJS.Signals | null = null;
   signals: NodeJS.Signals[] = [];
   private exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
+  private errorListeners: Array<(error: Error) => void> = [];
   constructor(
     private readonly onSignal: (child: FakeChild, signal: NodeJS.Signals) => void,
   ) {}
@@ -19,9 +21,20 @@ class FakeChild implements RecorderChild {
     this.onSignal(this, signal);
     return true;
   }
-  once(_event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void) {
-    this.exitListeners.push(listener);
+  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  once(event: "error", listener: (error: Error) => void): this;
+  once(event: "exit" | "error", listener: unknown) {
+    if (event === "exit") {
+      this.exitListeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
+    } else {
+      this.errorListeners.push(listener as (error: Error) => void);
+    }
     return this;
+  }
+  /** Node reports a spawn failure as `error` with the errno in `exitCode`; `exit` never follows. */
+  failToSpawn(error: Error, errno = -2) {
+    this.exitCode = errno;
+    for (const listener of this.errorListeners.splice(0)) listener(error);
   }
   exit(code: number | null, signal: NodeJS.Signals | null = null) {
     this.exitCode = code;
@@ -161,6 +174,57 @@ test("a recorder that exits by itself settles, and an empty file fails", async (
   assert.equal(info?.reason, "exited");
   assert.match(info?.error ?? "", /exit code 1/u);
   assert.equal(h.recorder.take(started.id), null, "only a ready recording can be taken");
+});
+
+test("a child that fails to spawn fails its recording instead of wedging stop and discard", async () => {
+  const h = harness();
+  const started = await start(h);
+  h.spawned[0]!.child.failToSpawn(Object.assign(new Error("spawn xcrun ENOENT"), { code: "ENOENT" }));
+  await settle();
+  const info = h.recorder.get(started.id);
+  assert.equal(info?.status, "failed");
+  assert.equal(info?.reason, "exited");
+  assert.equal(h.recorder.take(started.id), null);
+  const timeout = () => new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 200));
+  assert.notEqual(await Promise.race([h.recorder.stop(started.id), timeout()]), "timeout", "stop returns");
+  assert.notEqual(await Promise.race([h.recorder.discardWhere(() => true), timeout()]), "timeout", "discard returns");
+  assert.deepEqual(h.recorder.list(), []);
+  assert.equal(h.pendingTimers(), 0);
+});
+
+test("a recorder binary that cannot be spawned fails its recording on a real child process", async () => {
+  const removed: string[] = [];
+  const recorder = createDeviceRecorder({
+    spawn: (command, args) => nodeSpawn(command, [...args], { stdio: "ignore", detached: false }),
+    tempDir: async () => "/private/recordings",
+    fileSize: async () => null,
+    removeFile: async (file) => {
+      removed.push(file);
+    },
+    newId: () => "recording-0001",
+    now: () => 1_000,
+    setTimeout: (callback, ms) => setTimeout(callback, ms).unref(),
+    clearTimeout: (timer) => clearTimeout(timer),
+  });
+  const started = await recorder.start({
+    chatId: "chat-1",
+    platform: "ios",
+    hostId: "local",
+    deviceId: UDID,
+    command: (file) => ({ command: "/nonexistent/aiden-test/xcrun", args: ["simctl", "io", UDID, "recordVideo", file] }),
+  });
+  const failed = await new Promise<DeviceRecordingInfo | null>((resolve) => {
+    const unsubscribe = recorder.onChange((list) => {
+      if (list[0]?.status !== "failed") return;
+      unsubscribe();
+      resolve(list[0]);
+    });
+    setTimeout(() => resolve(recorder.get(started.id)), 2_000).unref();
+  });
+  assert.equal(failed?.status, "failed");
+  await recorder.discardWhere(() => true);
+  assert.deepEqual(recorder.list(), []);
+  assert.deepEqual(removed, ["/private/recordings/recording-0001.mp4"]);
 });
 
 test("discarding stops a running recorder and deletes its file, by id or by chat", async () => {

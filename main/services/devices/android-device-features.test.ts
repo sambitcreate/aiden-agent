@@ -288,8 +288,11 @@ class AdbChild implements RecorderChild {
     if (signal === "SIGKILL") this.exit(null, "SIGKILL");
     return true;
   }
-  once(_event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void) {
-    this.listeners.push(listener);
+  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  once(event: "error", listener: (error: Error) => void): this;
+  once(event: "exit" | "error", listener: unknown) {
+    // This child always spawns, so it only ever reports `exit`.
+    if (event === "exit") this.listeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
     return this;
   }
   exit(code: number | null, signal: NodeJS.Signals | null = null) {

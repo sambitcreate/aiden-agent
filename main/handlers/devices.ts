@@ -113,14 +113,8 @@ function defaultDeviceFeatures(): DeviceFeatures {
   deviceFeatures = createDeviceFeatures({
     service: defaultDeviceService(),
     recorder: createDeviceRecorder({
-      spawn: (command, args, env) => {
-        const child = nodeSpawn(command, [...args], { stdio: "ignore", detached: false, ...(env ? { env } : {}) });
-        // A spawn failure may never emit "exit"; the recorder settles on exit, so report one.
-        child.once("error", () => {
-          if (child.exitCode === null && child.signalCode === null) child.emit("exit", 127, null);
-        });
-        return child;
-      },
+      spawn: (command, args, env) =>
+        nodeSpawn(command, [...args], { stdio: "ignore", detached: false, ...(env ? { env } : {}) }),
       tempDir: async () => {
         const directory = path.join(baseDir, "recordings");
         await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -163,9 +157,24 @@ export function closeDeviceSessionsForChat(chatId: string): void {
   void deviceFeatures?.discardForChat(chatId).catch(() => undefined);
 }
 
+/** Quit deletes every recording, so finalizing one is not worth holding quit or the helpers' stop for. */
+const RECORDINGS_SHUTDOWN_BUDGET_MS = 2_000;
+
 /** Stops helpers and recordings the Simulator tab started. Simulators keep running. */
 export async function shutdownDevices(): Promise<void> {
-  await deviceFeatures?.stop().catch(() => undefined);
+  const recordings = deviceFeatures?.stop().catch(() => undefined);
+  if (recordings) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      recordings,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, RECORDINGS_SHUTDOWN_BUDGET_MS);
+        timer.unref();
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+  // The service bounds its own helpers' stop, and always runs so they never outlive the app.
   await deviceService?.stop();
 }
 
