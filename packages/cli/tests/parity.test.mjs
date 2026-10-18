@@ -709,6 +709,27 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   assert.equal((await request("/workspaces")).status, 403);
 });
 
+test("Remote starts and keeps persisting after loading a stream journal this build cannot read", async (t) => {
+  const dir = temporary(t), journal = join(dir, "remote-streams.json");
+  // Well-formed JSON from a build whose event vocabulary this one rejects.
+  const unreadable = JSON.stringify({ version: 1, streams: [{ streamId: "old", chatId: "chat-old", turnId: "turn-old", deviceId: "device-old", state: "done", updatedAt: 1,
+    events: [{ protocolVersion: 1, streamId: "old", sequence: 1, timestamp: "2026-01-01T00:00:00.000Z", type: "finished_v2", terminal: true, payload: {} }] }] });
+  writeFileSync(journal, unreadable);
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); });
+  await remote.start();
+  assert.equal((await remote.service.status()).running, true);
+  const issued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test" });
+  assert.equal((await remote.command(["revoke", issued.device.id])).revoked, true);
+  const rescues = readdirSync(dir).filter((name) => name.startsWith("remote-streams.json.invalid-"));
+  assert.equal(rescues.length, 1);
+  assert.equal(readFileSync(join(dir, rescues[0]), "utf8"), unreadable);
+  assert.deepEqual(JSON.parse(readFileSync(journal, "utf8")).streams, []);
+});
+
 test("Bots retain one-shot notice, exact Custom tools, revocation and independent rollback anchors", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir), requests = [];
   const originalEntry = process.env.AIDEN_CLI_ENTRY;
