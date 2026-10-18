@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn as nodeSpawn } from "node:child_process";
 import test from "node:test";
 import type { DeviceRecordingInfo } from "../../../renderer/shared/device-features.js";
-import { createDeviceRecorder, type RecorderChild } from "./device-recording.js";
+import { createDeviceRecorder, type DeviceRecordingRemote, type RecorderChild } from "./device-recording.js";
 
 const UDID = "5C1E4B7A-0000-4000-8000-000000000001";
 
@@ -105,6 +105,24 @@ const start = (h: ReturnType<typeof harness>, chatId = "chat-1", deviceId = UDID
     hostId: "local",
     deviceId,
     command: (file) => ({ command: "xcrun", args: ["simctl", "io", deviceId, "recordVideo", "--codec=h264", file] }),
+  });
+
+/** An emulator recording: `remote` stands in for the adb stop, pull, and delete steps. */
+const startAndroid = (
+  h: ReturnType<typeof harness>,
+  remote: (child: () => FakeChild) => DeviceRecordingRemote,
+  chatId = "chat-1",
+) =>
+  h.recorder.start({
+    chatId,
+    platform: "android",
+    hostId: "local",
+    deviceId: "emulator-5554",
+    command: (_file, id) => ({
+      command: "adb",
+      args: ["-s", "emulator-5554", "shell", "screenrecord", `/sdcard/aiden-rec-${id}.mp4`],
+    }),
+    remote: () => remote(() => h.spawned[h.spawned.length - 1]!.child),
   });
 
 const settle = async () => {
@@ -225,6 +243,62 @@ test("a recorder binary that cannot be spawned fails its recording on a real chi
   await recorder.discardWhere(() => true);
   assert.deepEqual(recorder.list(), []);
   assert.deepEqual(removed, ["/private/recordings/recording-0001.mp4"]);
+});
+
+test("an emulator recording whose pull fails is not offered as a finished file", async () => {
+  const h = harness();
+  const steps: string[] = [];
+  let local = "";
+  const started = await startAndroid(h, (child) => ({
+    async stop() {
+      steps.push("stop");
+      queueMicrotask(() => child().exit(0));
+    },
+    async collect(file) {
+      steps.push("collect");
+      local = file;
+      // The pull wrote part of the file before the emulator went away.
+      h.files.set(file, 1234);
+      throw new Error("adb: error: failed to copy");
+    },
+    async cleanup() {
+      steps.push("cleanup");
+    },
+  }));
+  const stopped = await h.recorder.stop(started.id);
+  assert.equal(stopped.status, "failed");
+  assert.match(stopped.error ?? "", /could not be copied from the emulator/u);
+  assert.equal(h.recorder.take(started.id), null, "a partial pull can never be saved");
+  assert.equal(h.files.has(local), false, "the partial temp file is deleted");
+  assert.deepEqual(steps, ["stop", "collect", "cleanup"]);
+});
+
+test("an emulator recording whose on-device stop was never confirmed fails instead of saving an unfinished file", async () => {
+  const h = harness();
+  const steps: string[] = [];
+  let local = "";
+  const started = await startAndroid(h, () => ({
+    async stop() {
+      steps.push("stop");
+      throw new Error("adb: device offline");
+    },
+    async collect(file) {
+      steps.push("collect");
+      local = file;
+      h.files.set(file, 4096);
+    },
+    async cleanup() {
+      steps.push("cleanup");
+    },
+  }));
+  const stopped = await h.recorder.stop(started.id);
+  assert.deepEqual(h.spawned[0]!.child.signals, ["SIGINT"], "the local adb is signalled as a fallback");
+  assert.equal(stopped.status, "failed");
+  assert.match(stopped.error ?? "", /did not finish writing/u);
+  assert.equal(h.recorder.take(started.id), null);
+  assert.equal(local === "" || !h.files.has(local), true, "no unfinished copy is left behind");
+  assert.ok(steps.includes("cleanup"), "the device copy is still deleted");
+  assert.equal(h.pendingTimers(), 0);
 });
 
 test("discarding stops a running recorder and deletes its file, by id or by chat", async () => {

@@ -89,6 +89,8 @@ interface Entry {
   remote: DeviceRecordingRemote | null;
   /** The device copy was deleted (or there never was one). */
   cleaned: boolean;
+  /** The device's recorder was never confirmed stopped, so its file may be unfinished. */
+  stopUnconfirmed: boolean;
 }
 
 export interface DeviceRecorder {
@@ -140,18 +142,24 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
     entry.child = null;
     let collectFailed = false;
     if (entry.remote) {
-      try {
-        await entry.remote.collect(entry.file);
-      } catch {
-        collectFailed = true;
+      // An unconfirmed stop leaves nothing worth pulling: the device may still be writing.
+      if (!entry.stopUnconfirmed) {
+        try {
+          await entry.remote.collect(entry.file);
+        } catch {
+          collectFailed = true;
+        }
       }
       await cleanupRemote(entry);
     }
     const size = await deps.fileSize(entry.file).catch(() => null);
     const stoppedAt = entry.info.stoppedAt ?? deps.now();
-    if (size && size > 0 && (code === 0 || reason !== "exited")) {
+    const incomplete = collectFailed || entry.stopUnconfirmed;
+    if (!incomplete && size && size > 0 && (code === 0 || reason !== "exited")) {
       update(entry, { status: "ready", stoppedAt, reason });
     } else {
+      // A partial pull or an unfinished file can never be saved, and the device copy is gone.
+      if (incomplete) await deps.removeFile(entry.file).catch(() => undefined);
       update(entry, {
         status: "failed",
         stoppedAt,
@@ -161,7 +169,9 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
             ? `The device stopped recording (exit code ${code}).`
             : collectFailed
               ? "The recording could not be copied from the emulator."
-              : "The recording is empty.",
+              : entry.stopUnconfirmed
+                ? "The recording did not finish writing."
+                : "The recording is empty.",
       });
     }
     return { ...entry.info };
@@ -179,7 +189,11 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
       }, stopTimeoutMs);
       if (entry.remote) {
         // The device's recorder finalizes its file; signalling the local adb would not wait for that.
-        void entry.remote.stop().catch(() => child.kill("SIGINT"));
+        void entry.remote.stop().catch(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          entry.stopUnconfirmed = true;
+          child.kill("SIGINT");
+        });
       } else {
         child.kill("SIGINT");
       }
@@ -259,6 +273,7 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
           settling: null,
           remote,
           cleaned: remote === null,
+          stopUnconfirmed: false,
         };
         entry.capTimer = deps.setTimeout(() => {
           entry.capTimer = null;
