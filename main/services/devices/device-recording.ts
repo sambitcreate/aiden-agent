@@ -112,8 +112,11 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
   const stopTimeoutMs = deps.stopTimeoutMs ?? DEVICE_RECORDING_STOP_TIMEOUT_MS;
   const entries = new Map<string, Entry>();
   const listeners = new Set<(recordings: DeviceRecordingInfo[]) => void>();
-  /** Device keys with a start in flight, so two clicks never spawn two recorders. */
-  const starting = new Set<string>();
+  /**
+   * Starts in flight by device key, so two clicks never spawn two recorders and a discard
+   * that runs while one is still preparing (a deleted chat, quit) cancels it.
+   */
+  const starting = new Map<string, { info: DeviceRecordingInfo; cancelled: boolean }>();
 
   const list = () => [...entries.values()].map((entry) => ({ ...entry.info }));
   const emit = () => {
@@ -233,14 +236,29 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
           deviceKey(entry.info) === key && (entry.info.status === "recording" || entry.info.status === "stopping"),
       );
       if (busy || starting.has(key)) throw new Error("This simulator is already being recorded.");
-      starting.add(key);
+      const id = deps.newId();
+      const cap = input.maxDurationMs ?? maxDurationMs;
+      const pendingAt = deps.now();
+      const pending = {
+        info: {
+          id,
+          chatId: input.chatId,
+          platform: input.platform,
+          hostId: input.hostId,
+          deviceId: input.deviceId,
+          status: "recording" as const,
+          startedAt: pendingAt,
+          endsBy: pendingAt + cap,
+        },
+        cancelled: false,
+      };
+      starting.set(key, pending);
       try {
-        const id = deps.newId();
         const directory = await deps.tempDir();
+        if (pending.cancelled) throw new Error("The recording was cancelled before it started.");
         const file = path.join(directory, `${id}.mp4`);
         const { command, args } = input.command(file, id);
         const remote = input.remote?.(id) ?? null;
-        const cap = input.maxDurationMs ?? maxDurationMs;
         const child = deps.spawn(command, args, input.env);
         const startedAt = deps.now();
         let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
@@ -307,6 +325,9 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
       if (entry) await removeEntry(entry);
     },
     async discardWhere(match) {
+      for (const pending of starting.values()) {
+        if (match({ ...pending.info })) pending.cancelled = true;
+      }
       await Promise.all([...entries.values()].filter((entry) => match(entry.info)).map(removeEntry));
     },
     list,

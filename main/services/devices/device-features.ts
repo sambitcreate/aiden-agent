@@ -158,6 +158,11 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
   };
   /** AVD names being wiped, so a second Erase never races the first one's cold boot. */
   const erasing = new Set<string>();
+  /** Recording starts still resolving their device, before the recorder can see (and cancel) them. */
+  const resolvingStarts = new Set<{ chatId: string; cancelled: boolean }>();
+  const cancelResolvingStarts = (match: (chatId: string) => boolean) => {
+    for (const pending of resolvingStarts) if (match(pending.chatId)) pending.cancelled = true;
+  };
 
   const eraseAndroid = async (ready: DeviceHostReady, device: DeviceSummary, onPhase?: (phase: DeviceErasePhase) => void) => {
     // A stopped AVD is listed under its name; a running one under its serial, with the AVD as its name.
@@ -271,7 +276,10 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       return { bytes };
     },
     async startRecording(chatId, target) {
-      const { ready, device } = await resolve(target, true);
+      const pending = { chatId, cancelled: false };
+      resolvingStarts.add(pending);
+      const { ready, device } = await resolve(target, true).finally(() => resolvingStarts.delete(pending));
+      if (pending.cancelled) throw new Error("The recording was cancelled before it started.");
       const base = { chatId, platform: device.platform, hostId: target.hostId, deviceId: device.id };
       if (device.platform === "android") {
         return recorder.start({
@@ -339,9 +347,13 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       return { status: "saved", path: destination };
     },
     isSavedPath: (file) => saved.includes(file),
-    discardForChat: (chatId) => recorder.discardWhere((info) => info.chatId === chatId),
+    discardForChat: (chatId) => {
+      cancelResolvingStarts((pendingChat) => pendingChat === chatId);
+      return recorder.discardWhere((info) => info.chatId === chatId);
+    },
     async stop() {
       unsubscribe();
+      cancelResolvingStarts(() => true);
       await recorder.discardWhere(() => true);
     },
   };

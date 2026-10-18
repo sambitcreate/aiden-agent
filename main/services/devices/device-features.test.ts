@@ -33,7 +33,9 @@ class Child implements RecorderChild {
   }
 }
 
-function harness(options: { booted?: boolean; hostText?: string; hostFormats?: string[] } = {}) {
+function harness(
+  options: { booted?: boolean; hostText?: string; hostFormats?: string[]; beforeTarget?: () => Promise<void> } = {},
+) {
   const device: DeviceSummary = {
     hostId: "local",
     id: UDID,
@@ -67,6 +69,7 @@ function harness(options: { booted?: boolean; hostText?: string; hostFormats?: s
   };
   const service: DeviceFeaturePort = {
     async localTarget(input) {
+      await options.beforeTarget?.();
       if (input.hostId !== "local") throw new Error("This works only with simulators on this Mac.");
       const found = state.devices.find((candidate) => candidate.id === input.deviceId);
       if (!found) throw new Error("That simulator is no longer available.");
@@ -242,6 +245,34 @@ test("a simulator that shuts down, a deleted chat, and app quit each end recordi
   await h.features.stop();
   assert.deepEqual(h.features.recordings(), []);
   assert.equal(h.files.size, 0);
+});
+
+test("a recording still resolving its simulator when its chat is deleted or the app quits never starts", async () => {
+  let release!: () => void;
+  let resolved = new Promise<void>((resolve) => (release = resolve));
+  const h = harness({ beforeTarget: () => resolved });
+  const deleted = h.features.startRecording("chat-1", TARGET);
+  const kept = h.features.startRecording("chat-2", TARGET);
+  await settle();
+  await h.features.discardForChat("chat-1");
+  release();
+  await assert.rejects(deleted, /cancelled/u);
+  assert.equal((await kept).chatId, "chat-2", "another chat's recording still starts");
+  assert.equal(h.children.length, 1);
+  assert.deepEqual(
+    h.features.recordings().map((info) => info.chatId),
+    ["chat-2"],
+  );
+  await h.features.discardForChat("chat-2");
+
+  resolved = new Promise<void>((resolve) => (release = resolve));
+  const quitting = h.features.startRecording("chat-3", TARGET);
+  await settle();
+  await h.features.stop();
+  release();
+  await assert.rejects(quitting, /cancelled/u);
+  assert.equal(h.children.length, 1, "no recorder starts after quit");
+  assert.deepEqual(h.features.recordings(), []);
 });
 
 test("screenshots save to the chosen file and can then be revealed", async () => {

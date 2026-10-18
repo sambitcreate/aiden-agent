@@ -43,7 +43,9 @@ class FakeChild implements RecorderChild {
   }
 }
 
-function harness(options: { hangOnSigint?: boolean; maxDurationMs?: number } = {}) {
+function harness(
+  options: { hangOnSigint?: boolean; maxDurationMs?: number; tempDir?: () => Promise<string> } = {},
+) {
   let now = 1_000;
   let nextTimer = 1;
   const timers = new Map<number, { at: number; callback: () => void }>();
@@ -64,7 +66,7 @@ function harness(options: { hangOnSigint?: boolean; maxDurationMs?: number } = {
       spawned.push({ command, args, child });
       return child;
     },
-    tempDir: async () => "/private/recordings",
+    tempDir: options.tempDir ?? (async () => "/private/recordings"),
     fileSize: async (file) => files.get(file) ?? null,
     removeFile: async (file) => {
       removed.push(file);
@@ -298,6 +300,27 @@ test("an emulator recording whose on-device stop was never confirmed fails inste
   assert.equal(h.recorder.take(started.id), null);
   assert.equal(local === "" || !h.files.has(local), true, "no unfinished copy is left behind");
   assert.ok(steps.includes("cleanup"), "the device copy is still deleted");
+  assert.equal(h.pendingTimers(), 0);
+});
+
+test("a start still preparing its temp file when its chat is discarded never spawns a recorder", async () => {
+  let release!: () => void;
+  const prepared = new Promise<void>((resolve) => (release = resolve));
+  const h = harness({ tempDir: () => prepared.then(() => "/private/recordings") });
+  const deleted = start(h, "chat-1", UDID);
+  const other = start(h, "chat-2", "5C1E4B7A-0000-4000-8000-000000000002");
+  await settle();
+  await h.recorder.discardWhere((info) => info.chatId === "chat-1");
+  release();
+  await assert.rejects(deleted, /cancelled/u);
+  assert.equal((await other).status, "recording", "another chat's start goes ahead");
+  assert.equal(h.spawned.length, 1);
+  assert.deepEqual(
+    h.recorder.list().map((info) => info.chatId),
+    ["chat-2"],
+  );
+  assert.equal((await start(h, "chat-3", UDID)).status, "recording", "the simulator is free again");
+  await h.recorder.discardWhere(() => true);
   assert.equal(h.pendingTimers(), 0);
 });
 
