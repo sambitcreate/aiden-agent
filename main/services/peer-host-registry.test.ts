@@ -274,6 +274,60 @@ test("paired-host encrypted store rejects unavailable encryption and corrupt dat
   await assert.rejects(store.load());
 });
 
+test("pairing into a fresh store that cannot encrypt fails before the host issues a credential", async () => {
+  const sent: string[] = [];
+  const store = new PeerHostRegistry({
+    // A first pairing on a machine whose secure storage is locked or absent.
+    storage: new EncryptedPeerHostStorage(
+      {
+        load: async () => ({ version: 1, ciphertext: null }),
+        save: async () => assert.fail("nothing may reach disk"),
+      },
+      {
+        isEncryptionAvailable: () => false,
+        encryptString: (text) => Buffer.from(text),
+        decryptString: (bytes) => Buffer.from(bytes).toString(),
+      },
+    ),
+    localInstanceId: async () => "self",
+    deviceName: "Desktop",
+    clientVersion: "1",
+    platform: "mac",
+    client: () => ({
+      json: async (input) => {
+        sent.push(input.path);
+        throw new Error("no host request may be sent");
+      },
+      events: async () => {},
+    }),
+    bootstrap: () => ({
+      observedSpki: undefined,
+      json: async (input) => {
+        sent.push(input.path);
+        throw new Error("no host request may be sent");
+      },
+    }),
+  });
+  await assert.rejects(
+    store.pair({
+      ...trust,
+      instanceId: "other",
+      secret: "b".repeat(43),
+      expiresAt: new Date(Date.now() + 10000).toISOString(),
+    }),
+    /Unlock secure storage/,
+  );
+  await assert.rejects(
+    store.pairWithRequest(
+      { instanceId: "other", endpoint: trust.endpoint, route: "tailscale" },
+      () => assert.fail("no match code"),
+    ),
+    /Unlock secure storage/,
+  );
+  assert.deepEqual(sent, []);
+  assert.deepEqual(await store.list(), []);
+});
+
 test("pairing rejects self before network and authenticates identity before publishing", async () => {
   let calls = 0;
   const store = registry([], {

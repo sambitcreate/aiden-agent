@@ -87,6 +87,8 @@ export interface StoredPeerHost extends PeerTrust {
 export interface PeerHostStorage {
   load(): Promise<StoredPeerHost[]>;
   save(hosts: StoredPeerHost[], isCurrent?: () => boolean): Promise<void>;
+  /** Rejects when `save` cannot persist right now, so pairing fails before any exchange. */
+  assertWritable?(): Promise<void>;
 }
 
 export interface PeerClient {
@@ -554,6 +556,13 @@ export class PeerHostRegistry {
     return this.locked(async () => {
       attempt.assertCurrent();
       const hosts = await this.load();
+      // A credential the host issues cannot be withdrawn from here, so refuse
+      // before the one-time exchange when it could not be saved.
+      try {
+        await this.options.storage.assertWritable?.();
+      } catch {
+        throw failed("Unlock secure storage before pairing devices.");
+      }
       if (
         instanceId === (await this.options.localInstanceId()) ||
         instanceId === LOCAL_HOST_ID
