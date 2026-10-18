@@ -1300,6 +1300,41 @@ test("a Bot message that fails the same way on every redelivery is reported to t
   assert.deepEqual(admitted, ["plan lunch"], "later updates on the profile are no longer blocked");
 });
 
+test("a Bot turn accepted before its reply row could be written is never skipped at the retry cutoff", async () => {
+  const owner = person(42, "owner");
+  const accepted = makeUpdate(7, makeMessage(10, owner, "plan dinner"));
+  let attempts = 0;
+  const { service, api, config } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[accepted], [accepted], [accepted], [accepted], [accepted], [accepted], [accepted]],
+    autoStop: true,
+    botIngress: {
+      admit: async () => {
+        attempts += 1;
+        if (attempts <= 6) {
+          const error = new Error("ENOSPC: no space left on device");
+          error.name = "BotReplyAdmittedUnrecordedError";
+          throw error;
+        }
+        return { requestId: "r", deduped: true };
+      },
+    },
+  });
+
+  await service.start();
+  await waitFor(() => attempts === 7 && config.persistOffsetCalls() >= 1);
+
+  assert.equal(
+    api.sentMessages.filter(({ chatId }) => chatId === durableBinding.chatId).length,
+    0,
+    "no error is sent for a turn the Bot already accepted",
+  );
+});
+
 test("a Bot that cannot take messages at all is told once and the update is not redelivered", async () => {
   const owner = person(42, "owner");
   let attempts = 0;

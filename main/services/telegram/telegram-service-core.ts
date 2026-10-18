@@ -79,6 +79,11 @@ const TERMINAL_BOT_SESSION_REASONS: ReadonlySet<BotSessionErrorReason> = new Set
 ]);
 
 /** Duck-typed so this module does not load the Bot runtime (the CLI bundles it without one). */
+/** An accepted Bot turn whose reply row is not yet durable; skipping its update would lose the answer. */
+function isAdmittedUnrecordedError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "BotReplyAdmittedUnrecordedError";
+}
+
 function isTerminalBotSessionError(cause: unknown): boolean {
   return (
     cause instanceof Error &&
@@ -531,7 +536,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
             deps.error(`Telegram handleUpdate failed for ${update.update_id}.`, cause);
             const attempts = failing?.updateId === update.update_id ? failing.attempts + 1 : 1;
             failing = { updateId: update.update_id, attempts };
-            if (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause)) {
+            const skippable = !isAdmittedUnrecordedError(cause);
+            if ((skippable && attempts >= MAX_UPDATE_ATTEMPTS) || isTerminalBotSessionError(cause)) {
               // The update fails the same way every time: tell the chat and move
               // past it, so one poison update cannot block the whole profile.
               const message = update.message ?? update.edited_message ?? update.callback_query?.message;
