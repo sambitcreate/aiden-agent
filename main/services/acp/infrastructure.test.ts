@@ -6,7 +6,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
+import { Value } from "typebox/value";
 
+import { createDeviceAgentTools } from "../devices/device-tools.js";
+import { createTodoExtensionRuntime } from "../rpiv-todo/extension.js";
 import { buildChildEnvironment } from "./environment.js";
 import { redactSecrets } from "./errors.js";
 import { AcpMcpBridge, sanitizeSchema } from "./mcp-bridge.js";
@@ -211,6 +214,76 @@ test("schema sanitizing keeps the callable subset and drops unknown keywords", (
     required: ["name"],
     properties: { name: { type: "string", minLength: 1 } },
   });
+});
+
+type JsonSchema = Record<string, any>;
+
+/** The values a sanitized schema lets the agent choose: each variant's enum, flattened. */
+const advertisedValues = (schema: JsonSchema | undefined): unknown[] =>
+  (schema?.anyOf ?? [schema]).flatMap((variant: JsonSchema | undefined) => variant?.enum ?? []);
+
+/** Every object node of a schema, so each one's `required` can be checked against its `properties`. */
+function objectNodes(schema: unknown, found: JsonSchema[] = []): JsonSchema[] {
+  if (!schema || typeof schema !== "object") return found;
+  const node = schema as JsonSchema;
+  if (node.properties) found.push(node);
+  for (const child of [
+    ...Object.values(node.properties ?? {}),
+    node.items,
+    node.additionalProperties,
+    ...(node.anyOf ?? []),
+    ...(node.oneOf ?? []),
+    ...(node.allOf ?? []),
+  ]) {
+    objectNodes(child, found);
+  }
+  return found;
+}
+
+test("schema sanitizing keeps literal values, so bridged tools advertise the arguments they accept", () => {
+  const todo = createTodoExtensionRuntime({ tasks: [], nextId: 1 }).extension.tools![0]!;
+  const original = todo.parameters as JsonSchema;
+  const sanitized = sanitizeSchema(todo.parameters)!;
+  for (const property of ["action", "status"]) {
+    const literals = original.properties[property].anyOf.map((variant: JsonSchema) => variant.const);
+    assert.deepEqual(advertisedValues((sanitized.properties as JsonSchema)[property]), literals, property);
+  }
+  for (const action of advertisedValues((sanitized.properties as JsonSchema).action)) {
+    assert.equal(Value.Check(todo.parameters, { action }), true, `${String(action)} is accepted`);
+  }
+
+  const deviceOpen = createDeviceAgentTools({
+    chatId: "chat-1",
+    signal: new AbortController().signal,
+    supportsImages: true,
+    port: {} as never,
+  }).find((tool) => tool.name === "device_open")!;
+  const platforms = advertisedValues((sanitizeSchema(deviceOpen.parameters)!.properties as JsonSchema).platform);
+  assert.deepEqual(platforms, ["ios", "android"]);
+  for (const platform of platforms) assert.equal(Value.Check(deviceOpen.parameters, { platform }), true);
+
+  // Object variants told apart only by a literal `kind` keep it.
+  const target = sanitizeSchema(
+    Type.Union([
+      Type.Object({ kind: Type.Literal("url"), url: Type.String() }),
+      Type.Object({ kind: Type.Literal("environment-port"), port: Type.Integer() }),
+    ]),
+  )!;
+  assert.deepEqual(
+    (target.anyOf as JsonSchema[]).map((variant) => variant.properties.kind.enum),
+    [["url"], ["environment-port"]],
+  );
+});
+
+test("schema sanitizing never requires a property it does not describe", () => {
+  const sanitized = sanitizeSchema(Type.Object({ payload: Type.Unknown(), name: Type.String() }))!;
+  const todo = createTodoExtensionRuntime({ tasks: [], nextId: 1 }).extension.tools![0]!;
+  for (const node of [...objectNodes(sanitized), ...objectNodes(sanitizeSchema(todo.parameters))]) {
+    for (const name of (node.required ?? []) as string[]) {
+      assert.ok(Object.prototype.hasOwnProperty.call(node.properties, name), `${name} is required and described`);
+    }
+  }
+  assert.deepEqual((sanitized.required as string[]).sort(), ["name", "payload"]);
 });
 
 test("the tool bridge requires its bearer token and validates arguments against the original schema", async () => {
