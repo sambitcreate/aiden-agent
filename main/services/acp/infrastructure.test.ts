@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
 
@@ -69,6 +71,54 @@ test("the process wrapper keeps protocol lines, drops stdout noise, and reports 
   assert.deepEqual(lines, ["first", "second"]);
   assert.equal(exit.code, 0);
   assert.equal(child.ignoredStdoutLines, 1);
+});
+
+test("an oversized protocol line fails the input stream and closes the agent without an uncaught error", async () => {
+  const uncaught: unknown[] = [];
+  const onUncaught = (error: unknown) => uncaught.push(error);
+  process.on("uncaughtException", onUncaught);
+  try {
+    // A fake agent without a pid, so closing it signals only this object.
+    const fake = Object.assign(new EventEmitter(), {
+      pid: undefined,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      stdin: new PassThrough(),
+      signals: [] as NodeJS.Signals[],
+      kill(signal: NodeJS.Signals) {
+        fake.signals.push(signal);
+        // The agent writes the rest of its line, then dies on TERM.
+        setImmediate(() => {
+          fake.stdout.write('"}\n{"jsonrpc":"2.0","id":2}\n');
+          fake.stdout.end();
+          fake.signalCode = signal;
+          setImmediate(() => fake.emit("exit", null, signal));
+        });
+        return true;
+      },
+    });
+    const child = new AcpProcess({
+      command: "agent",
+      args: [],
+      cwd: tempDir(),
+      env: {},
+      platform: "linux",
+      spawnImpl: (() => fake) as never,
+    });
+    const reader = child.input.getReader();
+    const read = reader.read();
+    fake.stdout.write(Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":1,"result":"'), Buffer.alloc(17 * 1024 * 1024, 0x61)]));
+    await assert.rejects(read, /oversized protocol line/u);
+    const exit = await child.exited;
+    assert.equal(exit.signal, "SIGTERM");
+    assert.deepEqual(fake.signals, ["SIGTERM"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(uncaught, []);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+  }
 });
 
 test("closing a process stops its whole group, including children that ignore TERM", { skip: process.platform === "win32" }, async () => {
