@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
+import path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
 
 export type AidenOpaqueHandleKind = "loc" | "cur" | "sel" | "file";
@@ -208,4 +209,28 @@ export async function inspectAidenFilesystemIdentity(rootPath: string, candidate
     filesystemInode: String(identity.ino),
     kind: identity.isDirectory() ? "directory" : "file",
   };
+}
+
+/**
+ * A snapshot-handle save installs a new inode at the same name. Rebind the
+ * handle in place (clients validate that a save answers with the id they sent)
+ * after the same containment and single-link checks a fresh listing performs.
+ * If the installed file cannot be admitted, the handle keeps the old identity
+ * and fails closed on its next use.
+ */
+export async function rebindAidenFileHandleToSavedFile(
+  handles: AidenOpaqueHandleStore,
+  token: string,
+  rootPath: string,
+  displayPath: string,
+): Promise<void> {
+  try {
+    const stored = handles.claimsFor(token, "file");
+    const installed = await inspectAidenFilesystemIdentity(rootPath, path.join(rootPath, displayPath));
+    if (installed.kind !== "file" || installed.canonicalRootPath !== stored.canonicalRootPath ||
+        installed.canonicalPath !== stored.canonicalPath) return;
+    handles.updateReservedFileIdentity(token, installed.filesystemDevice, installed.filesystemInode);
+  } catch {
+    // The save already landed; only the follow-up handle use is refused.
+  }
 }

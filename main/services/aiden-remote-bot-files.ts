@@ -11,6 +11,7 @@ import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
   inspectAidenFilesystemIdentity,
+  rebindAidenFileHandleToSavedFile,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
 import {
@@ -441,6 +442,7 @@ export class AidenRemoteBotFileService {
           input.expectedVersion,
           resolved.signal,
         );
+        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath);
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
         if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {

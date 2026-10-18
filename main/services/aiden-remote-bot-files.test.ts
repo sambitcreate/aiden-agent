@@ -144,6 +144,17 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
     });
     assert.equal(saved.content, "second\n");
     assert.equal(await fs.readFile(path.join(root, "Notes", "plan.md"), "utf8"), "second\n");
+    // A save installs a new inode. Clients validate the response id against the
+    // one they sent and keep using it, so it must still read and save the file.
+    assert.equal(saved.id, file.id);
+    const reread = await service.read("device-1", "chat-1", saved.id);
+    assert.equal(reread.content, "second\n");
+    const resaved = await service.write("device-1", "chat-1", saved.id, {
+      content: "third\n",
+      expectedVersion: reread.version,
+    });
+    assert.equal(resaved.content, "third\n");
+    assert.equal(await fs.readFile(path.join(root, "Notes", "plan.md"), "utf8"), "third\n");
 
     await assert.rejects(
       () => service.read("device-2", "chat-1", file.id),

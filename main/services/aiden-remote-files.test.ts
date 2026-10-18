@@ -169,6 +169,20 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     });
     assert.equal(saved.content, "let value = 3\n");
     assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
+    // A save installs a new inode. The returned handle and the listed entry must
+    // keep reading and saving the file without reopening Files.
+    const reread = await service.read("device-1", workspace.id, saved.id);
+    assert.equal(reread.content, "let value = 3\n");
+    const resaved = await service.write("device-1", workspace.id, saved.id, {
+      content: "let value = 4\n",
+      expectedVersion: reread.version,
+    });
+    assert.equal((await service.read("device-1", workspace.id, file.id)).content, "let value = 4\n");
+    await service.write("device-1", workspace.id, resaved.id, {
+      content: "let value = 3\n",
+      expectedVersion: resaved.version,
+    });
+    assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
 
     // Snapshot handles also refuse multiply-linked files: another name for the
     // inode may live outside the workspace.
