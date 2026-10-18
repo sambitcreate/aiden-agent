@@ -3052,6 +3052,46 @@ test("a failed secret migration never blocks startup reads and retries later", a
   assert.equal(calls, 2);
 });
 
+test("a legacy gemini key beside a current google key converges instead of re-running per read", async (t) => {
+  const h = await harness(t);
+  const secrets = fakeSecrets({ gemini: "legacy-ciphertext", google: "current-ciphertext" });
+  const reports: string[] = [];
+  const store = createConfigStore(h.stores, secrets.port, (area) => reports.push(area));
+
+  await store.getSettings();
+  for (let i = 0; i < 5; i += 1) await store.getCompactionSettings();
+  for (let i = 0; i < 5; i += 1) await store.listProviders();
+
+  assert.equal(secrets.keys.google, "current-ciphertext", "the current google key wins");
+  assert.equal(secrets.keys.gemini, undefined);
+  assert.equal(
+    secrets.keys["__aiden_internal_provider_legacy_quarantine_key_v1__:gemini"],
+    "legacy-ciphertext",
+    "the superseded key stays recoverable",
+  );
+  assert.equal(secrets.migrateCalls, 1);
+  assert.deepEqual(reports, []);
+  assert.equal(await store.providerLegacyCredentialMigrationReady(), true);
+});
+
+test("an unresolvable legacy secret is migrated and reported once per process", async (t) => {
+  const h = await harness(t);
+  const futureGoogle = { version: 2, ciphertext: "future" };
+  const secrets = fakeSecrets({ gemini: "legacy-ciphertext", google: futureGoogle });
+  const reports: string[] = [];
+  const store = createConfigStore(h.stores, secrets.port, (area) => reports.push(area));
+
+  await store.getSettings();
+  for (let i = 0; i < 5; i += 1) await store.getCompactionSettings();
+  for (let i = 0; i < 5; i += 1) await store.listProviders();
+
+  assert.equal(secrets.keys.gemini, "legacy-ciphertext");
+  assert.deepEqual(secrets.keys.google, futureGoogle);
+  assert.equal(secrets.migrateCalls, 1);
+  assert.deepEqual(reports, ["provider-secret-migration"]);
+  assert.equal(await store.providerLegacyCredentialMigrationReady(), false);
+});
+
 test("compaction preference defaults to LLM and survives a restart independently of memory", async (t) => {
   const h = await harness(t);
   assert.equal((await h.store.getSettings()).compactionEngine, "llm");

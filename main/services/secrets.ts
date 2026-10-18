@@ -13,6 +13,8 @@ import {
   moveSecretEntryPairIfVacant,
   moveSecretEntryWithBindingIfVacant,
   parseSecretKeyMap,
+  PROVIDER_LEGACY_QUARANTINE_BINDING_PREFIX,
+  PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX,
   secretKeyEntry,
   setSecretKeyEntry,
   swapSecretEntryPairs,
@@ -27,10 +29,6 @@ const FILE = "provider-keys.json";
 const PROVIDER_BINDING_PREFIX = "__aiden_internal_provider_binding_v1__:";
 const PROVIDER_QUARANTINE_KEY_PREFIX = "__aiden_internal_provider_quarantine_key_v1__:";
 const PROVIDER_QUARANTINE_BINDING_PREFIX = "__aiden_internal_provider_quarantine_binding_v1__:";
-const PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX =
-  "__aiden_internal_provider_legacy_quarantine_key_v1__:";
-const PROVIDER_LEGACY_QUARANTINE_BINDING_PREFIX =
-  "__aiden_internal_provider_legacy_quarantine_binding_v1__:";
 const LEGACY_UNBOUND_PROVIDER_BINDING = "__aiden_legacy_unbound_provider_key_v1__";
 
 type KeyMap = SecretKeyMap; // providerId -> base64 ciphertext

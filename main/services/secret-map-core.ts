@@ -1,5 +1,11 @@
 export type SecretKeyMap = Record<string, unknown>;
 
+/** Recovery slot for a pre-binding provider key that must never be sent again. */
+export const PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX =
+  "__aiden_internal_provider_legacy_quarantine_key_v1__:";
+export const PROVIDER_LEGACY_QUARANTINE_BINDING_PREFIX =
+  "__aiden_internal_provider_legacy_quarantine_binding_v1__:";
+
 export function parseSecretKeyMap(value: unknown): SecretKeyMap {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid encrypted secret map.");

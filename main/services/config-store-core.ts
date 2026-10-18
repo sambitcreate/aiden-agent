@@ -38,6 +38,10 @@ import {
   type SettingsShape,
 } from "./portable-config-core.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
+import {
+  PROVIDER_LEGACY_QUARANTINE_BINDING_PREFIX,
+  PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX,
+} from "./secret-map-core.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
 import {
   normalizeTtsSettings,
@@ -302,6 +306,9 @@ export function createConfigStore(
   let secretMigrationAliases: Array<readonly [source: string, target: string]> = [];
   let secretMigrationTargets: Array<Readonly<{ id: string; binding: string }>> = [];
   let secretMigrationComplete = false;
+  // Unresolved (not failed) records wait for the next launch; a thrown
+  // keychain error still retries on the next read.
+  let secretMigrationDeferred = false;
   let secretMigrationPromise: Promise<void> | null = null;
   // TTS settings revision: monotonic per session, seeded randomly so a restart
   // can never alias an older revision. Used for renderer compare-and-set.
@@ -324,7 +331,7 @@ export function createConfigStore(
   }
 
   async function attemptSecretMigration(): Promise<void> {
-    if (secretMigrationComplete) return;
+    if (secretMigrationComplete || secretMigrationDeferred) return;
     if (!secretMigrationPromise) {
       secretMigrationPromise = (async () => {
         let unresolved = false;
@@ -351,8 +358,18 @@ export function createConfigStore(
               return false;
             }
             const currentGoogleKey = ownRecordEntry(keys, GOOGLE_PROVIDER_ID);
+            const quarantineKeyId = `${PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX}gemini`;
             if (currentGoogleKey === undefined) {
               setRecordEntry(keys, GOOGLE_PROVIDER_ID, legacyGoogleKey);
+            } else if (
+              typeof currentGoogleKey === "string" &&
+              ownRecordEntry(keys, quarantineKeyId) === undefined &&
+              ownRecordEntry(keys, `${PROVIDER_LEGACY_QUARANTINE_BINDING_PREFIX}gemini`) ===
+                undefined
+            ) {
+              // The current google key wins; the superseded one stays
+              // recoverable but can no longer reach any provider.
+              setRecordEntry(keys, quarantineKeyId, legacyGoogleKey);
             } else {
               unresolved = true;
               return changed;
@@ -363,6 +380,9 @@ export function createConfigStore(
           return changed;
         });
         if (unresolved) {
+          // The same records give the same outcome, so later reads in this
+          // process neither re-run the keychain migration nor re-report it.
+          secretMigrationDeferred = true;
           reportDeferredError(
             "provider-secret-migration",
             new Error("Legacy provider credentials contain unresolved future-version records."),
