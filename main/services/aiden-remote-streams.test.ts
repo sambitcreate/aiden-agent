@@ -329,6 +329,34 @@ test("cancel and approval decisions are bound to the owning device and owner ide
   assert.equal(app.cancelled.length, 1);
 });
 
+test("a stop sent before the turn is admitted reaches the generation once it starts", async () => {
+  const cancelled: string[] = [];
+  let generationStarted = false;
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    // The host can only cancel a generation it has registered.
+    cancel: (streamId, ownerId) => {
+      if (!generationStarted) return false;
+      cancelled.push(`${streamId}:${ownerId}`);
+      return true;
+    },
+    approve: () => true,
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const stopped = await service.cancel("device-1", "stream-1", "early-stop-key-00001");
+  assert.equal(stopped.state, "reconciling");
+  assert.deepEqual(cancelled, []);
+
+  generationStarted = true;
+  service.markRunning("device-1", "stream-1");
+  assert.deepEqual(cancelled, [`stream-1:${owner.owner.documentId}`]);
+  assert.equal(service.status("device-1", "stream-1").state, "reconciling");
+  const states = service.snapshot().streams[0]!.events
+    .filter(({ type }) => type === "status")
+    .map(({ payload }) => payload.state);
+  assert.equal(states.includes("running"), false);
+});
+
 test("schedule-tool approvals declare the schedule-write capability boundary", () => {
   const app = fixture();
   const owner = app.service.create(

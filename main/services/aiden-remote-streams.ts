@@ -1283,6 +1283,12 @@ export class AidenRemoteStreamService {
 
   markRunning(deviceId: string, streamId: string): void {
     const stream = this.requireStream(deviceId, streamId);
+    if (stream.cancelRequested && !terminal(stream.state)) {
+      // A stop accepted before the generation existed could not reach it;
+      // deliver it now and keep reconciling until the cancelled terminal.
+      this.options.cancel(streamId, stream.owner.owner.documentId);
+      return;
+    }
     this.append(stream, "status", { state: "running" }, false, "running");
   }
 
