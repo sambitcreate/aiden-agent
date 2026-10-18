@@ -605,6 +605,24 @@ export class SubagentSupervisor {
           toolNames: logicalToolCeiling(authority),
         }),
       );
+      // Nested children bring their own turn and network-operation ceilings,
+      // like depth-1 siblings, within the same generation-wide bounds.
+      const nestedAllowance = (authorities as SubagentAuthorityV2[]).reduce(
+        (total, { budgets }) => ({
+          turns: total.turns + budgets.maxTurns,
+          networkOperations: total.networkOperations + budgets.maxNetworkOperations,
+        }),
+        { turns: 0, networkOperations: 0 },
+      );
+      if (
+        this.v2TurnAllowance + nestedAllowance.turns > MAX_SUBAGENT_V2_TREE_TURNS ||
+        this.v2NetworkOperationAllowance + nestedAllowance.networkOperations >
+          MAX_SUBAGENT_V2_TREE_NETWORK_OPERATIONS
+      ) {
+        throw new Error(
+          "Subagent generation tree budget exhausted. Start a new parent turn with narrower tasks.",
+        );
+      }
       let releaseStart!: () => void;
       let rejectStart!: (reason: Error) => void;
       const startBarrier = new Promise<void>((resolve, reject) => {
@@ -881,6 +899,11 @@ export class SubagentSupervisor {
         throw reason;
       }
       try {
+        // The fan-out is reserved and every child still waits on the start
+        // barrier, so its allowance is admitted before any can be spent.
+        input.ledger.extendAllowance(nestedAllowance);
+        this.v2TurnAllowance += nestedAllowance.turns;
+        this.v2NetworkOperationAllowance += nestedAllowance.networkOperations;
         for (const [index, task] of request.tasks.entries()) {
           this.input.projector?.begin(
             identities[index]!,

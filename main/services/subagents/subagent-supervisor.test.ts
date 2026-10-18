@@ -1141,6 +1141,7 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
     nestedTool: boolean;
     context: string;
   }> = [];
+  const networkOperations: boolean[] = [];
   const supervisor = new SubagentSupervisor({
     generationId: "generation-phase6b",
     ...TEST_SUPERVISOR_SCOPE,
@@ -1164,7 +1165,7 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
         parent: parentAuthority,
       });
       preparedAuthorities.push(authority);
-      return phase6Prepared(authority);
+      return { ...phase6Prepared(authority), consumeNetworkOperation: () => true };
     },
     runChild: async (child) => {
       assert.ok(child.v2Authority);
@@ -1174,6 +1175,13 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
         nestedTool: child.executeNested !== undefined,
         context: child.context.mode,
       });
+      // Every run stays inside its own 8-turn, one-operation authority;
+      // together they need 17 turns and two network operations.
+      const turns = child.v2Authority.depth === 1 ? 5 : 6;
+      for (let index = 0; index < turns; index += 1) child.telemetry?.turnStarted();
+      if (child.v2Authority.depth === 2) {
+        networkOperations.push(child.consumeNetworkOperation?.(child.v2Authority) === true);
+      }
       if (child.v2Authority.depth === 1) {
         const nested = await child.executeNested!(
           {
@@ -1206,6 +1214,7 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
   assert.equal(preparedAuthorities[1]?.parentRunId, preparedAuthorities[0]?.runId);
   assert.equal(preparedAuthorities[2]?.parentRunId, preparedAuthorities[0]?.runId);
   assert.equal(supervisor.launchesUsed, 3);
+  assert.deepEqual(networkOperations, [true, true]);
 });
 
 test("Phase 6C preserves fork mode and bounded fork messages for depth-2 children", async () => {
