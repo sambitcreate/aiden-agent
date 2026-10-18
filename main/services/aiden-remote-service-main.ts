@@ -66,7 +66,7 @@ import {
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
-  MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES,
+  aidenRemoteStreamStoreOptions,
   normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
   type AidenRemotePendingApproval,
@@ -382,23 +382,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     STREAMS_FILE,
     { version: 1, streams: [] },
     () => userData,
-    {
-      // The journal budgets its compact JSON; allow the trailing newline.
-      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES + 1,
-      fileMode: 0o600,
-      compact: true,
-      normalize: normalizeAidenRemoteStreamSnapshot,
-      isSafe: (value) => {
-        try {
-          normalizeAidenRemoteStreamSnapshot(value);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      rejectCorruptWrite: true,
-      rejectUnsafeWrite: true,
-    },
+    aidenRemoteStreamStoreOptions(),
   );
   const tailscale = new AidenRemoteTailscaleController(
     await createSystemTailscaleCommandRunner(),
