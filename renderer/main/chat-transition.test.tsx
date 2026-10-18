@@ -203,6 +203,81 @@ test("a refused follow-up side question keeps the card and the typed text", asyn
   }
 });
 
+async function showCompletedSideQuestion(chatId: string, requestId: string, answer: string) {
+  await act(async () => {
+    emitBotTestNotification("chats:btw-event", {
+      version: 1,
+      type: "started",
+      chatId,
+      requestId,
+      sequence: 0,
+      question: `Question in ${chatId}`,
+      hasHistory: false,
+      contextTrimmed: false,
+    });
+    emitBotTestNotification("chats:btw-event", {
+      version: 1,
+      type: "terminal",
+      chatId,
+      requestId,
+      sequence: 1,
+      status: "completed",
+      answer,
+      contextTrimmed: false,
+    });
+  });
+}
+
+async function askFollowUp(text: string) {
+  const followUp = screen.getByLabelText("Ask a follow-up side question") as HTMLTextAreaElement;
+  await act(async () => {
+    fireEvent.change(followUp, { target: { value: text } });
+  });
+  await act(async () => {
+    fireEvent.keyDown(followUp, { key: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
+test("a late refusal from the previous chat cannot restore its side question into the next chat", async () => {
+  const starts = new Map<string, { reject: (error: Error) => void }>();
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:btwStart": (request) =>
+      new Promise((_resolve, reject) => {
+        starts.set((request as { chatId: string }).chatId, { reject });
+      }),
+  });
+  try {
+    await showCompletedSideQuestion("chat-a", "btw-a", "Answer from chat A.");
+    await askFollowUp("A follow-up");
+    assert.ok(starts.has("chat-a"));
+
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await showCompletedSideQuestion("chat-b", "btw-b", "Answer from chat B.");
+    await askFollowUp("B follow-up");
+    assert.ok(starts.has("chat-b"));
+
+    await act(async () => {
+      starts.get("chat-a")?.reject(new Error("The side question could not start."));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
+    assert.ok(screen.queryByText("Answer from chat A.") === null, "Chat A's answer must not appear in chat B");
+    const followUp = screen.queryByLabelText("Ask a follow-up side question") as HTMLTextAreaElement | null;
+    // B's own start is still pending, so its card stays in the starting state.
+    assert.ok(followUp === null || followUp.disabled, "Chat B's pending side question must stay pending");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
 test("chat pane hides the generic tool phase when a chronological row owns it", () => {
   const pane = source("./chat-pane.tsx");
   assert.match(pane, /toolVisible:\s*chronologicalLiveRows\?\.some\(\(row\) => row\.kind === "activity"[\s\S]*?step\.status === "running"/u);
