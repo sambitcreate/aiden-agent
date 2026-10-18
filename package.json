@@ -212,7 +212,7 @@
     "cli:playground": "npm --prefix packages/cli-playground run dev",
     "cli:playground:build": "npm --prefix packages/cli-playground run build",
     "test:cli-playground": "npm --prefix packages/cli-playground test",
-    "test:durable-jobs": "tsx --test main/services/durable-jobs/store.test.ts main/services/durable-jobs/service.test.ts",
+    "test:durable-jobs": "tsx --test main/services/durable-jobs/store.test.ts main/services/durable-jobs/service.test.ts main/services/durable-jobs/worker.test.ts",
     "test:transcript-polish": "tsx --test renderer/lib/sticky-section.test.ts renderer/shared/assistant-turn-stats.test.ts",
     "build:native:c": "node scripts/build-native-c-helpers.mjs",
     "build:electron:production": "node scripts/patch-pi-oauth-branding.mjs && node scripts/build-electron.mjs --production",
