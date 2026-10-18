@@ -190,7 +190,9 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     // Another app replaces the file after the writer verified its save: the handle
     // must not adopt the replacement, only the inode the save installed.
     const swapPath = path.join(root, "Sources", "App.swift");
-    const beforeSwap = await service.read("device-1", workspace.id, file.id);
+    const swapping = (await service.list("device-1", workspace.id)).entries
+      .find((entry) => entry.displayPath === "Sources/App.swift")!;
+    const beforeSwap = await service.read("device-1", workspace.id, swapping.id);
     // This test later shadows the module-level import, so take it from the module here.
     const syncExports = (await import("node:module")).syncBuiltinESMExports;
     const originalRm = fsPromises.rm;
@@ -205,7 +207,7 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     }) as typeof fsPromises.rm;
     syncExports();
     try {
-      await service.write("device-1", workspace.id, file.id, {
+      await service.write("device-1", workspace.id, swapping.id, {
         content: "let value = 5\n",
         expectedVersion: beforeSwap.version,
       });
@@ -214,8 +216,11 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
       syncExports();
     }
     assert.equal(swapped, true);
+    // The refused rebind ends the handle outright: whether or not the replacement reuses the
+    // freed pre-save inode, the old id authorizes nothing and the phone re-lists.
+    assert.throws(() => handles.claimsFor(swapping.id, "file"), /handle_invalid/u);
     await assert.rejects(
-      () => service.read("device-1", workspace.id, file.id),
+      () => service.read("device-1", workspace.id, swapping.id),
       (error: unknown) => error instanceof AidenRemoteServiceError,
       "the old handle refuses the replacement",
     );
