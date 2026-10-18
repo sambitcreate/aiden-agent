@@ -7,8 +7,11 @@ export class DurableJobWorker {
   readonly owner = randomUUID();
   private timer?: ReturnType<typeof setInterval>;
   private stopping = false;
-  /** Running jobs; stop() waits on these, a later tick never does. */
-  private active = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  /**
+   * Every unsettled attempt; stop() waits on these, a later tick never does. A cancel releases
+   * the lease at once, so a job can be reclaimed while its earlier attempt is still settling.
+   */
+  private active = new Set<{ jobId: string; controller: AbortController; done: Promise<void> }>();
   constructor(
     private readonly service: DurableJobService,
     private readonly onError: (error: unknown) => void,
@@ -49,24 +52,25 @@ export class DurableJobWorker {
           controller.abort();
         }
       }, HEARTBEAT_MS);
-      const entry = {
+      const entry: { jobId: string; controller: AbortController; done: Promise<void> } = {
+        jobId,
         controller,
         done: this.service
           .run(claim.lease, controller.signal)
           .catch(this.onError)
           .finally(() => {
             clearInterval(heartbeat);
-            if (this.active.get(jobId) === entry) this.active.delete(jobId);
+            this.active.delete(entry);
           }),
       };
-      this.active.set(jobId, entry);
+      this.active.add(entry);
       claimed.push(entry.done);
     }
     await Promise.all(claimed);
   }
   /** Call after a committed control to promptly abort its exact old attempt. */
   notifyControl(jobId: string): void {
-    this.active.get(jobId)?.controller.abort();
+    for (const entry of this.active) if (entry.jobId === jobId) entry.controller.abort();
   }
 
   /** Bounded shutdown; false retains live reservations until runtime settlement. */

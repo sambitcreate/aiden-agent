@@ -63,3 +63,57 @@ test("a long-running job does not stop the worker from claiming a later job", as
   assert.equal(f.store.get(long.id).state, "succeeded");
   assert.deepEqual(errors, []);
 });
+
+test("shutdown still waits for a cancelled attempt after the same job is reclaimed", async (t) => {
+  const f = fixture(t);
+  const release = deferred();
+  let reserved = false;
+  let executions = 0;
+  const runtime: DurableJobRuntime = {
+    validateInput: async () => undefined,
+    // The chat stays reserved until the first attempt's runtime settles, so a reclaim cannot run it.
+    acquire: async (job) => {
+      if (reserved) return null;
+      reserved = true;
+      let current = evidence("not_started");
+      return {
+        evidence: async () => current,
+        appendInput: async (context) => {
+          context.beforeCommit();
+          return { ...checkpoint, inputMessageId: job.input.messageId };
+        },
+        execute: async (context) => {
+          context.beforeEffect();
+          executions += 1;
+          // This runtime does not settle on abort.
+          await release.promise;
+          current = evidence("completed");
+          return current;
+        },
+        close: async () => {
+          reserved = false;
+        },
+      };
+    },
+  };
+  const service = new DurableJobService(f.store, runtime);
+  const worker = new DurableJobWorker(service, () => undefined);
+  t.after(async () => {
+    release.resolve();
+    await worker.stop();
+  });
+
+  const job = await service.enqueue(input, "actor", "job");
+  const first = worker.tick();
+  await until("the first attempt to run", () => executions === 1);
+  f.store.control({ actor: "actor", key: "cancel", jobId: job.id, expectedRevision: f.store.get(job.id).revision, action: "cancel" });
+  worker.notifyControl(job.id);
+  // The cancel released the lease, so a later tick reclaims the job to reconcile it.
+  await worker.tick();
+  assert.equal(executions, 1, "the reclaim never runs the job again");
+
+  assert.equal(await worker.stop(0), false, "the first attempt still holds the chat");
+  release.resolve();
+  await first;
+  assert.equal(reserved, false);
+});

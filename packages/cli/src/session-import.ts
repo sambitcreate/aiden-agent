@@ -5,7 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createCurrentPiSessionRepository } from "../../../main/services/pi-session-repository-port.js";
 import { parseAttachments } from "../../../main/services/attachment-contract.js";
 import type { Message } from "@earendil-works/pi-ai";
-import { exportSession, IMPORTED_ASSISTANT_ATTACHMENTS } from "./sessions.ts";
+import { exportSession, IMPORTED_ASSISTANT_ATTACHMENTS, importedAssistantAttachments } from "./sessions.ts";
 
 function importContext(messages: readonly { role: string }[]): Message[] {
   return messages.map((message) => {
@@ -67,6 +67,14 @@ export async function importSession(agentDir: string, cwd: string, source: strin
       const manager = SessionManager.open(file);
       messages = importContext(manager.buildSessionContext().messages);
       name = manager.getSessionName();
+      // Aiden's own journals keep assistant attachments beside their message; carry them to the new ids.
+      const imported = importedAssistantAttachments(manager.getEntries());
+      const byMessage = new Map<unknown, string>();
+      for (const entry of manager.getBranch()) if (entry.type === "message") byMessage.set(entry.message, entry.id);
+      for (const message of messages) {
+        const attachments = parseAttachments(imported.get(byMessage.get(message) ?? ""));
+        if (message.role === "assistant" && attachments?.length) assistantAttachments.set(message, attachments);
+      }
     } finally { rmSync(staging, { recursive: true, force: true }); }
   } else {
     const document = JSON.parse(text);
