@@ -19,11 +19,37 @@ import { aidenExtensionToInlineFactory, type AidenExtensionShape } from "../pi-b
 
 type DisplayTool = { execute: (id: string, params: unknown, signal: AbortSignal) => Promise<{ content: unknown[] }> };
 
+type ImageUsage = { bytes: number; count: number; pixels: number };
+
+/**
+ * One presented image's usage, recorded beside the journal. A display_image run through codemode or
+ * `ctx.executeTool()` leaves no display_image result of its own: pi journals only the outer tool's.
+ */
+const DISPLAY_IMAGE_USAGE_ENTRY = "aiden-display-image-usage";
+
+function imageUsage(image: { data: string; mimeType: string }): ImageUsage {
+	return displayedAssistantImageUsage([
+		{ role: "assistant", attachments: [{ kind: "image", size: Buffer.byteLength(image.data, "base64"), ...image }] },
+	]);
+}
+
+const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0);
+
 /** Images this session already shows, read from its journal like the desktop reads chat history. */
-function sessionImageUsage(manager: Pick<ExtensionContext["sessionManager"], "getBranch"> | undefined) {
+function sessionImageUsage(manager: Pick<ExtensionContext["sessionManager"], "getBranch"> | undefined): ImageUsage {
 	const messages: { role: string; attachments: { kind: string; size: number; mimeType: string; data: string }[] }[] = [];
+	const counted = new Set<string>();
+	const recorded: { toolCallId: string; usage: ImageUsage }[] = [];
 	for (const entry of manager?.getBranch() ?? []) {
+		if (entry.type === "custom" && entry.customType === DISPLAY_IMAGE_USAGE_ENTRY) {
+			const data = entry.data as { toolCallId?: unknown; bytes?: unknown; count?: unknown; pixels?: unknown } | undefined;
+			if (typeof data?.toolCallId === "string") {
+				recorded.push({ toolCallId: data.toolCallId, usage: { bytes: count(data.bytes), count: count(data.count), pixels: count(data.pixels) } });
+			}
+			continue;
+		}
 		if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.toolName !== DISPLAY_IMAGE_TOOL_NAME) continue;
+		counted.add(entry.message.toolCallId);
 		const content: unknown = entry.message.content;
 		const attachments = (Array.isArray(content) ? content : []).flatMap((part) =>
 			part?.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string"
@@ -32,7 +58,15 @@ function sessionImageUsage(manager: Pick<ExtensionContext["sessionManager"], "ge
 		);
 		messages.push({ role: "assistant", attachments });
 	}
-	return displayedAssistantImageUsage(messages);
+	const usage = displayedAssistantImageUsage(messages);
+	// Journals from before the record, and top-level calls, count once from their own result.
+	for (const { toolCallId, usage: extra } of recorded) {
+		if (counted.has(toolCallId)) continue;
+		usage.bytes = Math.min(Number.MAX_SAFE_INTEGER, usage.bytes + extra.bytes);
+		usage.count += extra.count;
+		usage.pixels = Math.min(Number.MAX_SAFE_INTEGER, usage.pixels + extra.pixels);
+	}
+	return usage;
 }
 
 export function createDisplayImageInlineExtension(options: {
@@ -73,6 +107,7 @@ export function createDisplayImageInlineExtension(options: {
 		return { extension, tool };
 	};
 	let current = build();
+	let recordUsage: ((customType: string, data: unknown) => void) | undefined;
 	const wrappedTool = {
 		...current.tool,
 		async execute(toolCallId: string, params: unknown, signal: AbortSignal) {
@@ -81,6 +116,7 @@ export function createDisplayImageInlineExtension(options: {
 			lastPresented = undefined;
 			if (presented) {
 				result.content = [...result.content, { type: "image", data: presented.data, mimeType: presented.mimeType }];
+				recordUsage?.(DISPLAY_IMAGE_USAGE_ENTRY, { toolCallId, ...imageUsage(presented) });
 			}
 			return result;
 		},
@@ -93,6 +129,7 @@ export function createDisplayImageInlineExtension(options: {
 	return {
 		name: inline.name,
 		factory: (pi) => {
+			recordUsage = (customType, data) => pi.appendEntry(customType, data);
 			pi.on("before_agent_start", (_event, ctx) => {
 				current = build(sessionImageUsage(ctx?.sessionManager));
 			});

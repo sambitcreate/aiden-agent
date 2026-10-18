@@ -341,3 +341,36 @@ test("discarding stops a running recorder and deletes its file, by id or by chat
   assert.equal(h.removed.length, 2);
   assert.equal(h.pendingTimers(), 0);
 });
+
+test("quit's deadline force-kills recorders still stopping, deletes their files, and skips the device pull", async () => {
+  const h = harness({ hangOnSigint: true });
+  const ios = await start(h, "chat-1", UDID);
+  const steps: string[] = [];
+  await startAndroid(h, () => ({
+    async stop() {
+      steps.push("stop");
+      await new Promise<void>(() => undefined);
+    },
+    async collect() {
+      steps.push("collect");
+    },
+    async cleanup() {
+      steps.push("cleanup");
+    },
+  }), "chat-2");
+  const discarding = h.recorder.discardWhere(() => true);
+  await settle();
+  assert.equal(h.recorder.get(ios.id)?.status, "stopping", "SIGINT alone does not end this recorder");
+
+  h.recorder.terminate();
+  await discarding;
+  assert.deepEqual(h.spawned[0]!.child.signals, ["SIGINT", "SIGKILL"]);
+  assert.deepEqual(h.spawned[1]!.child.signals, ["SIGKILL"]);
+  assert.deepEqual(steps, ["stop", "cleanup"], "the device copy is deleted without being pulled");
+  assert.deepEqual(
+    [...new Set(h.removed)].sort(),
+    ["/private/recordings/recording-0001.mp4", "/private/recordings/recording-0002.mp4"],
+  );
+  assert.deepEqual(h.recorder.list(), []);
+  assert.equal(h.pendingTimers(), 0);
+});
