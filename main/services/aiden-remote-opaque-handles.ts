@@ -249,12 +249,15 @@ export async function rebindAidenFileHandleToSavedFile(
   token: string,
   rootPath: string,
   displayPath: string,
+  saved: { device: string; inode: string },
 ): Promise<void> {
   try {
     const stored = handles.claimsFor(token, "file");
     const installed = await inspectAidenFilesystemIdentity(rootPath, path.join(rootPath, displayPath));
     if (installed.kind !== "file" || installed.canonicalRootPath !== stored.canonicalRootPath ||
         installed.canonicalPath !== stored.canonicalPath) return;
+    // Only the inode this save installed is adopted, never a file another app put there afterwards.
+    if (installed.filesystemDevice !== saved.device || installed.filesystemInode !== saved.inode) return;
     handles.updateReservedFileIdentity(token, installed.filesystemDevice, installed.filesystemInode);
   } catch {
     // The save already landed; only the follow-up handle use is refused.

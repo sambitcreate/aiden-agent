@@ -187,6 +187,42 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     });
     assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
 
+    // Another app replaces the file after the writer verified its save: the handle
+    // must not adopt the replacement, only the inode the save installed.
+    const swapPath = path.join(root, "Sources", "App.swift");
+    const beforeSwap = await service.read("device-1", workspace.id, file.id);
+    // This test later shadows the module-level import, so take it from the module here.
+    const syncExports = (await import("node:module")).syncBuiltinESMExports;
+    const originalRm = fsPromises.rm;
+    let swapped = false;
+    fsPromises.rm = (async (...args: Parameters<typeof fsPromises.rm>) => {
+      await originalRm(...args);
+      if (!swapped && String(args[0]).endsWith(".tmp")) {
+        swapped = true;
+        await fsPromises.rename(swapPath, path.join(root, "Sources", "App.swift.aside"));
+        await fsPromises.writeFile(swapPath, "let replaced = true\n", "utf8");
+      }
+    }) as typeof fsPromises.rm;
+    syncExports();
+    try {
+      await service.write("device-1", workspace.id, file.id, {
+        content: "let value = 5\n",
+        expectedVersion: beforeSwap.version,
+      });
+    } finally {
+      fsPromises.rm = originalRm;
+      syncExports();
+    }
+    assert.equal(swapped, true);
+    await assert.rejects(
+      () => service.read("device-1", workspace.id, file.id),
+      (error: unknown) => error instanceof AidenRemoteServiceError,
+      "the old handle refuses the replacement",
+    );
+    await fs.rm(swapPath);
+    await fs.rename(path.join(root, "Sources", "App.swift.aside"), swapPath);
+    await fs.writeFile(swapPath, "let value = 3\n", "utf8");
+
     // Snapshot handles also refuse multiply-linked files: another name for the
     // inode may live outside the workspace.
     await fs.link(outside, path.join(root, "linked-secret.txt"));
