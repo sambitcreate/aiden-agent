@@ -286,6 +286,8 @@ class AdbChild implements RecorderChild {
   kill(signal: NodeJS.Signals) {
     this.signals.push(signal);
     if (signal === "SIGKILL") this.exit(null, "SIGKILL");
+    // Interrupting the local `adb shell` ends it, though the device's recorder may keep writing.
+    else if (signal === "SIGINT") queueMicrotask(() => this.exit(130));
     return true;
   }
   once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
@@ -304,7 +306,7 @@ class AdbChild implements RecorderChild {
 }
 
 function androidHarness(
-  options: { booted?: boolean; hostText?: string; ignoreStop?: boolean; pullFails?: boolean } = {},
+  options: { booted?: boolean; hostText?: string; ignoreStop?: boolean; pullFails?: boolean; stopFails?: boolean } = {},
 ) {
   const device: DeviceSummary = {
     hostId: "local",
@@ -355,6 +357,8 @@ function androidHarness(
     const shell = args.indexOf("shell");
     const words = shell >= 0 ? deviceArgv(args.slice(shell + 1)) : [];
     if (words[0] === "pkill") {
+      // adb could not reach the device, so its recorder was never told to stop.
+      if (options.stopFails) return { stdout: "", stderr: "adb: device offline", code: 1 };
       const path = words[3]!;
       const child = children.find(
         (candidate) =>
@@ -575,6 +579,24 @@ test("an emulator recording fails cleanly when its file cannot be pulled or its 
     line.endsWith(`rm -f ${androidRecordingRemotePath(second.id)}`),
   );
   assert.equal(rm.length, 1, "a killed recording still deletes its device copy");
+});
+
+test("an emulator recording whose on-device stop fails is not pulled or offered as finished", async () => {
+  const h = androidHarness({ stopFails: true });
+  const started = await h.features.startRecording("chat-1", h.target);
+  const remote = androidRecordingRemotePath(started.id);
+  h.remoteFiles.set(remote, "partial");
+  const stopped = await h.features.stopRecording(started.id);
+  assert.equal(stopped.status, "failed");
+  assert.match(stopped.error ?? "", /did not finish writing/u);
+  assert.deepEqual(h.children[0]!.signals, ["SIGINT"], "the local adb is interrupted instead");
+  assert.equal(
+    h.commands.some((line) => line.startsWith(`adb -s ${SERIAL} pull `)),
+    false,
+    "an unfinished file is never pulled",
+  );
+  assert.equal(h.files.has(`/private/recordings/${started.id}.mp4`), false);
+  assert.equal(h.remoteFiles.size, 0, "the device copy is still deleted");
 });
 
 test("a deleted chat, a shut-down emulator, and app quit each stop and delete emulator recordings", async () => {
