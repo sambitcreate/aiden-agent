@@ -1712,6 +1712,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // A new turn revokes any active read-aloud job for this chat.
         readAloudRef.current?.stop();
         const question = text.trim();
+        // A refused follow-up must leave the earlier answer, and the card holding
+        // the unsent text, on screen rather than unmounting it.
+        const previousView = btwViewRef.current?.requestId === "pending" ? null : btwViewRef.current;
         setBtwView({
           requestId: "pending",
           question,
@@ -1729,7 +1732,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               : current,
           );
         } catch (error) {
-          setBtwView((current) => (current?.requestId === "pending" ? null : current));
+          setBtwView((current) => (current?.requestId === "pending" ? previousView : current));
           throw error;
         }
         return;

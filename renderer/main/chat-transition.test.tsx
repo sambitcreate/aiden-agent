@@ -4,11 +4,11 @@
 // state-driven instead of mount-driven.
 
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
-import { installBotTestIpc } from "./bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "./bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Outlet, RouterProvider } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
@@ -47,7 +47,11 @@ function chatReadResponse(id: string) {
   };
 }
 
-test("switching chats keeps the routed ChatPane mounted and shows the new chat", async () => {
+/** Mounts the real routed ChatPane at `/chat/<chatId>` behind the fake IPC bridge. */
+async function mountRoutedChatPane(
+  chatId: string,
+  handlers: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   // The app router is a module singleton whose scroll restoration reads these
   // window globals while it is created, so load it after exposing them.
   const globals = globalThis as Record<string, unknown>;
@@ -78,6 +82,7 @@ test("switching chats keeps the routed ChatPane mounted and shows the new chat",
     "shortcut:get": () => null,
     "tts:status": () => null,
     "app:renderer-ready": () => null,
+    ...handlers,
   });
 
   // Keep the real chat route (the component that decides ChatPane's key) and
@@ -100,20 +105,25 @@ test("switching chats keeps the routed ChatPane mounted and shows the new chat",
   };
   routes["/chatLayout"].options.component = Outlet;
 
-  router.history.push("/chat/chat-a");
+  router.history.push(`/chat/${chatId}`);
+  await act(async () => {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <RouterProvider router={router} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  return { router, queryClient };
+}
+
+test("switching chats keeps the routed ChatPane mounted and shows the new chat", async () => {
+  const { router, queryClient } = await mountRoutedChatPane("chat-a");
   try {
-    await act(async () => {
-      render(
-        <QueryClientProvider client={queryClient}>
-          <TooltipProvider>
-            <RouterProvider router={router} />
-          </TooltipProvider>
-        </QueryClientProvider>,
-      );
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
     screen.getByText("Hello from chat chat-a");
     const title = screen.getByRole("heading", { level: 1 });
     assert.equal(title.textContent, "Chat chat-a");
@@ -136,6 +146,57 @@ test("switching chats keeps the routed ChatPane mounted and shows the new chat",
     );
     assert.ok(title.isConnected);
     assert.equal(title.textContent, "Chat chat-b");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("a refused follow-up side question keeps the card and the typed text", async () => {
+  const { queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:btwStart": () => {
+      throw new Error("The side question could not start.");
+    },
+  });
+  try {
+    // A completed side question is on screen with its follow-up box.
+    await act(async () => {
+      emitBotTestNotification("chats:btw-event", {
+        version: 1,
+        type: "started",
+        chatId: "chat-a",
+        requestId: "btw-1",
+        sequence: 0,
+        question: "What does this do?",
+        hasHistory: false,
+        contextTrimmed: false,
+      });
+      emitBotTestNotification("chats:btw-event", {
+        version: 1,
+        type: "terminal",
+        chatId: "chat-a",
+        requestId: "btw-1",
+        sequence: 1,
+        status: "completed",
+        answer: "It parses the config.",
+        contextTrimmed: false,
+      });
+    });
+    const followUp = screen.getByLabelText("Ask a follow-up side question") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.change(followUp, { target: { value: "And the defaults?" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(followUp, { key: "Enter" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    // main refused the start: the card, the earlier answer and the unsent text all remain.
+    const after = screen.queryByLabelText("Ask a follow-up side question") as HTMLTextAreaElement | null;
+    assert.ok(after !== null, "The side-question card must stay mounted after a refused follow-up");
+    assert.equal(after.value, "And the defaults?");
+    assert.equal(after.disabled, false);
+    assert.ok(screen.queryByText("It parses the config.") !== null);
   } finally {
     cleanup();
     queryClient.clear();
