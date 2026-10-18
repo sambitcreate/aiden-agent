@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowUp, CircleStop, Sparkles, Trash2, X } from "lucide-react";
 import { BTW_LIMITS } from "../shared/btw";
 import type { BtwEventV1 } from "../shared/btw";
+import { toast } from "./ui";
 
 export type BtwCardStatus = "starting" | "running" | "completed" | "failed" | "cancelled";
 
@@ -73,7 +74,11 @@ export function BtwCard({
     const question = draft.trim();
     if (!question || running) return;
     setDraft("");
-    void onAsk(question);
+    Promise.resolve(onAsk(question)).catch((error: unknown) => {
+      // The pane refused the side question: give the text back and say why.
+      setDraft((current) => current || question);
+      toast.error(error instanceof Error ? error.message : "Couldn't ask the side question.");
+    });
   }, [draft, onAsk, running]);
 
   return (
@@ -150,6 +155,8 @@ export function BtwCard({
               className="max-h-24 min-h-7 min-w-0 flex-1 resize-none bg-transparent py-1 text-regular text-primary placeholder:text-secondary"
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
+                // An IME confirms its candidate with Enter; that is not a send.
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   submit();

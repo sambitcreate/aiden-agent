@@ -79,6 +79,7 @@ beforeEach(() => {
         : branches,
     "git:worktrees": () => [],
     "git:checkout": () => null,
+    "git:createBranch": () => null,
     "settings:get": () => null,
   });
   queryClient = new QueryClient({
@@ -178,6 +179,35 @@ test("a started chat keeps today's menu: branches and the create-now worktree, n
   assert.ok(screen.queryByText("develop") !== null, "the branch list is shown");
 });
 
+test("the new-branch form ignores the Enter that confirms an IME composition", async () => {
+  await mount(
+    <GitBranchPicker
+      workspaceId={REPO.id}
+      branch="main"
+      worktreeDescription="Creates a worktree."
+      onCreateWorktree={async () => undefined}
+    />,
+  );
+  await openMenu(screen.getByRole("button", { name: "main" }));
+  await click(screen.getByText("Create and checkout new branch…"));
+  const input = screen.getByRole("textbox", { name: "New branch name" });
+  await act(async () => {
+    fireEvent.change(input, { target: { value: "feature/ログイン" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  });
+  await settle();
+  assert.ok(!calls.some((call) => call.channel === "git:createBranch"), "a composing Enter created the branch");
+
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
+  await settle();
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "git:createBranch").map((call) => call.args),
+    [[REPO.id, "feature/ログイン"]],
+  );
+});
+
 test("a draft chooses where to run; existing worktrees are listed only when the repo has some", async () => {
   await mount(<DraftHarness workspaces={[REPO]} />);
   await openMenu(screen.getByRole("button", { name: "main" }));
@@ -249,8 +279,14 @@ test("New worktree offers Start from, the origin toggle only with a remote, and 
   });
   assert.ok(screen.queryByText("Enter a valid Git branch name.") !== null);
   assert.equal(getChatDraft(draftId)?.worktree?.branchName, undefined);
+  // The Enter that confirms an IME candidate must not save the half-typed name.
   await act(async () => {
     fireEvent.change(input, { target: { value: "feature/login" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  });
+  assert.equal(getChatDraft(draftId)?.worktree?.branchName, undefined, "a composing Enter saved the name");
+  assert.ok(screen.queryByRole("textbox", { name: /Branch name/u }) !== null, "the field stays open");
+  await act(async () => {
     fireEvent.keyDown(input, { key: "Enter" });
   });
   await settle();
