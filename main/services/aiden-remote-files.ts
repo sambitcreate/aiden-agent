@@ -225,6 +225,8 @@ export class AidenRemoteFileService {
       workspaceId,
       async ({ folderPath, workspace }, signal) => {
         const index = await listWorkspaceFiles(folderPath, signal);
+        const listing = `${deviceId}\u0000${workspaceId}`;
+        this.handles.supersedeListing(listing);
         const snapshotId = `files_${randomBytes(24).toString("base64url")}`;
         const revision = projectAidenRemoteWorkspace(workspace).revision;
         const entries: AidenRemoteFileEntry[] = [];
@@ -254,7 +256,7 @@ export class AidenRemoteFileService {
             const { entry, displayPath, claims } = result;
             try {
               entries.push({
-                id: this.handles.issue("file", claims),
+                id: this.handles.issue("file", claims, { listing }),
                 displayPath,
                 name: [...entry.name].slice(0, 255).join(""),
                 kind: entry.kind,

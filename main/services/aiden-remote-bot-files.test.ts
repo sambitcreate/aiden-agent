@@ -261,6 +261,44 @@ test("a device paired without its own Full Access notice opens Bot Files under t
   }
 });
 
+test("re-listing Bot Files reclaims superseded unopened handles instead of answering 429", async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-bot-files-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "managed-home");
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(path.join(root, "a.md"), "a\n", "utf8");
+  await fs.writeFile(path.join(root, "b.md"), "b\n", "utf8");
+  const chat: Chat = {
+    id: "chat-1", botId: "bot-1", workspaceId: "managed-workspace-1", title: "Plan", messages: [], createdAt: 1, updatedAt: 1,
+  };
+  const service = new AidenRemoteBotFileService({
+    instanceId: "instance-1",
+    botAudienceId: "desktop:local",
+    chats: { get: async (chatId) => chatId === chat.id ? chat : null },
+    handles: new AidenOpaqueHandleStore({ maxEntries: 3 }),
+    authority: {
+      admit: async ({ botId, chatId }): Promise<BotRuntimeAuthorityAdmission> => ({
+        authority: authorityFixture({ root, botId, chatId, workspaceId: "managed-workspace-1", epoch: "1", botHome: true }),
+        signal: new AbortController().signal,
+        revalidateBeforeEffect: async () => undefined,
+        release: () => undefined,
+      }),
+    },
+  });
+  const first = await service.list("device-1", "chat-1");
+  const opened = first.entries.find(({ displayPath }) => displayPath === "a.md")!;
+  const unopened = first.entries.find(({ displayPath }) => displayPath === "b.md")!;
+  await service.read("device-1", "chat-1", opened.id);
+  for (let refresh = 0; refresh < 3; refresh++) {
+    assert.equal((await service.list("device-1", "chat-1")).entries.length, 2);
+  }
+  assert.equal((await service.read("device-1", "chat-1", opened.id)).content, "a\n");
+  await assert.rejects(
+    () => service.read("device-1", "chat-1", unopened.id),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_invalid",
+  );
+});
+
 test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home access", async () => {
   let admissions = 0;
   const chats = new Map<string, Chat>([

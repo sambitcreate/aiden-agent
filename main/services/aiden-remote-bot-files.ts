@@ -295,6 +295,8 @@ export class AidenRemoteBotFileService {
       try {
         await authority.revalidateBeforeEffect();
         const index = await listWorkspaceFiles(authority.workingDirectory, authority.signal);
+        const listing = `${deviceId}\u0000${chatId}`;
+        this.handles.supersedeListing(listing);
         const snapshotId = `files_${randomBytes(24).toString("base64url")}`;
         const entries: AidenRemoteFileEntry[] = [];
         let omitted = false;
@@ -319,7 +321,7 @@ export class AidenRemoteBotFileService {
           const { displayPath, claims } = inspected;
           try {
             entries.push({
-              id: this.handles.issue("file", claims),
+              id: this.handles.issue("file", claims, { listing }),
               displayPath,
               name: [...entry.name].slice(0, 255).join(""),
               kind: entry.kind,

@@ -45,6 +45,10 @@ interface StoredHandle {
   kind: AidenOpaqueHandleKind;
   claims: AidenOpaqueHandleClaims;
   consumed: boolean;
+  /** Scope of the listing that issued this handle, e.g. one device's view of one workspace. */
+  listing?: string;
+  superseded?: boolean;
+  resolved?: boolean;
 }
 
 function digest(token: string): string {
@@ -72,15 +76,36 @@ export class AidenOpaqueHandleStore {
     }
   }
 
-  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims): string {
+  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options: { listing?: string } = {}): string {
     const now = this.now();
     this.prune(now);
     if (claims.expiresAt <= now) throw new AidenOpaqueHandleError("handle_expired");
     if (kind === "file" && !claims.workspaceId) throw new AidenOpaqueHandleError("handle_invalid");
+    if (this.handles.size >= this.maxEntries) this.reclaimSuperseded();
     if (this.handles.size >= this.maxEntries) throw new AidenOpaqueHandleError("handle_capacity");
     const token = `${kind}_${randomBytes(32).toString("base64url")}`;
-    this.handles.set(digest(token), { kind, claims: { ...claims }, consumed: false });
+    this.handles.set(digest(token), {
+      kind, claims: { ...claims }, consumed: false, ...(options.listing ? { listing: options.listing } : {}),
+    });
     return token;
+  }
+
+  /**
+   * A new listing for `listing` supersedes the handles earlier listings of it
+   * issued. They keep working, but once the store is full those never resolved
+   * are reclaimed first (a document the client opened has been resolved), so
+   * re-listing cannot lock the device out until the old handles expire.
+   */
+  supersedeListing(listing: string): void {
+    for (const stored of this.handles.values()) {
+      if (stored.listing === listing) stored.superseded = true;
+    }
+  }
+
+  private reclaimSuperseded(): void {
+    for (const [key, stored] of this.handles) {
+      if (stored.superseded && !stored.resolved) this.handles.delete(key);
+    }
   }
 
   /** Reserve before a save, then bind the same slot to its installed inode. */
@@ -162,6 +187,7 @@ export class AidenOpaqueHandleStore {
     ) {
       throw new AidenOpaqueHandleError("filesystem_identity_changed");
     }
+    stored.resolved = true;
     if (options.consume) stored.consumed = true;
     return { ...claims };
   }

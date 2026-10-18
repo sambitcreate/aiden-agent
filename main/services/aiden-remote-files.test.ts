@@ -482,3 +482,23 @@ test("overlapping Remote and desktop listings share one four-operation metadata 
   assert.equal(active, 0);
   await assert.rejects(service.read("second-device", "workspace", remote.entries[0]!.id));
 });
+
+test("re-listing reclaims a superseded listing's unopened handles instead of locking Files", async (t) => {
+  // Room for one listing per device plus one more handle.
+  const { service } = await legacyFixture(t, 2, 5);
+  const first = await service.list("device-1", "workspace");
+  const other = await service.list("device-2", "workspace");
+  const opened = first.entries[0]!;
+  assert.equal((await service.read("device-1", "workspace", opened.id)).content, "data");
+
+  const second = await service.list("device-1", "workspace");
+  assert.equal(second.entries.length, 2);
+  assert.equal((await service.list("device-1", "workspace")).entries.length, 2);
+  // The document the device opened and the other device's listing keep working.
+  assert.equal((await service.read("device-1", "workspace", opened.id)).content, "data");
+  for (const entry of other.entries) {
+    assert.equal((await service.read("device-2", "workspace", entry.id)).content, "data");
+  }
+  await assert.rejects(service.read("device-1", "workspace", first.entries[1]!.id), (error: unknown) =>
+    error instanceof AidenRemoteServiceError && error.code === "handle_invalid");
+});
