@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
 import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
-import { agentCommandEnvironment } from "./agent-command-environment.js";
+import { agentShellCommandEnvironment } from "./agent-command-environment.js";
 import {
   constants as fsConstants,
   realpathSync,
@@ -2002,7 +2002,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         const child = spawn(command, {
           cwd: root,
           detached: process.platform !== "win32",
-          env: runCommandEnv(options, agentCommandEnvironment()),
+          env: runCommandEnv(options, agentShellCommandEnvironment()),
           shell: true,
           stdio: ["ignore", "pipe", "pipe"],
         });

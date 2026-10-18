@@ -1720,6 +1720,36 @@ test("run_command applies the macOS agent PATH to its spawned shell", async () =
   }
 });
 
+test("run_command withholds Aiden's own credentials but keeps tooling variables", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-run-command-env-"));
+  const names = ["AIDEN_TELEGRAM_TOKEN", "AIDEN_IMAGE_FAL_KEY", "aiden_image_replicate_api_token", "AIDEN_CONFIG_DIR", "GH_TOKEN"] as const;
+  const previous = new Map(names.map((name) => [name, process.env[name]]));
+  try {
+    process.env.AIDEN_TELEGRAM_TOKEN = "telegram-bot-secret";
+    process.env.AIDEN_IMAGE_FAL_KEY = "fal-image-secret";
+    process.env.aiden_image_replicate_api_token = "replicate-image-secret";
+    process.env.AIDEN_CONFIG_DIR = "/tmp/aiden-config";
+    process.env.GH_TOKEN = "gh-tooling-token";
+    const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command");
+    assert.ok(runCommand);
+    // Print only these variables so a failure never dumps the test runner's environment.
+    const command = `printf '%s\\n' ${names.map((name) => `"\${${name}-unset}"`).join(" ")}`;
+    const result = await runCommand.execute("env", { command });
+    const output = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    // Builds and package managers authenticate through their own variables, and
+    // non-secret Aiden settings still reach a nested `aiden` invocation.
+    assert.deepEqual(output.trim().split("\n"), ["unset", "unset", "unset", "/tmp/aiden-config", "gh-tooling-token"]);
+    assert.equal(process.env.AIDEN_TELEGRAM_TOKEN, "telegram-bot-secret");
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("agent command PATH preserves inherited entries and non-macOS environments", () => {
   const parent = { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" };
   const mac = agentCommandEnvironment(parent, "darwin");
