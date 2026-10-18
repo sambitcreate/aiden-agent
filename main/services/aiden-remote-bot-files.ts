@@ -11,6 +11,7 @@ import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
   inspectAidenFilesystemIdentity,
+  rebindAidenFileHandleToSavedFile,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
 import {
@@ -21,7 +22,7 @@ import {
   listWorkspaceFiles,
   readWorkspaceFile,
   WorkspaceFileError,
-  writeWorkspaceFile,
+  writeWorkspaceFileInstalling,
   type WorkspaceFileDocument,
   type WorkspaceFileEntry,
 } from "./workspace-files.js";
@@ -294,6 +295,8 @@ export class AidenRemoteBotFileService {
       try {
         await authority.revalidateBeforeEffect();
         const index = await listWorkspaceFiles(authority.workingDirectory, authority.signal);
+        const listing = `${deviceId}\u0000${chatId}`;
+        this.handles.supersedeListing(listing);
         const snapshotId = `files_${randomBytes(24).toString("base64url")}`;
         const entries: AidenRemoteFileEntry[] = [];
         let omitted = false;
@@ -318,7 +321,7 @@ export class AidenRemoteBotFileService {
           const { displayPath, claims } = inspected;
           try {
             entries.push({
-              id: this.handles.issue("file", claims),
+              id: this.handles.issue("file", claims, { listing }),
               displayPath,
               name: [...entry.name].slice(0, 255).join(""),
               kind: entry.kind,
@@ -434,13 +437,14 @@ export class AidenRemoteBotFileService {
     const input = parseWrite(value);
     return this.withResolvedFile(deviceId, chatId, fileId, async (resolved) => {
       try {
-        const document = await writeWorkspaceFile(
+        const { document, installed } = await writeWorkspaceFileInstalling(
           resolved.folderPath,
           resolved.displayPath,
           input.content,
           input.expectedVersion,
           resolved.signal,
         );
+        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
         if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {
