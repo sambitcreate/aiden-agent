@@ -194,6 +194,7 @@ test("listProviders recombines intent with this machine's cache", async (t) => {
   assert.deepEqual(listed.modelMetadata, provider.modelMetadata);
   assert.equal(listed.hasKey, false);
   assert.equal(await h.store.providerLegacyCredentialMigrationReady(), true);
+  assert.equal(await h.store.legacyProviderKeyOwnedByBuiltin("openai"), true, "no alias claims the legacy id");
   assert.equal(h.secrets.migrateCalls, 1);
 });
 
@@ -1165,6 +1166,11 @@ test("a string legacy key cannot bypass a future-shaped custom destination", asy
   assert.equal(secrets.keys.openai, "legacy-ciphertext");
   assert.deepEqual(secrets.keys["custom:openai-legacy"], futureTarget);
   assert.equal(await store.providerLegacyCredentialMigrationReady(), false);
+  assert.equal(
+    await store.legacyProviderKeyOwnedByBuiltin("openai"),
+    false,
+    "a deferred custom alias may own the legacy openai key, so logout must keep it",
+  );
 });
 
 test("a future-shaped custom alias source stays unresolved when its destination is absent", async (t) => {

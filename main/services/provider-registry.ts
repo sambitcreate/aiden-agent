@@ -22,6 +22,10 @@ import {
 } from "./pi-models-store.js";
 import { isCustomProviderId } from "./custom-provider-id.js";
 import { secrets } from "./secrets.js";
+import { configStore } from "./config-store.js";
+
+/** Durable record that a built-in was signed out while its pre-Pi key was kept for a custom alias. */
+const legacySignedOutMarker = (legacyId: string) => `aiden-internal:legacy-pi-signed-out:${legacyId}`;
 import {
   deleteLegacyApiKeysForPiProvider,
   migrateLegacyApiKeysToPi,
@@ -243,7 +247,11 @@ export class ProviderRegistry {
       // Pi's marker always goes, so a failed agent sign-out cannot leave the
       // provider looking signed in.
       await this.credentials.delete(providerId);
-      await deleteLegacyApiKeysForPiProvider(providerId, (legacyId) => secrets.deleteKey(legacyId));
+      await deleteLegacyApiKeysForPiProvider(providerId, {
+        ownedByBuiltin: (legacyId) => configStore.legacyProviderKeyOwnedByBuiltin(legacyId),
+        deleteLegacy: (legacyId) => secrets.deleteKey(legacyId),
+        markSignedOut: (legacyId) => secrets.setInternalKey(legacySignedOutMarker(legacyId), "1", 1),
+      });
     }
   }
 
@@ -445,6 +453,7 @@ export class ProviderRegistry {
       this.legacyCredentialMigration = migrateLegacyApiKeysToPi({
         readLegacy: (legacyId) => secrets.getKey(legacyId),
         deleteLegacy: (legacyId) => secrets.deleteKey(legacyId),
+        signedOut: async (legacyId) => (await secrets.getKey(legacySignedOutMarker(legacyId))) !== null,
         credentials: this.credentials,
       })
         .catch((error) => {

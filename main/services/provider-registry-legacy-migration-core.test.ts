@@ -7,13 +7,19 @@ import {
 } from "./provider-registry-legacy-migration-core.js";
 
 /** Durable stores shared across simulated launches; each launch builds fresh dependencies. */
-function durableStores(legacy: Record<string, string>, pi: Record<string, Credential> = {}) {
+function durableStores(
+  legacy: Record<string, string>,
+  pi: Record<string, Credential> = {},
+  options: { customOwned?: string[] } = {},
+) {
   const legacyKeys = new Map(Object.entries(legacy));
   const piCredentials = new Map(Object.entries(pi));
+  const signedOut = new Set<string>();
   let failModifyFor: string | undefined;
   const launch = () => ({
     readLegacy: async (id: string) => legacyKeys.get(id) ?? null,
     deleteLegacy: async (id: string) => void legacyKeys.delete(id),
+    signedOut: async (id: string) => signedOut.has(id),
     credentials: {
       read: async (id: string) => piCredentials.get(id),
       modify: async (
@@ -30,11 +36,17 @@ function durableStores(legacy: Record<string, string>, pi: Record<string, Creden
   /** What the provider logout path does: drop Pi's credential and its pre-Pi record. */
   const logout = async (piId: string) => {
     piCredentials.delete(piId);
-    await deleteLegacyApiKeysForPiProvider(piId, launch().deleteLegacy);
+    await deleteLegacyApiKeysForPiProvider(piId, {
+      // An alias can map the legacy id to a custom endpoint, whose only recovery key it then is.
+      ownedByBuiltin: async (id) => !(options.customOwned ?? []).includes(id),
+      deleteLegacy: launch().deleteLegacy,
+      markSignedOut: async (id) => void signedOut.add(id),
+    });
   };
   return {
     legacyKeys,
     piCredentials,
+    signedOut,
     launch,
     logout,
     failModify: (id: string) => {
@@ -71,6 +83,22 @@ test("logging out removes a renamed provider's pre-Pi record before it is migrat
   assert.equal(stores.piCredentials.has("moonshotai"), false);
   assert.equal(stores.legacyKeys.has("moonshot"), false);
   assert.deepEqual(stores.piCredentials.get("deepseek"), { type: "api_key", key: "sk-deepseek" });
+});
+
+test("logout keeps a legacy key a custom alias owns, and the next launch still does not import it", async () => {
+  // `openai` is aliased to custom:openai-legacy with migration deferred: its legacy record is that endpoint's key.
+  const stores = durableStores(
+    { openai: "sk-custom-endpoint" },
+    { openai: { type: "api_key", key: "sk-builtin" } },
+    { customOwned: ["openai"] },
+  );
+
+  await stores.logout("openai");
+  assert.equal(stores.legacyKeys.get("openai"), "sk-custom-endpoint", "the custom endpoint's key survives");
+
+  await migrateLegacyApiKeysToPi(stores.launch());
+  assert.equal(stores.piCredentials.has("openai"), false, "the signed-out built-in stays signed out");
+  assert.equal(stores.legacyKeys.get("openai"), "sk-custom-endpoint");
 });
 
 test("a current Pi credential wins over the legacy record", async () => {

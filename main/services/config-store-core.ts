@@ -769,6 +769,16 @@ export function createConfigStore(
       return !normalizePortableConfig(await portable.load()).unsafe;
     },
 
+    /**
+     * A built-in logout may delete a pre-Pi key only when the built-in provably owns it: the
+     * migration preconditions hold and no provider alias maps that id to a custom endpoint.
+     */
+    async legacyProviderKeyOwnedByBuiltin(legacyId: string): Promise<boolean> {
+      if (!(await this.providerLegacyCredentialMigrationReady())) return false;
+      const target = (await readPortable()).providerIdAliases[legacyId];
+      return target === undefined || target === legacyId;
+    },
+
     async listProviders(): Promise<Provider[]> {
       const config = await readPortable();
       const cache = await readModelCache();
