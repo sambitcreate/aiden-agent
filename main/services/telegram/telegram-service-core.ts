@@ -502,8 +502,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
 
     let offset = await deps.config.getOffset();
-    /** Consecutive failures of the update Telegram keeps redelivering. */
-    let failing: { updateId: number; attempts: number } | undefined;
+    /**
+     * Consecutive failures of the update Telegram keeps redelivering. `admitted` sticks once the
+     * Bot accepted its turn without a reply row: from then on only a successful admission settles it.
+     */
+    let failing: { updateId: number; attempts: number; admitted: boolean } | undefined;
 
     while (started && !signal.aborted) {
       let updates: TelegramUpdate[];
@@ -534,10 +537,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
             handled = true;
           } else {
             deps.error(`Telegram handleUpdate failed for ${update.update_id}.`, cause);
-            const attempts = failing?.updateId === update.update_id ? failing.attempts + 1 : 1;
-            failing = { updateId: update.update_id, attempts };
-            const skippable = !isAdmittedUnrecordedError(cause);
-            if ((skippable && attempts >= MAX_UPDATE_ATTEMPTS) || isTerminalBotSessionError(cause)) {
+            const same = failing?.updateId === update.update_id ? failing : undefined;
+            const attempts = (same?.attempts ?? 0) + 1;
+            const admitted = (same?.admitted ?? false) || isAdmittedUnrecordedError(cause);
+            failing = { updateId: update.update_id, attempts, admitted };
+            if (!admitted && (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause))) {
               // The update fails the same way every time: tell the chat and move
               // past it, so one poison update cannot block the whole profile.
               const message = update.message ?? update.edited_message ?? update.callback_query?.message;
