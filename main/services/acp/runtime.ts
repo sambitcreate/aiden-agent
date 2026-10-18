@@ -355,7 +355,7 @@ export class AcpHarnessRuntime {
         // start a fresh session that receives a bounded reconstruction.
         this.sessions.remove(binding.chatId);
         release();
-        await this.drop(binding, false);
+        await this.drop(binding);
         return this.run(model, context, options, writer);
       }
       const instructions = this.instructionsFor(context);
@@ -365,7 +365,7 @@ export class AcpHarnessRuntime {
         // session. A new session receives the current instructions and history.
         this.sessions.remove(binding.chatId);
         release();
-        await this.drop(binding, false);
+        await this.drop(binding);
         return this.run(model, context, options, writer);
       }
       clearTimeout(binding.idleTimer);
@@ -458,7 +458,7 @@ export class AcpHarnessRuntime {
     } catch (error) {
       binding.writer?.fail(error, isAbortError(error) || signal?.aborted === true);
       if (turn) turn.failed = true;
-      if (!binding.launched.process.alive) await this.drop(binding, false);
+      if (!binding.launched.process.alive) await this.drop(binding);
       throw error;
     } finally {
       // Only a turn that ended cleanly while no stream was attached carries its
@@ -500,9 +500,9 @@ export class AcpHarnessRuntime {
       // bridged tool. Do not feed its result back under the old instructions.
       cancelTools(binding, "Host instructions changed.");
       this.requestCancel(binding, turn);
-      if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding, false);
+      if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding);
       this.sessions.remove(binding.chatId);
-      await this.drop(binding, false);
+      await this.drop(binding);
       return false;
     }
     const announced = [...binding.pendingTools.values()].filter((pending) => pending.announced);
@@ -514,7 +514,7 @@ export class AcpHarnessRuntime {
       cancelTools(binding, "The tool result never came back.");
       if (turn) {
         this.requestCancel(binding, turn);
-        if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding, false);
+        if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding);
       }
       return false;
     }
@@ -583,7 +583,7 @@ export class AcpHarnessRuntime {
     void binding.connection.cancel(binding.sessionId);
     // A clean cancel keeps the session; only an agent that will not settle is killed.
     const timer = setTimeout(() => {
-      if (binding.turn === turn) void this.drop(binding, false);
+      if (binding.turn === turn) void this.drop(binding);
     }, this.options.cancelGraceMs);
     timer.unref?.();
     void turn.completion.then(() => clearTimeout(timer));
@@ -609,7 +609,7 @@ export class AcpHarnessRuntime {
       if (binding && !binding.closed && binding.launched.process.alive && binding.cwd === host.cwd) {
         return binding;
       }
-      if (binding) await this.drop(binding, false);
+      if (binding) await this.drop(binding);
       if (this.bindings.get(host.chatId) === existing) this.bindings.delete(host.chatId);
     }
     await this.makeRoom();
@@ -628,7 +628,7 @@ export class AcpHarnessRuntime {
         .filter((binding) => !binding.turn && binding.pendingTools.size === 0)
         .sort((left, right) => left.lastUsed - right.lastUsed)[0];
       if (!oldest) return;
-      await this.drop(oldest, true);
+      await this.drop(oldest);
     }
   }
 
@@ -644,7 +644,7 @@ export class AcpHarnessRuntime {
         this.onSignInLost?.();
         if (binding) {
           binding.writer?.fail(this.signInError());
-          void this.drop(binding, true);
+          void this.drop(binding);
         } else {
           void pendingLaunch?.dispose();
         }
@@ -762,7 +762,7 @@ export class AcpHarnessRuntime {
       const created = binding;
       this.live.add(created);
       void launched.process.exited.then(() => {
-        if (!created.closed) void this.drop(created, false);
+        if (!created.closed) void this.drop(created);
       });
       return created;
     } catch (error) {
@@ -1007,13 +1007,13 @@ export class AcpHarnessRuntime {
     if (binding.closed) return;
     clearTimeout(binding.idleTimer);
     binding.idleTimer = setTimeout(() => {
-      if (!binding.turn && binding.pendingTools.size === 0) void this.drop(binding, true);
+      if (!binding.turn && binding.pendingTools.size === 0) void this.drop(binding);
     }, this.options.idleTimeoutMs);
     binding.idleTimer.unref?.();
   }
 
-  /** Close one session. `keepRecord` keeps its saved binding for a later resume. */
-  private async drop(binding: Binding, keepRecord: boolean): Promise<void> {
+  /** Close one session. Its saved binding stays for a later resume unless a turn was in flight. */
+  private async drop(binding: Binding): Promise<void> {
     if (binding.closed) return;
     binding.closed = true;
     clearTimeout(binding.idleTimer);
@@ -1023,10 +1023,9 @@ export class AcpHarnessRuntime {
       const value = await current.catch(() => undefined);
       if (value === binding && this.bindings.get(binding.chatId) === current) this.bindings.delete(binding.chatId);
     }
-    if (!keepRecord) {
-      // A session that died mid-turn may have state we never committed.
-      if (binding.turn) this.sessions.remove(binding.chatId);
-    }
+    // A session closed mid-turn already received input its record does not count; resuming it
+    // would send that input again, so the next turn starts a fresh session instead.
+    if (binding.turn) this.sessions.remove(binding.chatId);
     cancelTools(binding, "The agent session closed.");
     binding.buffered = [];
     binding.turn?.controller.abort();
@@ -1039,7 +1038,7 @@ export class AcpHarnessRuntime {
     const resolved = await Promise.all(pending.map((value) => value.catch(() => undefined)));
     await Promise.allSettled(
       [...new Set([...this.live, ...resolved.filter((value): value is Binding => !!value)])].map((binding) =>
-        this.drop(binding, true),
+        this.drop(binding),
       ),
     );
   }

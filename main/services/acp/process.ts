@@ -100,36 +100,52 @@ export class AcpProcess {
 
     let pending: Buffer = Buffer.alloc(0);
     let controller!: ReadableStreamDefaultController<Uint8Array>;
+    /** Errored or cancelled: enqueueing again would throw out of the stdout handlers. */
+    let streamClosed = false;
     this.input = new ReadableStream<Uint8Array>({
       start(value) {
         controller = value;
+      },
+      cancel() {
+        streamClosed = true;
+        pending = Buffer.alloc(0);
       },
     });
     const emitLine = (line: Buffer) => {
       const text = line.toString("utf8").replace(/\r$/u, "");
       if (text.trim().length === 0) return;
       if (text.trimStart().startsWith("{")) {
-        controller.enqueue(new Uint8Array(Buffer.from(`${text}\n`, "utf8")));
+        try {
+          controller.enqueue(new Uint8Array(Buffer.from(`${text}\n`, "utf8")));
+        } catch {
+          streamClosed = true;
+        }
         return;
       }
       this.noiseLines += 1;
       options.onStdoutNoise?.(text);
     };
     child.stdout.on("data", (chunk: Buffer) => {
+      if (streamClosed) return;
       pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
       let index: number;
-      while ((index = pending.indexOf(0x0a)) >= 0) {
+      while (!streamClosed && (index = pending.indexOf(0x0a)) >= 0) {
         emitLine(pending.subarray(0, index));
         pending = pending.subarray(index + 1);
       }
-      if (pending.length > MAX_LINE_BYTES) {
+      if (!streamClosed && pending.length > MAX_LINE_BYTES) {
+        // The rest of the line is dropped with the buffer; the agent is stopped.
+        streamClosed = true;
+        pending = Buffer.alloc(0);
         controller.error(new AcpHarnessError("protocol", "The agent sent an oversized protocol line."));
         void this.close();
       }
     });
     child.stdout.once("end", () => {
-      if (pending.length > 0) emitLine(pending);
+      if (!streamClosed && pending.length > 0) emitLine(pending);
       pending = Buffer.alloc(0);
+      if (streamClosed) return;
+      streamClosed = true;
       try {
         controller.close();
       } catch {

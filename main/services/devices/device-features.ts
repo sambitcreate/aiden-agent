@@ -114,8 +114,11 @@ export interface DeviceFeatures {
   isSavedPath(file: string): boolean;
   /** A deleted chat's recordings are stopped and deleted. */
   discardForChat(chatId: string): Promise<void>;
-  /** App quit: stops and deletes every recording. */
-  stop(): Promise<void>;
+  /**
+   * App quit: stops and deletes every recording. With a `deadline`, a recorder still running
+   * when it fires is force-killed, and the cleanup that follows is bounded by a second one.
+   */
+  stop(options?: { deadline?: () => Promise<void> }): Promise<void>;
 }
 
 const MAX_REMEMBERED_SAVES = 64;
@@ -158,6 +161,11 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
   };
   /** AVD names being wiped, so a second Erase never races the first one's cold boot. */
   const erasing = new Set<string>();
+  /** Recording starts still resolving their device, before the recorder can see (and cancel) them. */
+  const resolvingStarts = new Set<{ chatId: string; cancelled: boolean }>();
+  const cancelResolvingStarts = (match: (chatId: string) => boolean) => {
+    for (const pending of resolvingStarts) if (match(pending.chatId)) pending.cancelled = true;
+  };
 
   const eraseAndroid = async (ready: DeviceHostReady, device: DeviceSummary, onPhase?: (phase: DeviceErasePhase) => void) => {
     // A stopped AVD is listed under its name; a running one under its serial, with the AVD as its name.
@@ -212,7 +220,9 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
     return {
       async stop() {
         const stop = androidStopScreenrecordCommand(serial, remotePath);
-        await step(stop);
+        const result = await step(stop);
+        // An unreached device never stopped its recorder, so its file may still be unfinished.
+        if (result.code !== 0) throw new Error("The emulator's recorder could not be stopped.");
       },
       async collect(file) {
         const pull = androidPullCommand(serial, remotePath, file);
@@ -271,7 +281,10 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       return { bytes };
     },
     async startRecording(chatId, target) {
-      const { ready, device } = await resolve(target, true);
+      const pending = { chatId, cancelled: false };
+      resolvingStarts.add(pending);
+      const { ready, device } = await resolve(target, true).finally(() => resolvingStarts.delete(pending));
+      if (pending.cancelled) throw new Error("The recording was cancelled before it started.");
       const base = { chatId, platform: device.platform, hostId: target.hostId, deviceId: device.id };
       if (device.platform === "android") {
         return recorder.start({
@@ -339,10 +352,26 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       return { status: "saved", path: destination };
     },
     isSavedPath: (file) => saved.includes(file),
-    discardForChat: (chatId) => recorder.discardWhere((info) => info.chatId === chatId),
-    async stop() {
+    discardForChat: (chatId) => {
+      cancelResolvingStarts((pendingChat) => pendingChat === chatId);
+      return recorder.discardWhere((info) => info.chatId === chatId);
+    },
+    async stop(options) {
       unsubscribe();
-      await recorder.discardWhere(() => true);
+      cancelResolvingStarts(() => true);
+      const discarding = recorder.discardWhere(() => true).then(
+        () => true,
+        () => true,
+      );
+      const deadline = options?.deadline;
+      if (!deadline) {
+        await discarding;
+        return;
+      }
+      if (await Promise.race([discarding, deadline().then(() => false)])) return;
+      // No recorder may outlive the app: kill the rest, then give their cleanup one more bound.
+      recorder.terminate();
+      await Promise.race([discarding, deadline()]);
     },
   };
 }
