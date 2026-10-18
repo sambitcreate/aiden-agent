@@ -61,7 +61,12 @@ export async function deleteLegacyApiKeysForPiProvider(
 ): Promise<void> {
   for (const [legacyId, piId] of Object.entries(LEGACY_API_KEY_PROVIDER_IDS)) {
     if (piId !== piProviderId) continue;
-    await dependencies.markSignedOut(legacyId);
-    if (await dependencies.ownedByBuiltin(legacyId)) await dependencies.deleteLegacy(legacyId);
+    if (await dependencies.ownedByBuiltin(legacyId)) {
+      // Deleting the record is what keeps this logout; the marker is only a second guard.
+      await dependencies.markSignedOut(legacyId).catch(() => undefined);
+      await dependencies.deleteLegacy(legacyId);
+    } else {
+      await dependencies.markSignedOut(legacyId);
+    }
   }
 }
