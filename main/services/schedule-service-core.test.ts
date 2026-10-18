@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { scheduledJobs } from "croner";
-import { createCatchUpQueue, createScheduleServiceCore } from "./schedule-service-core.js";
+import test, { type TestContext } from "node:test";
+import { scheduledJobs, type Cron } from "croner";
+import { createCatchUpQueue, createScheduleServiceCore, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
@@ -126,6 +126,25 @@ async function addTask(store: ReturnType<typeof harness>["store"]) {
     timezone: "UTC",
     prompt: "Summarize changes.",
   });
+}
+
+const mockedClocks = new WeakSet<TestContext>();
+
+/**
+ * Cron fires a job only once its next fire time arrives, and an automatic run
+ * never claims a future fire: move the mocked clock to that time, then fire.
+ */
+function fireWhenDue(t: TestContext, job: Cron): Promise<void> {
+  const due = job.nextRun()?.getTime();
+  if (due !== undefined && due > Date.now()) {
+    if (mockedClocks.has(t)) {
+      t.mock.timers.setTime(due);
+    } else {
+      t.mock.timers.enable({ apis: ["Date"], now: due });
+      mockedClocks.add(t);
+    }
+  }
+  return job.trigger();
 }
 
 test("global kill switch cancels and settles live runs without deleting or pausing tasks", async () => {
@@ -850,7 +869,7 @@ test("a current Cron trigger still claims and executes the scheduled task", asyn
   await testbed.service.start();
   const before = (await testbed.store.get(task.id))!;
   const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
-  const triggering = job.trigger();
+  const triggering = fireWhenDue(t, job);
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(testbed.hasPending(task.id), true);
@@ -902,7 +921,7 @@ for (const staleOnArrival of [true, false]) {
     };
     if (staleOnArrival) await testbed.service.resume(task.id);
     invokingOld = true;
-    const obsolete = oldJob.trigger();
+    const obsolete = fireWhenDue(t, oldJob);
     invokingOld = false;
     if (!staleOnArrival) {
       await entered.promise;
@@ -910,7 +929,7 @@ for (const staleOnArrival of [true, false]) {
       await testbed.service.resume(task.id);
     }
     const currentJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
-    const current = currentJob.trigger();
+    const current = fireWhenDue(t, currentJob);
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(testbed.hasPending(task.id), true, "obsolete lookup must not block replacement execution");
@@ -953,13 +972,13 @@ test("delayed workspace cancellation cannot cancel a replacement run through the
     }
     return latest;
   };
-  const obsolete = oldJob.trigger();
+  const obsolete = fireWhenDue(t, oldJob);
   await entered.promise;
   const cancelling = testbed.service.cancelWorkspace("workspace-handoff");
   await new Promise((resolve) => setImmediate(resolve));
   await testbed.service.resumeWorkspace("workspace-handoff");
   const currentJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
-  const current = currentJob.trigger();
+  const current = fireWhenDue(t, currentJob);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(testbed.hasPending(task.id), true);
   release.resolve();
@@ -979,7 +998,7 @@ test("a replaced job keeps its run slot once execution has started", async (t) =
   const task = await addTask(testbed.store);
   await testbed.service.start();
   const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
-  const running = job.trigger();
+  const running = fireWhenDue(t, job);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(testbed.hasPending(task.id), true);
   await testbed.service.resume(task.id);
@@ -1034,11 +1053,11 @@ test("replacement Cron reclaims an obsolete pending claim without stale publicat
       await release.promise;
     }
   };
-  const obsolete = oldJob.trigger();
+  const obsolete = fireWhenDue(t, oldJob);
   await entered.promise;
   await testbed.service.resume(task.id);
   const currentJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
-  const current = currentJob.trigger();
+  const current = fireWhenDue(t, currentJob);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(testbed.hasPending(task.id), true);
   const newer = await testbed.store.get(task.id);
@@ -1096,7 +1115,7 @@ for (const automaticSource of ["Cron", "startup catch-up"] as const) {
     if (automaticSource === "Cron") {
       await testbed.service.start();
       const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
-      await job.trigger();
+      await fireWhenDue(t, job);
     } else {
       await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
       await testbed.service.start();
@@ -1171,4 +1190,58 @@ test("catch-up waits while deferred and resumes when re-evaluated; stale entries
   assert.deepEqual(started, [0, 2]);
   assert.equal(queue.pending, 0);
   queue.clear();
+});
+
+test("a deferred startup catch-up does not re-run a fire the Cron already claimed", async (t) => {
+  // Yesterday's 09:00 fire was missed while the app was closed; it restarts at 08:59:59.
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.UTC(2026, 0, 5, 8, 59, 59) });
+  const store = createScheduleStore(
+    new MemoryPersistence<unknown[]>([]),
+    new MemoryPersistence<unknown[]>([]),
+  );
+  const triggers: Array<{ trigger?: ScheduledRunTrigger; at: number }> = [];
+  const errors: string[] = [];
+  const service = createScheduleServiceCore({
+    store,
+    execution: {
+      run: async (task, _runId, trigger) => {
+        triggers.push({ trigger, at: Date.now() });
+        return { id: `run-${triggers.length}`, taskId: task.id, startedAt: Date.now(), finishedAt: Date.now(), result: "success", output: "" };
+      },
+      cancel: () => false,
+      cancelAll: () => undefined,
+    },
+    globallyEnabled: async () => true,
+    broadcast: () => undefined,
+    warn: () => undefined,
+    error: (message) => void errors.push(message),
+  });
+  t.after(() => service.stop());
+  let locked = true;
+  service.setCatchUpDeferPolicy(() => locked);
+  const task = await addTask(store);
+  const missedAt = Date.UTC(2026, 0, 4, 9, 0);
+  await store.updateRuntime(task.id, { nextRunAt: missedAt });
+  await service.start();
+
+  // The screen is locked, so the catch-up waits while today's 09:00 fire lands.
+  t.mock.timers.tick(1_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(triggers.length, 1, "the Cron fire runs the task and claims the missed fire");
+  const next = (await store.get(task.id))!.nextRunAt!;
+  assert.equal(next, Date.UTC(2026, 0, 6, 9, 0));
+
+  locked = false;
+  service.reevaluateCatchUp();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    triggers.map((entry) => entry.trigger),
+    [{ kind: "automatic", fireTime: missedAt }],
+    "the superseded catch-up must not run again or claim tomorrow's fire",
+  );
+  assert.ok(triggers.every(({ trigger, at }) => trigger?.kind !== "automatic" || trigger.fireTime <= at));
+  assert.equal((await store.get(task.id))!.nextRunAt, next);
+  assert.deepEqual(await store.runs(task.id), []);
+  assert.deepEqual(errors, []);
 });

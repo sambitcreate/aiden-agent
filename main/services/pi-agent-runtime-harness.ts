@@ -881,6 +881,8 @@ export class PiAgentRuntimeHarness {
   private managedHostFault: PiRuntimeHostFaultKind | undefined;
   private managedProviderFailure: PiRuntimeFailureReason | undefined;
   private appCancelRequested = false;
+  /** An abort() that arrived while no managed run was active; the next run honours it. */
+  private pendingAbort = false;
   private managedAbortController: AbortController | undefined;
   private lastManagedOutcome: PiRuntimeTerminalOutcome | undefined;
   private managedRunning = false;
@@ -1826,7 +1828,10 @@ export class PiAgentRuntimeHarness {
       settleManagedOperation = resolve;
     });
     this.managedOperationSettlement = managedOperationSettlement;
-    this.appCancelRequested = false;
+    // A Stop that arrived before this run started (while the caller was still
+    // preparing the turn) must cancel it rather than be forgotten here.
+    this.appCancelRequested = this.pendingAbort;
+    this.pendingAbort = false;
     this.managedHostFault = undefined;
     this.managedProviderFailure = undefined;
     this.lastManagedOutcome = undefined;
@@ -2524,6 +2529,7 @@ export class PiAgentRuntimeHarness {
   }
 
   abort(): void {
+    if (!this.managedRunning) this.pendingAbort = true;
     this.appCancelRequested = true;
     this.managedQueueOpen = false;
     this.managedAbortController?.abort(new Error("The app cancelled the Pi runtime operation."));
@@ -2600,6 +2606,7 @@ export class PiAgentRuntimeHarness {
     this.managedHostFault = undefined;
     this.managedProviderFailure = undefined;
     this.appCancelRequested = false;
+    this.pendingAbort = false;
     this.managedQueueOpen = false;
     this.lastManagedOutcome = undefined;
     this.pendingDurableMessages = [];

@@ -51,6 +51,7 @@ import {
   type AidenIdempotencySnapshot,
   AidenOperationContractError,
 } from "./aiden-remote-operation-contract.js";
+import type { DataStoreOptions } from "./data-store.js";
 
 const MAX_STREAMS = 256;
 const STREAM_DRAIN_TIMEOUT_MS = 30_000;
@@ -434,6 +435,32 @@ export function removeRevokedDeviceStreams(
     // Turn identities are per-chat public facts other paired devices still
     // need for roster correlation after the issuing device is revoked.
     turnIndex: snapshot.turnIndex,
+  };
+}
+
+/**
+ * DataStore options for the durable stream journal. The journal is
+ * machine-owned, replaced wholesale on every write and disposable across
+ * restarts, so a file this build cannot read (another build's event
+ * vocabulary, an oversized or torn write) is kept aside as a rescue copy and
+ * replaced by a fresh journal instead of refusing every later write.
+ */
+export function aidenRemoteStreamStoreOptions(): DataStoreOptions<AidenRemoteStreamSnapshot> {
+  return {
+    // The journal budgets its compact JSON; allow the trailing newline.
+    maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES + 1,
+    fileMode: 0o600,
+    compact: true,
+    normalize: normalizeAidenRemoteStreamSnapshot,
+    isSafe: (value) => {
+      try {
+        normalizeAidenRemoteStreamSnapshot(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    rejectUnsafeWrite: true,
   };
 }
 
@@ -1256,6 +1283,12 @@ export class AidenRemoteStreamService {
 
   markRunning(deviceId: string, streamId: string): void {
     const stream = this.requireStream(deviceId, streamId);
+    if (stream.cancelRequested && !terminal(stream.state)) {
+      // A stop accepted before the generation existed could not reach it;
+      // deliver it now and keep reconciling until the cancelled terminal.
+      this.options.cancel(streamId, stream.owner.owner.documentId);
+      return;
+    }
     this.append(stream, "status", { state: "running" }, false, "running");
   }
 

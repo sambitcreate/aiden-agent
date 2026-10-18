@@ -9,6 +9,7 @@ import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
   inspectAidenFilesystemIdentity,
+  rebindAidenFileHandleToSavedFile,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
 import { mapWorkspaceMetadata, WORKSPACE_METADATA_CONCURRENCY } from "./workspace-metadata.js";
@@ -21,7 +22,7 @@ import {
   decodeWorkspaceFileText,
   readWorkspaceFile,
   WorkspaceFileError,
-  writeWorkspaceFile,
+  writeWorkspaceFileInstalling,
   type WorkspaceFileDocument,
   type WorkspaceFileEntry,
 } from "./workspace-files.js";
@@ -149,7 +150,6 @@ function projectedDocument(
 }
 
 export class AidenRemoteFileService {
-  private readonly roots = new Map<string, { configuredPath: string; canonicalPath: string; device: string; inode: string }>();
   private readonly pages = new Map<string, {
     claims: AidenOpaqueHandleClaims;
     entries: WorkspaceFileEntry[];
@@ -173,6 +173,12 @@ export class AidenRemoteFileService {
     return this.handleStore;
   }
 
+  /**
+   * Admits the configured root for one request. Every lazy handle and cursor
+   * carries the root identity it was issued under and is refused once that
+   * root is replaced, so a folder re-created at the same path (re-clone,
+   * restore, remount) lists afresh without reviving any earlier handle.
+   */
   private async assertRoot(workspace: Workspace, folderPath: string): Promise<{ path: string; device: string; inode: string }> {
     if (!workspace.folderPath) throw new AidenOpaqueHandleError("root_policy_changed");
     // macOS system aliases are fixed; all workspace-controlled ancestors must
@@ -185,16 +191,7 @@ export class AidenRemoteFileService {
         configured.dev !== current.dev || configured.ino !== current.ino) {
       throw new AidenOpaqueHandleError("filesystem_identity_changed");
     }
-    const identity = { configuredPath: workspace.folderPath, canonicalPath: folderPath,
-      device: current.dev.toString(), inode: current.ino.toString() };
-    const previous = this.roots.get(workspace.id);
-    if (previous && previous.configuredPath === identity.configuredPath &&
-        (previous.canonicalPath !== identity.canonicalPath || previous.device !== identity.device || previous.inode !== identity.inode)) {
-      throw new AidenOpaqueHandleError("filesystem_identity_changed");
-    }
-    if (!previous && this.roots.size >= 1_024) throw new AidenOpaqueHandleError("handle_capacity");
-    this.roots.set(workspace.id, identity);
-    return { path: identity.canonicalPath, device: identity.device, inode: identity.inode };
+    return { path: folderPath, device: current.dev.toString(), inode: current.ino.toString() };
   }
 
   private async claims(
@@ -228,6 +225,8 @@ export class AidenRemoteFileService {
       workspaceId,
       async ({ folderPath, workspace }, signal) => {
         const index = await listWorkspaceFiles(folderPath, signal);
+        const listing = `${deviceId}\u0000${workspaceId}`;
+        this.handles.supersedeListing(listing);
         const snapshotId = `files_${randomBytes(24).toString("base64url")}`;
         const revision = projectAidenRemoteWorkspace(workspace).revision;
         const entries: AidenRemoteFileEntry[] = [];
@@ -257,7 +256,7 @@ export class AidenRemoteFileService {
             const { entry, displayPath, claims } = result;
             try {
               entries.push({
-                id: this.handles.issue("file", claims),
+                id: this.handles.issue("file", claims, { listing }),
                 displayPath,
                 name: [...entry.name].slice(0, 255).join(""),
                 kind: entry.kind,
@@ -388,7 +387,10 @@ export class AidenRemoteFileService {
             ? this.handles.issue("cur", { ...snapshot.claims, cursorOffset: nextOffset }) : undefined;
           // Completed pages do not retain directory inventories in server memory.
           if (!nextCursor) this.pages.delete(snapshotId);
-          await this.assertRoot(workspace, folderPath);
+          const after = await this.assertRoot(workspace, folderPath);
+          if (after.device !== rootIdentity.device || after.inode !== rootIdentity.inode) {
+            throw new AidenOpaqueHandleError("filesystem_identity_changed");
+          }
           return { snapshotId, entries, truncated: snapshot.truncated || omitted,
             maxEntries: 4_000, maxDepth: 20, directoryPath, ...(nextCursor ? { nextCursor } : {}) };
         },
@@ -497,13 +499,14 @@ export class AidenRemoteFileService {
             throw error;
           }
         }
-        const document = await writeWorkspaceFile(
+        const { document, installed } = await writeWorkspaceFileInstalling(
           resolved.folderPath,
           resolved.displayPath,
           input.content,
           input.expectedVersion,
           resolved.signal,
         );
+        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
         if (error instanceof ManagedWorktreeFileIoError && error.code === "recovery_limit") {

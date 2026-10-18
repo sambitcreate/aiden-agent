@@ -14,9 +14,13 @@ class Child implements RecorderChild {
   signalCode: NodeJS.Signals | null = null;
   signals: NodeJS.Signals[] = [];
   private listeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
-  constructor(private readonly finalize: () => void) {}
+  constructor(
+    private readonly finalize: () => void,
+    private readonly hangOnSigint = false,
+  ) {}
   kill(signal: NodeJS.Signals) {
     this.signals.push(signal);
+    if (signal === "SIGINT" && this.hangOnSigint) return true;
     this.finalize();
     queueMicrotask(() => {
       this.exitCode = 0;
@@ -24,13 +28,24 @@ class Child implements RecorderChild {
     });
     return true;
   }
-  once(_event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void) {
-    this.listeners.push(listener);
+  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  once(event: "error", listener: (error: Error) => void): this;
+  once(event: "exit" | "error", listener: unknown) {
+    // This child always spawns, so it only ever reports `exit`.
+    if (event === "exit") this.listeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
     return this;
   }
 }
 
-function harness(options: { booted?: boolean; hostText?: string; hostFormats?: string[] } = {}) {
+function harness(
+  options: {
+    booted?: boolean;
+    hostText?: string;
+    hostFormats?: string[];
+    beforeTarget?: () => Promise<void>;
+    hangOnSigint?: boolean;
+  } = {},
+) {
   const device: DeviceSummary = {
     hostId: "local",
     id: UDID,
@@ -64,6 +79,7 @@ function harness(options: { booted?: boolean; hostText?: string; hostFormats?: s
   };
   const service: DeviceFeaturePort = {
     async localTarget(input) {
+      await options.beforeTarget?.();
       if (input.hostId !== "local") throw new Error("This works only with simulators on this Mac.");
       const found = state.devices.find((candidate) => candidate.id === input.deviceId);
       if (!found) throw new Error("That simulator is no longer available.");
@@ -92,7 +108,7 @@ function harness(options: { booted?: boolean; hostText?: string; hostFormats?: s
   const recorder = createDeviceRecorder({
     spawn: (_command, args) => {
       const file = args[args.length - 1]!;
-      const child = new Child(() => files.set(file, "mp4"));
+      const child = new Child(() => files.set(file, "mp4"), options.hangOnSigint);
       children.push(child);
       return child;
     },
@@ -241,6 +257,34 @@ test("a simulator that shuts down, a deleted chat, and app quit each end recordi
   assert.equal(h.files.size, 0);
 });
 
+test("a recording still resolving its simulator when its chat is deleted or the app quits never starts", async () => {
+  let release!: () => void;
+  let resolved = new Promise<void>((resolve) => (release = resolve));
+  const h = harness({ beforeTarget: () => resolved });
+  const deleted = h.features.startRecording("chat-1", TARGET);
+  const kept = h.features.startRecording("chat-2", TARGET);
+  await settle();
+  await h.features.discardForChat("chat-1");
+  release();
+  await assert.rejects(deleted, /cancelled/u);
+  assert.equal((await kept).chatId, "chat-2", "another chat's recording still starts");
+  assert.equal(h.children.length, 1);
+  assert.deepEqual(
+    h.features.recordings().map((info) => info.chatId),
+    ["chat-2"],
+  );
+  await h.features.discardForChat("chat-2");
+
+  resolved = new Promise<void>((resolve) => (release = resolve));
+  const quitting = h.features.startRecording("chat-3", TARGET);
+  await settle();
+  await h.features.stop();
+  release();
+  await assert.rejects(quitting, /cancelled/u);
+  assert.equal(h.children.length, 1, "no recorder starts after quit");
+  assert.deepEqual(h.features.recordings(), []);
+});
+
 test("screenshots save to the chosen file and can then be revealed", async () => {
   const h = harness();
   const offered: string[] = [];
@@ -272,4 +316,23 @@ test("a framed 3D screenshot saves the renderer's image under a distinct name an
   assert.deepEqual(await h.features.saveFramedScreenshot({ hostId: "local", deviceId: UDID }, png, async () => null), {
     status: "cancelled",
   });
+});
+
+test("quit kills a recorder that ignores SIGINT once its deadline passes, and deletes the recording", async () => {
+  const h = harness({ hangOnSigint: true });
+  await h.features.startRecording("chat-1", TARGET);
+  let expire!: () => void;
+  let stopped = false;
+  const quitting = h.features
+    .stop({ deadline: () => new Promise<void>((resolve) => (expire = resolve)) })
+    .then(() => (stopped = true));
+  await settle();
+  assert.equal(stopped, false, "quit waits for the recorder until the deadline");
+  assert.deepEqual(h.children[0]!.signals, ["SIGINT"]);
+
+  expire();
+  await quitting;
+  assert.deepEqual(h.children[0]!.signals, ["SIGINT", "SIGKILL"], "the deadline force-kills the recorder");
+  assert.deepEqual(h.features.recordings(), []);
+  assert.equal(h.files.size, 0);
 });

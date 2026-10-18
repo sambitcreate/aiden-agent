@@ -233,6 +233,8 @@ export function sanitizeSchema(value: unknown, depth = 0): Record<string, unknow
     output.required = source.required.filter((item): item is string => typeof item === "string");
   }
   if (Array.isArray(source.enum)) output.enum = source.enum.filter(jsonScalar);
+  // TypeBox literals are `const`; a one-value enum keeps them in the subset that has no `const`.
+  if (jsonScalar(source.const)) output.enum = [source.const];
   if (jsonValue(source.default)) output.default = source.default;
   if (typeof source.additionalProperties === "boolean") {
     output.additionalProperties = source.additionalProperties;
@@ -244,9 +246,17 @@ export function sanitizeSchema(value: unknown, depth = 0): Record<string, unknow
     const properties: Record<string, unknown> = {};
     for (const [name, schema] of Object.entries(source.properties as Record<string, unknown>)) {
       const sanitized = sanitizeSchema(schema, depth + 1);
+      // An unconstrained property (Type.Unknown, Type.Any) stays described as "any value".
       if (sanitized) properties[name] = sanitized;
+      else if (schema && typeof schema === "object" && !Array.isArray(schema)) properties[name] = {};
     }
     output.properties = properties;
+    // A required name must describe a property the agent can see.
+    if (Array.isArray(output.required)) {
+      output.required = (output.required as string[]).filter((name) =>
+        Object.prototype.hasOwnProperty.call(properties, name),
+      );
+    }
   }
   if (source.items) {
     const items = sanitizeSchema(source.items, depth + 1);

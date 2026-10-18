@@ -63,6 +63,8 @@ const EXECUTION_MODES = new Set<SubagentExecutionModeV2>([
 const CONTEXT_MODES = new Set<SubagentContextModeV2>(["fresh", "fork"]);
 const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const MINTED_TREE_NODES = new WeakSet<object>();
+const MAX_SUBAGENT_TREE_TURN_BUDGET = 512;
+const MAX_SUBAGENT_TREE_NETWORK_OPERATION_BUDGET = 512;
 
 function exactPlainRecord(
   value: unknown,
@@ -510,10 +512,14 @@ function parseBudgetLimits(value: unknown): SubagentTreeBudgetLimitsV2 {
     maxQueued: positiveInteger(limits.maxQueued, 64, "queue budget"),
     maxTokens: positiveInteger(limits.maxTokens, 10_000_000, "token budget"),
     maxToolCalls: positiveInteger(limits.maxToolCalls, 512, "tool-call budget"),
-    maxTurns: positiveInteger(limits.maxTurns, 512, "turn budget"),
+    maxTurns: positiveInteger(
+      limits.maxTurns,
+      MAX_SUBAGENT_TREE_TURN_BUDGET,
+      "turn budget",
+    ),
     maxNetworkOperations: positiveInteger(
       limits.maxNetworkOperations,
-      512,
+      MAX_SUBAGENT_TREE_NETWORK_OPERATION_BUDGET,
       "network-operation budget",
     ),
     maxWallTimeMs: positiveInteger(
@@ -561,7 +567,7 @@ function parseUsage(value: unknown): SubagentTreeBudgetUsageV2 {
 /** One synchronous, tree-owned ledger. Every multi-child reservation is all-or-nothing. */
 export class SubagentTreeBudgetLedgerV2 {
   readonly treeRootId: string;
-  readonly limits: SubagentTreeBudgetLimitsV2;
+  private currentLimits: SubagentTreeBudgetLimitsV2;
   private readonly createdAt: number;
   private readonly runs = new Map<string, LedgerRun>();
   private launched = 0;
@@ -580,10 +586,48 @@ export class SubagentTreeBudgetLedgerV2 {
     private readonly clock: () => number = Date.now,
   ) {
     this.treeRootId = treeIdentifier(treeRootId, "budget root identity");
-    this.limits = parseBudgetLimits(limits);
+    this.currentLimits = parseBudgetLimits(limits);
     this.createdAt = this.clock();
     if (!Number.isFinite(this.createdAt))
       throw new Error("Invalid subagent tree clock.");
+  }
+
+  get limits(): SubagentTreeBudgetLimitsV2 {
+    return this.currentLimits;
+  }
+
+  /**
+   * Admit a nested batch's own turn and network-operation ceilings, so depth-2
+   * children do not spend their depth-1 parent's allowance. Both stay within
+   * the tree bound; an invalid or over-bound extension changes nothing.
+   */
+  extendAllowance(value: {
+    readonly turns: number;
+    readonly networkOperations: number;
+  }): void {
+    this.assertLive();
+    const maxTurns =
+      this.limits.maxTurns +
+      positiveInteger(value.turns, MAX_SUBAGENT_TREE_TURN_BUDGET, "turn extension");
+    const maxNetworkOperations =
+      this.limits.maxNetworkOperations +
+      positiveInteger(
+        value.networkOperations,
+        MAX_SUBAGENT_TREE_NETWORK_OPERATION_BUDGET,
+        "network-operation extension",
+      );
+    const exceeded: [SubagentTreeBudgetDimension, number, number] | undefined =
+      maxTurns > MAX_SUBAGENT_TREE_TURN_BUDGET
+        ? ["turns", maxTurns, MAX_SUBAGENT_TREE_TURN_BUDGET]
+        : maxNetworkOperations > MAX_SUBAGENT_TREE_NETWORK_OPERATION_BUDGET
+          ? ["network operations", maxNetworkOperations, MAX_SUBAGENT_TREE_NETWORK_OPERATION_BUDGET]
+          : undefined;
+    if (exceeded) throw new SubagentTreeBudgetExhaustedError(...exceeded);
+    this.currentLimits = Object.freeze({
+      ...this.limits,
+      maxTurns,
+      maxNetworkOperations,
+    });
   }
 
   private assertLive(): void {

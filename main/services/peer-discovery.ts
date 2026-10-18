@@ -5,8 +5,11 @@ import {
   type PeerDiscoveryState,
 } from "../../renderer/shared/peer-host.js";
 import {
+  createSystemTailscaleCommandRunner,
   normalizeDnsName,
   type AidenTailscaleCommandRunner,
+  type AidenTailscaleStatusReadFailureCategory,
+  type AidenTailscaleSystemRunnerOptions,
 } from "./aiden-remote-tailscale.js";
 import type { PeerBootstrapFactory } from "./peer-bootstrap-transport.js";
 import type { PeerPairingTarget } from "./peer-host-registry.js";
@@ -23,7 +26,14 @@ export const MAX_LAN_CANDIDATES = 64;
 export const PEER_BROWSE_SETTLE_MS = 3_000;
 /** The first contract revision that serves `/pairing/requests`. */
 const PAIRING_REQUESTS_CONTRACT_REVISION = 20;
-const MAX_STATUS_CHARS = 256 * 1_024;
+/**
+ * `tailscale status --json` lists every peer, so it grows with the tailnet
+ * (roughly 1-2 KiB per peer). Discovery gets its own bound, well past the
+ * Serve controller's 256 KiB, and still finite.
+ */
+export const PEER_TAILSCALE_STATUS_MAX_BYTES = 4 * 1_024 * 1_024;
+// UTF-8 never encodes a UTF-16 code unit in fewer bytes, so this bounds both.
+const MAX_STATUS_CHARS = PEER_TAILSCALE_STATUS_MAX_BYTES;
 const MAX_STATUS_PEERS = 4_096;
 const DESKTOP_OS = new Set(["macOS", "linux"]);
 
@@ -56,6 +66,30 @@ export interface PeerDiscoveryOptions {
   lanAddress?(instanceId: string, address: string, spki: string | undefined): void;
   /** Defaults to `PEER_BROWSE_SETTLE_MS`. */
   browseSettleMs?: number;
+  /** The tailnet status could not be read or exceeded its bound, so Tailscale found nothing. */
+  tailscaleUnavailable?(category: AidenTailscaleStatusReadFailureCategory): void;
+}
+
+/** The fixed-path Tailscale CLI, bounded for the full peer inventory discovery reads. */
+export function createPeerDiscoveryTailscaleRunner(
+  options: AidenTailscaleSystemRunnerOptions = {},
+): Promise<AidenTailscaleCommandRunner | null> {
+  return createSystemTailscaleCommandRunner({
+    ...options,
+    maxBuffer: PEER_TAILSCALE_STATUS_MAX_BYTES,
+  });
+}
+
+function tailscaleStatusFailure(error: unknown): AidenTailscaleStatusReadFailureCategory {
+  const details = error !== null && typeof error === "object"
+    ? error as { code?: unknown; killed?: unknown; message?: unknown }
+    : undefined;
+  if (
+    details?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+    || details?.message === "tailscale_status_invalid_response"
+  ) return "invalid-response";
+  if (details?.code === "ETIMEDOUT" || details?.killed === true) return "timed-out";
+  return "command-failed";
 }
 
 /**
@@ -238,12 +272,25 @@ export class PeerDiscovery {
   }
 
   private async scanTailscale(session: Session): Promise<void> {
+    let runner: AidenTailscaleCommandRunner | null;
+    try {
+      runner = await this.options.tailscale();
+    } catch {
+      return;
+    }
+    if (!runner || this.session !== session) return;
     let names: string[];
     try {
-      const runner = await this.options.tailscale();
-      if (!runner || this.session !== session) return;
-      names = parseTailscalePeerNames(await runner.run(["status", "--json"]));
-    } catch {
+      const serialized = await runner.run(["status", "--json"]);
+      if (serialized.length > MAX_STATUS_CHARS) throw new Error("tailscale_status_invalid_response");
+      names = parseTailscalePeerNames(serialized);
+    } catch (error) {
+      if (this.session !== session) return;
+      try {
+        this.options.tailscaleUnavailable?.(tailscaleStatusFailure(error));
+      } catch {
+        // Diagnostics never change what discovery finds.
+      }
       return;
     }
     if (this.session !== session) return;

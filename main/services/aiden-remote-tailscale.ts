@@ -1,6 +1,6 @@
 import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createSocket } from "node:dgram";
+import { createSocket, type Socket, type SocketOptions } from "node:dgram";
 import * as fs from "node:fs/promises";
 import { get as httpGet } from "node:http";
 import { performance } from "node:perf_hooks";
@@ -60,6 +60,8 @@ export interface AidenTailscaleSystemRunnerOptions {
   execute?: AidenTailscaleCommandExecutor;
   resolveBinary?: () => Promise<string | null>;
   platform?: NodeJS.Platform;
+  /** Output bound in bytes; defaults to the Serve status bound. */
+  maxBuffer?: number;
 }
 
 export interface AidenTailscaleConnectionStatus {
@@ -138,6 +140,7 @@ export interface AidenTailscaleRouteLockOptions {
   port?: number;
   attempts?: number;
   retryMs?: number;
+  createSocket?: (options: SocketOptions) => Socket;
 }
 
 interface AidenTailscaleNodeStatus {
@@ -241,6 +244,38 @@ function preservedServeFingerprint(status: AidenTailscaleStatus): string {
   return serveFingerprint(aidenTailscaleCanonicalRouteSnapshot(status).preservedStatus);
 }
 
+interface AidenReconciliationRoute {
+  target?: string;
+  funnel: boolean;
+  https: boolean;
+}
+
+/**
+ * Only the part of Serve that Aiden's exact route mutation writes: the API
+ * handler on the HTTPS 443 listener, that listener's Funnel flag and its TCP
+ * HTTPS state. Unrelated Serve edits never enter a reconciliation decision.
+ */
+function aidenReconciliationRoute(status: AidenTailscaleStatus): AidenReconciliationRoute {
+  let snapshot: ReturnType<typeof aidenTailscaleCanonicalRouteSnapshot>;
+  try {
+    snapshot = aidenTailscaleCanonicalRouteSnapshot(status);
+  } catch {
+    throw new Error("tailscale_reconciliation_conflict");
+  }
+  return {
+    ...(snapshot.target ? { target: snapshot.target } : {}),
+    funnel: snapshot.funnel,
+    https: status.TCP?.["443"]?.HTTPS === true,
+  };
+}
+
+function sameAidenReconciliationRoute(
+  left: AidenReconciliationRoute,
+  right: AidenReconciliationRoute,
+): boolean {
+  return left.target === right.target && left.funnel === right.funnel && left.https === right.https;
+}
+
 function preservedServeFingerprintForListenerTransition(status: AidenTailscaleStatus): string {
   const preservedStatus = structuredClone(
     aidenTailscaleCanonicalRouteSnapshot(status).preservedStatus,
@@ -336,16 +371,25 @@ export async function withAidenTailscaleRouteLock<T>(
   const port = options.port ?? ROUTE_LOCK_PORT;
   const attempts = options.attempts ?? ROUTE_LOCK_ATTEMPTS;
   const retryMs = options.retryMs ?? ROUTE_LOCK_RETRY_MS;
-  let lockSocket: ReturnType<typeof createSocket> | undefined;
+  const openSocket = options.createSocket ?? ((socketOptions) => createSocket(socketOptions));
+  let lockSocket: Socket | undefined;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     // The UDP namespace cannot collide with Aiden's retained TCP listener
     // ports, while the kernel still releases this process-owned mutex on exit.
-    const candidate = createSocket({ type: "udp4", reuseAddr: false });
+    const candidate = openSocket({ type: "udp4", reuseAddr: false });
     candidate.unref();
     const acquired = await new Promise<boolean>((resolve, reject) => {
       candidate.once("error", (error: NodeJS.ErrnoException) => {
-        if (error.code === "EADDRINUSE") resolve(false);
-        else reject(error);
+        // A socket whose bind failed still holds a descriptor until closed.
+        const settle = () => {
+          if (error.code === "EADDRINUSE") resolve(false);
+          else reject(error);
+        };
+        try {
+          candidate.close(settle);
+        } catch {
+          settle();
+        }
       });
       candidate.bind({ address: "127.0.0.1", port, exclusive: true }, () => resolve(true));
     });
@@ -401,7 +445,7 @@ export async function createSystemTailscaleCommandRunner(
             ...environment,
             ...(platform === "darwin" ? { TAILSCALE_BE_CLI: "1" } : {}),
           },
-          maxBuffer: MAX_STATUS_BYTES,
+          maxBuffer: options.maxBuffer ?? MAX_STATUS_BYTES,
           timeout: 15_000,
           windowsHide: true,
         });
@@ -935,45 +979,37 @@ export class AidenRemoteTailscaleController {
     return this.withRouteLock(async () => {
       const pending = await this.outcomeStore?.snapshot();
       if (!pending || !this.outcomeStore) throw new Error("tailscale_reconciliation_unavailable");
-      const status = await this.serveStatus();
-      if (serveFingerprint(status) === pending.beforeFingerprint) {
-        const confirmed = await this.serveStatus();
-        if (serveFingerprint(confirmed) !== pending.beforeFingerprint) {
+      // Settle from Aiden's own route alone. Comparing the whole Serve document
+      // let any unrelated edit or `serve status` format change refuse forever.
+      // Reconciliation never mutates Serve, and every later route action
+      // re-plans from a fresh read with its own preserved-state checks.
+      const route = aidenReconciliationRoute(await this.serveStatus());
+      if (route.funnel) throw new Error("tailscale_reconciliation_conflict");
+      const confirmUnchanged = async () => {
+        const confirmed = aidenReconciliationRoute(await this.serveStatus());
+        if (!sameAidenReconciliationRoute(confirmed, route)) {
           throw new Error("tailscale_reconciliation_conflict");
         }
-        await this.outcomeStore.clear();
-        return "not_applied";
-      }
-      const snapshot = aidenTailscaleCanonicalRouteSnapshot(status);
-      const expectedTarget = pending.operation === "disconnect" ? undefined : pending.target;
-      const preserved = pending.normalizeListenerScaffolding
-        ? preservedServeFingerprintForListenerTransition(status)
-        : preservedServeFingerprint(status);
-      if (
-        snapshot.funnel
-        || snapshot.target !== expectedTarget
-        || preserved !== pending.preservedFingerprint
-        || (expectedTarget !== undefined && status.TCP?.["443"]?.HTTPS !== true)
-      ) {
-        throw new Error("tailscale_reconciliation_conflict");
-      }
-      if (expectedTarget !== undefined) {
-        if (!await this.probeHealth(expectedTarget)) {
+      };
+      if (pending.operation !== "disconnect" && route.target === pending.target) {
+        if (!route.https) throw new Error("tailscale_reconciliation_conflict");
+        if (!await this.probeHealth(pending.target)) {
           throw new Error("tailscale_reconciliation_unhealthy");
         }
-        const confirmed = await this.serveStatus();
-        if (serveFingerprint(confirmed) !== serveFingerprint(status)) {
-          throw new Error("tailscale_reconciliation_conflict");
-        }
-        await this.outcomeStore.commit({ path: "/api/aiden/v1", target: expectedTarget });
+        await confirmUnchanged();
+        await this.outcomeStore.commit({ path: "/api/aiden/v1", target: pending.target });
         return "connected";
       }
-      const confirmed = await this.serveStatus();
-      if (serveFingerprint(confirmed) !== serveFingerprint(status)) {
-        throw new Error("tailscale_reconciliation_conflict");
+      await confirmUnchanged();
+      if (pending.operation === "disconnect" && route.target !== pending.target) {
+        // The owned route being removed is gone; Aiden owns nothing here now.
+        await this.outcomeStore.commit(undefined);
+        return "disconnected";
       }
-      await this.outcomeStore.commit(undefined);
-      return "disconnected";
+      // Aiden's new route never appeared, or the owned route it was removing
+      // is still exactly in place: the ownership from before stands.
+      await this.outcomeStore.clear();
+      return "not_applied";
     });
   }
 }

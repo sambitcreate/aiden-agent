@@ -209,6 +209,8 @@ function BranchNameRow({
           setInvalid(false);
         }}
         onKeyDown={(event) => {
+          // An IME confirms its candidate with Enter; that is not a save.
+          if (event.nativeEvent.isComposing) return;
           if (event.key === "Enter") {
             event.preventDefault();
             finish(true);

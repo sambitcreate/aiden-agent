@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import type { ServerResponse } from "node:http";
+import { EventEmitter, once } from "node:events";
+import http, { type ServerResponse } from "node:http";
+import net, { type AddressInfo } from "node:net";
 import test from "node:test";
 import type {
   SubagentRunSnapshotV1,
@@ -506,6 +507,44 @@ test("disconnect removes the observer without ending Mac-owned work", async () =
   response.emit("close");
   assert.equal(events.current("chat-1")?.generationId, "generation-1");
   service.close();
+});
+
+test("clients that disconnect before the stream opens do not hold progress connection slots", async () => {
+  const { service } = fixture();
+  const grants = new Set(["tasks:read"] as const);
+  const opened: Array<Promise<void>> = [];
+  let arrived = () => {};
+  const server = http.createServer((_request, response) => {
+    arrived();
+    // The router authenticates and checks chat access before opening the
+    // stream; a phone that backgrounds meanwhile has already dropped the socket.
+    opened.push(
+      once(response, "close").then(() =>
+        service.openEvents("device-1", "chat-1", grants, 0, response)),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    // Eight is the per-device cap: each early drop must release its slot.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const requested = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      const socket = net.connect(port, "127.0.0.1");
+      socket.write("GET /chats/chat-1/progress/events HTTP/1.1\r\nHost: localhost\r\n\r\n");
+      await requested;
+      socket.destroy();
+      await opened[attempt];
+    }
+    const healthy = new Response();
+    await service.openEvents("device-1", "chat-1", grants, 0, healthy.wire);
+    assert.match(healthy.chunks.join(""), /event: task_update/);
+  } finally {
+    service.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("late publications and old turn settlement cannot change the active chat", () => {

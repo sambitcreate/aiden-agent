@@ -16,7 +16,8 @@ import { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import { GitHubApi } from "./github/github-api.js";
 import { FakeGitHub } from "./github/github-fake-server.js";
 import { BatchedPullRequestReader } from "./github/github-pull-request-reader.js";
-import { fixedCredentials, recordingFetch } from "./github/github-test-fetch.js";
+import { GitHubRateLimitGate } from "./github/github-request-gate.js";
+import { fixedCredentials, jsonResponse, recordingFetch } from "./github/github-test-fetch.js";
 import { GitHubPullRequestService } from "./github-pull-request.js";
 import type {
   GitHubPullRequestCreateResult,
@@ -925,4 +926,88 @@ test("explicit refresh bypasses a fresh background cache after remote CI changes
   const refreshed = await service.refresh(CHAT);
   assert.equal(refreshed.links[0]?.checksState, "failing");
   assert.ok(recorded.requests.length > afterLink);
+});
+
+/**
+ * A real PR read stack whose every GraphQL answer reports 400 of 5,000 points
+ * left: inside the 10% reserve background reads must leave for user actions.
+ */
+function reserveLimitedService(directory: string) {
+  const github = new FakeGitHub({
+    repositories: ["owner/repo"],
+    pullRequests: [
+      {
+        repository: "owner/repo",
+        number: 12,
+        title: "PR 12",
+        state: "OPEN",
+        headRefName: "feature/x",
+        baseRefName: "main",
+        headRefOid: "a".repeat(40),
+        headOwner: "owner",
+        checks: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  });
+  const recorded = recordingFetch(async (request, signal) => {
+    const response = await github.responder(request, signal);
+    const body = (await response.json()) as { data?: { rateLimit?: { remaining: number } } };
+    if (body.data?.rateLimit) body.data.rateLimit.remaining = 400;
+    return jsonResponse(body, response.status);
+  });
+  const pullRequests = new GitHubPullRequestService({
+    reader: new BatchedPullRequestReader({
+      api: new GitHubApi({
+        credentials: fixedCredentials({ "github.com": "token-a" }),
+        gate: new GitHubRateLimitGate(),
+        fetch: recorded.fetch,
+      }),
+    }),
+    repositories: {
+      resolve: async () => ({
+        ok: true,
+        repository: { host: "github.com", owner: "owner", name: "repo" },
+      }),
+    },
+    resolveBinary: async () => "gh",
+  });
+  const service = new ChatPullRequestService({
+    store: new ChatPullRequestStore(() => directory),
+    github: pullRequests,
+    gitInfo: async () => ({ isRepo: true, branch: "feature/x" }),
+    chatWorkspaceId: async () => "workspace-1",
+    workspaceFolderPath: async () => "/work/repo",
+  });
+  return { service, pullRequests };
+}
+
+test("the link chooser and post-push detection may spend the reserve kept for user actions", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  for (const action of ["chooser", "detect"] as const) {
+    const { service, pullRequests } = reserveLimitedService(path.join(directory, action));
+    // The first read observes the budget; a background read is then refused.
+    const observed = await pullRequests.getPullRequest("/work/repo", "github.com/owner/repo", 12);
+    assert.equal(observed.availability, "ready");
+    const background = await pullRequests.listPullRequests("/work/repo", { state: "open", limit: 30 });
+    assert.equal(background.availability, "rate-limited");
+
+    if (action === "chooser") {
+      const candidates = await service.candidates(CHAT);
+      assert.equal(candidates.availability, "ready", candidates.message);
+      assert.deepEqual(candidates.pullRequests.map((pullRequest) => pullRequest.number), [12]);
+    } else {
+      const detected = await service.detectAfterPush(CHAT, {
+        workspaceId: "workspace-1",
+        headBranch: "feature/x",
+        expectedHeadSha: "a".repeat(40),
+        repository: "github.com/owner/repo",
+      });
+      assert.equal(detected.availability, "ready", detected.message);
+      assert.deepEqual(detected.matches.map((pullRequest) => pullRequest.number), [12]);
+    }
+  }
 });
