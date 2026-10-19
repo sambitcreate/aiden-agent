@@ -1453,7 +1453,7 @@ function EnvironmentPanelSurface({
     if (!chatId) toast.error("Open a chat in this workspace first.");
     return chatId;
   };
-    const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
+  const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
     "new-tab": () => (
       <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={Boolean(active) && panel.artifacts.workspaceId === active?.id && panel.artifacts.views.length > 0} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
     ),

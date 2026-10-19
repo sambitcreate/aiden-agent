@@ -20,7 +20,7 @@ const SHELL: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command
 const FILE: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
 const ECHO: WorkspaceArtifactActionV1 = { name: "note", label: "Write note", command: "printf '%s' {{text}} > note.txt", params: [{ name: "text", type: "string" }] };
 
-async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifactSourceV1[]; approved?: boolean } = {}) {
+async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifactSourceV1[]; approved?: boolean; readDelayMs?: number } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-runner-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const folder = path.join(dir, "workspace");
@@ -34,7 +34,10 @@ async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifact
       commands.push(shell.command);
       return runBoundedShellCommand(shell);
     },
-    readFile: async (root, file, signal) => (await readWorkspaceFile(root, file, signal)).content,
+    readFile: async (root, file, signal) => {
+      if (options.readDelayMs) await new Promise((resolve) => setTimeout(resolve, options.readDelayMs));
+      return (await readWorkspaceFile(root, file, signal)).content;
+    },
     env: () => process.env,
     store,
     notify: (event) => events.push(event),
@@ -214,4 +217,27 @@ test("file sources explain problems in terms of the page, within the source size
   const results = await runner.refresh("ws1", "art1", context("full"));
   assert.equal(results.missing!.error, "There is no file at nope.md.");
   assert.equal(results.big!.error, "big.txt is larger than an artifact can read.");
+});
+
+test("allowing a page while a refresh is running starts a fresh read rather than joining the blocked one", async (t) => {
+  const { runner, store, commands, context } = await setup(t, { readDelayMs: 200 });
+  const before = runner.refresh("ws1", "art1", context("ask"));
+  const view = (await store.get("ws1", "art1"))!;
+  await store.approve("ws1", "art1", view.digest);
+  const after = await runner.refresh("ws1", "art1", context("ask"));
+  assert.equal(after.pulls!.status, "ok");
+  assert.equal((await before).pulls!.status, "blocked");
+  assert.equal((await store.get("ws1", "art1"))!.snapshot!.sources.pulls!.status, "ok");
+  assert.equal(commands.length, 1);
+});
+
+test("a run that started with more access never overwrites what a later, narrower refresh saved", async (t) => {
+  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.3; printf 1", parse: "json" };
+  const { runner, store, commands, context } = await setup(t, { sources: [slow] });
+  const full = runner.refresh("ws1", "art1", context("full"));
+  await until(() => commands.length === 1);
+  assert.equal((await runner.refresh("ws1", "art1", context("none"))).v!.status, "blocked");
+  assert.equal((await full).v!.dataJson, "1");
+  const saved = (await store.get("ws1", "art1"))!.snapshot!.sources.v!;
+  assert.deepEqual([saved.status, saved.dataJson], ["blocked", undefined]);
 });

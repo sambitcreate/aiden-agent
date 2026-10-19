@@ -119,9 +119,10 @@ import {
 } from "./bot-tool-authority.js";
 import { mcpAgentToolIdentity, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
-import { type SkillRegistrySnapshot } from "./skill-registry.js";
+import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
+import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -1408,8 +1409,22 @@ async function prepareGeneration(
   // Assistant modes use positive allowlists: the dock gets safe metadata plus
   // scheduling, while an approved automation gets only its project tools and
   // exact MCP identities. Computer Use, skills, and delegation stay out.
+  // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
+  // Telegram and Bot turns get neither the tool nor its skill.
+  const offerWorkspaceArtifacts =
+    !botContext &&
+    !assistantMode &&
+    Boolean(workspace) &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    options.visualAudience !== "remote" &&
+    permission !== "read-only" &&
+    !options.excludeToolNames?.has(WORKSPACE_ARTIFACT_TOOL_NAME);
   let skillSnapshot =
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
+  if (skillSnapshot && !offerWorkspaceArtifacts) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
+  }
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
     if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
@@ -1974,16 +1989,7 @@ async function prepareGeneration(
     });
     generationExtensions.push(generativeUiRuntime.extension);
   }
-  if (
-    !botContext &&
-    !assistantMode &&
-    workspace &&
-    options.usageSource === "chat" &&
-    options.interactionSurface !== "telegram" &&
-    options.visualAudience !== "remote" &&
-    permission !== "read-only" &&
-    !options.excludeToolNames?.has(WORKSPACE_ARTIFACT_TOOL_NAME)
-  ) {
+  if (offerWorkspaceArtifacts && workspace) {
     // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone and
     // Telegram turns never get the tool.
     generationExtensions.push({

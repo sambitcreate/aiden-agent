@@ -181,7 +181,7 @@ function ArtifactView({
 }) {
   const refresh = useArtifactRefresh(workspace, view, active);
   const pageRef = React.useRef<HTMLDivElement | null>(null);
-  const buttons = useArtifactButtons(workspace, refresh.refresh);
+  const buttons = useArtifactButtons(workspace, view, refresh.refresh);
   const { press } = buttons;
   const handleAction = React.useCallback(
     (target: WorkspaceArtifactView, action: AidenUiAction) => {
@@ -240,35 +240,55 @@ interface PendingButton {
  * it passes. Under Ask the person confirms each press with the exact command;
  * under Full a press runs at once, as a chat's commands would.
  */
-function useArtifactButtons(workspace: Workspace, refresh: () => Promise<void>) {
+function useArtifactButtons(workspace: Workspace, view: WorkspaceArtifactView, refresh: () => Promise<void>) {
   const [pending, setPending] = React.useState<PendingButton | null>(null);
   const [running, setRunning] = React.useState(false);
+  // A ref, so a second press in the same frame sees the first one.
+  const runningRef = React.useRef(false);
+  const currentRef = React.useRef({ artifactId: view.artifact.id, refresh });
+  React.useLayoutEffect(() => {
+    currentRef.current = { artifactId: view.artifact.id, refresh };
+  }, [refresh, view.artifact.id]);
+  // A confirmation belongs to the page it was asked on.
+  React.useEffect(() => {
+    if (!runningRef.current) setPending((current) => (current && current.artifactId !== view.artifact.id ? null : current));
+  }, [view.artifact.id]);
+  const changed = pending !== null && pending.artifactId === view.artifact.id && pending.digest !== view.digest;
   const run = React.useCallback(
     async (button: PendingButton) => {
+      if (runningRef.current) return;
+      runningRef.current = true;
       setRunning(true);
+      const status = toast.loading(`${button.label}…`);
       try {
         const result = await workspaceArtifactsApi.run(workspace.id, button.artifactId, button.name, button.args, button.digest);
-        if (result.ok) toast.success(button.label, result.output ? { description: result.output } : undefined);
-        else toast.error(`${button.label} failed`, { description: result.output });
-        void refresh();
+        if (result.ok) toast.success(button.label, { id: status, ...(result.output ? { description: result.output } : {}) });
+        else toast.error(`${button.label} failed`, { id: status, description: result.output });
+        // Re-read the page that ran, which may no longer be the one on screen.
+        if (currentRef.current.artifactId === button.artifactId) void currentRef.current.refresh();
+        else void workspaceArtifactsApi.refresh(workspace.id, button.artifactId).catch(() => undefined);
       } catch (cause) {
-        toast.error(cause instanceof Error ? cause.message : `${button.label} could not run.`);
+        toast.error(cause instanceof Error ? cause.message : `${button.label} could not run.`, { id: status });
       } finally {
+        runningRef.current = false;
         setRunning(false);
         setPending(null);
       }
     },
-    [refresh, workspace.id],
+    [workspace.id],
   );
   const press = React.useCallback(
-    (view: WorkspaceArtifactView, name: string, args: unknown[]) => {
-      if (running) return;
-      const action = view.artifact.actions.find((entry) => entry.name === name);
+    (target: WorkspaceArtifactView, name: string, args: unknown[]) => {
+      if (runningRef.current) {
+        toast.info("Another button on this page is still running.");
+        return;
+      }
+      const action = target.artifact.actions.find((entry) => entry.name === name);
       if (!action) {
         toast.error(`This page has no button named “${name}”. Ask Aiden to change it.`);
         return;
       }
-      const access = workspaceArtifactPageAccess(view, workspace);
+      const access = workspaceArtifactPageAccess(target, workspace);
       if (access === "blocked") {
         toast.error("Workspace access is off, so this page’s buttons can’t run.");
         return;
@@ -284,25 +304,31 @@ function useArtifactButtons(workspace: Workspace, refresh: () => Promise<void>) 
         toast.error(cause instanceof Error ? cause.message : `${action.label} could not run.`);
         return;
       }
-      const button = { artifactId: view.artifact.id, digest: view.digest, name, label: action.label, args, preview };
+      const button = { artifactId: target.artifact.id, digest: target.digest, name, label: action.label, args, preview };
       if (workspace.permission === "ask") setPending(button);
       else void run(button);
     },
-    [run, running, workspace],
+    [run, workspace],
   );
   const dialog = (
     <Dialog
       open={pending !== null}
       onOpenChange={(open) => {
-        if (!open && !running) setPending(null);
+        if (!open && !runningRef.current) setPending(null);
       }}
       title={pending ? `${pending.label}?` : ""}
       description={`This runs in ${workspace.name}:`}
       confirmLabel="Run"
+      confirmDisabled={changed}
       busy={running}
       size="large"
-      onConfirm={() => (pending ? run(pending) : undefined)}
+      onConfirm={() => (pending && !changed ? run(pending) : undefined)}
     >
+      {changed ? (
+        <Callout color="warning" className="mb-3" role="alert">
+          <Text variant="small">This page changed after you pressed the button. Close this and press it again.</Text>
+        </Callout>
+      ) : null}
       <pre className="m-0 whitespace-pre-wrap break-words rounded-card bg-well p-3 font-mono text-small">{pending?.preview}</pre>
     </Dialog>
   );

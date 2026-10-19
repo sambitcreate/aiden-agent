@@ -33,3 +33,8 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
     "Delete a page only when the person asks. After creating or updating one, say in a sentence what it shows; the Artifacts tab opens on it.",
   ].join("\n"),
 });
+
+export const AIDEN_ARTIFACTS_SKILL_ID = "builtin:aiden-artifacts";
+
+/** Stable ids of built-in skills that only apply where `workspace_artifact` is offered. */
+export const DESKTOP_ARTIFACT_SKILLS: ReadonlySet<string> = new Set([AIDEN_ARTIFACTS_SKILL_ID]);

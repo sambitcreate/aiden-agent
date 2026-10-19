@@ -411,3 +411,27 @@ test("a button whose page is waiting for approval does not run", async () => {
   assert.equal(screen.queryByRole("dialog", { name: /Merge pull request/u }), null);
   assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:run"), false);
 });
+
+test("a button's confirmation notices when the page changes underneath it and does not run the old preview", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:run": () => ({ ok: true, output: "" }) });
+  const props = { actions: [MERGE], markup: BUTTONS, pulls: [{ number: 12 }], approved: true };
+  const { rerender } = renderPanel({ artifacts: state([view("art1", "Open PRs", props)]) });
+  fireEvent.click(screen.getByRole("button", { name: "Merge #12" }));
+  const dialog = await screen.findByRole("dialog");
+  rerender(
+    <TooltipProvider>
+      <ArtifactsPanel
+        workspace={WORKSPACE}
+        active
+        selectedId={null}
+        onSelect={() => undefined}
+        onAskAiden={() => undefined}
+        artifacts={state([view("art1", "Open PRs", { ...props, digest: "b".repeat(64) })])}
+      />
+    </TooltipProvider>,
+  );
+  within(dialog).getByRole("alert");
+  assert.equal(within(dialog).getByRole("button", { name: "Run" }).hasAttribute("disabled"), true);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Run" }));
+  assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:run"), false);
+});

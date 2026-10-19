@@ -67,11 +67,13 @@ interface SharedRefresh {
   /** Aborts the run once every caller has left. */
   controller: AbortController;
   callers: number;
+  /** Only the newest run for a page saves what it read. */
+  generation: number;
 }
 
 const FOLDER_UNAVAILABLE = "The workspace folder is unavailable.";
 
-/** The folder as it is now, so a moved or swapped folder never runs anything. */
+/** Resolves the folder as it is now: a folder that was removed or is no longer a directory runs nothing. */
 async function verifiedFolder(folderPath: string): Promise<string> {
   try {
     const real = await fs.realpath(folderPath);
@@ -108,6 +110,7 @@ function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): Source
 
 export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRunnerDependencies) {
   const inFlight = new Map<string, SharedRefresh>();
+  const generations = new Map<string, number>();
 
   async function runSource(
     source: WorkspaceArtifactSourceV1,
@@ -186,11 +189,14 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
     if (signal?.aborted) return cancelledResults(view.artifact.sources);
     const id = `${workspaceId}:${artifactId}`;
-    const key = `${view.digest}\0${context.permission}\0${context.folderPath ?? ""}`;
+    const approved = view.artifact.approvedDigest === view.digest;
+    const key = `${view.digest}\0${approved}\0${context.permission}\0${context.folderPath ?? ""}`;
     let shared = inFlight.get(id);
     if (!shared || shared.key !== key || shared.controller.signal.aborted) {
       const controller = new AbortController();
-      const entry: SharedRefresh = { key, controller, callers: 0, promise: Promise.resolve({}) };
+      const generation = (generations.get(id) ?? 0) + 1;
+      generations.set(id, generation);
+      const entry: SharedRefresh = { key, controller, callers: 0, generation, promise: Promise.resolve({}) };
       entry.promise = (async () => {
         let results: SourceResults;
         try {
@@ -201,7 +207,8 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
           const at = Date.now();
           results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: message } as const]));
         }
-        if (controller.signal.aborted) return results;
+        // A newer run (other commands, approval or access) owns the saved data now.
+        if (controller.signal.aborted || generations.get(id) !== generation) return results;
         // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
         const current = await dependencies.store.get(workspaceId, artifactId);
         if (!current || current.digest !== view.digest) return results;
