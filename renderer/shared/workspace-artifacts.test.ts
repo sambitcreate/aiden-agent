@@ -131,6 +131,8 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "eval {{x}}",
     "sh -c {{x}}",
     "xargs {{x}}",
+    "if {{x}}; then echo ok; fi",
+    "{ {{x}}; }",
     "printf '%s' \\{{x}}",
     // A quote in a comment must not change what the next line counts as quoted.
     '# say "hi\necho "{{x}}"',
@@ -138,11 +140,21 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "echo $AIDEN_ARG_1 {{x}}",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
-  for (const command of ["[[ {{x}} -gt 0 ]] && echo big", "(( {{x}} > 0 )) && echo big", "let {{x}}"]) {
+  for (const command of ["[[ {{x}} -gt 0 ]] && echo big", "(( {{x}} > 0 )) && echo big", "let {{x}}", "f() { local {{x}}; }; f"]) {
     assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /arithmetic/u, command);
     assert.equal(parseWorkspaceArtifactActions(actions(command, "number")).length, 1, command);
   }
-  for (const command of ["[ {{x}} -gt 0 ] && echo big", "gh pr view {{x}} # the number", "printf '%s\\n' {{x}} | sort"]) {
+  // Text is fine outside those places, even when the same template uses them elsewhere.
+  for (const command of [
+    "[ {{x}} -gt 0 ] && echo big",
+    "gh pr view {{x}} # the number",
+    "printf '%s\\n' {{x}} | sort",
+    "printf %s {{x}} # comparison uses [[ later",
+    "if (( 1 )); then printf %s {{x}}; fi",
+    "[[ -d .git ]] && git checkout {{x}}",
+    "f() { local result=ok; printf %s {{x}}; }; f",
+    "echo '((' {{x}}",
+  ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
 });

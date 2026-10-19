@@ -158,11 +158,18 @@ function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
 const WORD_BREAK_BEFORE = /[\s;&|()]/u;
 const WORD_BREAK_AFTER = /[\s;&|)]/u;
 /** Where a word starts a command, so a value there would run as the program. */
-const COMMAND_START = /(?:^|[;&|(\n!])[ \t]*$/u;
+const COMMAND_START = /(?:^|[;&|(){}\n!]|(?:^|\s)(?:do|elif|else|if|then|until|while))[ \t]*$/u;
 /** Commands that run their argument as code or as another program. */
 const RUNS_ARGUMENT = new Set([".", "-c", "builtin", "command", "env", "eval", "exec", "nohup", "source", "sudo", "time", "xargs"]);
-/** Bash evaluates a quoted text value as arithmetic here, which can run code. */
-const ARITHMETIC_CONTEXT = /\[\[|\(\(|\$\[|(?:^|[\s;&|(])(?:let|declare|typeset|local)[ \t]/u;
+/** Commands whose arguments bash may evaluate as arithmetic, which can run code. */
+const ARITHMETIC_COMMANDS = new Set(["declare", "let", "local", "typeset"]);
+
+interface PlaceholderPlacement {
+  /** Where a placeholder sits wrongly for any value. */
+  misplaced?: string;
+  /** A placeholder bash evaluates as arithmetic; only numbers are safe there. */
+  arithmetic?: string;
+}
 
 /**
  * Each placeholder must stand alone as an unquoted argument (`gh pr merge
@@ -173,12 +180,16 @@ const ARITHMETIC_CONTEXT = /\[\[|\(\(|\$\[|(?:^|[\s;&|(])(?:let|declare|typeset|
  * shell code (see `resolveWorkspaceArtifactCommand`); this keeps each value
  * one plain argument, as the person's confirmation shows it.
  */
-function placeholderOutsideWord(template: string): string | undefined {
-  if (!PLACEHOLDER_TEST.test(template)) return undefined;
-  if (template.includes("AIDEN_ARG_")) return "next to AIDEN_ARG_ variables, which are reserved";
-  if (/<<(?!<)/u.test(template)) return "inside a heredoc";
+function placeholderPlacement(template: string, isText: (name: string) => boolean): PlaceholderPlacement {
+  const misplaced = (reason: string): PlaceholderPlacement => ({ misplaced: reason });
+  if (!PLACEHOLDER_TEST.test(template)) return {};
+  if (template.includes("AIDEN_ARG_")) return misplaced("next to AIDEN_ARG_ variables, which are reserved");
+  if (/<<(?!<)/u.test(template)) return misplaced("inside a heredoc");
   let quote: "'" | '"' | "`" | "$'" | null = null;
   let depth = 0;
+  // Unquoted [[ … ]] and (( … )), where bash reads words as arithmetic.
+  let testBrackets = false;
+  let arithmeticParens = 0;
   const checked = new Set<number>();
   for (let index = 0; index < template.length; index += 1) {
     const char = template[index]!;
@@ -203,34 +214,61 @@ function placeholderOutsideWord(template: string): string | undefined {
       const match = PLACEHOLDER_AT.exec(template);
       if (!match) continue;
       checked.add(index);
-      if (quote === '"') return "inside double quotes";
-      if (quote === "`") return "inside backticks";
-      if (depth > 0) return "inside a $(…) or ${…} expansion";
+      if (quote === '"') return misplaced("inside double quotes");
+      if (quote === "`") return misplaced("inside backticks");
+      if (depth > 0) return misplaced("inside a $(…), ${…} or $[…] expansion");
       const before = index === 0 ? " " : template[index - 1]!;
       const end = index + match[0].length;
       const after = end >= template.length ? " " : template[end]!;
-      if (!WORD_BREAK_BEFORE.test(before) || !WORD_BREAK_AFTER.test(after)) return "part of a longer word";
+      if (!WORD_BREAK_BEFORE.test(before) || !WORD_BREAK_AFTER.test(after)) return misplaced("part of a longer word");
       const head = template.slice(0, index);
-      if (COMMAND_START.test(head) && !/\(\([ \t]*$/u.test(head)) return "the command itself";
+      const inArithmetic = arithmeticParens > 0 || testBrackets;
+      if (!inArithmetic && COMMAND_START.test(head)) return misplaced("the command itself");
       const previous = /(\S+)[ \t]+$/u.exec(head)?.[1];
-      if (previous && RUNS_ARGUMENT.has(previous)) return `an argument to ${previous}, which runs it`;
+      if (previous && RUNS_ARGUMENT.has(previous)) return misplaced(`an argument to ${previous}, which runs it`);
+      const commandWord = /(?:^|[;&|(){}\n!])[ \t]*([^\s;&|(){}]+)[^;&|(){}\n]*$/u.exec(head)?.[1];
+      if ((inArithmetic || (commandWord && ARITHMETIC_COMMANDS.has(commandWord))) && isText(match[1]!)) {
+        return { arithmetic: match[1]! };
+      }
       index = end - 1;
       continue;
+    }
+    if (quote === null && depth === 0) {
+      const wordStart = index === 0 || WORD_BREAK_BEFORE.test(template[index - 1]!);
+      if (!testBrackets && wordStart && template.startsWith("[[", index)) {
+        testBrackets = true;
+        index += 1;
+        continue;
+      }
+      if (testBrackets && template.startsWith("]]", index)) {
+        testBrackets = false;
+        index += 1;
+        continue;
+      }
+      if (arithmeticParens === 0 && wordStart && template.startsWith("((", index)) {
+        arithmeticParens = 2;
+        index += 1;
+        continue;
+      }
+      if (arithmeticParens > 0 && (char === "(" || char === ")")) {
+        arithmeticParens += char === "(" ? 1 : -1;
+        continue;
+      }
     }
     if (quote === null && char === "$" && template[index + 1] === "'") {
       quote = "$'";
       index += 1;
     } else if (quote === null && (char === "'" || char === '"' || char === "`")) quote = char;
     else if (quote !== null && char === quote) quote = null;
-    else if (char === "$" && (template[index + 1] === "(" || template[index + 1] === "{")) {
+    else if (char === "$" && (template[index + 1] === "(" || template[index + 1] === "{" || template[index + 1] === "[")) {
       depth += 1;
       index += 1;
-    } else if (depth > 0 && (char === ")" || char === "}")) depth -= 1;
+    } else if (depth > 0 && (char === ")" || char === "}" || char === "]")) depth -= 1;
   }
-  if (quote !== null || depth !== 0) return "after an unclosed quote or expansion";
+  if (quote !== null || depth !== 0) return misplaced("after an unclosed quote or expansion");
   // A placeholder the scan stepped over (say, right after a backslash) was never checked.
-  for (const match of template.matchAll(PLACEHOLDER)) if (!checked.has(match.index)) return "after a backslash or other escape";
-  return undefined;
+  for (const match of template.matchAll(PLACEHOLDER)) if (!checked.has(match.index)) return misplaced("after a backslash or other escape");
+  return {};
 }
 
 function byteLength(text: string): number {
@@ -350,17 +388,14 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
     for (const match of template.matchAll(PLACEHOLDER)) {
       if (!paramNames.has(match[1]!)) return invalid(`${where}: {{${match[1]}}} is not one of its params.`);
     }
-    const misplaced = placeholderOutsideWord(template);
-    if (misplaced) {
-      return invalid(`${where}: each {{param}} must be its own unquoted word, not ${misplaced}. Write gh pr comment {{number}} --body {{body}}.`);
+    const placement = placeholderPlacement(template, (name) => params.some((param) => param.name === name && param.type === "string"));
+    if (placement.misplaced) {
+      return invalid(`${where}: each {{param}} must be its own unquoted word, not ${placement.misplaced}. Write gh pr comment {{number}} --body {{body}}.`);
     }
-    if (ARITHMETIC_CONTEXT.test(template)) {
-      const text = params.find((param) => param.type === "string" && new RegExp(`\\{\\{\\s*${param.name}\\s*\\}\\}`, "u").test(template));
-      if (text) {
-        return invalid(
-          `${where}: {{${text.name}}} is text, and bash runs text inside [[ ]], (( )), $[ ] or let as arithmetic. Give it type "number", or compare with [ … ].`,
-        );
-      }
+    if (placement.arithmetic) {
+      return invalid(
+        `${where}: {{${placement.arithmetic}}} is text, and bash evaluates text inside [[ ]], (( )), let or declare as arithmetic. Give it type "number", or compare with [ … ].`,
+      );
     }
     return { name: entry.name, label, command: template, params };
   });
