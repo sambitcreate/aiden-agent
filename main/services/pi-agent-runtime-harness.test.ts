@@ -661,6 +661,36 @@ test("managed run journals its input exactly once before provider execution", as
   );
 });
 
+test("an abort issued before a managed run starts cancels that run without reaching the provider", async () => {
+  const { core, harness, session } = await managedTestHarness([fauxAssistantMessage("ran anyway")]);
+  const input: AgentMessage = {
+    role: "user",
+    content: [{ type: "text", text: "stopped before start" }],
+    timestamp: Date.now(),
+  };
+
+  harness.abort();
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: input });
+
+  assert.equal(outcome.kind, "app_cancelled");
+  assert.equal(core.state.callCount, 0);
+  assert.equal(
+    (await session.buildContext()).messages.some((message) =>
+      JSON.stringify(message).includes("stopped before start"),
+    ),
+    false,
+  );
+
+  // The early abort is consumed by that run: after reset() the next run proceeds.
+  harness.reset();
+  const next = await harness.runManaged({
+    kind: "append-and-run",
+    message: { ...input, content: [{ type: "text", text: "second request" }] },
+  });
+  assert.equal(next.kind, "completed");
+  assert.equal(core.state.callCount, 1);
+});
+
 test("managed run commits an assistant tool plan before executing effects", async () => {
   const trace: string[] = [];
   let releasePlan!: () => void;

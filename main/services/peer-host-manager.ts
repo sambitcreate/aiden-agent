@@ -100,6 +100,8 @@ interface Supervisor {
   retryTimer: unknown;
   stableTimer: unknown;
   routeTimer?: unknown;
+  /** The generation whose scheduled route check is running; its chain reschedules itself. */
+  routeChecking?: number;
   discoveryTimer?: unknown;
   finalDiscoveryTimer?: unknown;
   probing?: boolean;
@@ -608,9 +610,13 @@ export class PeerHostManager {
 
   private scheduleRouteCheck(sup: Supervisor, generation: number): void {
     if (!this.options.registry.preferReachableRoute || sup.view.activeRouteKind !== "tailscale" || !sup.view.routes?.some((route) => route.kind === "lan")) return;
+    // One chain per generation: a sync during an in-flight check must not start another.
+    if (sup.routeTimer !== undefined || sup.routeChecking === generation) return;
     sup.routeTimer = this.timers.set(() => {
       sup.routeTimer = undefined;
+      sup.routeChecking = generation;
       void this.checkPreferredRoute(sup, generation).finally(() => {
+        if (sup.routeChecking === generation) sup.routeChecking = undefined;
         if (this.current(sup, generation)) this.scheduleRouteCheck(sup, generation);
       });
     }, 30_000);

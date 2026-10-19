@@ -6502,12 +6502,10 @@ export class GitService {
   async managedWorktreeBranchHead(cwd: string, branch: string): Promise<string | undefined> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
-    const result = await this.run(
-      repo.cwd,
-      ["for-each-ref", "--count=1", "--format=%(objectname)", `refs/heads/${branch}`],
-    );
-    const head = result.stdout.trim();
-    return GIT_OBJECT_ID.test(head) ? head : undefined;
+    // An exact ref lookup: for-each-ref patterns also match nested branches
+    // (`refs/heads/<branch>/...`), which would report another branch's commit.
+    const head = await this.optionalCommit(repo, `refs/heads/${branch}`);
+    return head !== undefined && GIT_OBJECT_ID.test(head) ? head : undefined;
   }
 
   /**

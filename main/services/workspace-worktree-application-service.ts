@@ -140,7 +140,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   beginWorkspaceMutation(workspaceId: string): () => void;
   workspaceIsChanging(workspaceId: string): boolean;
   cancelWorkspaceOperations(workspaceId: string, exceptSignal: AbortSignal): Promise<void>;
-  closeWorkspaceTerminals(workspaceId: string): void;
+  closeWorkspaceTerminals(workspaceId: string): Promise<void>;
   cancelWorkspaceGeneration(workspaceId: string): Promise<void>;
   cancelWorkspaceSchedules(workspaceId: string): Promise<void>;
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
@@ -228,7 +228,7 @@ export function createWorkspaceWorktreeApplicationService(
 ) {
   // Restore journals live inside the snapshot directory, so concurrent
   // restores of the same snapshot are serialized here per process.
-  const restoreLocks = new Map<string, Promise<Workspace>>();
+  const restoreLocks = new Map<string, Promise<void>>();
 
   const createIn = async (
     resolved: { folderPath: string; workspace: Workspace },
@@ -464,7 +464,7 @@ export function createWorkspaceWorktreeApplicationService(
             ),
           },
           async ({ keepPaused }) => {
-            dependencies.closeWorkspaceTerminals(workspaceId);
+            await dependencies.closeWorkspaceTerminals(workspaceId);
             await dependencies.cancelWorkspaceGeneration(workspaceId);
             await dependencies.cancelWorkspaceSchedules(workspaceId);
 
@@ -687,6 +687,10 @@ export function createWorkspaceWorktreeApplicationService(
     snapshotId: string,
     requestedName?: string,
   ): Promise<Workspace> => {
+    // Capture the in-flight holder before this attempt is queued. The callback
+    // runs only after admission's own I/O, by which time the map holds this
+    // attempt, so reading it there would wait on itself and never settle.
+    const previous = restoreLocks.get(snapshotId);
     const operation = dependencies.environment.run(
       owner,
       sourceWorkspaceId,
@@ -695,9 +699,9 @@ export function createWorkspaceWorktreeApplicationService(
         // shared state is consulted. A concurrent restore of the same snapshot
         // is serialized, not shared: this caller waits for the in-flight
         // attempt, then runs its own journal-convergent restore.
-        const pending = restoreLocks.get(snapshotId);
-        if (pending !== undefined) {
-          await pending.catch(() => undefined);
+        if (previous !== undefined) {
+          await previous;
+          signal.throwIfAborted();
         }
         const snapshotRoot = await dependencies.ensureSnapshotRoot();
         const snapshot = await requireReadyManagedWorktreeSnapshot(snapshotRoot, snapshotId);
@@ -782,14 +786,15 @@ export function createWorkspaceWorktreeApplicationService(
         return saved;
       },
     );
-    restoreLocks.set(snapshotId, operation);
-    try {
-      return await operation;
-    } finally {
-      if (restoreLocks.get(snapshotId) === operation) {
+    // The lock settles only after every earlier holder and this attempt, so an
+    // attempt refused at admission cannot let a later one overtake a running one.
+    const lock: Promise<void> = Promise.allSettled([previous, operation]).then(() => {
+      if (restoreLocks.get(snapshotId) === lock) {
         restoreLocks.delete(snapshotId);
       }
-    }
+    });
+    restoreLocks.set(snapshotId, lock);
+    return operation;
   };
 
   return { create, createFromBase, discardInterruptedWorktree, remove, restore };

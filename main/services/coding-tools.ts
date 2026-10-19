@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
 import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
-import { agentCommandEnvironment } from "./agent-command-environment.js";
+import { agentShellCommandEnvironment } from "./agent-command-environment.js";
 import {
   constants as fsConstants,
   realpathSync,
@@ -1234,9 +1234,17 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
       } finally {
         await handle.close();
       }
+      if (old_string.length === 0) throw new Error("old_string must not be empty.");
       const original = source.toString("utf8");
+      // Decoding is lossy for invalid sequences; never rewrite bytes we cannot round-trip.
+      if (!Buffer.from(original, "utf8").equals(source)) {
+        throw new Error(`edit_file only edits valid UTF-8 text files; ${p} contains bytes that are not UTF-8.`);
+      }
       throwIfAborted(signal, "File edit cancelled.");
-      const count = original.split(old_string).length - 1;
+      let count = 0;
+      for (let at = original.indexOf(old_string); at !== -1; at = original.indexOf(old_string, at + old_string.length)) {
+        count += 1;
+      }
       if (count === 0) throw new Error(`old_string not found in ${p}.`);
       if (count > 1)
         throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
@@ -1943,6 +1951,8 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
  */
 export interface CodingToolOptions {
   pathPrefix?: string | (() => string | null | undefined);
+  /** A shorter deadline for process-lifecycle tests; production uses the fixed limit. */
+  commandTimeoutMs?: number;
   /** Trusted native helper from the application installation, if packaged outside Electron. */
   fileMutatorBinary?: string;
 }
@@ -1992,7 +2002,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         const child = spawn(command, {
           cwd: root,
           detached: process.platform !== "win32",
-          env: runCommandEnv(options, agentCommandEnvironment()),
+          env: runCommandEnv(options, agentShellCommandEnvironment()),
           shell: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -2005,6 +2015,18 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         let settled = false;
         let terminationRequested = false;
         let forceKill: ReturnType<typeof setTimeout> | undefined;
+        let finishTermination: (() => void) | undefined;
+        let terminationCleanup: Promise<void> | undefined;
+
+        const processGroupExists = () => {
+          if (process.platform === "win32" || !child.pid) return false;
+          try {
+            process.kill(-child.pid, 0);
+            return true;
+          } catch (error) {
+            return (error as NodeJS.ErrnoException).code !== "ESRCH";
+          }
+        };
 
         const signalProcess = (processSignal: NodeJS.Signals) => {
           if (process.platform !== "win32" && child.pid) {
@@ -2021,10 +2043,17 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
           if (terminationRequested) return;
           terminationRequested = true;
           signalProcess("SIGTERM");
-          forceKill = setTimeout(() => {
-            if (!settled) signalProcess("SIGKILL");
-          }, 1_000);
-          forceKill.unref?.();
+          if (!child.pid) return;
+          terminationCleanup = new Promise<void>((resolve) => {
+            finishTermination = resolve;
+            forceKill = setTimeout(() => {
+              // The shell can close before its descendants leave the process group.
+              // Keep this timer owned by the group, independent of shell settlement.
+              signalProcess("SIGKILL");
+              finishTermination?.();
+              finishTermination = undefined;
+            }, 1_000);
+          });
         };
         const abort = () => {
           aborted = true;
@@ -2046,30 +2075,39 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
           if (settled) return;
           settled = true;
           clearTimeout(timeout);
-          clearTimeout(forceKill);
           signal?.removeEventListener("abort", abort);
-          reject(error);
+          void (async () => {
+            await terminationCleanup;
+            reject(error);
+          })();
         });
         child.once("close", (exitCode) => {
           if (settled) return;
           settled = true;
           clearTimeout(timeout);
-          clearTimeout(forceKill);
           signal?.removeEventListener("abort", abort);
-          resolve({
-            stdout: Buffer.concat(stdout).toString("utf-8"),
-            stderr: Buffer.concat(stderr).toString("utf-8"),
-            exitCode,
-            timedOut,
-            outputLimitExceeded,
-            aborted,
-          });
+          if (finishTermination && !processGroupExists()) {
+            clearTimeout(forceKill);
+            finishTermination();
+            finishTermination = undefined;
+          }
+          void (async () => {
+            await terminationCleanup;
+            resolve({
+              stdout: Buffer.concat(stdout).toString("utf-8"),
+              stderr: Buffer.concat(stderr).toString("utf-8"),
+              exitCode,
+              timedOut,
+              outputLimitExceeded,
+              aborted,
+            });
+          })();
         });
         signal?.addEventListener("abort", abort, { once: true });
         const timeout = setTimeout(() => {
           timedOut = true;
           terminate();
-        }, COMMAND_TIMEOUT_MS);
+        }, options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS);
         timeout.unref?.();
       });
       if (result.aborted) {

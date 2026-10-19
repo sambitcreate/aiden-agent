@@ -40,6 +40,11 @@ test("mac signing hook assigns minimal entitlements to privileged and standalone
     COMPUTER_USE_ENTITLEMENTS,
   );
   assert.equal(
+    options.optionsForFile(path.join(app, "Contents", "Helpers", "aiden-lease-flock"))
+      .entitlements,
+    COMPUTER_USE_ENTITLEMENTS,
+  );
+  assert.equal(
     options.optionsForFile(path.join(app, "Contents", "Helpers", "aiden-subagent-run-store"))
       .entitlements,
     COMPUTER_USE_ENTITLEMENTS,

@@ -30,6 +30,8 @@ export interface RecorderChild {
   signalCode: NodeJS.Signals | null;
   kill(signal: NodeJS.Signals): boolean;
   once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  /** A spawn failure: Node emits `error` (with the errno already in `exitCode`) and never `exit`. */
+  once(event: "error", listener: (error: Error) => void): unknown;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -87,6 +89,8 @@ interface Entry {
   remote: DeviceRecordingRemote | null;
   /** The device copy was deleted (or there never was one). */
   cleaned: boolean;
+  /** The device's recorder was never confirmed stopped, so its file may be unfinished. */
+  stopUnconfirmed: boolean;
 }
 
 export interface DeviceRecorder {
@@ -98,6 +102,11 @@ export interface DeviceRecorder {
   /** Stops if needed and deletes the temp file. */
   discard(id: string): Promise<void>;
   discardWhere(match: (info: DeviceRecordingInfo) => boolean): Promise<void>;
+  /**
+   * Quit's deadline: SIGKILLs every recorder child still running so none outlives the app.
+   * A pending discard then deletes the device copy, without pulling it, and the local file.
+   */
+  terminate(): void;
   list(): DeviceRecordingInfo[];
   get(id: string): DeviceRecordingInfo | null;
   onChange(listener: (recordings: DeviceRecordingInfo[]) => void): () => void;
@@ -108,8 +117,11 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
   const stopTimeoutMs = deps.stopTimeoutMs ?? DEVICE_RECORDING_STOP_TIMEOUT_MS;
   const entries = new Map<string, Entry>();
   const listeners = new Set<(recordings: DeviceRecordingInfo[]) => void>();
-  /** Device keys with a start in flight, so two clicks never spawn two recorders. */
-  const starting = new Set<string>();
+  /**
+   * Starts in flight by device key, so two clicks never spawn two recorders and a discard
+   * that runs while one is still preparing (a deleted chat, quit) cancels it.
+   */
+  const starting = new Map<string, { info: DeviceRecordingInfo; cancelled: boolean }>();
 
   const list = () => [...entries.values()].map((entry) => ({ ...entry.info }));
   const emit = () => {
@@ -138,18 +150,24 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
     entry.child = null;
     let collectFailed = false;
     if (entry.remote) {
-      try {
-        await entry.remote.collect(entry.file);
-      } catch {
-        collectFailed = true;
+      // An unconfirmed stop leaves nothing worth pulling: the device may still be writing.
+      if (!entry.stopUnconfirmed) {
+        try {
+          await entry.remote.collect(entry.file);
+        } catch {
+          collectFailed = true;
+        }
       }
       await cleanupRemote(entry);
     }
     const size = await deps.fileSize(entry.file).catch(() => null);
     const stoppedAt = entry.info.stoppedAt ?? deps.now();
-    if (size && size > 0 && (code === 0 || reason !== "exited")) {
+    const incomplete = collectFailed || entry.stopUnconfirmed;
+    if (!incomplete && size && size > 0 && (code === 0 || reason !== "exited")) {
       update(entry, { status: "ready", stoppedAt, reason });
     } else {
+      // A partial pull or an unfinished file can never be saved, and the device copy is gone.
+      if (incomplete) await deps.removeFile(entry.file).catch(() => undefined);
       update(entry, {
         status: "failed",
         stoppedAt,
@@ -159,7 +177,9 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
             ? `The device stopped recording (exit code ${code}).`
             : collectFailed
               ? "The recording could not be copied from the emulator."
-              : "The recording is empty.",
+              : entry.stopUnconfirmed
+                ? "The recording did not finish writing."
+                : "The recording is empty.",
       });
     }
     return { ...entry.info };
@@ -177,7 +197,11 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
       }, stopTimeoutMs);
       if (entry.remote) {
         // The device's recorder finalizes its file; signalling the local adb would not wait for that.
-        void entry.remote.stop().catch(() => child.kill("SIGINT"));
+        void entry.remote.stop().catch(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          entry.stopUnconfirmed = true;
+          child.kill("SIGINT");
+        });
       } else {
         child.kill("SIGINT");
       }
@@ -217,20 +241,37 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
           deviceKey(entry.info) === key && (entry.info.status === "recording" || entry.info.status === "stopping"),
       );
       if (busy || starting.has(key)) throw new Error("This simulator is already being recorded.");
-      starting.add(key);
+      const id = deps.newId();
+      const cap = input.maxDurationMs ?? maxDurationMs;
+      const pendingAt = deps.now();
+      const pending = {
+        info: {
+          id,
+          chatId: input.chatId,
+          platform: input.platform,
+          hostId: input.hostId,
+          deviceId: input.deviceId,
+          status: "recording" as const,
+          startedAt: pendingAt,
+          endsBy: pendingAt + cap,
+        },
+        cancelled: false,
+      };
+      starting.set(key, pending);
       try {
-        const id = deps.newId();
         const directory = await deps.tempDir();
+        if (pending.cancelled) throw new Error("The recording was cancelled before it started.");
         const file = path.join(directory, `${id}.mp4`);
         const { command, args } = input.command(file, id);
         const remote = input.remote?.(id) ?? null;
-        const cap = input.maxDurationMs ?? maxDurationMs;
         const child = deps.spawn(command, args, input.env);
         const startedAt = deps.now();
         let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
         const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
           resolveExit = resolve;
         });
+        // A child that could not be spawned emits only `error`, so it settles the recording as an exit.
+        child.once("error", () => resolveExit({ code: child.exitCode ?? 127, signal: null }));
         if (child.exitCode !== null || child.signalCode !== null) {
           resolveExit({ code: child.exitCode, signal: child.signalCode });
         } else {
@@ -255,6 +296,7 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
           settling: null,
           remote,
           cleaned: remote === null,
+          stopUnconfirmed: false,
         };
         entry.capTimer = deps.setTimeout(() => {
           entry.capTimer = null;
@@ -288,7 +330,20 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
       if (entry) await removeEntry(entry);
     },
     async discardWhere(match) {
+      for (const pending of starting.values()) {
+        if (match({ ...pending.info })) pending.cancelled = true;
+      }
       await Promise.all([...entries.values()].filter((entry) => match(entry.info)).map(removeEntry));
+    },
+    terminate() {
+      for (const pending of starting.values()) pending.cancelled = true;
+      for (const entry of entries.values()) {
+        const child = entry.child;
+        if (!child || child.exitCode !== null || child.signalCode !== null) continue;
+        // A killed recorder's file is unfinished, so nothing is pulled from the device.
+        entry.stopUnconfirmed = true;
+        child.kill("SIGKILL");
+      }
     },
     list,
     get: (id) => {

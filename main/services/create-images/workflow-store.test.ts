@@ -16,8 +16,11 @@ async function fixture(t: TestContext) {
   await assets.initialize();
   t.after(() => assets.close());
   let clock = 1_000;
-  /** Flip a flag to make that kind of JSON write fail, as a full disk or a permissions error would. */
-  const faults = { document: false, index: false };
+  /**
+   * Flip a flag to make that kind of JSON write fail, as a full disk or a permissions error would.
+   * `documentSync`: the document is renamed into place but the directory flush after it fails.
+   */
+  const faults = { document: false, index: false, documentSync: false };
   const issues: string[] = [];
   const open = async () => {
     const store = new ImageWorkflowStore({
@@ -27,6 +30,9 @@ async function fixture(t: TestContext) {
       writeJson: (target, value, options) => {
         const isIndex = path.basename(target) === "index.json";
         if (isIndex ? faults.index : faults.document) return Promise.reject(new Error("disk full"));
+        if (!isIndex && faults.documentSync) {
+          return writeJsonAtomic(target, value, { ...options, io: { syncDirectory: () => Promise.reject(new Error("EIO")) } });
+        }
         return writeJsonAtomic(target, value, options);
       },
       reportIssue: (message) => void issues.push(message),
@@ -286,7 +292,41 @@ test("the index is a cache: a failed index write neither fails a save nor desync
   assert.deepEqual(store.list().map(({ title, revision }) => ({ title, revision })), [{ title: "Renamed anyway", revision: 3 }]);
   assert.ok(issues.length >= 2, "each failed index write is reported");
   faults.index = false;
-  assert.equal((await (await open()).get(created.id))?.revision, 3);
+  const reopened = await open();
+  assert.equal((await reopened.get(created.id))?.revision, 3);
+  // The stale index.json on disk lists the same ids: the summaries must still come from the documents.
+  assert.deepEqual(reopened.list().map(({ title, revision }) => ({ title, revision })), [{ title: "Renamed anyway", revision: 3 }]);
+});
+
+test("a document published before its directory flush fails counts as written: the copy keeps its holds and the list is current", async (t) => {
+  const { store, open, assets, faults, issues } = await fixture(t);
+  const asset = await assets.put({ bytes: pngBytes(4, 4, 1) });
+  const created = await store.create("blank");
+  const withImage: WorkflowDocV1 = {
+    ...created,
+    nodes: [{ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } }],
+  };
+  assert.equal((await store.save(created.id, 1, withImage)).ok, true);
+
+  faults.documentSync = true;
+  const copy = await store.duplicate(created.id);
+  assert.ok(copy, "the duplicate is reported, since its file is complete on disk");
+  assert.deepEqual(
+    assets.holders(asset.assetId).map((holder) => holder.id).sort(),
+    [created.id, copy.id].sort(),
+    "the copy keeps the holds on the image it shows",
+  );
+  // A save whose document landed is a save: the list reflects it at once, and
+  // the next save from the new revision is not told it conflicts with itself.
+  assert.deepEqual(await store.save(created.id, 2, { ...withImage, title: "Landed" }), { ok: true, revision: 3 });
+  assert.equal(store.list().find((entry) => entry.id === created.id)?.revision, 3);
+  assert.ok(issues.length >= 1, "the missed flush is reported");
+  faults.documentSync = false;
+  assert.deepEqual(await store.save(created.id, 3, { ...withImage, title: "Again" }), { ok: true, revision: 4 });
+
+  const reopened = await open();
+  assert.deepEqual(reopened.list().map((entry) => entry.id).sort(), [created.id, copy.id].sort());
+  assert.deepEqual((await reopened.get(copy.id))?.nodes, withImage.nodes);
 });
 
 test("delete releases the workflow's holds even if the index cannot be rewritten, and removes unindexed files", async (t) => {

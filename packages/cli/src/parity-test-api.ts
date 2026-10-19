@@ -29,6 +29,7 @@ export * from "./bots.ts";
 export { runCliSubagent } from "./subagent-process.ts";
 export { createCliAuthCoordinator } from "./auth.ts";
 export { createOnboardingExtension } from "./extensions/onboarding.ts";
+export { createDisplayImageInlineExtension } from "./extensions/display-image.ts";
 
 export { createCliBotAvatars } from "./bot-avatars.ts";
 export { createCliMcpPool } from "./mcp.ts";

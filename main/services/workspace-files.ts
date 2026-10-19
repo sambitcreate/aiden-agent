@@ -410,6 +410,23 @@ export async function writeWorkspaceFile(
   signal?: AbortSignal,
   hooks?: WorkspaceFileWriteHooks,
 ): Promise<WorkspaceFileDocument> {
+  return (await writeWorkspaceFileInstalling(root, suppliedPath, content, expectedVersion, signal, hooks)).document;
+}
+
+/** The inode a save installed, so a handle is rebound to it and never to a later replacement. */
+export interface InstalledWorkspaceFileIdentity {
+  device: string;
+  inode: string;
+}
+
+export async function writeWorkspaceFileInstalling(
+  root: string,
+  suppliedPath: string,
+  content: string,
+  expectedVersion: string,
+  signal?: AbortSignal,
+  hooks?: WorkspaceFileWriteHooks,
+): Promise<{ document: WorkspaceFileDocument; installed: InstalledWorkspaceFileIdentity }> {
   throwIfAborted(signal);
   const nextBuffer = Buffer.from(content, "utf8");
   if (nextBuffer.byteLength > MAX_EDITOR_BYTES) {
@@ -440,6 +457,7 @@ export async function writeWorkspaceFile(
   );
   let displaced = false;
   let installed = false;
+  let installedIdentity: InstalledWorkspaceFileIdentity | undefined;
   let warning: string | undefined;
   try {
     await fs.writeFile(temporaryPath, nextBuffer, { flag: "wx", mode: stats.mode });
@@ -463,6 +481,9 @@ export async function writeWorkspaceFile(
       // to overwrite a file recreated by an external editor after displacement.
       await fs.link(temporaryPath, fullPath);
       installed = true;
+      // The temporary name still holds the inode just linked into place.
+      const linked = await fs.stat(temporaryPath);
+      installedIdentity = { device: String(linked.dev), inode: String(linked.ino) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new WorkspaceFileError(
@@ -542,11 +563,14 @@ export async function writeWorkspaceFile(
 
   const savedStats = await fs.stat(fullPath);
   return {
-    path: relativePath,
-    content,
-    size: nextBuffer.byteLength,
-    modifiedAt: savedStats.mtimeMs,
-    version: contentVersion(nextBuffer),
-    ...(warning ? { warning } : {}),
+    document: {
+      path: relativePath,
+      content,
+      size: nextBuffer.byteLength,
+      modifiedAt: savedStats.mtimeMs,
+      version: contentVersion(nextBuffer),
+      ...(warning ? { warning } : {}),
+    },
+    installed: installedIdentity!,
   };
 }

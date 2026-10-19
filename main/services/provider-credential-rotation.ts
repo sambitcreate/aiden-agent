@@ -68,6 +68,10 @@ async function reconcilePendingProviderCredentialRotationNow(
       resolution.key,
       JSON.stringify(providerConnectionSnapshot(current)),
     );
+  } else if (!current && pending.target === null) {
+    // A committed explicit removal: its recovery quarantines go too, so
+    // re-adding the same ID cannot silently reattach the old key.
+    await secrets.deleteProviderKeyWithQuarantine(pending.providerId);
   } else {
     await secrets.deleteKey(pending.providerId);
   }

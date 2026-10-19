@@ -60,8 +60,12 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision 33: Bot message attachments (`bot-attachments-v1`). Phones stage
  * images and text files with `POST /bots/{botId}/attachments` and send them
  * with `attachmentIds` on `POST /bots/{botId}/messages`.
+ *
+ * Contract revision 34 (provisional; re-claim the next revision after `main`'s
+ * at merge): `speech-request-gzip-v1` advertises support for one bounded gzip
+ * member on `POST /speech/transcriptions`; identity JSON remains supported.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 33 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 34 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -70,6 +74,7 @@ export const AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT = 100;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT = 200;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH = 512;
 export const AIDEN_REMOTE_CHAT_SUMMARY_FEATURE = "chat-summaries-v1" as const;
+export const AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE = "speech-request-gzip-v1" as const;
 /**
  * Server feature token for shared read markers (`POST /chats/{chatId}/read`).
  * Advertised only while the host wires a durable read-marker store; without it
@@ -5958,6 +5963,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_READ_STATE_FEATURE)) {
     throw new Error("Fixture server must advertise chat read state.");
+  }
+  if (contractRevision >= 34 && !serverFeatures.includes(AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE)) {
+    throw new Error("Fixture server must advertise gzip speech requests.");
   }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {

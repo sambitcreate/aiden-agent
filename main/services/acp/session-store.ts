@@ -14,6 +14,8 @@ export interface AcpSessionRecord {
   /** Conversation messages the session had seen when last committed. */
   messageCount: number;
   historyFingerprint: string;
+  /** Fingerprint of the host instructions last sent to this native session. */
+  hostInstructionsFingerprint?: string;
   /** Fingerprint of the assistant reply the session itself produced last. */
   expectedAssistantFingerprint?: string;
   updatedAt: number;
@@ -93,6 +95,8 @@ function read(file: string): AcpSessionRecord[] {
         typeof (record as AcpSessionRecord).cwd === "string" &&
         Number.isSafeInteger((record as AcpSessionRecord).messageCount) &&
         typeof (record as AcpSessionRecord).historyFingerprint === "string" &&
+        ((record as AcpSessionRecord).hostInstructionsFingerprint === undefined ||
+          typeof (record as AcpSessionRecord).hostInstructionsFingerprint === "string") &&
         typeof (record as AcpSessionRecord).updatedAt === "number",
     );
   } catch {

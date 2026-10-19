@@ -1157,9 +1157,9 @@ test("every memory view the store can load is one phones accept", async () => {
     // The Bot's session directory exists once its harness has opened.
     mkdirSync(path.dirname(botMemoryDirectory(root, BOT_ID)), { recursive: true });
     const store = createBotMemoryStore({ profileDir: root });
-    // 65 short, individually valid facts fit the 1,375-character budget many times over.
+    // 65 short, individually valid facts fit the 2,750-character budget many times over.
     const facts = Array.from({ length: 65 }, (_, index) => `Likes tea ${index + 1}.`);
-    assert.ok(facts.join("\n§\n").length < 1_375);
+    assert.ok(facts.join("\n§\n").length < 2_750);
     for (const fact of facts) await store.apply(BOT_ID, "user", [{ action: "add", content: fact }]);
     const saved = memoryStoreView(await store.load(BOT_ID));
     assert.equal(saved.user.entries.length, 64, "the 65th save is refused");

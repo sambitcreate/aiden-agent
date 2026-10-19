@@ -917,6 +917,24 @@ test("restore fails closed on branch conflicts and existing destinations", async
     ),
     (error: unknown) => error instanceof GitServiceError,
   );
+
+  // A deleted branch is absent even when a nested branch shares its prefix;
+  // the nested branch's commit must not be reported as the restore target's.
+  await git(repository, ["branch", "codex/nested/child", moved]);
+  assert.equal(await service.managedWorktreeBranchHead(repository, "codex/nested"), undefined);
+  assert.equal(await service.managedWorktreeBranchHead(repository, "codex/nested/child"), moved);
+  assert.equal(await service.managedWorktreeBranchHead(repository, "conflict-target"), base);
+  await assert.rejects(
+    service.restoreManagedWorktreeCheckout(
+      repository,
+      restoreRoot,
+      path.join(restoreRoot, "nested"),
+      "codex/nested",
+      base,
+      "",
+    ),
+    (error: unknown) => error instanceof GitServiceError && !/exists at a different commit/u.test(error.message),
+  );
   assert.ok(created.path);
 });
 

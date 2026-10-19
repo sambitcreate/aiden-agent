@@ -26,7 +26,8 @@ const ACTIVE = new Set<SubagentRunStateV2>([
   "needs_attention",
 ]);
 const TRANSITIONS: Readonly<Record<string, ReadonlySet<SubagentRunStateV2>>> = {
-  queued: new Set(["starting", "stopped", "interrupted"]),
+  // A queued run whose child could not be created fails without starting.
+  queued: new Set(["starting", "failed", "stopped", "interrupted"]),
   starting: new Set([
     "running",
     "failed",

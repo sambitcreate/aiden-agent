@@ -238,6 +238,54 @@ test("durable acceptance precedes unique child creation and detached work outliv
   assert.equal(coordinator.activeCount, 0);
 });
 
+test("a child that cannot be created fails its accepted run and surfaces the real cause", async () => {
+  const store = new MemoryStore();
+  let clock = 20;
+  const lifecycle = new BackgroundSubagentLifecycleV2(store, {}, () => ++clock);
+  const coordinator = new BackgroundSubagentCoordinatorV2<never>(lifecycle, {
+    createChild() {
+      throw new Error("The app-wide subagent runtime limit was reached.");
+    },
+    async startChild() {},
+    deliverSteer() {},
+  });
+
+  await assert.rejects(
+    coordinator.launch(prepared("run-uncreated")),
+    /^Error: The app-wide subagent runtime limit was reached\.$/u,
+  );
+
+  assert.equal(store.records.get("run-uncreated")?.snapshot.state, "failed");
+  assert.equal(coordinator.activeCount, 0);
+});
+
+test("a creation failure that cannot be recorded still reports the creation failure", async () => {
+  const store = new MemoryStore();
+  let clock = 20;
+  const lifecycle = new BackgroundSubagentLifecycleV2(store, {}, () => ++clock);
+  const coordinator = new BackgroundSubagentCoordinatorV2<never>(lifecycle, {
+    createChild() {
+      store.put = async () => false; // the durable store rejects every later write
+      throw new Error("The app-wide subagent runtime limit was reached.");
+    },
+    async startChild() {},
+    deliverSteer() {},
+  });
+
+  const rejection = await coordinator.launch(prepared("run-unrecorded")).then(
+    () => assert.fail("launch must reject"),
+    (error: unknown) => error,
+  );
+
+  assert.ok(rejection instanceof Error);
+  assert.equal(rejection.message, "The app-wide subagent runtime limit was reached.");
+  assert.ok(
+    (rejection as Error & { cause?: unknown }).cause instanceof Error,
+    "the recording failure is kept as the cause",
+  );
+  assert.equal(coordinator.activeCount, 0);
+});
+
 test("wait observes terminal work or times out, and steering is delivered only at a safe boundary", async () => {
   const { store, children, coordinator } = harness();
   await coordinator.launch(prepared("run-wait"));

@@ -1677,7 +1677,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (device?.platform === "android") {
           await shutdownLocal(ready, input.deviceId);
         } else {
-          await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
+          const result = await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], {
+            timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS,
+          });
+          if (result.code !== 0) throw new Error("The simulator did not shut down.");
           devices = devices.map((candidate) =>
             candidate.hostId === input.hostId && candidate.id === input.deviceId ? { ...candidate, booted: false } : candidate,
           );

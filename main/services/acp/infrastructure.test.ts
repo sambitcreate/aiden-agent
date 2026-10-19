@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
+import { Value } from "typebox/value";
 
+import { createDeviceAgentTools } from "../devices/device-tools.js";
+import { createTodoExtensionRuntime } from "../rpiv-todo/extension.js";
 import { buildChildEnvironment } from "./environment.js";
 import { redactSecrets } from "./errors.js";
 import { AcpMcpBridge, sanitizeSchema } from "./mcp-bridge.js";
@@ -69,6 +74,54 @@ test("the process wrapper keeps protocol lines, drops stdout noise, and reports 
   assert.deepEqual(lines, ["first", "second"]);
   assert.equal(exit.code, 0);
   assert.equal(child.ignoredStdoutLines, 1);
+});
+
+test("an oversized protocol line fails the input stream and closes the agent without an uncaught error", async () => {
+  const uncaught: unknown[] = [];
+  const onUncaught = (error: unknown) => uncaught.push(error);
+  process.on("uncaughtException", onUncaught);
+  try {
+    // A fake agent without a pid, so closing it signals only this object.
+    const fake = Object.assign(new EventEmitter(), {
+      pid: undefined,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      stdin: new PassThrough(),
+      signals: [] as NodeJS.Signals[],
+      kill(signal: NodeJS.Signals) {
+        fake.signals.push(signal);
+        // The agent writes the rest of its line, then dies on TERM.
+        setImmediate(() => {
+          fake.stdout.write('"}\n{"jsonrpc":"2.0","id":2}\n');
+          fake.stdout.end();
+          fake.signalCode = signal;
+          setImmediate(() => fake.emit("exit", null, signal));
+        });
+        return true;
+      },
+    });
+    const child = new AcpProcess({
+      command: "agent",
+      args: [],
+      cwd: tempDir(),
+      env: {},
+      platform: "linux",
+      spawnImpl: (() => fake) as never,
+    });
+    const reader = child.input.getReader();
+    const read = reader.read();
+    fake.stdout.write(Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":1,"result":"'), Buffer.alloc(17 * 1024 * 1024, 0x61)]));
+    await assert.rejects(read, /oversized protocol line/u);
+    const exit = await child.exited;
+    assert.equal(exit.signal, "SIGTERM");
+    assert.deepEqual(fake.signals, ["SIGTERM"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(uncaught, []);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+  }
 });
 
 test("closing a process stops its whole group, including children that ignore TERM", { skip: process.platform === "win32" }, async () => {
@@ -161,6 +214,76 @@ test("schema sanitizing keeps the callable subset and drops unknown keywords", (
     required: ["name"],
     properties: { name: { type: "string", minLength: 1 } },
   });
+});
+
+type JsonSchema = Record<string, any>;
+
+/** The values a sanitized schema lets the agent choose: each variant's enum, flattened. */
+const advertisedValues = (schema: JsonSchema | undefined): unknown[] =>
+  (schema?.anyOf ?? [schema]).flatMap((variant: JsonSchema | undefined) => variant?.enum ?? []);
+
+/** Every object node of a schema, so each one's `required` can be checked against its `properties`. */
+function objectNodes(schema: unknown, found: JsonSchema[] = []): JsonSchema[] {
+  if (!schema || typeof schema !== "object") return found;
+  const node = schema as JsonSchema;
+  if (node.properties) found.push(node);
+  for (const child of [
+    ...Object.values(node.properties ?? {}),
+    node.items,
+    node.additionalProperties,
+    ...(node.anyOf ?? []),
+    ...(node.oneOf ?? []),
+    ...(node.allOf ?? []),
+  ]) {
+    objectNodes(child, found);
+  }
+  return found;
+}
+
+test("schema sanitizing keeps literal values, so bridged tools advertise the arguments they accept", () => {
+  const todo = createTodoExtensionRuntime({ tasks: [], nextId: 1 }).extension.tools![0]!;
+  const original = todo.parameters as JsonSchema;
+  const sanitized = sanitizeSchema(todo.parameters)!;
+  for (const property of ["action", "status"]) {
+    const literals = original.properties[property].anyOf.map((variant: JsonSchema) => variant.const);
+    assert.deepEqual(advertisedValues((sanitized.properties as JsonSchema)[property]), literals, property);
+  }
+  for (const action of advertisedValues((sanitized.properties as JsonSchema).action)) {
+    assert.equal(Value.Check(todo.parameters, { action }), true, `${String(action)} is accepted`);
+  }
+
+  const deviceOpen = createDeviceAgentTools({
+    chatId: "chat-1",
+    signal: new AbortController().signal,
+    supportsImages: true,
+    port: {} as never,
+  }).find((tool) => tool.name === "device_open")!;
+  const platforms = advertisedValues((sanitizeSchema(deviceOpen.parameters)!.properties as JsonSchema).platform);
+  assert.deepEqual(platforms, ["ios", "android"]);
+  for (const platform of platforms) assert.equal(Value.Check(deviceOpen.parameters, { platform }), true);
+
+  // Object variants told apart only by a literal `kind` keep it.
+  const target = sanitizeSchema(
+    Type.Union([
+      Type.Object({ kind: Type.Literal("url"), url: Type.String() }),
+      Type.Object({ kind: Type.Literal("environment-port"), port: Type.Integer() }),
+    ]),
+  )!;
+  assert.deepEqual(
+    (target.anyOf as JsonSchema[]).map((variant) => variant.properties.kind.enum),
+    [["url"], ["environment-port"]],
+  );
+});
+
+test("schema sanitizing never requires a property it does not describe", () => {
+  const sanitized = sanitizeSchema(Type.Object({ payload: Type.Unknown(), name: Type.String() }))!;
+  const todo = createTodoExtensionRuntime({ tasks: [], nextId: 1 }).extension.tools![0]!;
+  for (const node of [...objectNodes(sanitized), ...objectNodes(sanitizeSchema(todo.parameters))]) {
+    for (const name of (node.required ?? []) as string[]) {
+      assert.ok(Object.prototype.hasOwnProperty.call(node.properties, name), `${name} is required and described`);
+    }
+  }
+  assert.deepEqual((sanitized.required as string[]).sort(), ["name", "payload"]);
 });
 
 test("the tool bridge requires its bearer token and validates arguments against the original schema", async () => {

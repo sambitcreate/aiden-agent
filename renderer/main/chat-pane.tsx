@@ -1692,6 +1692,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const draftGitPendingRef = React.useRef(false);
   /** Counts visits to a chat: the composer that started a send is gone once this changes. */
   const chatVisitRef = React.useRef(0);
+  /** Identifies the newest side-question start so an older one cannot settle its card. */
+  const btwStartAttemptRef = React.useRef(0);
   React.useLayoutEffect(() => {
     chatVisitRef.current += 1;
   }, [chatId]);
@@ -1712,6 +1714,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // A new turn revokes any active read-aloud job for this chat.
         readAloudRef.current?.stop();
         const question = text.trim();
+        // A refused follow-up must leave the earlier answer, and the card holding
+        // the unsent text, on screen rather than unmounting it.
+        const previousView = btwViewRef.current?.requestId === "pending" ? null : btwViewRef.current;
+        // The pane outlives navigation and a later start replaces this one, so a
+        // settling start may touch the card only while it still owns it.
+        const visit = chatVisitRef.current;
+        const attempt = ++btwStartAttemptRef.current;
+        const ownsPendingView = (current: BtwLiveView | null): current is BtwLiveView =>
+          current?.requestId === "pending" &&
+          chatVisitRef.current === visit &&
+          btwStartAttemptRef.current === attempt;
         setBtwView({
           requestId: "pending",
           question,
@@ -1724,12 +1737,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
         try {
           const receipt = await chatsApi.btwStart(chatId, question);
           setBtwView((current) =>
-            current?.requestId === "pending"
-              ? { ...current, requestId: receipt.requestId }
-              : current,
+            ownsPendingView(current) ? { ...current, requestId: receipt.requestId } : current,
           );
         } catch (error) {
-          setBtwView((current) => (current?.requestId === "pending" ? null : current));
+          setBtwView((current) => (ownsPendingView(current) ? previousView : current));
           throw error;
         }
         return;
