@@ -138,7 +138,14 @@ function QuietRow({
 
 function cacheTimeLeft(ms: number): string {
   const totalSeconds = Math.ceil(ms / 1000);
-  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  if (totalSeconds < 3600) return `${Math.floor(totalSeconds / 60)}:${seconds}`;
+  return `${Math.floor(totalSeconds / 3600)}:${String(Math.floor(totalSeconds / 60) % 60).padStart(2, "0")}:${seconds}`;
+}
+
+function cacheLifetime(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  return minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
 }
 
 /** Counts down the provider's prompt cache from the last request that used it. */
@@ -149,7 +156,11 @@ export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWind
   React.useEffect(() => {
     // Ticks against the wall clock until the cache lapses; nothing else drives this.
     if (expiresAt <= Date.now()) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (current >= expiresAt) window.clearInterval(timer);
+    }, 1000);
     return () => window.clearInterval(timer);
   }, [expiresAt]);
   const lapsed = remaining === 0;
@@ -174,7 +185,7 @@ export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWind
       <span className="text-mini text-tertiary">
         {lapsed
           ? "The next request rebuilds the cache."
-          : `Kept for ${Math.max(1, Math.round(cache.ttlMs / 60_000))} min after each request.`}
+          : `Kept for ${cacheLifetime(cache.ttlMs)} after each request.`}
       </span>
     </div>
   );

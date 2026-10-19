@@ -5,7 +5,6 @@ import {
   renderSystemMessageUpdate,
   type SystemMessage,
   type ToolResultMessage,
-  type ModelPromptCache,
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -22,6 +21,7 @@ import { withoutMcpServersSection } from "./mcp-server-instructions.js";
 import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 import type { PiRuntimeTool } from "./pi-runtime-tool.js";
 
+import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
 const RECENT_TOOL_OUTPUT_BUDGET_TOKENS = 40_000;
 const MIN_RECENT_TOOL_RESULTS = 2;
@@ -697,19 +697,13 @@ export function chatContextPressureFromProjection(
   };
 }
 
-/** Aiden's chat requests use Pi's default "short" cache retention. */
-export function promptCacheTtlMs(model: { promptCache?: ModelPromptCache }): number {
-  const seconds = model.promptCache?.short ?? 0;
-  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
-}
-
 /**
  * The cache window left by the latest request from this provider and model
  * that read or wrote the prompt cache. A model switch starts a new cache, so
  * earlier requests from another model never count.
  */
 export function promptCacheWindow(
-  model: { provider: string; id: string; promptCache?: ModelPromptCache },
+  model: Parameters<typeof promptCacheTtlMs>[0],
   messages: readonly AgentMessage[],
 ): PromptCacheWindowV1 | undefined {
   const ttlMs = promptCacheTtlMs(model);

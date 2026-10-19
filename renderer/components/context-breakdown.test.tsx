@@ -345,6 +345,15 @@ test("the prompt cache countdown runs from the last cached request and says when
   assert.ok(within(lapsed).getByText("Expired"));
 });
 
+test("day-long caches count down in hours", () => {
+  const lastRequestAt = 1_000_000;
+  const promptCache = { ttlMs: 24 * 3_600_000, lastRequestAt };
+  render(<ContextBreakdown pressure={pressure({ promptCache })} now={lastRequestAt + 90_000} />);
+  const group = screen.getByRole("group", { name: "Prompt cache" });
+  assert.ok(within(group).getByText("23:58:30 left"));
+  assert.ok(within(group).getByText("Kept for 24 h after each request."));
+});
+
 test("no prompt cache window means no countdown", () => {
   render(<ContextBreakdown pressure={pressure()} />);
   assert.equal(screen.queryByRole("group", { name: "Prompt cache" }), null);

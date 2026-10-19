@@ -1359,7 +1359,7 @@ test("admitted MCP service guidance is measured from the transcript's mcp_server
 });
 
 test("the prompt cache window follows the last request that used the cache on the same model", () => {
-  const model = { provider: "openai-codex", id: "gpt-5.3-codex-spark", promptCache: { short: 300, long: 3600 } };
+  const model = { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.3-codex-spark", promptCache: { short: 300, long: 3600 } };
   const cached = (timestamp: number, cacheRead: number): AssistantMessage => {
     const message = assistant(`call-${timestamp}`);
     return { ...message, timestamp, usage: { ...message.usage, cacheRead } };

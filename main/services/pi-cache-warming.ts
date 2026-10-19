@@ -91,6 +91,8 @@ export interface PiCacheWarmerDependencies {
   /** Resolve credentials only when dispatching, never retain them in a timer. */
   resolveRuntime(signal: AbortSignal): Promise<ResolvedModelRuntime>;
   recordUsage(message: AssistantMessage, runtime: ResolvedModelRuntime): Promise<void>;
+  /** A refresh read or wrote the cache, restarting its lifetime from dispatch. */
+  onCacheRefreshed?(requestStartedAt: number): void;
   clock?: CacheWarmingClock;
 }
 
@@ -209,6 +211,7 @@ export class PiCacheWarmer {
         run.spentUsd += reportedCost - economics.warmCost;
       }
       if (message.stopReason === "error" || message.stopReason === "aborted") { if (this.run === run) this.stop(); return; }
+      if (message.usage.cacheRead + message.usage.cacheWrite > 0) this.deps.onCacheRefreshed?.(dispatchedAt);
       if (this.run === run) this.schedule(run, dispatchedAt);
     } catch {
       // Warming cannot fail the foreground turn and does not retry a failed refresh.
