@@ -85,7 +85,7 @@ export function WorkspaceToolLauncher({
           disabled={!hasWorkspace || busy || pending}
         />
         {error ? (
-          <p role="alert" className="mt-2 text-small text-support-danger">
+          <p role="alert" className="mt-2 text-small text-status-red">
             {error}
           </p>
         ) : null}

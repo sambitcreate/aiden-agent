@@ -623,12 +623,15 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [selectedArtifactId, setSelectedArtifactId] = React.useState<string | null>(null);
   const showToolsRef = React.useRef(showTools);
   const activeChatRef = React.useRef(activeChat);
+  const activeWorkspaceRef = React.useRef(activeId);
   React.useLayoutEffect(() => {
     showToolsRef.current = showTools;
     activeChatRef.current = activeChat;
-  }, [activeChat, showTools]);
+    activeWorkspaceRef.current = activeId;
+  }, [activeChat, activeId, showTools]);
   const onArtifactsChanged = React.useCallback((event: WorkspaceArtifactsChangedEvent) => {
     // The chat that made a page shows it; every other window just updates its list.
+    if (event.workspaceId !== activeWorkspaceRef.current) return;
     if (!revealsWorkspaceArtifact(event, activeChatRef.current)) return;
     setSelectedArtifactId(event.artifactId);
     showToolsRef.current("artifacts");
@@ -637,7 +640,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const artifactsSeenRef = React.useRef<{ workspaceId: string | null; count: number } | null>(null);
   const artifactsTabOpen = (surfaceState.openTabs ?? [surfaceState.toolsTab]).includes("artifacts");
   React.useEffect(() => {
-    if (!artifacts.loaded || artifacts.workspaceId !== (activeId ?? null)) return;
+    // Wait for a workspace and a list that actually loaded: a restored tab must
+    // survive startup, and a failed read is not an empty workspace.
+    if (artifacts.workspaceId === null || artifacts.workspaceId !== activeId) return;
+    if (!artifacts.loaded || artifacts.error) return;
     const previous = artifactsSeenRef.current;
     const count = artifacts.views.length;
     artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count };
@@ -645,7 +651,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     // last one is deleted, or on a workspace that has none.
     const emptied = previous?.workspaceId !== artifacts.workspaceId || previous.count > 0;
     if (count === 0 && emptied && artifactsTabOpen) dispatchSurface({ type: "close-tab", tab: "artifacts" });
-  }, [activeId, artifacts.loaded, artifacts.views.length, artifacts.workspaceId, artifactsTabOpen]);
+  }, [activeId, artifacts.error, artifacts.loaded, artifacts.views.length, artifacts.workspaceId, artifactsTabOpen]);
 
   const openReview = React.useCallback(
     (mode: EnvironmentReviewMode) => {
@@ -1448,6 +1454,7 @@ function EnvironmentPanelSurface({
     artifacts: () => (
       <ArtifactsPanel
         workspace={active ?? null}
+        active={presented && panel.tab === "artifacts"}
         artifacts={panel.artifacts}
         selectedId={panel.selectedArtifactId}
         onSelect={panel.selectArtifact}

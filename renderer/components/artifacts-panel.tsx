@@ -1,5 +1,5 @@
 import * as React from "react";
-import { MessageSquarePlus, MoreHorizontal, Pencil, ShieldCheck, Trash2 } from "lucide-react";
+import { MessageSquarePlus, MoreHorizontal, Pencil, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui/aiden-ui-block";
 import {
   AlertDialog,
@@ -23,6 +23,7 @@ import {
 } from "./ui";
 import { workspaceArtifactsApi } from "../lib/ipc";
 import { formatRelativeTime } from "../lib/relative-time";
+import { cn } from "../lib/ui-utils";
 import type { Workspace } from "../lib/types";
 import type { WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
 import {
@@ -31,13 +32,17 @@ import {
   workspaceArtifactPageAccess,
   workspaceArtifactProblems,
 } from "../lib/workspace-artifacts-view";
-import { describeWorkspaceArtifactCommands, type WorkspaceArtifactView } from "../shared/workspace-artifacts";
+import { workspaceArtifactCommandList, type WorkspaceArtifactView } from "../shared/workspace-artifacts";
 
 /** Page state is saved this long after the last change, like an inline visual's. */
 const STATE_SAVE_DELAY_MS = 400;
+/** A page refreshed this recently (say, by the chat that just made it) is not re-read on open. */
+const FRESH_ENOUGH_MS = 15_000;
 
 export interface ArtifactsPanelProps {
   workspace: Workspace | null;
+  /** The tab is on screen: only then do sources refresh on open or on their interval. */
+  active: boolean;
   artifacts: WorkspaceArtifactsState;
   selectedId: string | null;
   onSelect: (artifactId: string) => void;
@@ -53,7 +58,7 @@ export interface ArtifactsPanelProps {
  * as inline visuals; everything around it (switching, approval, rename,
  * delete) is Aiden's own UI.
  */
-export function ArtifactsPanel({ workspace, artifacts, selectedId, onSelect, onAskAiden, onAction }: ArtifactsPanelProps) {
+export function ArtifactsPanel({ workspace, active, artifacts, selectedId, onSelect, onAskAiden, onAction }: ArtifactsPanelProps) {
   const current = artifacts.workspaceId === (workspace?.id ?? null);
   const views = current ? artifacts.views : [];
   const activeId = pickWorkspaceArtifact(views, selectedId);
@@ -81,22 +86,125 @@ export function ArtifactsPanel({ workspace, artifacts, selectedId, onSelect, onA
     );
   }
   return (
+    <ArtifactView
+      workspace={workspace}
+      active={active}
+      views={views}
+      view={view}
+      onSelect={onSelect}
+      onAskAiden={onAskAiden}
+      onAction={onAction}
+      artifactsError={artifacts.error}
+      onRetry={artifacts.reload}
+      onStateSaved={artifacts.rememberState}
+    />
+  );
+}
+
+/**
+ * Re-reads the page's sources when it is shown, when the person asks, and on
+ * its interval while visible. Only pages allowed to run do.
+ */
+function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, active: boolean) {
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const artifactId = view.artifact.id;
+  const canRun = view.artifact.sources.length > 0 && workspaceArtifactPageAccess(view, workspace) === "run";
+  const request = React.useRef(0);
+  const refresh = React.useCallback(async () => {
+    if (!canRun) return;
+    const id = ++request.current;
+    setRefreshing(true);
+    setError(null);
+    try {
+      await workspaceArtifactsApi.refresh(workspace.id, artifactId);
+    } catch (cause) {
+      if (id === request.current) setError(cause instanceof Error ? cause.message : "Could not refresh this page.");
+    } finally {
+      if (id === request.current) setRefreshing(false);
+    }
+  }, [artifactId, canRun, workspace.id]);
+  React.useEffect(() => {
+    setError(null);
+    setRefreshing(false);
+  }, [artifactId]);
+  const refreshedAtRef = React.useRef(view.snapshot?.refreshedAt);
+  React.useLayoutEffect(() => {
+    refreshedAtRef.current = view.snapshot?.refreshedAt;
+  }, [view.snapshot?.refreshedAt]);
+  const onOpen = view.artifact.refresh.onOpen;
+  React.useEffect(() => {
+    if (!active || !onOpen) return;
+    const last = refreshedAtRef.current;
+    if (last !== undefined && Date.now() - last < FRESH_ENOUGH_MS) return;
+    void refresh();
+  }, [active, onOpen, refresh]);
+  const intervalSeconds = view.artifact.refresh.intervalSeconds;
+  React.useEffect(() => {
+    if (!active || !intervalSeconds) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, intervalSeconds * 1_000);
+    return () => window.clearInterval(timer);
+  }, [active, intervalSeconds, refresh]);
+  return { canRun, refreshing, error, refresh };
+}
+
+function ArtifactView({
+  workspace,
+  active,
+  views,
+  view,
+  onSelect,
+  onAskAiden,
+  onAction,
+  artifactsError,
+  onRetry,
+  onStateSaved,
+}: {
+  workspace: Workspace;
+  active: boolean;
+  views: readonly WorkspaceArtifactView[];
+  view: WorkspaceArtifactView;
+  onSelect: (artifactId: string) => void;
+  onAskAiden: (view: WorkspaceArtifactView) => void;
+  onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
+  artifactsError: string | null;
+  onRetry: () => void;
+  onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
+}) {
+  const refresh = useArtifactRefresh(workspace, view, active);
+  const pageRef = React.useRef<HTMLDivElement | null>(null);
+  return (
     <div className="flex h-full min-h-0 flex-col">
       <ArtifactsHeader
         workspaceId={workspace.id}
         views={views}
         view={view}
+        refresh={refresh}
         onSelect={onSelect}
         onAskAiden={onAskAiden}
       />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3" data-artifact-page={view.artifact.id}>
+      <div ref={pageRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none" data-artifact-page={view.artifact.id}>
+        {artifactsError ? (
+          <Callout color="warning" className="mb-3" role="alert">
+            <div className="flex items-center gap-3">
+              <Text variant="small" className="min-w-0 flex-1">
+                Couldn’t reload this workspace’s artifacts: {artifactsError}
+              </Text>
+              <Button size="small" onClick={onRetry}>
+                Try again
+              </Button>
+            </div>
+          </Callout>
+        ) : null}
         {view.artifact.description ? (
           <Text variant="small" color="secondary" as="p" className="mb-3">
             {view.artifact.description}
           </Text>
         ) : null}
-        <ArtifactAccessNotice workspace={workspace} view={view} />
-        <ArtifactPage workspaceId={workspace.id} view={view} onAction={onAction} />
+        <ArtifactAccessNotice key={view.artifact.id} workspace={workspace} view={view} returnFocus={() => pageRef.current} />
+        <ArtifactPage workspaceId={workspace.id} view={view} onAction={onAction} onStateSaved={onStateSaved} />
       </div>
     </div>
   );
@@ -104,7 +212,7 @@ export function ArtifactsPanel({ workspace, artifacts, selectedId, onSelect, onA
 
 function ArtifactsSkeleton() {
   return (
-    <div className="space-y-3 p-4" aria-label="Loading artifacts" aria-busy="true">
+    <div role="status" className="space-y-3 p-4" aria-label="Loading artifacts" aria-busy="true">
       <span className="block h-3 w-1/3 animate-pulse rounded-pill bg-control" />
       {[86, 64, 78].map((width, index) => (
         <div key={index} className="flex h-12 items-center rounded-card bg-well px-3">
@@ -119,12 +227,14 @@ function ArtifactsHeader({
   workspaceId,
   views,
   view,
+  refresh,
   onSelect,
   onAskAiden,
 }: {
   workspaceId: string;
   views: readonly WorkspaceArtifactView[];
   view: WorkspaceArtifactView;
+  refresh: ReturnType<typeof useArtifactRefresh>;
   onSelect: (artifactId: string) => void;
   onAskAiden: (view: WorkspaceArtifactView) => void;
 }) {
@@ -154,15 +264,30 @@ function ArtifactsHeader({
           {title}
         </Text>
       )}
-      <span className="min-w-0 flex-1 truncate text-small text-tertiary" aria-live="polite">
-        {problems.length > 0 ? (
-          <span className="text-status-warning">
+      <span className="min-w-0 flex-1 truncate text-small text-tertiary">
+        {refresh.error ? (
+          <span role="status" className="text-status-warning">Couldn’t refresh: {refresh.error}</span>
+        ) : problems.length > 0 ? (
+          <span role="status" className="text-status-warning">
             {problems.length === 1 ? `${problems[0]!.name} didn’t load` : `${problems.length} sources didn’t load`}
           </span>
         ) : refreshedAt ? (
           `Updated ${formatRelativeTime(refreshedAt)}`
         ) : null}
       </span>
+      {refresh.canRun ? (
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          onClick={() => void refresh.refresh()}
+          disabled={refresh.refreshing}
+          aria-label={`Refresh ${title}`}
+          title="Refresh"
+        >
+          <RefreshCw className={cn(refresh.refreshing && "animate-spin")} />
+        </Button>
+      ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button ref={menuTriggerRef} variant="transparent" size="small" iconOnly aria-label={`Actions for ${title}`}>
@@ -249,7 +374,7 @@ function RenameArtifactDialog({
     >
       <Input aria-label="Artifact name" value={title} maxLength={80} onChange={(event) => setTitle(event.target.value)} autoFocus />
       {error ? (
-        <p role="alert" className="mt-2 text-small text-support-danger">
+        <p role="alert" className="mt-2 text-small text-status-red">
           {error}
         </p>
       ) : null}
@@ -294,11 +419,28 @@ function DeleteArtifactDialog({
   );
 }
 
+interface ApprovalSnapshot {
+  artifactId: string;
+  digest: string;
+  title: string;
+  commands: { label: string; command: string }[];
+}
+
 /** Why live data is held back, and the one step that releases it. */
-function ArtifactAccessNotice({ workspace, view }: { workspace: Workspace; view: WorkspaceArtifactView }) {
+function ArtifactAccessNotice({
+  workspace,
+  view,
+  returnFocus,
+}: {
+  workspace: Workspace;
+  view: WorkspaceArtifactView;
+  returnFocus: () => HTMLElement | null;
+}) {
   const access = workspaceArtifactPageAccess(view, workspace);
-  const [reviewing, setReviewing] = React.useState(false);
+  // What the dialog shows is frozen when it opens, and Allow approves exactly that.
+  const [reviewing, setReviewing] = React.useState<ApprovalSnapshot | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const changed = reviewing !== null && reviewing.digest !== view.digest;
   if (access === "blocked") {
     return (
       <Callout className="mb-3">
@@ -317,24 +459,39 @@ function ArtifactAccessNotice({ workspace, view }: { workspace: Workspace; view:
         <Text variant="small" className="min-w-0 flex-1">
           This page runs commands in your workspace. Allow them to load live data.
         </Text>
-        <Button size="small" onClick={() => setReviewing(true)}>
+        <Button
+          size="small"
+          onClick={() =>
+            setReviewing({
+              artifactId: view.artifact.id,
+              digest: view.digest,
+              title: view.artifact.visual.title,
+              commands: workspaceArtifactCommandList(view.artifact.sources, view.artifact.actions),
+            })
+          }
+        >
           <ShieldCheck aria-hidden="true" />
           Review…
         </Button>
       </div>
       <Dialog
-        open={reviewing}
-        onOpenChange={setReviewing}
+        open={reviewing !== null}
+        onOpenChange={(open) => {
+          if (!open) setReviewing(null);
+        }}
         title="Allow these commands?"
-        description={`“${view.artifact.visual.title}” runs these in ${workspace.name} when it refreshes or you press its buttons. Changing any of them asks again.`}
+        description={`“${reviewing?.title ?? ""}” runs these in ${workspace.name} when it refreshes or you press its buttons. Changing any of them asks again.`}
         confirmLabel="Allow"
+        confirmDisabled={changed}
         busy={busy}
         size="large"
+        returnFocus={returnFocus}
         onConfirm={async () => {
+          if (!reviewing || changed) return;
           setBusy(true);
           try {
-            await workspaceArtifactsApi.approve(workspace.id, view.artifact.id, view.digest);
-            setReviewing(false);
+            await workspaceArtifactsApi.approve(workspace.id, reviewing.artifactId, reviewing.digest);
+            setReviewing(null);
           } catch (cause) {
             toast.error(cause instanceof Error ? cause.message : "Could not allow these commands.");
           } finally {
@@ -342,9 +499,21 @@ function ArtifactAccessNotice({ workspace, view }: { workspace: Workspace; view:
           }
         }}
       >
-        <pre className="m-0 whitespace-pre-wrap break-words rounded-card bg-well p-3 font-mono text-small">
-          {describeWorkspaceArtifactCommands(view.artifact.sources, view.artifact.actions)}
-        </pre>
+        {changed ? (
+          <Callout color="warning" className="mb-3" role="alert">
+            <Text variant="small">This page’s commands changed while you were reading. Close this and review them again.</Text>
+          </Callout>
+        ) : null}
+        <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Commands">
+          {reviewing?.commands.map((entry, index) => (
+            <li key={index} className="rounded-card bg-well p-3">
+              <Text variant="small-strong" as="p">
+                {entry.label}
+              </Text>
+              <pre className="m-0 mt-1 whitespace-pre-wrap break-words font-mono text-small">{entry.command}</pre>
+            </li>
+          ))}
+        </ul>
       </Dialog>
     </Callout>
   );
@@ -354,11 +523,18 @@ function ArtifactPage({
   workspaceId,
   view,
   onAction,
+  onStateSaved,
 }: {
   workspaceId: string;
   view: WorkspaceArtifactView;
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
+  /** Keeps the list's copy current, so switching pages and back shows the page as it was left. */
+  onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
 }) {
+  const onStateSavedRef = React.useRef(onStateSaved);
+  React.useLayoutEffect(() => {
+    onStateSavedRef.current = onStateSaved;
+  }, [onStateSaved]);
   const visual = React.useMemo(() => workspaceArtifactPage(view), [view]);
   const artifactId = view.artifact.id;
   const pending = React.useRef<{ timer: ReturnType<typeof setTimeout>; save: () => void } | null>(null);
@@ -375,6 +551,7 @@ function ArtifactPage({
     (state: Record<string, unknown>) => {
       if (pending.current) clearTimeout(pending.current.timer);
       const save = () => {
+        onStateSavedRef.current(artifactId, state);
         void workspaceArtifactsApi.saveState(workspaceId, artifactId, state).catch(() => {
           // State is a convenience: the page still works, it just reopens as it was.
         });

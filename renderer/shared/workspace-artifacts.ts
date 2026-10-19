@@ -569,6 +569,17 @@ export function workspaceArtifactSourceAccess(
   return approved ? "run" : "needs-approval";
 }
 
+/** Everything the artifact can run, one entry per command, verbatim. */
+export function workspaceArtifactCommandList(
+  sources: readonly WorkspaceArtifactSourceV1[],
+  actions: readonly WorkspaceArtifactActionV1[],
+): { label: string; command: string }[] {
+  return [
+    ...sources.flatMap((source) => (source.kind === "shell" ? [{ label: `Source ${source.name}`, command: source.command }] : [])),
+    ...actions.map((action) => ({ label: `Button “${action.label}”`, command: action.command })),
+  ];
+}
+
 /** Text for the approval card: everything the artifact can run, verbatim. */
 export function describeWorkspaceArtifactCommands(
   sources: readonly WorkspaceArtifactSourceV1[],

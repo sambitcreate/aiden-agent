@@ -10,6 +10,8 @@ export interface WorkspaceArtifactsState {
   loaded: boolean;
   error: string | null;
   reload: () => void;
+  /** Records page state the person changed, so the list matches what was saved. */
+  rememberState: (artifactId: string, state: Record<string, unknown>) => void;
 }
 
 /**
@@ -20,7 +22,7 @@ export function useWorkspaceArtifacts(
   workspaceId: string | null,
   onChange?: (event: WorkspaceArtifactsChangedEvent) => void,
 ): WorkspaceArtifactsState {
-  const [state, setState] = React.useState<Omit<WorkspaceArtifactsState, "reload">>({
+  const [state, setState] = React.useState<Omit<WorkspaceArtifactsState, "reload" | "rememberState">>({
     workspaceId,
     views: [],
     loaded: workspaceId === null,
@@ -75,5 +77,15 @@ export function useWorkspaceArtifacts(
   );
 
   const reload = React.useCallback(() => load(workspaceRef.current), [load]);
-  return React.useMemo(() => ({ ...state, reload }), [reload, state]);
+  const rememberState = React.useCallback((artifactId: string, pageState: Record<string, unknown>) => {
+    setState((current) => ({
+      ...current,
+      views: current.views.map((view) =>
+        view.artifact.id === artifactId
+          ? { ...view, artifact: { ...view.artifact, visual: { ...view.artifact.visual, state: pageState } } }
+          : view,
+      ),
+    }));
+  }, []);
+  return React.useMemo(() => ({ ...state, reload, rememberState }), [reload, rememberState, state]);
 }
