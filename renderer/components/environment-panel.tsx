@@ -34,7 +34,8 @@ import {
   useEnvironmentSummary,
   useShowWorkspaceFolder,
 } from "./environment-overview";
-import { ContextBreakdown } from "./context-breakdown";
+import { ContextBreakdown, contextApproaching } from "./context-breakdown";
+import { ContextPips, contextPercentLabel } from "./context-tiles";
 import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
 import { SubagentStatusGroups } from "./subagent-status-groups";
 import {
@@ -1656,20 +1657,11 @@ function ContextSummaryMeter({
   compacting: boolean;
 }) {
   const percent = contextPressurePercent(pressure);
-  // Same presentation threshold as the composer ContextMeter; a running compaction is emphasized too.
-  const approaching = compacting || pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
+  const approaching = contextApproaching(pressure, compacting);
   return (
     <>
-      <span>{`${percent}%`}</span>
-      <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-control">
-        <span
-          className={cn(
-            "block h-full rounded-full transition-[width] duration-(--motion-large-duration) ease-standard motion-reduce:transition-none",
-            approaching ? "bg-support-warning" : "bg-accent",
-          )}
-          style={{ width: `${Math.min(100, percent)}%` }}
-        />
-      </span>
+      <span>{contextPercentLabel(percent, pressure.contextTokens)}</span>
+      <ContextPips percent={percent} warning={approaching} used={pressure.contextTokens > 0} />
     </>
   );
 }

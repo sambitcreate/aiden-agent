@@ -173,6 +173,7 @@ import type {
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
@@ -255,9 +256,11 @@ import {
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
+import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 import {
   invalidateChatContextJournal,
   rememberChatContextProfile,
+  rememberPromptCacheRefresh,
 } from "./context-pressure.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
@@ -2770,6 +2773,7 @@ export const llmClient = {
     let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
     let cacheWarmer: PiCacheWarmer | undefined;
+    let lastContextPressure: ChatContextPressureV1 | undefined;
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
@@ -3321,6 +3325,15 @@ export const llmClient = {
           recordUsage: async (message, freshRuntime) => {
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
+          // A warming read restarts the provider's cache lifetime without a
+          // new projection, so the countdown is re-sent from that request.
+          onCacheRefreshed: (requestStartedAt) => {
+            rememberPromptCacheRefresh(params.chatId, { provider: model.provider, model: model.id, requestStartedAt });
+            const pressure = lastContextPressure;
+            if (!pressure?.promptCache) return;
+            lastContextPressure = { ...pressure, promptCache: { ...pressure.promptCache, lastRequestAt: requestStartedAt } };
+            sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+          },
         });
       }
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
@@ -3337,6 +3350,7 @@ export const llmClient = {
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
       const observedStream: typeof realStream = pace.wrap(warmedStream);
+      const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
@@ -3366,10 +3380,16 @@ export const llmClient = {
             permission,
             toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
           });
+          lastContextPressure = {
+            ...chatContextPressureFromProjection(projection, projectionOptions),
+            // Projections are emitted as each request is prepared, so the
+            // cache window restarts now for models that declare one.
+            ...(promptCacheTtl > 0 ? { promptCache: { ttlMs: promptCacheTtl, lastRequestAt: Date.now() } } : {}),
+          };
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
             chatId: params.chatId,
-            pressure: chatContextPressureFromProjection(projection, projectionOptions),
+            pressure: lastContextPressure,
           });
         },
         ...agentRuntimeOptions,

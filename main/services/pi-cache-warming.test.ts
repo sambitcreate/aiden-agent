@@ -38,6 +38,7 @@ function fixture(t: test.TestContext) {
   const requests: Array<SimpleStreamOptions | undefined> = [];
   const contexts: unknown[] = [];
   const recorded: unknown[] = [];
+  const refreshedAt: number[] = [];
   let database = createEmptyUsageDatabase();
   const usageStore = createUsageStore({ load: async () => structuredClone(database), save: async (value) => { database = structuredClone(value); } });
   let enabled = true;
@@ -68,7 +69,7 @@ function fixture(t: test.TestContext) {
       return stream;
     } },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); } });
+  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at) });
   t.after(() => warmer.dispose());
   const start = (options: SimpleStreamOptions = {}, selected = model) => {
     const context = normalizeContext({ messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
@@ -76,7 +77,7 @@ function fixture(t: test.TestContext) {
     response(usageMessage());
     return context;
   };
-  return { usageStore, setCurrent: (value: boolean) => current = value, setWarmCost: (value: number) => warmCost = value, warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: WarmOutcome) => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
+  return { refreshedAt, usageStore, setCurrent: (value: boolean) => current = value, setWarmCost: (value: number) => warmCost = value, warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: WarmOutcome) => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
 }
 
 test("warming waits for real usage, snapshots the prefix and resolves fresh credentials at dispatch", async (t) => {
@@ -417,5 +418,7 @@ test("one-token warming completion, provider errors and aborts retain distinct b
     assert.equal(summary.totals.tokens.cacheRead, 100_000);
     assert.equal(summary.totals.tokens.output, 1);
     assert.equal(h.clock.timers.size, reason === "length" ? 1 : 0);
+    // Only a completed refresh restarts the cache lifetime shown to the user, from its dispatch.
+    assert.deepEqual(h.refreshedAt, reason === "length" ? [270_000] : []);
   }
 });

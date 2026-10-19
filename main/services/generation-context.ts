@@ -14,12 +14,14 @@ import type {
   ContextBreakdownV1,
   ContextCategoryId,
   DeferredContextServer,
+  PromptCacheWindowV1,
 } from "../../renderer/shared/context-pressure.js";
 import { withoutAgentsInstructions } from "./agents-instructions.js";
 import { withoutMcpServersSection } from "./mcp-server-instructions.js";
 import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 import type { PiRuntimeTool } from "./pi-runtime-tool.js";
 
+import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
 const RECENT_TOOL_OUTPUT_BUDGET_TOKENS = 40_000;
 const MIN_RECENT_TOOL_RESULTS = 2;
@@ -693,6 +695,40 @@ export function chatContextPressureFromProjection(
     // Options that changed after the projection describe a different request.
     ...(breakdownTokens === projection.staticTokens ? { breakdown } : {}),
   };
+}
+
+/** A cache-warming request that read or wrote the cache without a transcript entry. */
+export interface PromptCacheRefresh {
+  provider: string;
+  model: string;
+  requestStartedAt: number;
+}
+
+/**
+ * The cache window left by the latest request from this provider and model
+ * that read or wrote the prompt cache. A model switch starts a new cache, so
+ * earlier requests from another model never count. A later warming refresh
+ * of a cache the transcript already shows extends it.
+ */
+export function promptCacheWindow(
+  model: Parameters<typeof promptCacheTtlMs>[0],
+  messages: readonly AgentMessage[],
+  refresh?: PromptCacheRefresh,
+): PromptCacheWindowV1 | undefined {
+  const ttlMs = promptCacheTtlMs(model);
+  if (ttlMs === 0) return undefined;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    if (message.provider !== model.provider || message.model !== model.id) return undefined;
+    const usage = message.usage;
+    if (usage && usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
+      const refreshed =
+        refresh?.provider === model.provider && refresh.model === model.id && refresh.requestStartedAt > message.timestamp;
+      return { ttlMs, lastRequestAt: refreshed ? refresh.requestStartedAt : message.timestamp };
+    }
+  }
+  return undefined;
 }
 
 function removeOldHistoricalTurns(

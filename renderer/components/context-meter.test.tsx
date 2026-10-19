@@ -58,12 +58,11 @@ test("the breakdown announces each label as the term and its token count as the 
   assert.deepEqual(
     pairs.map(([term]) => term),
     [
-      "projected tokens",
-      "model context",
-      "reserved for response + safety",
       "conversation",
       "system + tools",
       "recent work",
+      "reserved",
+      "model context",
     ],
   );
   for (const [, value] of pairs) assert.match(value, /\d/u);
@@ -92,8 +91,30 @@ test("context details aggregate durable turn totals once without inventing unava
   const messages = [turn, turn, { id: "old", role: "assistant" as const, content: "legacy", createdAt: 1 }];
   assert.deepEqual(recordedChatUsage({ messages }), { input: 100, output: 20, cacheRead: 500, cacheWrite: 40, total: 660, requests: 3, turns: 1, assistantMessages: 2, userMessages: 0 });
   const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages }, pressure: pressure(), compacting: false, providerLabel: "Local", modelLabel: "Model" }} />);
-  assert.match(html, /Reported usage from 1 of 2 saved assistant turns/);
+  assert.match(html, /Reported by 1 of 2 saved assistant turns/);
   assert.match(html, /Total cost<.*Unavailable/);
   assert.doesNotMatch(html, /\$0\.00/);
-  assert.match(html, /42% of usable context/);
+  const text = html.replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ");
+  assert.match(text, /42% used/u);
+  assert.match(text, /~40K of 96K usable/u);
+  // 500 of 640 prompt tokens (input 100 + cache read 500 + cache write 40) came from cache.
+  assert.match(text, /78% from cache/u);
+});
+
+
+test("cumulative usage past a billion tokens reads in billions", async () => {
+  const { ChatContextPanel } = await import("./chat-context-panel.js");
+  const usage = { input: 90_000_000, output: 10_000_000, cacheRead: 1_100_000_000, cacheWrite: 0, total: 1_200_000_000, requests: 900 };
+  const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage } };
+  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Long", createdAt: 1, updatedAt: 20, messages: [turn] }, pressure: null, compacting: false, providerLabel: "Local", modelLabel: "Model" }} />);
+  assert.match(html, />1\.2B</u);
+  assert.match(html, /92% from cache/u);
+});
+
+test("a chat whose provider never reported usage says so once instead of a column of Unavailable", async () => {
+  const { ChatContextPanel } = await import("./chat-context-panel.js");
+  const messages = [{ id: "old", role: "assistant" as const, content: "local reply", createdAt: 1 }];
+  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages }, pressure: pressure(), compacting: false, providerLabel: "Ollama", modelLabel: "llama3.2" }} />);
+  assert.match(html, /hasn(?:'|&#x27;)t reported token usage/u);
+  assert.doesNotMatch(html, /Unavailable/u);
 });
