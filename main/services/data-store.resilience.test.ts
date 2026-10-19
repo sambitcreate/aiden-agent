@@ -905,6 +905,62 @@ test("DataStore.update serializes concurrent transactions in arrival order", asy
   assert.deepEqual((await store.load()).log, ["a", "b", "c"]);
 });
 
+test("DataStore keeps a published value when the directory fsync after the rename fails", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-dir-sync-failure-");
+  const file = path.join(dir, "state.json");
+  let failNextDirectorySync = false;
+  const store = new DataStore<{ a: number; b: number }>("state.json", { a: 0, b: 0 }, () => dir, {
+    syncDirectory: async () => {
+      if (failNextDirectorySync) {
+        failNextDirectorySync = false;
+        throw new Error("injected directory sync failure");
+      }
+    },
+  });
+  await store.load();
+
+  failNextDirectorySync = true;
+  await assert.rejects(
+    store.update((draft) => void (draft.a = 1)),
+    /injected directory sync failure/u,
+  );
+  // The rename already published the new file; the caller was told so.
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { a: 1, b: 0 });
+  assert.deepEqual(await store.load(), { a: 1, b: 0 });
+
+  // A later read-modify-write must build on the published value, not revert it.
+  await store.update((draft) => void (draft.b = 2));
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { a: 1, b: 2 });
+});
+
+test("protected DataStore keeps accepting writes after a directory fsync fails post-publication", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-protected-dir-sync-failure-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  let failNextDirectorySync = false;
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    rejectExternalChanges: true,
+    syncDirectory: async () => {
+      if (failNextDirectorySync) {
+        failNextDirectorySync = false;
+        throw new Error("injected directory sync failure");
+      }
+    },
+  });
+  await store.load();
+
+  failNextDirectorySync = true;
+  await assert.rejects(
+    store.update((draft) => void (draft.count = 2)),
+    /injected directory sync failure/u,
+  );
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { count: 2 });
+
+  await store.update((draft) => void (draft.count = 3));
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { count: 3 });
+  assert.deepEqual(await store.load(), { count: 3 });
+});
+
 // ── Chat store (chat-store-core) ────────────────────────────────────────────
 
 test("chat store: list() returns [] when index.json is corrupt", async (t) => {

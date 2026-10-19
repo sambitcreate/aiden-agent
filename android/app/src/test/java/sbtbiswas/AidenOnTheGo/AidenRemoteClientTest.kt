@@ -45,6 +45,7 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 
 class AidenRemoteClientTest {
     private lateinit var server: MockWebServer
@@ -895,8 +896,32 @@ class AidenRemoteClientTest {
         val request = server.takeRequest()
         assertEquals("POST", request.method)
         assertEquals("/api/aiden/v1/speech/transcriptions", request.path)
+        assertNull(request.getHeader("Content-Encoding"))
         assertTrue(request.body.readUtf8().contains("\"encoding\":\"pcm_s16le\""))
         assertEquals("Hello from the Mac", result.text)
+    }
+
+    @Test
+    fun speechTranscriptionGzipsOnlyAfterServerAdvertisesSupport() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"protocolVersion":1,"instanceId":"test_instance","name":"Home","appVersion":"1","capabilities":["server:read","chat:write"],"serverCapabilities":["server:read","chat:write"],"connectionMode":"lan","serverTime":"2026-10-18T00:00:00Z","features":["speech-request-gzip-v1"]}"""))
+        assertEquals("Home", client.server().name)
+        assertEquals("/api/aiden/v1/server", server.takeRequest().path)
+
+        val pcmBase64 = Base64.getEncoder().encodeToString(ByteArray(32_000))
+        server.enqueue(MockResponse().setBody("""{"text":"Hello","modelId":"parakeet-v3"}"""))
+        assertEquals("Hello", client.transcribeSpeech(pcmBase64, "parakeet-v3").text)
+        val request = server.takeRequest()
+        assertEquals("gzip", request.getHeader("Content-Encoding"))
+        assertEquals("application/json", request.getHeader("Content-Type"))
+        val compressed = request.body.readByteArray()
+        assertEquals(0x1f, compressed[0].toInt() and 0xff)
+        assertEquals(0x8b, compressed[1].toInt() and 0xff)
+        assertTrue(compressed.size < pcmBase64.length)
+        val decoded = GZIPInputStream(compressed.inputStream()).bufferedReader().use { it.readText() }
+        val body = Json.parseToJsonElement(decoded).jsonObject
+        assertEquals(pcmBase64, body["pcmBase64"]?.jsonPrimitive?.content)
+        assertEquals("pcm_s16le", body["encoding"]?.jsonPrimitive?.content)
+        assertEquals("parakeet-v3", body["modelId"]?.jsonPrimitive?.content)
     }
 
     @Test

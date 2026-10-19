@@ -70,6 +70,7 @@ import type {
 export const DEFAULT_SUBAGENT_TREE_DEADLINE_MS = 10 * 60_000;
 const MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS = 128;
 const MAX_SUBAGENT_V2_TREE_TURNS = 512;
+const MAX_SUBAGENT_V2_TREE_NETWORK_OPERATIONS = 512;
 
 export interface SubagentSupervisorPolicy {
   childDeadlineMs?: number;
@@ -359,6 +360,7 @@ export class SubagentSupervisor {
   private v2OutputCharsUsed = 0;
   private v2TurnsUsed = 0;
   private v2TurnAllowance = 0;
+  private v2NetworkOperationAllowance = 0;
   private v2NetworkOperationsUsed = 0;
   private calls = 0;
   private treeExpired = false;
@@ -603,6 +605,24 @@ export class SubagentSupervisor {
           toolNames: logicalToolCeiling(authority),
         }),
       );
+      // Nested children bring their own turn and network-operation ceilings,
+      // like depth-1 siblings, within the same generation-wide bounds.
+      const nestedAllowance = (authorities as SubagentAuthorityV2[]).reduce(
+        (total, { budgets }) => ({
+          turns: total.turns + budgets.maxTurns,
+          networkOperations: total.networkOperations + budgets.maxNetworkOperations,
+        }),
+        { turns: 0, networkOperations: 0 },
+      );
+      if (
+        this.v2TurnAllowance + nestedAllowance.turns > MAX_SUBAGENT_V2_TREE_TURNS ||
+        this.v2NetworkOperationAllowance + nestedAllowance.networkOperations >
+          MAX_SUBAGENT_V2_TREE_NETWORK_OPERATIONS
+      ) {
+        throw new Error(
+          "Subagent generation tree budget exhausted. Start a new parent turn with narrower tasks.",
+        );
+      }
       let releaseStart!: () => void;
       let rejectStart!: (reason: Error) => void;
       const startBarrier = new Promise<void>((resolve, reject) => {
@@ -879,6 +899,11 @@ export class SubagentSupervisor {
         throw reason;
       }
       try {
+        // The fan-out is reserved and every child still waits on the start
+        // barrier, so its allowance is admitted before any can be spent.
+        input.ledger.extendAllowance(nestedAllowance);
+        this.v2TurnAllowance += nestedAllowance.turns;
+        this.v2NetworkOperationAllowance += nestedAllowance.networkOperations;
         for (const [index, task] of request.tasks.entries()) {
           this.input.projector?.begin(
             identities[index]!,
@@ -1577,10 +1602,12 @@ export class SubagentSupervisor {
         const nextTurnAllowance = this.v2TurnAllowance +
           authorities.reduce((total, authority) => total + authority.budgets.maxTurns, 0);
         const remainingTurns = nextTurnAllowance - this.v2TurnsUsed;
+        // Network operations accumulate the same way: each admitted child may
+        // spend its own authority's operations, so siblings do not share one.
+        const nextNetworkOperationAllowance = this.v2NetworkOperationAllowance +
+          authorities.reduce((total, authority) => total + authority.budgets.maxNetworkOperations, 0);
         const remainingNetworkOperations =
-          Math.min(
-            ...authorities.map(({ budgets }) => budgets.maxNetworkOperations),
-          ) - this.v2NetworkOperationsUsed;
+          nextNetworkOperationAllowance - this.v2NetworkOperationsUsed;
         const needsNetworkOperations = authorities.some(
           ({ capabilities }) => capabilities.web || capabilities.mcp.length > 0,
         );
@@ -1590,6 +1617,7 @@ export class SubagentSupervisor {
           remainingToolCalls < 1 ||
           remainingOutputChars < 1 ||
           nextTurnAllowance > MAX_SUBAGENT_V2_TREE_TURNS ||
+          nextNetworkOperationAllowance > MAX_SUBAGENT_V2_TREE_NETWORK_OPERATIONS ||
           remainingTurns < 1 ||
           (needsNetworkOperations && remainingNetworkOperations < 1)
         ) {
@@ -1627,6 +1655,7 @@ export class SubagentSupervisor {
         }
         try {
           this.v2TurnAllowance = nextTurnAllowance;
+          this.v2NetworkOperationAllowance = nextNetworkOperationAllowance;
           results = (await scheduler.run(
             request.tasks.map((task, index) => ({
               node: nodes[index]!,

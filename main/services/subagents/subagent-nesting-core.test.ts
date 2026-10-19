@@ -367,6 +367,55 @@ test("tree ledger enforces aggregate turn and network ceilings", () => {
   assert.deepEqual(ledger.snapshot(), full);
 });
 
+test("tree ledger admits a nested batch's allowance only within the 512 tree bounds", () => {
+  const ledger = new SubagentTreeBudgetLedgerV2(
+    "generation-root",
+    limits({ maxTurns: 2, maxNetworkOperations: 1 }),
+    () => 0,
+  );
+  const usage = (turns: number, networkOperations: number) => ({
+    tokens: 0,
+    toolCalls: 0,
+    outputChars: 0,
+    turns,
+    networkOperations,
+  });
+  ledger.consumeUsage(usage(2, 1));
+  ledger.extendAllowance({ turns: 3, networkOperations: 2 });
+  ledger.consumeUsage(usage(3, 2));
+  assert.throws(
+    () => ledger.consumeUsage(usage(1, 0)),
+    /turns budget exhausted \(6 attempted; 5 allowed\)/u,
+  );
+  assert.throws(
+    () => ledger.consumeUsage(usage(0, 1)),
+    /network operations budget exhausted \(4 attempted; 3 allowed\)/u,
+  );
+  for (const invalid of [0, -1, 1.5, Number.NaN]) {
+    assert.throws(
+      () => ledger.extendAllowance({ turns: invalid, networkOperations: 1 }),
+      /Invalid subagent tree turn extension/u,
+    );
+    assert.throws(
+      () => ledger.extendAllowance({ turns: 1, networkOperations: invalid }),
+      /Invalid subagent tree network-operation extension/u,
+    );
+  }
+  assert.throws(
+    () => ledger.extendAllowance({ turns: 508, networkOperations: 1 }),
+    /turns budget exhausted \(513 attempted; 512 allowed\)/u,
+  );
+  assert.throws(
+    () => ledger.extendAllowance({ turns: 1, networkOperations: 510 }),
+    /network operations budget exhausted \(513 attempted; 512 allowed\)/u,
+  );
+  assert.equal(ledger.limits.maxTurns, 5, "a refused extension changes nothing");
+  assert.equal(ledger.limits.maxNetworkOperations, 3);
+  ledger.extendAllowance({ turns: 507, networkOperations: 509 });
+  assert.equal(ledger.limits.maxTurns, 512);
+  assert.equal(ledger.limits.maxNetworkOperations, 512);
+});
+
 test("ledger rejects hostile budget and usage getters without partial mutation", () => {
   let budgetReads = 0;
   const hostileLimits = Object.defineProperty(

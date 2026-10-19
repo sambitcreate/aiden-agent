@@ -2887,6 +2887,7 @@ struct AidenForeignRunProjection: Equatable, Sendable {
     private(set) var liveText = ""
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
+    private(set) var timeline: AidenGenerationTimeline?
     private(set) var state: AidenStreamState = .running
     private(set) var approvals: [AidenRemoteRunApproval] = []
     private(set) var questions: [AidenRemoteRunQuestion] = []
@@ -2964,6 +2965,7 @@ struct AidenForeignRunProjection: Equatable, Sendable {
             liveText = ""
             reasoning = ""
             tools = []
+            timeline = nil
             approvals = snapshot.approvals.filter { !locallyAnswered.contains($0.approvalId) }
             questions = snapshot.questions.filter { !locallyAnswered.contains($0.promptId) }
             state = .reconciling
@@ -2999,6 +3001,9 @@ struct AidenForeignRunProjection: Equatable, Sendable {
         case .reasoningDelta:
             reasoning += payload.text ?? ""
             return [.reasoning]
+        case .timeline:
+            timeline = payload.timeline
+            return []
         case .toolStarted:
             guard let id = payload.toolId, let name = payload.name else { return [] }
             tools.append(AidenLiveTool(id: id, name: name, status: nil))

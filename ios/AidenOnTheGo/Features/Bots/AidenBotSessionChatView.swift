@@ -34,10 +34,11 @@ struct AidenBotSessionChatView: View {
     @State private var startAttempt = 0
     /// The chat couldn't start (no pairing or credential to reach the Mac with).
     @State private var startFailed = false
-    /// The transcript is at or near its end, so new rows scroll into view.
-    @State private var followsBottom = true
+    /// Content growth must not be mistaken for the reader scrolling away.
+    @State private var follow = AidenTranscriptFollowController()
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
     @State private var ownSendScroll = 0
+    @State private var footerHeight: CGFloat = 0
     @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -82,6 +83,7 @@ struct AidenBotSessionChatView: View {
                     // The composer is there at once; messages wait for the Mac (R14).
                     if let model {
                         footer(model)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
                     } else if startFailed {
                         startFailureHint
                             .padding(.horizontal, 16)
@@ -347,7 +349,7 @@ struct AidenBotSessionChatView: View {
                                 .id(row.id)
                         }
                         if let partial = model.partial {
-                            assistantBubble(partial, interrupted: false)
+                            assistantBubble(partial, interrupted: false, isStreaming: true)
                                 .id("partial")
                         }
                         ForEach(model.queued, id: \.submissionId) { message in
@@ -361,23 +363,35 @@ struct AidenBotSessionChatView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+                    .background {
+                        AidenChatScrollObserver(
+                            onFollowEvent: { follow.handle($0) },
+                            onMetrics: { follow.updateMetrics($0) }
+                        )
+                    }
                 }
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(
+                    AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: follow.isFollowing),
+                    for: .sizeChanges
+                )
                 .scrollDismissesKeyboard(.interactively)
                 .modifier(AidenBotSoftScrollEdge())
-                // New rows follow only a reader already at the end; one reading back stays put.
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    aidenBotFollowsTranscriptEnd(
-                        distanceFromEnd: geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
-                    )
-                } action: { _, atEnd in
-                    followsBottom = atEnd
-                }
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.partial) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.queued.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.outgoing.count) { _, _ in followIfAtEnd(proxy) }
-                .onChange(of: ownSendScroll) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: ownSendScroll) { _, _ in followIfAtEnd(proxy, userInitiated: true) }
+                .onAppear { follow.setStreaming(model.isRunning) }
+                .onChange(of: model.isRunning) { _, running in follow.setStreaming(running) }
+                .overlay(alignment: .bottom) {
+                    if follow.showsJumpButton {
+                        AidenChatJumpToLatestButton {
+                            followIfAtEnd(proxy, userInitiated: true)
+                        }
+                        .padding(.bottom, footerHeight + 10)
+                    }
+                }
             }
         } else {
             ScrollView {
@@ -389,8 +403,10 @@ struct AidenBotSessionChatView: View {
         }
     }
 
-    private func followIfAtEnd(_ proxy: ScrollViewProxy) {
-        if followsBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+    private func followIfAtEnd(_ proxy: ScrollViewProxy, userInitiated: Bool = false) {
+        follow.scheduleFollowScroll(isUserInitiated: userInitiated, animated: false) { _ in
+            proxy.scrollTo("bottom", anchor: .bottom)
+        }
     }
 
     /// The Mac can't be reached right now: skeletons hold still instead of shimmering.
@@ -602,8 +618,8 @@ struct AidenBotSessionChatView: View {
         }
     }
 
-    private func assistantBubble(_ text: String, interrupted: Bool) -> some View {
-        AidenMarkdownView(content: text)
+    private func assistantBubble(_ text: String, interrupted: Bool, isStreaming: Bool = false) -> some View {
+        AidenMarkdownView(content: text, isStreaming: isStreaming)
             .foregroundStyle(palette.foreground)
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(interrupted ? 0.7 : 1)
@@ -1030,11 +1046,6 @@ extension AidenBotSessionCopy {
 func aidenBotBusyMode(_ current: AidenStreamInputMode?, isRunning: Bool) -> AidenStreamInputMode {
     guard isRunning, let current else { return .queue }
     return current
-}
-
-/// Whether the transcript is close enough to its end that new rows should follow.
-func aidenBotFollowsTranscriptEnd(distanceFromEnd: CGFloat) -> Bool {
-    distanceFromEnd <= 80
 }
 
 /// The text of a message still waiting (Sending…, Queued): the palette's quieter

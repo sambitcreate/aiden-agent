@@ -123,21 +123,33 @@ export class BackgroundSubagentCoordinatorV2<Child> {
     try {
       child = this.dependencies.createChild(prepared);
     } catch (error) {
-      const acceptedRun = await this.lifecycle.manage({
-        version: 2,
-        action: "status",
-        runId: prepared.snapshot.runId,
-        chatId: prepared.authority.chatId,
-        workspaceId: prepared.authority.workspaceId,
-        ownerDocumentId: prepared.authority.ownerDocumentId,
-        authorityRevision: prepared.authority.authorityRevision,
-        expectedRevision: accepted.revision,
-      });
-      await this.lifecycle.transition(
-        statusProof(acceptedRun),
-        "failed",
-        "Background child could not be created.",
-      );
+      try {
+        const acceptedRun = await this.lifecycle.manage({
+          version: 2,
+          action: "status",
+          runId: prepared.snapshot.runId,
+          chatId: prepared.authority.chatId,
+          workspaceId: prepared.authority.workspaceId,
+          ownerDocumentId: prepared.authority.ownerDocumentId,
+          authorityRevision: prepared.authority.authorityRevision,
+          expectedRevision: accepted.revision,
+        });
+        await this.lifecycle.transition(
+          statusProof(acceptedRun),
+          "failed",
+          "Background child could not be created.",
+        );
+      } catch (recordError) {
+        // Report why the child is missing; the recording failure is the cause
+        // the run is still queued until startup reconciliation settles it.
+        const failure: Error & { cause?: unknown } = new Error(
+          error instanceof Error
+            ? error.message
+            : "Background child could not be created.",
+        );
+        failure.cause = recordError;
+        throw failure;
+      }
       throw error;
     }
     const acceptedRun = await this.lifecycle.manage({

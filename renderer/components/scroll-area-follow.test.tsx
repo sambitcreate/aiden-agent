@@ -421,3 +421,34 @@ test("reading keys in a focused nested scrollable element leave transcript follo
   );
   assert.equal(port.top(), port.bottom(), "transcript stays pinned even after nested scroll");
 });
+
+test("the jump button is centred on the chat column the composer uses, not on the scrollport box", async () => {
+  // Quick View insets `.chat-content-column` and a classic scrollbar narrows
+  // the footer; the button must share both, so it is positioned against a
+  // column wrapper that floats over the scrollport beside the footer (#485).
+  const Chat = ({ footer }: { footer?: React.ReactNode }) => (
+    <ScrollArea autoScrollToBottom showScrollToBottomButton alignFooterToScrollContent footer={footer}>
+      <p>chunk</p>
+    </ScrollArea>
+  );
+  const view = render(<Chat />);
+  const port = scrollport();
+  Object.defineProperty(port.viewport, "offsetWidth", { configurable: true, get: () => 415 });
+  Object.defineProperty(port.viewport, "clientWidth", { configurable: true, get: () => 400 });
+  // Adding the footer re-measures, so the 15px gutter is picked up.
+  view.rerender(<Chat footer={<div className="aiden-dock-inset chat-content-column">Composer</div>} />);
+  fireEvent.wheel(port.viewport, { deltaY: -120 });
+  port.moveTo(200);
+
+  const jump = await screen.findByRole("button", { name: "Scroll to bottom" });
+  const column = jump.parentElement;
+  assert.ok(column, "the button has a positioning wrapper");
+  assert.ok(column.classList.contains("chat-content-column"), "the button is positioned against the chat column");
+  assert.equal(port.viewport.contains(column), false, "the column floats over the scrollport, like the footer");
+  const layer = column.parentElement;
+  const footerLayer = screen.getByText("Composer").parentElement;
+  assert.ok(layer && footerLayer);
+  assert.equal(layer.style.insetInlineEnd, footerLayer.style.insetInlineEnd, "the button layer keeps the footer's scrollbar gutter");
+  assert.equal(footerLayer.style.insetInlineEnd, "15px");
+  assert.equal(jump.tabIndex, 0, "still reachable by keyboard");
+});

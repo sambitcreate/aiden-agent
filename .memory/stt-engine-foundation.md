@@ -14,6 +14,9 @@
   explicit user action (Settings Download, Remote download route, `aiden speech download`).
 - Verified, resumable downloads (`Range` + `.partial/<id>.tar.bz2.part`, SHA-256 before extract,
   prune to `spec.files`, atomic rename) under `<userData>/voice-models/<id>/` (CLI: `<agentDir>/voice-models`).
+  Replacing an install renames the old `<id>/` aside to `<id>.replaced-<ms>/` first and puts it back if
+  the new rename fails; startup cleanup removes or restores a leftover aside copy. The desktop
+  `localModels:download` IPC is a no-op for an installed model.
   Progress phases `download` (0–90) → `verify` (90) → `extract` (90–100).
 - Language (`voiceLanguage`), Translate to English (`voiceTranslateToEnglish`, Canary only) and
   Trim silence (`voiceTrimSilence`, default on). Unsupported languages fall back with a caption.

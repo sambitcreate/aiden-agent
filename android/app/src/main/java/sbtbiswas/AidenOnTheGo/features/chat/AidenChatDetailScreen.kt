@@ -566,9 +566,12 @@ fun AidenChatDetailScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    // MainActivity uses adjustNothing, so this is the one IME owner.
-                    // Insets consumption contributes only the IME delta beyond the
-                    // navigation bar and keeps the whole composer above the keyboard.
+                    // MainActivity is edge-to-edge, so adjustResize only delivers IME
+                    // insets (Android 8-10 need it to report them at all) and never
+                    // resizes the window: this is the one IME owner. The padding follows
+                    // the live insets, so a return from another app with the keyboard
+                    // restored lifts the composer again. Insets consumption contributes
+                    // only the IME delta beyond the navigation bar.
                     .imePadding()
                     .aidenReadableWidth()
                     .zIndex(1f)

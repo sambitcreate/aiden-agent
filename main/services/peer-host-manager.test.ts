@@ -20,12 +20,14 @@ import {
   PeerHostManager,
   peerBackoffDelay,
   peerNetworkFingerprint,
+  type PeerManagerRegistry,
 } from "./peer-host-manager.js";
 import { PEER_RUN_EVICT_MS } from "./peer-run-subscriptions.js";
 import { PeerEventFrames, PeerTransportError, type PeerRequest, type PeerStreamEnd, type PeerTrust } from "./peer-transport.js";
 import type {
   PeerHostFeedMessage,
   PeerHostStatus,
+  PeerHostView,
   PeerRunFrameMessage,
 } from "../../renderer/shared/peer-host.js";
 
@@ -1161,4 +1163,73 @@ test("unavailable alternate discovery stops after its two bounded collection rea
     assert.equal(harness.status(host.id).feed, "live");
     assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), false);
   } finally { harness.close(); }
+});
+
+test("a registry change during a preferred-route check keeps one 30-second check per tick", async () => {
+  const timers = new FakeTimers();
+  const view: PeerHostView = {
+    id: "host_route_check",
+    name: "Route check",
+    enabled: true,
+    state: "connected",
+    features: ["peer-routes-v1"],
+    capabilities: [],
+    routes: [
+      { id: "route_lan", kind: "lan", origin: "learned", active: false },
+      { id: "route_tailscale", kind: "tailscale", origin: "paired", active: true },
+    ],
+    activeRouteKind: "tailscale",
+    hasSuppressedRoutes: false,
+  };
+  let notifyChanged = () => {};
+  let checks = 0;
+  const inFlight: Array<() => void> = [];
+  const finishChecks = () => { for (const finish of inFlight.splice(0)) finish(); };
+  const registry: PeerManagerRegistry = {
+    list: async () => [view],
+    connect: async () => view,
+    request: async () => { throw new Error("unused"); },
+    setEnabled: async () => undefined,
+    remove: async () => undefined,
+    onChanged: (listener) => {
+      notifyChanged = listener;
+      return () => undefined;
+    },
+    attachConnectionState: () => undefined,
+    preferReachableRoute: () => {
+      checks += 1;
+      return new Promise<boolean>((resolve) => { inFlight.push(() => resolve(false)); });
+    },
+  };
+  const manager = new PeerHostManager({
+    registry,
+    broadcast: () => undefined,
+    timers,
+    now: () => timers.now,
+    random: () => 0.5,
+  });
+  try {
+    await manager.whenReady();
+    await settle();
+    assert.equal(manager.statuses()[0]?.state.kind, "connected");
+
+    timers.advance(30_000);
+    await settle();
+    assert.equal(checks, 1);
+    // A grant refresh or learned route lands while the probe is still running.
+    notifyChanged();
+    await settle();
+    finishChecks();
+    await settle();
+
+    for (const expected of [2, 3, 4]) {
+      timers.advance(30_000);
+      await settle();
+      assert.equal(checks, expected);
+      finishChecks();
+      await settle();
+    }
+  } finally {
+    manager.close();
+  }
 });

@@ -1214,6 +1214,7 @@ final class AidenChatViewModel {
                     replaceLiveText("")
                     reasoning = ""
                     tools = []
+                    activityTimeline = nil
                 }
             }
         }
@@ -5887,7 +5888,7 @@ func aidenChatIsScrolledAwayFromLatest(
     return contentBottom - viewportBottom > threshold
 }
 
-private struct AidenChatJumpToLatestButton: View {
+struct AidenChatJumpToLatestButton: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
 
@@ -6075,7 +6076,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     }
 }
 
-private struct AidenMessageView: View, Equatable {
+struct AidenMessageView: View, Equatable {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
@@ -8320,6 +8321,10 @@ private struct AidenVisualRowView: View {
         // Hold a typical landscape frame until the image reports its own shape.
         .aspectRatio(imageAspectRatio ?? 16 / 9, contentMode: .fit)
         .frame(maxWidth: visual.layout == .wide ? .infinity : 560, alignment: .leading)
+        // Claim the snapshot's own height. Left flexible, the message stack
+        // squeezes it to nothing when the reply also carries image attachments,
+        // leaving the space it should fill as a gap below them.
+        .fixedSize(horizontal: false, vertical: true)
         .clipShape(RoundedRectangle(cornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
@@ -9605,7 +9610,7 @@ extension AidenChatViewModel {
         // The retained replay lands at once: text it holds before a tool,
         // approval or other structural state shows before that state.
         let carriesStructure = !projection.tools.isEmpty || !projection.reasoning.isEmpty
-            || projection.pendingApproval != nil || projection.pendingQuestion != nil
+            || projection.pendingApproval != nil || projection.pendingQuestion != nil || projection.timeline != nil
         publishForeignRun(context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
@@ -9628,6 +9633,12 @@ extension AidenChatViewModel {
         if flushingText { flushPendingStreamingContent() }
         reasoning = projection.reasoning
         tools = projection.tools
+        activityTimeline = projection.timeline
+        if let timeline = projection.timeline {
+            imageArrivalRevealGenerationIDs = AidenImageGenerationPlaceholderState.armedArrivalReveals(
+                imageArrivalRevealGenerationIDs, after: timeline
+            )
+        }
         if streamState != projection.state { streamState = projection.state }
         let approval = projection.pendingApproval.map { foreignPendingApproval($0, context: context) }
         if pendingApproval != approval { pendingApproval = approval }
@@ -9786,6 +9797,7 @@ extension AidenChatViewModel {
         replaceLiveText("")
         reasoning = ""
         tools = []
+        activityTimeline = nil
     }
 
     private func scheduleForeignRunReconciliation(context: AidenRemoteRequestContext) {

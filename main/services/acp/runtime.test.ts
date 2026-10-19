@@ -581,6 +581,28 @@ test("after a restart the chat resumes its saved agent session instead of rebuil
   await second.runtime.close();
 });
 
+test("sessions closed mid-turn are not resumed, so the interrupted prompt is never sent to them again", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const reply = await turn(h, [userMessage("echo:one")]);
+  assert.ok(h.store.get("chat-1"), "a finished turn saves its session");
+  const interrupted = turn(h, [userMessage("echo:one"), reply, userMessage("slow")]);
+  await waitForAgentLog(h.env, (entry) => entry.method === "prompt" && entry.text === "slow");
+  // Quit, sign-out and runtime removal close sessions while keeping idle ones resumable.
+  await h.runtime.closeSessions();
+  assert.notEqual((await interrupted).stopReason, "stop");
+  assert.equal(h.store.get("chat-1"), undefined, "the record predates the prompt the agent already received");
+
+  await turn(h, [userMessage("echo:one"), reply, userMessage("slow"), userMessage("history")]);
+  const log = readAgentLog(h.env);
+  const slow = log.find((entry) => entry.method === "prompt" && entry.text === "slow");
+  const prompts = log.filter((entry) => entry.method === "prompt");
+  const last = prompts[prompts.length - 1];
+  assert.equal(log.filter((entry) => entry.method === "resumeSession").length, 0);
+  assert.notEqual(last?.sessionId, slow?.sessionId, "the next turn starts a new session");
+});
+
 test("at most the configured number of idle sessions stay alive", async () => {
   const h = harness(undefined, undefined, { maxLiveSessions: 1 });
   h.hosts.register(new RecordingHost("chat-a", h.dir));

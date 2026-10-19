@@ -3,6 +3,7 @@
 // Layout under the injected root:
 //   .partial/<id>.tar.bz2.part   bytes received so far (kept across cancel/relaunch)
 //   <id>.extracting/             staging directory for extraction
+//   <id>.replaced-<ms>/          the previous install, moved aside while a replacement is published
 //   <id>/                        the installed model (only the files the spec names)
 //
 // Every archive is pinned by exact byte size and SHA-256 in the catalog. Nothing
@@ -69,6 +70,9 @@ export interface SpeechModelManagerDependencies {
 const PARTIAL_DIR = ".partial";
 const PARTIAL_SUFFIX = ".tar.bz2.part";
 const EXTRACTING_SUFFIX = ".extracting";
+/** The previous install, moved aside while its replacement is renamed into place. */
+const REPLACED_SUFFIX = ".replaced-";
+const REPLACED_DIR = /^(.+)\.replaced-\d+$/;
 const LEGACY_STAGING = /^\..+\.staging-\d+$/;
 
 const CANCELLED = "Download cancelled.";
@@ -285,8 +289,7 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
         throw new Error("The downloaded model is missing expected files.");
       }
       const dir = path.join(modelsRoot(), id);
-      await fs.promises.rm(dir, { recursive: true, force: true });
-      await fs.promises.rename(staging, dir);
+      await replaceInstall(staging, dir);
       await fs.promises.rm(part, { force: true });
       emit("extract", 1, 1);
       downloadStates.delete(id);
@@ -310,6 +313,30 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
     } finally {
       downloads.delete(id);
     }
+  }
+
+  /**
+   * Publish `staging` at `dir` by rename-swap: a previous install is moved
+   * aside first and only removed once the new files are in place, so a failed
+   * commit (EIO, a locked directory) puts the previous install back instead of
+   * leaving no model at all.
+   */
+  async function replaceInstall(staging: string, dir: string): Promise<void> {
+    const aside = `${dir}${REPLACED_SUFFIX}${Date.now()}`;
+    let movedAside = false;
+    try {
+      await fs.promises.rename(dir, aside);
+      movedAside = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    try {
+      await fs.promises.rename(staging, dir);
+    } catch (error) {
+      if (movedAside) await fs.promises.rename(aside, dir).catch(() => {});
+      throw error;
+    }
+    if (movedAside) await fs.promises.rm(aside, { recursive: true, force: true }).catch(() => {});
   }
 
   /** Append the archive's remaining bytes to `part`, resuming from `have`. */
@@ -472,12 +499,22 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
    * `<id>.extracting/` without an active download, legacy `.<id>.staging-*`
    * directories, and `.partial/*.part` files for unknown ids or that exceed the
    * pinned size. Partials for catalog models are kept so a relaunch resumes.
+   * A `<id>.replaced-*` copy is removed once `<id>/` exists, and put back when
+   * a replacement stopped between its two renames and left no `<id>/`.
    */
   async function cleanupLeftovers(): Promise<void> {
     const root = modelsRoot();
     for (const entry of await fs.promises.readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const extractingId = entry.name.endsWith(EXTRACTING_SUFFIX) ? entry.name.slice(0, -EXTRACTING_SUFFIX.length) : null;
+      const replacedId = REPLACED_DIR.exec(entry.name)?.[1] ?? null;
+      if (replacedId !== null) {
+        if (downloads.has(replacedId)) continue;
+        const installed = path.join(root, replacedId);
+        if (!fs.existsSync(installed)) await fs.promises.rename(path.join(root, entry.name), installed);
+        else await fs.promises.rm(path.join(root, entry.name), { recursive: true, force: true });
+        continue;
+      }
       if ((extractingId !== null && !downloads.has(extractingId)) || LEGACY_STAGING.test(entry.name)) {
         await fs.promises.rm(path.join(root, entry.name), { recursive: true, force: true });
       }

@@ -199,14 +199,23 @@ export class AidenRemoteWorkspaceBrowserService {
   async listRoots(deviceId: string): Promise<{ roots: AidenRemoteBrowserRootProjection[] }> {
     const state = await this.options.state.snapshot();
     const roots: AidenRemoteBrowserRootProjection[] = [];
+    let unavailable: unknown;
     for (const root of state.approvedRoots) {
-      const claims = await this.claimsForPath(deviceId, root, root.folderPath, {
-        expiresAt: this.now() + LOCATION_TTL_MS,
-        depth: 0,
-        snapshotId: undefined,
-        cursorOffset: undefined,
-        parentHandleDigest: undefined,
-      });
+      let claims: AidenOpaqueHandleClaims;
+      try {
+        claims = await this.claimsForPath(deviceId, root, root.folderPath, {
+          expiresAt: this.now() + LOCATION_TTL_MS,
+          depth: 0,
+          snapshotId: undefined,
+          cursorOffset: undefined,
+          parentHandleDigest: undefined,
+        });
+      } catch (error) {
+        // An unplugged, deleted or replaced root is omitted, not fatal for the
+        // others; it gets no location handle.
+        unavailable ??= error;
+        continue;
+      }
       roots.push({
         id: root.id,
         label: safeLabel(root.label, "Approved folder"),
@@ -214,6 +223,8 @@ export class AidenRemoteWorkspaceBrowserService {
         policyRevision: root.policyRevision,
       });
     }
+    // With nothing browsable, keep explaining why rather than showing no roots.
+    if (roots.length === 0 && unavailable) throw unavailable;
     return { roots };
   }
 

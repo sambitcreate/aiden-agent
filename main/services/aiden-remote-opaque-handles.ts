@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
+import path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
 
 export type AidenOpaqueHandleKind = "loc" | "cur" | "sel" | "file";
@@ -44,6 +45,10 @@ interface StoredHandle {
   kind: AidenOpaqueHandleKind;
   claims: AidenOpaqueHandleClaims;
   consumed: boolean;
+  /** Scope of the listing that issued this handle, e.g. one device's view of one workspace. */
+  listing?: string;
+  superseded?: boolean;
+  resolved?: boolean;
 }
 
 function digest(token: string): string {
@@ -71,15 +76,36 @@ export class AidenOpaqueHandleStore {
     }
   }
 
-  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims): string {
+  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options: { listing?: string } = {}): string {
     const now = this.now();
     this.prune(now);
     if (claims.expiresAt <= now) throw new AidenOpaqueHandleError("handle_expired");
     if (kind === "file" && !claims.workspaceId) throw new AidenOpaqueHandleError("handle_invalid");
+    if (this.handles.size >= this.maxEntries) this.reclaimSuperseded();
     if (this.handles.size >= this.maxEntries) throw new AidenOpaqueHandleError("handle_capacity");
     const token = `${kind}_${randomBytes(32).toString("base64url")}`;
-    this.handles.set(digest(token), { kind, claims: { ...claims }, consumed: false });
+    this.handles.set(digest(token), {
+      kind, claims: { ...claims }, consumed: false, ...(options.listing ? { listing: options.listing } : {}),
+    });
     return token;
+  }
+
+  /**
+   * A new listing for `listing` supersedes the handles earlier listings of it
+   * issued. They keep working, but once the store is full those never resolved
+   * are reclaimed first (a document the client opened has been resolved), so
+   * re-listing cannot lock the device out until the old handles expire.
+   */
+  supersedeListing(listing: string): void {
+    for (const stored of this.handles.values()) {
+      if (stored.listing === listing) stored.superseded = true;
+    }
+  }
+
+  private reclaimSuperseded(): void {
+    for (const [key, stored] of this.handles) {
+      if (stored.superseded && !stored.resolved) this.handles.delete(key);
+    }
   }
 
   /** Reserve before a save, then bind the same slot to its installed inode. */
@@ -161,6 +187,7 @@ export class AidenOpaqueHandleStore {
     ) {
       throw new AidenOpaqueHandleError("filesystem_identity_changed");
     }
+    stored.resolved = true;
     if (options.consume) stored.consumed = true;
     return { ...claims };
   }
@@ -208,4 +235,41 @@ export async function inspectAidenFilesystemIdentity(rootPath: string, candidate
     filesystemInode: String(identity.ino),
     kind: identity.isDirectory() ? "directory" : "file",
   };
+}
+
+/**
+ * A snapshot-handle save installs a new inode at the same name. Rebind the
+ * handle in place (clients validate that a save answers with the id they sent)
+ * after the same containment and single-link checks a fresh listing performs.
+ * If the installed file cannot be admitted, the handle is discarded so it
+ * authorizes nothing, and the phone re-lists.
+ */
+export async function rebindAidenFileHandleToSavedFile(
+  handles: AidenOpaqueHandleStore,
+  token: string,
+  rootPath: string,
+  displayPath: string,
+  saved: { device: string; inode: string },
+): Promise<void> {
+  let rebound = false;
+  try {
+    const stored = handles.claimsFor(token, "file");
+    const installed = await inspectAidenFilesystemIdentity(rootPath, path.join(rootPath, displayPath));
+    // Only the inode this save installed is adopted, never a file another app put there afterwards.
+    if (
+      installed.kind === "file" &&
+      installed.canonicalRootPath === stored.canonicalRootPath &&
+      installed.canonicalPath === stored.canonicalPath &&
+      installed.filesystemDevice === saved.device &&
+      installed.filesystemInode === saved.inode
+    ) {
+      handles.updateReservedFileIdentity(token, installed.filesystemDevice, installed.filesystemInode);
+      rebound = true;
+    }
+  } catch {
+    // The save already landed; only the follow-up handle use is refused.
+  }
+  // The pre-save inode may be freed and reused by a replacement, so a handle that could not be
+  // rebound must authorize nothing: the phone gets a conflict and lists the folder again.
+  if (!rebound) handles.discard(token);
 }

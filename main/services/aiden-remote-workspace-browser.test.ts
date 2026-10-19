@@ -134,6 +134,28 @@ test("approved-root browsing keeps working after a remount renumbers the volume"
   }
 });
 
+test("an unavailable approved root does not hide the other approved roots", async () => {
+  const app = await fixture();
+  try {
+    const gonePath = path.join(path.dirname(app.rootPath), "Gone");
+    await fs.mkdir(gonePath);
+    const goneIdentity = await fs.stat(gonePath, { bigint: true });
+    const gone = { ...app.root, id: "root-gone", label: "Unplugged", folderPath: gonePath,
+      device: goneIdentity.dev.toString(), inode: goneIdentity.ino.toString() };
+    const replaced = { ...app.root, id: "root-replaced", label: "Replaced",
+      inode: (BigInt(app.root.inode) + 1n).toString() };
+    app.setRoots([gone, app.root, replaced]);
+    await fs.rm(gonePath, { recursive: true });
+
+    const { roots } = await app.service.listRoots("device-1");
+    assert.deepEqual(roots.map((root) => root.id), [app.root.id]);
+    const page = await app.service.listChildren("device-1", roots[0]!.location);
+    assert.deepEqual(page.entries.map((entry) => entry.name), ["Alpha", "Beta"]);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("directory pagination binds cursors to the exact location and snapshot", async () => {
   const app = await fixture();
   try {
