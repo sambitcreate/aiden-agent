@@ -21,6 +21,11 @@ checked prefix reaches the parent after the ordinary credential sanitizer;
 later, unclassified lines are omitted with an explicit safety-scan notice.
 Mixed V2 batches add accepted child ceilings to a generation-wide turn ledger,
 bounded at 512 turns, so a default sibling cannot truncate an extended scout.
+Network operations accumulate the same way (bounded at 512), so each web/MCP
+sibling, in any batch of the generation, keeps its own authority's allowance.
+A nested (depth-2) batch extends the shared tree ledger and the generation
+allowance with its own turn and network ceilings (`extendAllowance`), within
+the same bounds, so delegation never spends its depth-1 parent's turns.
 Other limits and cancellations remain
 fail-closed. OpenCode v2's task/session design (MIT, studied conceptually)
 retains child sessions for continuation and defaults to no step cap; Aiden

@@ -23,6 +23,8 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     updatedAt: 2,
   };
   let managed: Workspace | undefined;
+  let releaseTerminals: () => void = () => undefined;
+  let terminalDrain: Promise<void> = Promise.resolve();
   const signal = new AbortController().signal;
   const service = createWorkspaceWorktreeApplicationService({
     environment: {
@@ -114,7 +116,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     },
     workspaceIsChanging: () => false,
     cancelWorkspaceOperations: async () => { events.push("cancel-operations"); },
-    closeWorkspaceTerminals: () => { events.push("close-terminals"); },
+    closeWorkspaceTerminals: async () => {
+      events.push("close-terminals");
+      await terminalDrain;
+    },
     cancelWorkspaceGeneration: async () => { events.push("cancel-generation"); },
     cancelWorkspaceSchedules: async () => { events.push("cancel-schedules"); },
     resumeWorkspaceSchedules: async () => { events.push("resume-schedules"); },
@@ -135,9 +140,19 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   ]);
 
   events.length = 0;
-  const removed = await service.remove(owner, created.id, (workspace) => {
+  terminalDrain = new Promise<void>((resolve) => { releaseTerminals = resolve; });
+  const removal = service.remove(owner, created.id, (workspace) => {
     events.push(`validate:${workspace.id}`);
   });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, [
+    "validate:workspace-managed",
+    "begin-mutation",
+    "cancel-operations",
+    "close-terminals",
+  ], "Git deletion must wait for terminal exit");
+  releaseTerminals();
+  const removed = await removal;
   assert.equal(removed.branchDeleted, true);
   assert.deepEqual(events, [
     "validate:workspace-managed",
@@ -287,7 +302,7 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     beginWorkspaceMutation: () => () => undefined,
     workspaceIsChanging: () => false,
     cancelWorkspaceOperations: async () => undefined,
-    closeWorkspaceTerminals: () => undefined,
+    closeWorkspaceTerminals: async () => undefined,
     cancelWorkspaceGeneration: async () => undefined,
     cancelWorkspaceSchedules: async () => undefined,
     resumeWorkspaceSchedules: async () => undefined,
@@ -473,4 +488,174 @@ test("snapshot transfers canonicalize aliased identity paths without accepting r
     destinationRoot: alias, destinationIdentity: identity, destinationRelativePath: "missing.env",
     byteLimit: copied.size, digest: copied.digest, mode: 0o600,
   }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination");
+});
+
+test("restore through the real environment settles, serializes same-snapshot restores, and releases source admission", async (t) => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { randomUUID } = await import("node:crypto");
+  const { persistManagedWorktreeSnapshot } = await import("./managed-worktree-snapshot.js");
+  const { createWorkspaceEnvironmentApplicationService } = await import("./workspace-environment-application-service.js");
+  const { WorkspaceMutationGate } = await import("./workspace-mutation-gate.js");
+  const { WorkspaceOperationRegistry } = await import("./workspace-operation-registry.js");
+
+  const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-restore-admission-")));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const repositoryPath = path.join(base, "repository");
+  const snapshotRoot = path.join(base, "snapshots");
+  const worktreeRoot = path.join(base, "worktrees");
+  await fs.mkdir(repositoryPath);
+  await fs.mkdir(snapshotRoot);
+  await fs.mkdir(worktreeRoot);
+  const snapshotId = randomUUID();
+  await persistManagedWorktreeSnapshot(snapshotRoot, {
+    id: snapshotId,
+    workspaceId: "workspace-deleted",
+    repositoryPath,
+    worktreePath: path.join(base, "deleted"),
+    workspaceSubpath: "",
+    branch: "codex/restored",
+    originalHead: "b".repeat(40),
+    snapshotRef: `refs/aiden/snapshots/${snapshotId}`,
+    snapshotCommit: "c".repeat(40),
+    snapshotTree: "d".repeat(40),
+    createdAt: 1,
+    provisionedFiles: [],
+  });
+  const source: Workspace = {
+    id: "workspace-source",
+    name: "Source",
+    folderPath: repositoryPath,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  // Production environment: admission and persisted resolution do real I/O
+  // before the restore callback runs.
+  const registry = new WorkspaceOperationRegistry();
+  const environment = createWorkspaceEnvironmentApplicationService({
+    configStore: { getWorkspace: async (id) => id === source.id ? source : undefined },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: registry,
+    assertManagedWorktreeAdmission: async () => undefined,
+    realpath: fs.realpath,
+    stat: fs.stat,
+  });
+
+  const checkouts: string[] = [];
+  let releaseCheckout: () => void = () => undefined;
+  let checkoutGate: Promise<void> = Promise.resolve();
+  let checkoutReached: () => void = () => undefined;
+  const saved: string[] = [];
+  const service = createWorkspaceWorktreeApplicationService({
+    environment,
+    ensureWorktreeRoot: async () => worktreeRoot,
+    ensureSnapshotRoot: async () => snapshotRoot,
+    checkoutBytes: async () => 0,
+    checkCreateCapacity: async () => undefined,
+    checkWorktreeAllocation: async () => undefined,
+    checkSnapshotCapacity: async () => undefined,
+    provisionIncludedFiles: async () => [],
+    repositoryPaths: async (folderPath) => ({
+      topLevel: await fs.realpath(folderPath),
+      commonDir: path.join(repositoryPath, ".git"),
+    }),
+    dirtyState: async () => { throw new Error("unexpected dirty state"); },
+    expandIgnoredPaths: async () => { throw new Error("unexpected expansion"); },
+    snapshotContentBytes: async () => 0,
+    captureWorktreeSnapshot: async () => { throw new Error("unexpected snapshot"); },
+    snapshotRefCommit: async () => "c".repeat(40),
+    deleteSnapshotRef: async () => true,
+    restoreManagedCheckout: async (repository, _root, worktreePath, branch, baseCommit) => {
+      checkouts.push(worktreePath);
+      checkoutReached();
+      await checkoutGate;
+      await fs.mkdir(worktreePath);
+      const identity = await fs.stat(worktreePath);
+      return {
+        path: worktreePath,
+        workspacePath: worktreePath,
+        repositoryPath: repository,
+        worktreeGitDir: path.join(repository, ".git", "worktrees", "restored"),
+        ownershipToken: "a".repeat(64),
+        worktreeDevice: identity.dev,
+        worktreeInode: identity.ino,
+        createdFromHead: baseCommit,
+        head: baseCommit,
+        branch,
+        bare: false,
+        detached: false,
+        current: false,
+      };
+    },
+    resumeManagedCheckout: async () => { throw new Error("unexpected resume"); },
+    applyWorktreeSnapshot: async () => undefined,
+    createWorktree: async () => { throw new Error("unexpected create"); },
+    rollbackWorktree: async () => undefined,
+    deleteManagedWorktree: async () => { throw new Error("unexpected delete"); },
+    managedWorktreeDeletionPending: async () => false,
+    managedWorktreeRegistered: async () => false,
+    // A converged retry re-verifies the journaled checkout it adopts.
+    managedWorktreeUsable: async (managed) => checkouts.includes(managed.worktreePath),
+    finalizeManagedWorktreeDeletion: async () => undefined,
+    workspacePathExists: async () => false,
+    saveWorkspace: async (workspace) => {
+      saved.push(workspace.id);
+      return workspace;
+    },
+    removeWorkspace: async () => undefined,
+    beginWorkspaceMutation: () => () => undefined,
+    workspaceIsChanging: () => false,
+    cancelWorkspaceOperations: async () => undefined,
+    closeWorkspaceTerminals: async () => undefined,
+    cancelWorkspaceGeneration: async () => undefined,
+    cancelWorkspaceSchedules: async () => undefined,
+    resumeWorkspaceSchedules: async () => undefined,
+    createWorkspaceId: () => "workspace-restored",
+    now: () => 5,
+    notifyChanged: () => undefined,
+    logError: () => undefined,
+  });
+
+  const settledWithin = <T>(promise: Promise<T>, label: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 2_000);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  };
+
+  // Two concurrent restores of one snapshot: the second waits for the first
+  // instead of planning its own checkout, then converges on the same result.
+  checkoutGate = new Promise<void>((resolve) => { releaseCheckout = resolve; });
+  const reached = new Promise<void>((resolve) => { checkoutReached = resolve; });
+  const first = service.restore(owner, source.id, snapshotId);
+  const second = service.restore(owner, source.id, snapshotId);
+  await settledWithin(reached, "the first restore");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(checkouts.length, 1);
+  assert.deepEqual(saved, [], "the second restore must not run while the first holds the snapshot");
+  releaseCheckout();
+  const [restored, converged] = await settledWithin(Promise.all([first, second]), "concurrent restores");
+  assert.equal(restored.id, "workspace-restored");
+  assert.equal(restored.folderPath, checkouts[0]);
+  assert.equal(restored.managedWorktree?.branch, "codex/restored");
+  assert.equal(converged.id, restored.id);
+  assert.equal(converged.folderPath, restored.folderPath);
+  assert.equal(checkouts.length, 1);
+
+  // Each restore released its admission on the source workspace, so a later
+  // workspace mutation's cancel-and-drain is admitted immediately.
+  await registry.cancelAndSettle(source.id, { timeoutMs: 100 });
+
+  // A restore that fails inside the operation also releases its admission.
+  await assert.rejects(
+    settledWithin(service.restore(owner, source.id, randomUUID()), "a missing-snapshot restore"),
+    /snapshot does not exist/u,
+  );
+  await registry.cancelAndSettle(source.id, { timeoutMs: 100 });
 });

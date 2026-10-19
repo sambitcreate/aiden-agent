@@ -1601,6 +1601,73 @@ test("run_command cancellation kills the shell process group", async () => {
   }
 });
 
+test("run_command waits for resistant process-group cleanup after cancellation, timeout, and output overflow", async () => {
+  if (process.platform === "win32") return;
+  for (const trigger of ["cancel", "timeout", "output", "foreground"] as const) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `aiden-command-${trigger}-`));
+    const controller = new AbortController();
+    let running: Promise<unknown> | undefined;
+    try {
+      await fs.writeFile(path.join(root, "worker.cjs"), `
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+fs.writeFileSync("ready", String(process.pid));
+setInterval(() => fs.appendFileSync("heartbeat", "x"), 25);
+`);
+      if (trigger === "output") {
+        await fs.writeFile(path.join(root, "output.cjs"), 'process.stdout.write("x".repeat(11 * 1024 * 1024));');
+      }
+      const command = trigger === "foreground"
+        ? "node worker.cjs"
+        : trigger === "output"
+          ? "node worker.cjs >/dev/null 2>&1 & while [ ! -f ready ]; do sleep 0.01; done; node output.cjs; wait"
+          : "node worker.cjs >/dev/null 2>&1 & wait";
+      const runCommand = buildCodingTools(root, undefined, {
+        commandTimeoutMs: trigger === "timeout" ? 2_000 : undefined,
+      }).find((tool) => tool.name === "run_command")!;
+      running = runCommand.execute(trigger, { command }, controller.signal);
+
+      let pid = 0;
+      const readyDeadline = Date.now() + 5_000;
+      while (Date.now() < readyDeadline) {
+        pid = Number(await fs.readFile(path.join(root, "ready"), "utf8").catch(() => "0"));
+        const heartbeat = await fs.readFile(path.join(root, "heartbeat")).catch(() => Buffer.alloc(0));
+        if (pid > 0 && heartbeat.length >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(pid > 0, `${trigger}: worker did not become ready`);
+      if (trigger === "cancel" || trigger === "foreground") {
+        controller.abort(new Error(`${trigger} cancellation`));
+        await assert.rejects(running, new RegExp(`${trigger} cancellation`, "u"));
+      } else {
+        const result = await running as Awaited<ReturnType<typeof runCommand.execute>>;
+        assert.equal(result.isError, true);
+        assert.match(
+          result.content[0].type === "text" ? result.content[0].text : "",
+          trigger === "timeout" ? /^Command timed out\./u : /^Command exceeded the output limit\./u,
+        );
+      }
+
+      const before = (await fs.readFile(path.join(root, "heartbeat"))).length;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const after = (await fs.readFile(path.join(root, "heartbeat"))).length;
+      assert.equal(after, before, `${trigger}: descendant kept writing after the command settled`);
+      const status = await execFileAsync("ps", ["-o", "stat=", "-p", String(pid)])
+        .then(({ stdout }) => stdout.trim())
+        .catch(() => "");
+      assert.ok(!status || status.startsWith("Z"), `${trigger}: descendant is still executing (${status})`);
+    } finally {
+      controller.abort(new Error("fixture cleanup"));
+      await running?.catch(() => {});
+      const pid = Number(await fs.readFile(path.join(root, "ready"), "utf8").catch(() => "0"));
+      if (pid > 0) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ }
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("agent commands find user CLIs from a macOS GUI launch PATH", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agent-path-"));
   try {
@@ -1650,6 +1717,36 @@ test("run_command applies the macOS agent PATH to its spawned shell", async () =
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
     await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("run_command withholds Aiden's own credentials but keeps tooling variables", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-run-command-env-"));
+  const names = ["AIDEN_TELEGRAM_TOKEN", "AIDEN_IMAGE_FAL_KEY", "aiden_image_replicate_api_token", "AIDEN_CONFIG_DIR", "GH_TOKEN"] as const;
+  const previous = new Map(names.map((name) => [name, process.env[name]]));
+  try {
+    process.env.AIDEN_TELEGRAM_TOKEN = "telegram-bot-secret";
+    process.env.AIDEN_IMAGE_FAL_KEY = "fal-image-secret";
+    process.env.aiden_image_replicate_api_token = "replicate-image-secret";
+    process.env.AIDEN_CONFIG_DIR = "/tmp/aiden-config";
+    process.env.GH_TOKEN = "gh-tooling-token";
+    const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command");
+    assert.ok(runCommand);
+    // Print only these variables so a failure never dumps the test runner's environment.
+    const command = `printf '%s\\n' ${names.map((name) => `"\${${name}-unset}"`).join(" ")}`;
+    const result = await runCommand.execute("env", { command });
+    const output = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    // Builds and package managers authenticate through their own variables, and
+    // non-secret Aiden settings still reach a nested `aiden` invocation.
+    assert.deepEqual(output.trim().split("\n"), ["unset", "unset", "unset", "/tmp/aiden-config", "gh-tooling-token"]);
+    assert.equal(process.env.AIDEN_TELEGRAM_TOKEN, "telegram-bot-secret");
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
@@ -1798,6 +1895,62 @@ test("edit_file writes JavaScript replacement markers literally", async () => {
     assert.equal(result.isError, undefined);
     assert.deepEqual(result.content, [{ type: "text", text: "Edited sample.ts." }]);
     assert.equal(await fs.readFile(file, "utf8"), `const output = ${replacement};\n`);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("edit_file refuses non-UTF-8 files and leaves their bytes untouched", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-latin1-edit-"));
+  try {
+    const file = path.join(root, "latin1.txt");
+    // Latin-1 "café" (0xE9 is not valid UTF-8) followed by an unrelated ASCII token.
+    const before = Buffer.concat([
+      Buffer.from("caf"),
+      Buffer.from([0xe9]),
+      Buffer.from(" au lait\nTOKEN=1\n"),
+    ]);
+    await fs.writeFile(file, before);
+    const editFile = buildCodingTools(root).find((tool) => tool.name === "edit_file");
+    assert.ok(editFile);
+
+    await assert.rejects(
+      editFile.execute("latin1", { path: "latin1.txt", old_string: "TOKEN=1", new_string: "TOKEN=2" }),
+      /only edits valid UTF-8 text files/,
+    );
+    assert.ok((await fs.readFile(file)).equals(before), "file bytes must be unchanged");
+
+    // A valid UTF-8 file with multi-byte characters still edits and keeps them intact.
+    const utf8 = path.join(root, "utf8.txt");
+    await fs.writeFile(utf8, "\uFEFFcafé ☕\r\nTOKEN=1\r\n", "utf8");
+    const result = await editFile.execute("utf8", { path: "utf8.txt", old_string: "TOKEN=1", new_string: "TOKEN=2" });
+    assert.equal(result.isError, undefined);
+    assert.equal(await fs.readFile(utf8, "utf8"), "\uFEFFcafé ☕\r\nTOKEN=2\r\n");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("edit_file rejects an empty old_string without touching the file", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-empty-old-"));
+  try {
+    const editFile = buildCodingTools(root).find((tool) => tool.name === "edit_file");
+    assert.ok(editFile);
+    for (const content of ["a", "ab", "abc"]) {
+      const name = `${content.length}.txt`;
+      await fs.writeFile(path.join(root, name), content, "utf8");
+      await assert.rejects(
+        editFile.execute(`empty-${name}`, { path: name, old_string: "", new_string: "X" }),
+        /old_string must not be empty/,
+      );
+      assert.equal(await fs.readFile(path.join(root, name), "utf8"), content);
+    }
+    // Non-empty patterns still report real occurrence counts.
+    await fs.writeFile(path.join(root, "dup.txt"), "x = 1; x = 1;\n", "utf8");
+    await assert.rejects(
+      editFile.execute("dup", { path: "dup.txt", old_string: "x = 1", new_string: "y" }),
+      /not unique in dup\.txt \(2 matches\)/,
+    );
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

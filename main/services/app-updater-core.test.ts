@@ -492,6 +492,26 @@ test("service defers loading the updater SDK until an update check needs it", as
   }
 });
 
+test("Check for Updates during a background check still shows its result once", async () => {
+  const fixture = await simulatedService();
+  const titles = () => fixture.dialogs.map((options) => (options as { title?: string }).title);
+  try {
+    const background = fixture.service.checkNow(false);
+    await flushUpdater();
+    const manual = fixture.service.checkNow(true);
+    fixture.check.resolve({ isUpdateAvailable: false, updateInfo: { version: "0.28.31" } });
+
+    assert.deepEqual(await manual, { outcome: "up-to-date" });
+    assert.deepEqual(await background, { outcome: "up-to-date" });
+    assert.deepEqual(titles(), ["Aiden Agent is up to date"]);
+
+    assert.deepEqual(await fixture.service.checkNow(false), { outcome: "up-to-date" });
+    assert.equal(fixture.dialogs.length, 1, "a later background check stays silent");
+  } finally {
+    fixture.service.dispose();
+  }
+});
+
 test("service disposal prevents late feed downloads, manual dialogs, and restarts", async () => {
   const fixture = await simulatedService();
   try {

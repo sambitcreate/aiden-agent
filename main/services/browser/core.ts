@@ -44,7 +44,7 @@ export function browserUrl(value: unknown): string {
     throw new Error("Enter a valid browser URL.");
   const input = value.trim();
   if (!input || input === "about:blank") return "about:blank";
-  const explicit = /^[a-z][a-z\d+.-]*:/i.test(input) && !/^[^/]+:\d+(?:\/|$)/.test(input);
+  const explicit = /^[a-z][a-z\d+.-]*:/i.test(input) && !/^[^/?#]+:\d+(?:[/?#]|$)/.test(input);
   const loopback = /^(?:localhost|127(?:\.\d+){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(input);
   const candidate = explicit ? input : `${loopback ? "http" : "https"}://${input}`;
   let url: URL;

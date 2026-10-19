@@ -1,10 +1,72 @@
+// Installs happy-dom for the Testing Library cases; must stay the first import.
+import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import test, { afterEach, mock } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BtwCard, reduceBtwView, type BtwLiveView } from "./btw-card.js";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { BtwCard, reduceBtwView, type BtwCardView, type BtwLiveView } from "./btw-card.js";
+import { toast } from "./ui";
 
 const noop = () => undefined;
+
+afterEach(cleanup);
+
+const answered: BtwCardView = {
+  requestId: "btw-1",
+  question: "Why?",
+  answer: "Because.",
+  status: "completed",
+  hasHistory: true,
+  contextTrimmed: false,
+};
+
+function followUp(): HTMLTextAreaElement {
+  return screen.getByRole("textbox", { name: /follow-up/u }) as HTMLTextAreaElement;
+}
+
+test("BTW follow-up ignores the Enter that confirms an IME composition", () => {
+  const asked: string[] = [];
+  render(<BtwCard view={answered} onAsk={(question) => void asked.push(question)} onCancel={noop} onClear={noop} onClose={noop} />);
+  const textarea = followUp();
+  fireEvent.change(textarea, { target: { value: "にほんご" } });
+  fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
+  assert.deepEqual(asked, [], "a composing Enter sent the follow-up");
+  assert.equal(textarea.value, "にほんご");
+
+  fireEvent.keyDown(textarea, { key: "Enter" });
+  assert.deepEqual(asked, ["にほんご"]);
+  assert.equal(textarea.value, "");
+});
+
+test("BTW follow-up keeps the question and reports the error when the send is refused", async () => {
+  const rejections: unknown[] = [];
+  const onUnhandled = (reason: unknown) => void rejections.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  const toastError = mock.method(toast, "error", () => "toast-id");
+  try {
+    render(
+      <BtwCard
+        view={answered}
+        onAsk={() => Promise.reject(new Error("Side questions are not available."))}
+        onCancel={noop}
+        onClear={noop}
+        onClose={noop}
+      />,
+    );
+    const textarea = followUp();
+    fireEvent.change(textarea, { target: { value: "why?" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await waitFor(() => assert.equal(toastError.mock.callCount(), 1));
+    assert.deepEqual(toastError.mock.calls[0].arguments, ["Side questions are not available."]);
+    assert.equal(followUp().value, "why?", "the follow-up text was dropped after the send failed");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(rejections, []);
+  } finally {
+    toastError.mock.restore();
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
 
 test("BTW reducer orders deltas, resets overflow attempts, and settles authoritatively", () => {
   let view = reduceBtwView(null, {

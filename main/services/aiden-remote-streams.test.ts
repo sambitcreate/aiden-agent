@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { ServerResponse } from "node:http";
 import {
   AidenRemoteStreamService,
+  aidenRemoteStreamStoreOptions,
   normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
+  type AidenRemoteStreamSnapshot,
 } from "./aiden-remote-streams.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { DataStore } from "./data-store.js";
 
 function assertExactSnapshotBytes(service: AidenRemoteStreamService): void {
   // Independent oracle includes UTF-8 encoding, all JSON punctuation, metadata,
@@ -321,6 +327,34 @@ test("cancel and approval decisions are bound to the owning device and owner ide
   );
   assert.equal(status.state, "reconciling");
   assert.equal(app.cancelled.length, 1);
+});
+
+test("a stop sent before the turn is admitted reaches the generation once it starts", async () => {
+  const cancelled: string[] = [];
+  let generationStarted = false;
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    // The host can only cancel a generation it has registered.
+    cancel: (streamId, ownerId) => {
+      if (!generationStarted) return false;
+      cancelled.push(`${streamId}:${ownerId}`);
+      return true;
+    },
+    approve: () => true,
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const stopped = await service.cancel("device-1", "stream-1", "early-stop-key-00001");
+  assert.equal(stopped.state, "reconciling");
+  assert.deepEqual(cancelled, []);
+
+  generationStarted = true;
+  service.markRunning("device-1", "stream-1");
+  assert.deepEqual(cancelled, [`stream-1:${owner.owner.documentId}`]);
+  assert.equal(service.status("device-1", "stream-1").state, "reconciling");
+  const states = service.snapshot().streams[0]!.events
+    .filter(({ type }) => type === "status")
+    .map(({ payload }) => payload.state);
+  assert.equal(states.includes("running"), false);
 });
 
 test("schedule-tool approvals declare the schedule-write capability boundary", () => {
@@ -839,6 +873,72 @@ test("restart restores terminal journals and marks active work interrupted", () 
   assert.equal(status.state, "interrupted");
   assert.equal(status.lastSequence, 3);
   assertExactSnapshotBytes(restarted);
+});
+
+test("a journal this build cannot read is kept aside so persistence and revocation keep working", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-streams-"));
+  const openStore = () => new DataStore<AidenRemoteStreamSnapshot>(
+    "streams.json",
+    { version: 1, streams: [] },
+    () => directory,
+    aidenRemoteStreamStoreOptions(),
+  );
+  try {
+    // Well-formed JSON from a build whose event vocabulary this one rejects.
+    const unreadable = JSON.stringify({
+      version: 1,
+      streams: [{
+        streamId: "old",
+        chatId: "chat-old",
+        turnId: "turn-old",
+        deviceId: "device-1",
+        state: "done",
+        updatedAt: 1,
+        events: [{
+          protocolVersion: 1,
+          streamId: "old",
+          sequence: 1,
+          timestamp: "2026-01-01T00:00:00.000Z",
+          type: "finished_v2",
+          terminal: true,
+          payload: {},
+        }],
+      }],
+    });
+    await fs.writeFile(path.join(directory, "streams.json"), unreadable);
+    const store = openStore();
+    const errors: unknown[] = [];
+    const service = new AidenRemoteStreamService({
+      now: () => 1_000,
+      cancel: () => true,
+      approve: () => true,
+      snapshot: normalizeAidenRemoteStreamSnapshot(await store.load()),
+      persist: (snapshot) => store.save(snapshot),
+      onPersistenceError: (error) => errors.push(error),
+    });
+    service.create("device-1", "stream-1", "chat-1", "turn-1");
+    service.create("device-2", "stream-2", "chat-2", "turn-2");
+    await service.settlePersistence();
+    await service.revokeDevice("device-1");
+    assert.deepEqual(errors, []);
+
+    const names = await fs.readdir(directory);
+    const rescues = names.filter((name) => name.startsWith("streams.json.invalid-"));
+    assert.equal(rescues.length, 1);
+    assert.equal(await fs.readFile(path.join(directory, rescues[0]!), "utf8"), unreadable);
+
+    const restarted = normalizeAidenRemoteStreamSnapshot(await openStore().load());
+    assert.deepEqual(restarted.streams.map(({ streamId }) => streamId), ["stream-2"]);
+    const restored = new AidenRemoteStreamService({
+      now: () => 2_000,
+      cancel: () => true,
+      approve: () => true,
+      snapshot: restarted,
+    });
+    assert.equal(restored.turnIdFor("chat-2", "stream-2"), "turn-2");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("revocation closes only the selected device streams and approval expiry denies safely", async () => {

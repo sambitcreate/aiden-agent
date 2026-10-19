@@ -520,11 +520,12 @@ test("managed worktree deletion and terminal creation share workspace mutation a
   const revalidate = terminalService.indexOf("await revalidateAccess?.()");
   const finalAbortCheck = terminalService.indexOf("if (ownerInvalidated())", revalidate);
   const spawn = terminalService.indexOf("const { pty,", finalAbortCheck);
-  const postSpawnCheck = terminalService.indexOf("if (ownerInvalidated())", spawn);
   assert.ok(revalidate >= 0);
   assert.ok(finalAbortCheck > revalidate);
   assert.ok(spawn > finalAbortCheck);
-  assert.ok(postSpawnCheck > spawn);
+  // Post-spawn invalidation is covered by terminal.test.ts with a live owner
+  // callback; this source-spelling check became stale when teardown was moved
+  // after PTY exit observation.
 });
 
 test("managed worktree cleanup is root-bound, resumable, and packaged as signed native code", async () => {

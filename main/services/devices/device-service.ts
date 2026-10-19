@@ -630,32 +630,40 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     const running = host.current();
     if (running) return Promise.resolve(running);
     starting ??= (async () => {
-      const epoch = consentEpoch;
+      // Sharing and agent-access changes do not cancel the local streaming hub.
+      const epoch = streamingEpoch;
+      const currentConsent = () => epoch === streamingEpoch && consent.streaming;
       try {
-        if (!consent.streaming) return null;
+        if (!currentConsent()) return null;
         if (!allowInstall && !(await host.hubInstalled())) {
-          setHost(await idleStatus());
+          if (!currentConsent()) return null;
+          const idle = await idleStatus();
+          if (currentConsent()) setHost(idle);
           return null;
         }
-        // A revoke during the install check wins before npm is contacted.
-        if (epoch !== consentEpoch || !consent.streaming) return null;
+        // A streaming revoke during the install check wins before npm is contacted.
+        if (!currentConsent()) return null;
         const ready = await host.ensureReady(
           (phase, detail) => {
+            if (!currentConsent()) return;
             const shown = phase === "installing" && installDetail ? installDetail : detail;
             setHost({ status: phase, ...(shown ? { detail: shown } : {}) });
           },
           { allowInstall },
         );
-        if (epoch !== consentEpoch || !consent.streaming) {
+        if (!currentConsent()) {
           // Streaming was turned off while the hub installed or started; the revoke wins.
           await host.stop();
-          setHost(await idleStatus());
           return null;
         }
         setHost({ status: "ready" });
         return ready;
       } catch (error) {
-        if (error instanceof DeviceToolsMissingError) setHost(await idleStatus());
+        if (!currentConsent()) return null;
+        if (error instanceof DeviceToolsMissingError) {
+          const idle = await idleStatus();
+          if (currentConsent()) setHost(idle);
+        }
         else if (error instanceof DeviceHostUnavailableError) setHost({ status: "unavailable" }, error.reason);
         else setHost({ status: "error", detail: errorMessage(error) });
         return null;
@@ -1669,7 +1677,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (device?.platform === "android") {
           await shutdownLocal(ready, input.deviceId);
         } else {
-          await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
+          const result = await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], {
+            timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS,
+          });
+          if (result.code !== 0) throw new Error("The simulator did not shut down.");
           devices = devices.map((candidate) =>
             candidate.hostId === input.hostId && candidate.id === input.deviceId ? { ...candidate, booted: false } : candidate,
           );

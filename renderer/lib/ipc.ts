@@ -140,6 +140,8 @@ export interface BotAccessState {
   access: BotAccessView;
   modelSelection?: { providerId: string; modelId: string };
   visionModelSelection?: { providerId: string; modelId: string };
+  /** Full Access Web Search grant; always false for Custom access. */
+  webSearchEnabled?: boolean;
 }
 import type { GenerationTimeline } from "../shared/generation-timeline";
 import type {

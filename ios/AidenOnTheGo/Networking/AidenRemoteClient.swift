@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import ImageIO
+import zlib
 
 enum AidenDeviceType: String, Codable, Sendable {
     case iphone
@@ -82,6 +83,7 @@ private struct AidenSpeechTranscriptionRequest: Encodable {
 }
 
 struct AidenServer: Codable, Equatable, Sendable {
+    static let speechRequestGzipFeature = "speech-request-gzip-v1"
     static let chatSummariesFeature = "chat-summaries-v1"
     static let chatTasksFeature = "chat-tasks-v1"
     static let chatAgentsFeature = "chat-agents-v1"
@@ -632,6 +634,8 @@ private final class AidenConditionalResponseCache: @unchecked Sendable {
 final class AidenRemoteClient: @unchecked Sendable {
     // A client belongs to one credential scope; cached bytes never cross pairings.
     private let conditionalResponses = AidenConditionalResponseCache()
+    private let serverFeatureLock = NSLock()
+    private var speechRequestGzipSupported = false
     private struct EmptyRequest: Encodable {}
 
     private struct PairingExchangeRequest: Encodable {
@@ -1014,6 +1018,9 @@ final class AidenRemoteClient: @unchecked Sendable {
         let value: AidenServer = try await send(method: "GET", path: ["server"])
         guard value.protocolVersion == AidenRemoteProtocol.version else {
             throw AidenRemoteContractError.invalidProtocolVersion
+        }
+        serverFeatureLock.withLock {
+            speechRequestGzipSupported = value.features.contains(AidenServer.speechRequestGzipFeature)
         }
         return value
     }
@@ -1659,6 +1666,29 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    /// Revision 33 (`bot-attachments-v1`): stages one image or text file for
+    /// this device's next message to the Bot. The reference is single-use.
+    func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
+        try validateBotIdentifier(botId)
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "attachments"],
+            body: upload,
+            acceptedStatus: [201]
+        )
+    }
+
+    /// Drops a staged upload the person removed before sending.
+    func removeBotAttachment(botId: String, attachmentId: String) async throws {
+        try validateBotIdentifier(botId)
+        try await sendWithoutResponse(
+            method: "DELETE",
+            path: ["bots", botId, "attachments", attachmentId],
+            headers: [:],
+            acceptedStatus: [204]
+        )
+    }
+
     func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
         try await botSessionAction("resume", botId: botId, idempotencyKey: idempotencyKey)
     }
@@ -2152,13 +2182,18 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     func transcribeSpeech(pcm16: Data, modelId: String) async throws -> AidenSpeechTranscription {
-        try await send(
+        let body = try JSONEncoder().encode(AidenSpeechTranscriptionRequest(
+            pcmBase64: pcm16.base64EncodedString(),
+            modelId: modelId
+        ))
+        let canCompress = serverFeatureLock.withLock { speechRequestGzipSupported }
+        let compressed = canCompress ? try AidenSpeechRequestGzip.compress(body) : nil
+        let useGzip = compressed.map { $0.count < body.count } ?? false
+        return try await send(
             method: "POST",
             path: ["speech", "transcriptions"],
-            body: AidenSpeechTranscriptionRequest(
-                pcmBase64: pcm16.base64EncodedString(),
-                modelId: modelId
-            ),
+            encodedBody: useGzip ? compressed! : body,
+            headers: useGzip ? ["Content-Encoding": "gzip"] : [:],
             timeoutInterval: 120,
             maximumResponseBytes: 64 * 1_024
         )
@@ -2772,6 +2807,23 @@ final class AidenRemoteClient: @unchecked Sendable {
         maximumResponseBytes: Int = AidenRemoteProtocol.maxJSONBodyBytes
     ) async throws -> Response {
         let encodedBody = try JSONEncoder().encode(body)
+        return try await send(method: method, path: path, query: query,
+            encodedBody: encodedBody, headers: headers, authenticated: authenticated,
+            acceptedStatus: acceptedStatus, timeoutInterval: timeoutInterval,
+            maximumResponseBytes: maximumResponseBytes)
+    }
+
+    private func send<Response: Decodable>(
+        method: String,
+        path: [String],
+        query: [URLQueryItem] = [],
+        encodedBody: Data,
+        headers: [String: String] = [:],
+        authenticated: Bool = true,
+        acceptedStatus: Set<Int> = [200],
+        timeoutInterval: TimeInterval? = nil,
+        maximumResponseBytes: Int = AidenRemoteProtocol.maxJSONBodyBytes
+    ) async throws -> Response {
         var request = try makeRequest(
             method: method,
             path: path,
@@ -3232,6 +3284,37 @@ protocol AidenSSEEventParsing: Sendable {
 
 
 private struct AidenEmptyObject: Encodable {}
+
+private enum AidenSpeechRequestGzip {
+    enum CompressionError: Error { case failed }
+
+    static func compress(_ input: Data) throws -> Data {
+        var stream = z_stream()
+        guard deflateInit2_(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+            MAX_WBITS + 16, MAX_MEM_LEVEL, Z_DEFAULT_STRATEGY,
+            ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+            throw CompressionError.failed
+        }
+        defer { deflateEnd(&stream) }
+
+        let capacity = Int(compressBound(uLong(input.count))) + 18
+        var output = Data(count: capacity)
+        let written = try input.withUnsafeBytes { source in
+            try output.withUnsafeMutableBytes { destination in
+                stream.next_in = UnsafeMutablePointer<Bytef>(mutating: source.bindMemory(to: Bytef.self).baseAddress)
+                stream.avail_in = uInt(input.count)
+                stream.next_out = destination.bindMemory(to: Bytef.self).baseAddress
+                stream.avail_out = uInt(capacity)
+                guard deflate(&stream, Z_FINISH) == Z_STREAM_END else {
+                    throw CompressionError.failed
+                }
+                return Int(stream.total_out)
+            }
+        }
+        output.count = written
+        return output
+    }
+}
 
 /// Pins a run stream to one run: the current-run route adopts the first
 /// frame's run, and every later frame must name it.

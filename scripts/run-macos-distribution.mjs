@@ -250,6 +250,7 @@ export async function runMacDistribution() {
       await npm("generative-ui:vendor");
       await npm("build:native");
       await npm("build");
+      await npm("package:model-catalog");
       await runCommand(
         path.join(repositoryRoot, "node_modules", ".bin", "electron-builder"),
         distributionElectronBuilderArguments(staging, { enableAutoUpdates }),

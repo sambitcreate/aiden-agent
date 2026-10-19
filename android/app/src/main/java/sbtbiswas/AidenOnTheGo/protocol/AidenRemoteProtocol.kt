@@ -18,6 +18,7 @@ object AidenRemoteProtocol {
     const val MAX_CHAT_SUMMARY_PAGE_SIZE = 200
     const val MAX_CHAT_SUMMARY_CURSOR_LENGTH = 512
     const val CHAT_SUMMARIES_FEATURE = "chat-summaries-v1"
+    const val SPEECH_REQUEST_GZIP_FEATURE = "speech-request-gzip-v1"
     val CHAT_SUMMARY_REVISION_PATTERN = Regex("^rev_[A-Za-z0-9_-]{43}$")
     val CHAT_SUMMARY_CURSOR_PATTERN = Regex("^cur_[A-Za-z0-9_-]{1,384}\\.[A-Za-z0-9_-]{43}$")
     const val MAX_BOT_IDENTIFIER_LENGTH = 160

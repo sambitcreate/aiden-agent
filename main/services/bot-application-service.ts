@@ -78,6 +78,7 @@ type CapabilityStorePort = Pick<
   | "auditBotInventory"
   | "migrateLegacyBotsToFull"
   | "getBotPolicy"
+  | "getBotWebSearchEnabled"
   | "getBotAuthorityStatus"
   | "assertBotAuthorityMatchesIdentity"
   | "deleteBotAuthority"
@@ -168,6 +169,11 @@ export interface CreateBotApplicationInput {
   bot: BotCreateInput;
   /** Omitted means the foreground Full Access default. */
   access?: BotAccessUpdate;
+  /**
+   * Grants Web Search to a Full Access Bot whose access names no Web choice.
+   * Only surfaces that disclose Web Search (desktop starters) set this.
+   */
+  grantFullWebSearch?: boolean;
 }
 
 export interface CreateBotChatApplicationInput {
@@ -378,6 +384,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   const accessForCreate = async (
     audienceId: string,
     requested: BotAccessUpdate | undefined,
+    grantFullWebSearch = false,
   ) => {
     const snapshot = await snapshotForAudience(audienceId);
     // Audience-safe IDs are revalidated against this exact fresh snapshot.
@@ -390,6 +397,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           catalogRevision: snapshot.catalog.revision,
           confirmedForeground: true,
         };
+    if (grantFullWebSearch && access.accessMode === "full" && access.webSearchEnabled === undefined) {
+      access = { ...access, webSearchEnabled: true };
+    }
     if (
       access.accessMode === "full" &&
       access.providerId === undefined &&
@@ -451,11 +461,13 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     botId: string,
     audienceId: string,
     requested?: BotAccessUpdate,
+    grantFullWebSearch?: boolean,
   ) => {
     return withFreshInventoryLease(async (assertCurrent) => {
       const { snapshot, access, binding, modelBinding, visionModelBinding } = await accessForCreate(
         audienceId,
         requested,
+        grantFullWebSearch,
       );
       assertCurrent();
       return deps.capabilityStore.createBotPolicy({
@@ -1195,7 +1207,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         try {
           await deps.managedWorkspace.provision(botId, reservation);
           operation = await advance(operation, "workspace_provisioned");
-          await createPolicy(botId, input.audienceId, input.access);
+          await createPolicy(botId, input.audienceId, input.access, input.grantFullWebSearch);
           operation = await advance(operation, "policy_committed");
           const bot = await deps.botStore.createWithId(botId, input.bot);
           operation = await advance(operation, "identity_committed");
@@ -1450,6 +1462,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     async getBotAccess(botId: string) {
       await ensureOperational();
       return deps.capabilityStore.getBotPolicy(botId);
+    },
+
+    async botWebSearchEnabled(botId: string) {
+      await ensureOperational();
+      return deps.capabilityStore.getBotWebSearchEnabled(botId);
     },
 
     async capabilityCatalog(audienceId: string, botId?: string) {

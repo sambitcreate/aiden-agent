@@ -26,6 +26,7 @@ const REQUIRED_HELPERS = Object.freeze([
   "aiden-secret-service-authority",
   "aiden-worktree-remover",
   "aiden-bot-inbox-writer",
+  "aiden-lease-flock",
   "aiden-subagent-run-store",
   "aiden-subagent-file-mutator",
   "aiden-subagent-shell-runner",

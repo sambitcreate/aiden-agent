@@ -142,7 +142,7 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 32);
+  assert.equal(fixture.contractRevision, 34);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -158,6 +158,7 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
   assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
   assert.equal(fixture.server.features.includes("chat-run-input-v1"), true);
+  assert.equal(fixture.server.features.includes("speech-request-gzip-v1"), true);
   assert.deepEqual(fixture.streamInput.request, { mode: "queue", text: "Also add a regression test." });
   assert.equal(fixture.streamInput.response.status, "admitted");
   assert.equal(fixture.streamInput.response.queue, "follow-up");
@@ -439,6 +440,8 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   // Bot chat activity is revision 30.
   delete revision19.botActivity;
   delete revision19.botActivityPrivacy;
+  // Bot message attachments are revision 33.
+  delete revision19.botAttachments;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
@@ -565,6 +568,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/session",
     "/bots/{botId}/session/events",
     "/bots/{botId}/messages",
+    "/bots/{botId}/attachments",
+    "/bots/{botId}/attachments/{attachmentId}",
     "/bots/{botId}/resume",
     "/bots/{botId}/dismiss",
     "/bots/{botId}/stop",
@@ -1270,6 +1275,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/from-preset", "post", "201", "BotPresetCreateResult"],
     ["/bots/{botId}/session", "get", "200", "BotSession"],
     ["/bots/{botId}/messages", "post", "200", "BotMessageReceipt"],
+    ["/bots/{botId}/attachments", "post", "201", "AttachmentReference"],
     ["/bots/{botId}/resume", "post", "200", "BotSessionState"],
     ["/bots/{botId}/dismiss", "post", "200", "BotSessionState"],
     ["/bots/{botId}/stop", "post", "200", "BotSessionState"],
@@ -2401,6 +2407,24 @@ test("the shared Bot avatar palette fixture is exactly the desktop colour table"
   for (const value of [BOT_AVATAR_FACE_HEX, ...Object.values(BOT_AVATAR_COLOR_HEX)]) {
     assert.match(value, /^#[0-9A-F]{6}$/u);
   }
+});
+
+test("Bot attachment references arrive in revision 33 and only where the host announces them", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const section = parseAidenRemoteContractFixture(raw).botAttachments!;
+  assert.deepEqual(section.send.request.attachmentIds, raw.botAttachments.send.request.attachmentIds);
+  assert.equal(section.attachmentsOnly.text, "", "attachments make the words optional");
+  assert.throws(
+    () => parseAidenRemoteBotMessageRequest(raw.botAttachments.send.request, { allowWhenBusy: true }),
+    /unsupported field attachmentIds/u,
+  );
+  for (const sample of raw.botAttachments.rejectedSends) {
+    assert.throws(() => parseAidenRemoteBotMessageRequest(sample, { allowAttachments: true }), Error, JSON.stringify(sample));
+  }
+  const older = structuredClone(raw);
+  older.contractRevision = 32;
+  record(older.hostHealth, "hostHealth").contractRevision = 32;
+  assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 33/u);
 });
 
 // ---------------------------------------------------------------------------

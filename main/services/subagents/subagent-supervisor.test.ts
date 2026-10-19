@@ -561,6 +561,70 @@ test("V2 mixed read-only ceilings admit the extended child without losing the tr
   );
 });
 
+test("V2 web siblings each spend their own network operation, in every batch of a generation", async () => {
+  const generationId = "web-v2-network-budget";
+  const persistence = createForegroundSubagentPersistenceV2({
+    store: {
+      selection: "v2",
+      async reserveRun() {},
+      releaseRunReservation() {},
+      async upsert(snapshot: unknown) { return snapshot as never; },
+    } as unknown as ProductionSubagentRunStore,
+    generationId,
+    chatId: TEST_SUPERVISOR_SCOPE.chatId,
+    workspace: {
+      id: TEST_SUPERVISOR_SCOPE.workspaceId,
+      name: "Workspace",
+      folderPath: "/workspace",
+      permission: "full",
+      createdAt: 1,
+      updatedAt: 2,
+    },
+    runtime: runtime(),
+    thinkingLevel: "high",
+    ownerDocumentId: "1:2:document-one",
+    permission: "full",
+    webEnabled: true,
+    requestApproval: async () => true,
+  });
+  const searches: Array<{ label: string; allowed: boolean }> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId,
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    prepareRun: (input) => persistence.prepareRun(input),
+    runChild: async (child) => {
+      // One web search, within the child's own one-operation authority.
+      searches.push({
+        label: child.request.label,
+        allowed: child.consumeNetworkOperation!(child.v2Authority!),
+      });
+      return completed(child.request.label);
+    },
+  });
+  const web = { workspaceRead: true, web: true, mcp: [] };
+
+  const first = await supervisor.execute({ tasks: [
+    { role: "scout", label: "Search A", task: "Search A.", capabilities: web },
+    { role: "scout", label: "Search B", task: "Search B.", capabilities: web },
+  ] });
+  const second = await supervisor.execute({ tasks: [
+    { role: "scout", label: "Search C", task: "Search C.", capabilities: web },
+  ] });
+
+  assert.match(first, /## 1\. Search A[\s\S]*Status: completed[\s\S]*## 2\. Search B[\s\S]*Status: completed/u);
+  assert.match(second, /## 1\. Search C[\s\S]*Status: completed/u);
+  assert.deepEqual(searches.sort((a, b) => a.label.localeCompare(b.label)), [
+    { label: "Search A", allowed: true },
+    { label: "Search B", allowed: true },
+    { label: "Search C", allowed: true },
+  ]);
+});
+
 test("V2 authority admission floors a high-resolution remaining deadline", async () => {
   let now = 1_000.25;
   const preparedDeadlines: number[] = [];
@@ -1077,6 +1141,7 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
     nestedTool: boolean;
     context: string;
   }> = [];
+  const networkOperations: boolean[] = [];
   const supervisor = new SubagentSupervisor({
     generationId: "generation-phase6b",
     ...TEST_SUPERVISOR_SCOPE,
@@ -1100,7 +1165,7 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
         parent: parentAuthority,
       });
       preparedAuthorities.push(authority);
-      return phase6Prepared(authority);
+      return { ...phase6Prepared(authority), consumeNetworkOperation: () => true };
     },
     runChild: async (child) => {
       assert.ok(child.v2Authority);
@@ -1110,6 +1175,13 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
         nestedTool: child.executeNested !== undefined,
         context: child.context.mode,
       });
+      // Every run stays inside its own 8-turn, one-operation authority;
+      // together they need 17 turns and two network operations.
+      const turns = child.v2Authority.depth === 1 ? 5 : 6;
+      for (let index = 0; index < turns; index += 1) child.telemetry?.turnStarted();
+      if (child.v2Authority.depth === 2) {
+        networkOperations.push(child.consumeNetworkOperation?.(child.v2Authority) === true);
+      }
       if (child.v2Authority.depth === 1) {
         const nested = await child.executeNested!(
           {
@@ -1142,6 +1214,7 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
   assert.equal(preparedAuthorities[1]?.parentRunId, preparedAuthorities[0]?.runId);
   assert.equal(preparedAuthorities[2]?.parentRunId, preparedAuthorities[0]?.runId);
   assert.equal(supervisor.launchesUsed, 3);
+  assert.deepEqual(networkOperations, [true, true]);
 });
 
 test("Phase 6C preserves fork mode and bounded fork messages for depth-2 children", async () => {

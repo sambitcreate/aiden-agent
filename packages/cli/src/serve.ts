@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import { chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { acquireLease } from "./state.ts";
+import { recoverStaleServeLease } from "./serve-lifecycle.ts";
 import { createCliScheduler, daemonSocket } from "./schedules.ts";
 import { createDaemonChats } from "./daemon-chats.ts";
 import { createCliTelegram } from "./telegram.ts";
@@ -9,7 +10,6 @@ import { workspaceCommand } from "./workspaces.ts";
 import { createCliWorkspaceApplication } from "./workspace-application.ts";
 import { createCliBots } from "./bots.ts";
 import { createCliRemote } from "./remote.ts";
-import { recoverStaleServeLease } from "./serve-lifecycle.ts";
 
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean } = {}) {
@@ -33,6 +33,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     if (clients.size >= 64) { socket.destroy(); return; }
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
     let buffer = "", handled = false;
+    socket.setEncoding("utf8");
     socket.setTimeout(30_000, () => socket.destroy());
     socket.on("data", (data) => {
       if (handled) return;

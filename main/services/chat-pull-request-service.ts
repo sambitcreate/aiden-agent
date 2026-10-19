@@ -489,17 +489,20 @@ export class ChatPullRequestService {
       );
     };
 
-    // Both reads start together so they share one GitHub request.
+    // Both reads start together so they share one GitHub request. The user
+    // opened the chooser, so these reads may spend the background reserve.
     const [forBranch, open] = await Promise.all([
       context.branch
         ? this.deps.github.listPullRequests(context.folderPath, {
             state: "open",
             headBranch: context.branch,
+            interactive: true,
           })
         : undefined,
       this.deps.github.listPullRequests(context.folderPath, {
         state: "open",
         limit: 30,
+        interactive: true,
       }),
     ]);
     if (forBranch) {
@@ -555,11 +558,13 @@ export class ChatPullRequestService {
         refreshed: [],
       };
     }
+    // Detection follows the user's push, so it may spend the background reserve.
     const found = await this.deps.github.findForBranch(
       folderPath,
       input.headBranch,
       undefined,
       repository,
+      { interactive: true },
     );
     if (found.availability !== "ready" || !found.pullRequests) {
       return {

@@ -128,6 +128,7 @@ export class AppUpdateService {
   private activeDownloadCancellation: UpdaterCancellationToken | null = null;
   private retryAttempt = 0;
   private checkPromise: Promise<AppUpdateCheckResult> | null = null;
+  private manualResultPending = false;
   private readonly controller = new AppUpdateController({
     checkForUpdates: async () => {
       try {
@@ -239,9 +240,15 @@ export class AppUpdateService {
     }
     if (!this.started) this.start();
     if (!this.started) return { outcome: "unavailable" };
-    if (this.checkPromise) return this.checkPromise;
+    if (this.checkPromise) {
+      // A user's "Check for Updates…" joining a background check still gets
+      // the result dialog once that shared check settles.
+      if (manual) this.manualResultPending = true;
+      return this.checkPromise;
+    }
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
+    this.manualResultPending = manual;
 
     this.checkPromise = (async (): Promise<AppUpdateCheckResult> => {
       const result = await this.controller.checkNow();
@@ -249,7 +256,8 @@ export class AppUpdateService {
       if (result.outcome !== "failed" && result.outcome !== "unavailable") {
         this.retryAttempt = 0;
       }
-      if (manual) {
+      if (this.manualResultPending) {
+        this.manualResultPending = false;
         try {
           await this.showManualResult(result);
         } catch (error) {

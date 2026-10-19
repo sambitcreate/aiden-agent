@@ -50,6 +50,7 @@ function fakeCall(entries: EntryRecord[] = []): BotToolCall {
     signal: new AbortController().signal,
     entries: async () => entries,
     appendEntry: async () => undefined,
+    submissions: async (requestIds) => requestIds.map(() => undefined),
     memo: async (_name, candidate) => candidate,
   };
 }

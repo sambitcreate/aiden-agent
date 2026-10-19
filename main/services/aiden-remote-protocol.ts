@@ -57,8 +57,17 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * `chat-ui-panels-enabled-v1`, `GET`/`POST /chats/{chatId}/controls/{panelId}`
  * behind the `app-controls:read`/`app-controls:respond` progress capabilities,
  * the `app_controls_changed` progress event and the `builtin` skill source.
+ *
+ * Contract revision 33 (provisional; re-claim the next revision after `main`'s
+ * at merge): Bot message attachments (`bot-attachments-v1`). Phones stage
+ * images and text files with `POST /bots/{botId}/attachments` and send them
+ * with `attachmentIds` on `POST /bots/{botId}/messages`.
+ *
+ * Contract revision 34 (provisional; re-claim the next revision after `main`'s
+ * at merge): `speech-request-gzip-v1` advertises support for one bounded gzip
+ * member on `POST /speech/transcriptions`; identity JSON remains supported.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 32 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 34 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -67,6 +76,7 @@ export const AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT = 100;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT = 200;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH = 512;
 export const AIDEN_REMOTE_CHAT_SUMMARY_FEATURE = "chat-summaries-v1" as const;
+export const AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE = "speech-request-gzip-v1" as const;
 /**
  * Server feature token for shared read markers (`POST /chats/{chatId}/read`).
  * Advertised only while the host wires a durable read-marker store; without it
@@ -102,6 +112,13 @@ export const AIDEN_REMOTE_BOT_PROACTIVE_FEATURE = "bot-proactive-v1" as const;
  * with the negotiable `bot:activity`.
  */
 export const AIDEN_REMOTE_BOT_ACTIVITY_FEATURE = "bot-activity-v1" as const;
+/**
+ * Bot message attachments (contract revision 33). Announced only while the
+ * host stages uploads for Bots: `POST`/`DELETE /bots/{botId}/attachments` take
+ * the chat attachment upload body, and `POST /bots/{botId}/messages` accepts
+ * `attachmentIds` (the text may then be empty).
+ */
+export const AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE = "bot-attachments-v1" as const;
 
 const AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH = 128;
 const AIDEN_REMOTE_MAX_ENDPOINT_UTF8_BYTES = 2_048;
@@ -1326,6 +1343,8 @@ export interface AidenRemoteBotMessageRequest {
   text: string;
   /** Revision 30, only on hosts announcing `bot-activity-v1`. Absent queues, as before. */
   whenBusy?: AidenRemoteBotWhenBusy;
+  /** Revision 33, only on hosts announcing `bot-attachments-v1`: staged uploads, sent once. */
+  attachmentIds?: string[];
 }
 
 export interface AidenRemoteBotMessageReceipt extends AidenRemoteBotSessionStateView {
@@ -1579,6 +1598,8 @@ export interface AidenRemoteContractFixture {
   botSessionCards: AidenRemoteBotSession;
   /** Revision 30: activity sessions, frames, Chat activity and the phase table every client draws. */
   botActivity?: AidenRemoteBotActivityFixture;
+  /** Revision 33 (`bot-attachments-v1`): a message carrying staged uploads. */
+  botAttachments?: AidenRemoteBotAttachmentsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -5478,20 +5499,48 @@ export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotS
   }
 }
 
+const BOT_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
+export const AIDEN_REMOTE_BOT_MESSAGE_MAX_ATTACHMENTS = 10;
+
 export function parseAidenRemoteBotMessageRequest(
   value: unknown,
-  options: { allowWhenBusy?: boolean } = {},
+  options: { allowWhenBusy?: boolean; allowAttachments?: boolean } = {},
 ): AidenRemoteBotMessageRequest {
   if (!isRecord(value)) throw new Error("Bot message request must be an object.");
-  assertExactKeys(value, options.allowWhenBusy === true ? ["text", "whenBusy"] : ["text"], "Bot message request");
-  const text = boundedText(value.text, "Bot message text", AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS);
-  if (text.trim().length === 0) throw new Error("Bot message text must not be blank.");
+  assertExactKeys(
+    value,
+    [
+      "text",
+      ...(options.allowWhenBusy === true ? ["whenBusy"] : []),
+      ...(options.allowAttachments === true ? ["attachmentIds"] : []),
+    ],
+    "Bot message request",
+  );
+  const attachmentIds = hasOwn(value, "attachmentIds") ? parseBotAttachmentIds(value.attachmentIds) : undefined;
+  // With attachments the words are optional, as in a workspace chat.
+  const text = boundedText(value.text, "Bot message text", AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS, attachmentIds !== undefined);
+  if (attachmentIds === undefined && text.trim().length === 0) throw new Error("Bot message text must not be blank.");
   return {
     text,
     ...(hasOwn(value, "whenBusy")
       ? { whenBusy: enumMember(value.whenBusy, AIDEN_REMOTE_BOT_WHEN_BUSY_MODES, "Bot message whenBusy") }
       : {}),
+    ...(attachmentIds ? { attachmentIds } : {}),
   };
+}
+
+function parseBotAttachmentIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > AIDEN_REMOTE_BOT_MESSAGE_MAX_ATTACHMENTS) {
+    throw new Error(`Bot message attachmentIds must list 1–${AIDEN_REMOTE_BOT_MESSAGE_MAX_ATTACHMENTS} references.`);
+  }
+  const seen = new Set<string>();
+  for (const id of value) {
+    if (typeof id !== "string" || !BOT_ATTACHMENT_ID.test(id) || seen.has(id)) {
+      throw new Error("Bot message attachmentIds are invalid.");
+    }
+    seen.add(id);
+  }
+  return [...seen];
 }
 
 const BOT_QUESTION_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
@@ -5753,6 +5802,29 @@ export interface AidenRemoteBotActivityFixture {
   send: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
 }
 
+export interface AidenRemoteBotAttachmentsFixture {
+  send: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
+  attachmentsOnly: AidenRemoteBotMessageRequest;
+}
+
+function parseBotAttachmentsFixture(value: unknown): AidenRemoteBotAttachmentsFixture {
+  if (!isRecord(value)) throw new Error("Bot attachments fixture must be an object.");
+  assertExactKeys(
+    value,
+    ["note", "imageUpload", "textUpload", "send", "attachmentsOnly", "rejectedSends"],
+    "Bot attachments fixture",
+  );
+  const send = requestResponseRecord(value.send, "Bot attachments send");
+  const options = { allowWhenBusy: true, allowAttachments: true };
+  return {
+    send: {
+      request: parseAidenRemoteBotMessageRequest(send.request, options),
+      response: parseAidenRemoteBotMessageReceipt(send.response),
+    },
+    attachmentsOnly: parseAidenRemoteBotMessageRequest(value.attachmentsOnly, options),
+  };
+}
+
 function parseBotActivityFixture(value: unknown): AidenRemoteBotActivityFixture {
   if (!isRecord(value)) throw new Error("Bot activity fixture must be an object.");
   assertExactKeys(
@@ -5893,6 +5965,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_READ_STATE_FEATURE)) {
     throw new Error("Fixture server must advertise chat read state.");
+  }
+  if (contractRevision >= 34 && !serverFeatures.includes(AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE)) {
+    throw new Error("Fixture server must advertise gzip speech requests.");
   }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {
@@ -6556,6 +6631,11 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (chat.messages.some((message) => message.visuals?.length) && contractRevision < 28) {
     throw new Error("Chat visuals fixtures require contract revision 28.");
   }
+  let botAttachments: AidenRemoteBotAttachmentsFixture | undefined;
+  if (value.botAttachments !== undefined) {
+    if (contractRevision < 33) throw new Error("Bot attachment fixtures require contract revision 33.");
+    botAttachments = parseBotAttachmentsFixture(value.botAttachments);
+  }
   let botActivity: AidenRemoteBotActivityFixture | undefined;
   if (value.botActivity !== undefined) {
     if (contractRevision < 30) throw new Error("Bot activity fixtures require contract revision 30.");
@@ -6653,6 +6733,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     error,
     ...revision19,
     ...(botActivity ? { botActivity } : {}),
+    ...(botAttachments ? { botAttachments } : {}),
   };
 }
 

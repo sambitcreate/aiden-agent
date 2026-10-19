@@ -105,6 +105,40 @@ const credentialStorePlugin = {
   },
 };
 
+// Pi's public main API cannot add another automatic skill root. Keep Aiden's
+// desktop roots in the bundled loader, after Pi resolves the session cwd and
+// project trust. Fail the build when a Pi upgrade changes these integration points.
+const skillDiscoveryPlugin = {
+  name: "aiden-skill-discovery",
+  setup(build) {
+    build.onLoad({ filter: /pi-coding-agent\/dist\/core\/resource-loader\.js$/ }, (args) => {
+      let source = readFileSync(args.path, "utf8");
+      const original = "        const skillPaths = this.noSkills\n";
+      if (source.split(original).length !== 2) throw new Error("Pi skill loading changed; review the Aiden trust integration.");
+      source = source.replace(original, `        const aidenSkills = this.noSkills ? [] : desktopSkillDiscoveryPaths(homedir(), this.cwd, this.settingsManager.isProjectTrusted());
+        for (const skill of aidenSkills) {
+            metadataByPath.set(skill.path, { source: "auto", scope: skill.scope, origin: "top-level", baseDir: skill.baseDir });
+        }
+${original}`);
+      const existing = "this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths)";
+      if (source.split(existing).length !== 2) throw new Error("Pi skill path composition changed; review the Aiden trust integration.");
+      source = source.replace(existing, "this.mergePaths([...cliEnabledSkills, ...enabledSkills], [...this.additionalSkillPaths, ...aidenSkills.map((skill) => skill.path)])");
+      return { contents: `import { homedir } from "node:os";\nimport { desktopSkillDiscoveryPaths } from ${JSON.stringify(join(pkgDir, "src/skill-paths.ts"))};\n` + source, loader: "js", resolveDir: dirname(args.path) };
+    });
+    build.onLoad({ filter: /pi-coding-agent\/dist\/core\/trust-manager\.js$/ }, (args) => {
+      const source = readFileSync(args.path, "utf8");
+      const original = "    const configDir = join(currentDir, CONFIG_DIR_NAME);\n";
+      if (source.split(original).length !== 2) throw new Error("Pi project trust detection changed; review the Aiden trust integration.");
+      const replacement = `${original}    const claudeSkillsDir = join(currentDir, ".claude", "skills");
+    if (claudeSkillsDir !== join(homeDir, ".claude", "skills") && existsSync(claudeSkillsDir)) {
+        return true;
+    }
+`;
+      return { contents: source.replace(original, replacement), loader: "js", resolveDir: dirname(args.path) };
+    });
+  },
+};
+
 const aidenRelativeTsRewritePlugin = {
 	name: "aiden-relative-ts-rewrite",
 	setup(build) {
@@ -275,6 +309,7 @@ function commonBuildOptions() {
 		platform: "node",
 		plugins: [
 			credentialStorePlugin,
+			skillDiscoveryPlugin,
 			aidenRelativeTsRewritePlugin,
 			lazyJitiPlugin,
 			httpsProxyAgentNamedExportPlugin,

@@ -15,6 +15,7 @@ Consecutive `text_delta` / `reasoning_delta` events fold into the tail event whi
 - `tool_started` / `tool_finished` persist immediately with prompts, cancel, snapshot and terminal events.
 - `snapshotBytes()` is incremental: `turnIndexBytes` follows insertion and eviction, envelope sizes are cached per state plus `String(updatedAt).length`. `assertExactSnapshotBytes` remains the oracle.
 - `DataStore` has an opt-in `compact` option; the stream store uses it with `maxBytes` = snapshot cap + 1, so indented journals from older builds still load.
+- The stream store's options live in `aidenRemoteStreamStoreOptions()` and deliberately omit `rejectCorruptWrite`: a journal this build cannot normalize is kept aside as `*.invalid-*` and replaced, so persistence and device revocation keep working.
 
 Measured, 2,000 tokens at 20 ms: `main` 2,002 saves / 552 MiB indented; pre-fix branch 156 saves / 42.7 MiB; now 156 saves / 2.4 MiB compact with 157 journal events (no subscriber), or 23.9 MiB with a live subscriber (2,003 events). Registry, 10,000 tokens: `lastSequence` 10,001 → 771, and a late observer replays events instead of getting `snapshot_required`.
 

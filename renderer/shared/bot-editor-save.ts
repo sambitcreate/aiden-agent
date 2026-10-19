@@ -9,6 +9,8 @@ export interface BotEditorIdentityDraft {
 
 export interface BotEditorAccessDraft {
   usesFullAccess: boolean;
+  /** Full Access Web Search grant. Custom access grants Web through otherCapabilityIds. */
+  webSearchEnabled: boolean;
   providerId: string | undefined;
   modelId: string | undefined;
   visionProviderId?: string;
@@ -63,6 +65,9 @@ export function rebaseBotEditorAccessDraft(
     usesFullAccess: draft.usesFullAccess === baseline.usesFullAccess
       ? authoritative.usesFullAccess
       : draft.usesFullAccess,
+    webSearchEnabled: draft.webSearchEnabled === baseline.webSearchEnabled
+      ? authoritative.webSearchEnabled
+      : draft.webSearchEnabled,
     providerId: modelBindingChanged ? draft.providerId : authoritative.providerId,
     modelId: modelBindingChanged ? draft.modelId : authoritative.modelId,
     visionProviderId:

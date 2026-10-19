@@ -116,6 +116,7 @@
         "main/services/durable-fs.test.ts",
         "main/services/durable-jobs/service.test.ts",
         "main/services/durable-jobs/store.test.ts",
+        "main/services/durable-jobs/worker.test.ts",
         "main/services/external-editors.test.ts",
         "main/services/foundation-models-connection-core.test.ts",
         "main/services/foundation-models-connection.test.ts",
@@ -316,6 +317,7 @@
         "main/services/pi-thinking-disclosure.integration.test.ts",
         "main/services/provider-config-migration-core.test.ts",
         "main/services/provider-credential-rotation-core.test.ts",
+        "main/services/provider-registry-legacy-migration-core.test.ts",
         "main/services/renderer-readiness-core.test.ts",
         "main/services/schedule-notification.test.ts",
         "main/services/schedule-script.test.ts",
@@ -335,6 +337,7 @@
         "vcc-build",
         "worktree-remover-build",
         "bot-inbox-writer-build",
+        "lease-flock-build",
         "bot-inbox-writer-test-build",
         "subagent-run-store-build",
         "subagent-run-store-test-build",
@@ -469,6 +472,7 @@
         "main/services/bot-memory/tool.test.ts",
         "main/services/bot-memory/compaction.test.ts",
         "main/services/bot-memory/review.test.ts",
+        "main/services/bot-memory/recall.test.ts",
         "main/services/bot-runtime/profile-lock.test.ts",
         "main/services/bot-runtime/tool-adapter.test.ts",
         "main/services/bot-share-image-tool.test.ts",
@@ -639,7 +643,8 @@
       "name": "renderer-other",
       "description": "Renderer, Telegram, scripts, onboarding, and UI-adjacent tests.",
       "prerequisites": [
-        "worktree-remover-build"
+        "worktree-remover-build",
+        "lease-flock-build"
       ],
       "files": [
         "renderer/components/settings/harness-runtime-section.test.tsx",
@@ -859,6 +864,7 @@
         "renderer/lib/hosts/remote-new-chat.test.ts",
         "renderer/lib/hosts/remote-stream-translator.test.ts",
         "renderer/lib/hosts/use-peer-host-sidebar.test.tsx",
+        "renderer/lib/input-modality.test.ts",
         "renderer/lib/ipc-stream.test.ts",
         "renderer/lib/live-pcm-capture.test.ts",
         "renderer/lib/mcp-preset-state.test.ts",
@@ -935,6 +941,7 @@
         "main/handlers/bot-memory.test.ts",
         "main/handlers/bot-renderer-errors.test.ts",
         "renderer/main/chat-transition.test.tsx",
+        "renderer/components/settings/compaction-budget-settings.test.tsx",
         "renderer/main/remote-chat-view.test.tsx",
         "renderer/main/remote-new-chat-view.test.tsx",
         "renderer/main/studio-capability-route.test.tsx",
@@ -1086,6 +1093,18 @@
         "--test"
       ],
       "reason": "Native worktree remover test binary."
+    },
+    {
+      "id": "lease-flock-build",
+      "for": [
+        "runtime-subagents"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:lease-flock"
+      ],
+      "reason": "Bot profile lock tests need the native flock helper."
     },
     {
       "id": "bot-inbox-writer-build",

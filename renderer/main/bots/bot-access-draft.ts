@@ -62,6 +62,8 @@ export function accessDraftFromState(
       : visionFallback;
   return {
     usesFullAccess: state ? state.access.accessMode === "full" : false,
+    // A Bot with no saved access yet starts with Web Search, as a new Bot does.
+    webSearchEnabled: state ? state.webSearchEnabled === true : true,
     providerId: selected?.providerId ?? fallback?.providerId,
     modelId: selected?.modelId ?? fallback?.modelId,
     visionProviderId: visionSelected?.providerId,
@@ -107,6 +109,7 @@ export function buildBotAccessUpdate(
       confirmedForeground: true,
       providerId: provider.id,
       modelId: model.id,
+      webSearchEnabled: draft.webSearchEnabled,
       visionModel: visionSelection,
     };
   }
@@ -160,6 +163,8 @@ export function botAccessDiffers(
   if (update.accessMode === "full") {
     return state.modelSelection?.providerId !== update.providerId
       || state.modelSelection?.modelId !== update.modelId
+      || (update.webSearchEnabled !== undefined
+        && update.webSearchEnabled !== (state.webSearchEnabled === true))
       || state.visionModelSelection?.providerId !== update.visionModel?.providerId
       || state.visionModelSelection?.modelId !== update.visionModel?.modelId;
   }

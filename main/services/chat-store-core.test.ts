@@ -402,6 +402,76 @@ test("post-rename directory sync failure never publishes a partial chat or advan
   assert.ok(directorySyncs > syncsBeforeRetry);
 });
 
+test("a directory-sync failure while creating the transaction marker does not wedge later writes to that chat", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-marker-sync-failure-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let failNextDirectorySync = false;
+  const store = createChatStore(async () => directory, undefined, {
+    syncFile: async () => undefined,
+    syncDirectory: async () => {
+      if (failNextDirectorySync) {
+        failNextDirectorySync = false;
+        throw new Error("injected marker sync failure");
+      }
+    },
+  });
+  const chat = await store.create({ title: "Marker barrier" });
+  const marker = path.join(directory, `.chat-transaction.${chat.id}.pending`);
+
+  // The marker barrier is the first directory sync of an append: the payload
+  // rename and index write only follow once the marker is durable.
+  failNextDirectorySync = true;
+  await assert.rejects(
+    store.appendMessage(chat.id, { role: "user", content: "lost" }),
+    /injected marker sync failure/u,
+  );
+  await fs.access(marker);
+
+  await store.appendMessage(chat.id, { role: "user", content: "retry" });
+  await assert.rejects(fs.access(marker), { code: "ENOENT" });
+  assert.deepEqual(
+    (await store.get(chat.id))?.messages.map((message) => message.content),
+    ["retry"],
+  );
+  await store.rename(chat.id, "Renamed after retry");
+  const reopened = createChatStore(async () => directory, undefined, {
+    syncFile: async () => undefined,
+    syncDirectory: async () => undefined,
+  });
+  const persisted = await reopened.get(chat.id);
+  assert.equal(persisted?.title, "Renamed after retry");
+  assert.equal(persisted?.messages.length, 1);
+});
+
+test("a stale transaction marker found by an initialized store is reconciled on the next write", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-stale-marker-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory, undefined, {
+    syncFile: async () => undefined,
+    syncDirectory: async () => undefined,
+  });
+  const chat = await store.create({ title: "Stale marker" });
+  const marker = path.join(directory, `.chat-transaction.${chat.id}.pending`);
+  // A marker left behind outside this store's own write path (for example by
+  // a crashed sibling process) must not block the chat for the store lifetime.
+  await fs.writeFile(marker, "1\n");
+
+  await assert.rejects(
+    store.appendMessage(chat.id, { role: "user", content: "blocked" }),
+    (error: NodeJS.ErrnoException) => error.code === "EEXIST",
+  );
+  await store.appendMessage(chat.id, { role: "user", content: "admitted" });
+  await assert.rejects(fs.access(marker), { code: "ENOENT" });
+  assert.deepEqual(
+    (await store.get(chat.id))?.messages.map((message) => message.content),
+    ["admitted"],
+  );
+});
+
 test("chat payloads use owner-only mode and leave no staging files", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-payload-mode-"),

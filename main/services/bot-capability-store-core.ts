@@ -683,6 +683,17 @@ export function projectBotAccessView(
     : { ...base, accessMode: "full" };
 }
 
+/** Full Access Web Search grant. Custom Bots carry Web as an exact grant instead. */
+export function projectBotWebSearchEnabled(
+  state: Readonly<BotCapabilityState>,
+  botId: string,
+): boolean {
+  assertBotIdentity(botId, "bot");
+  const policy = state.policies.find((entry) => entry.botId === botId);
+  if (!policy) throw new BotCapabilityUnavailableError();
+  return policy.accessMode === "full" && policy.webSearchEnabled === true;
+}
+
 export function projectBotChatAccessView(
   state: Readonly<BotCapabilityState>,
   chatId: string,
