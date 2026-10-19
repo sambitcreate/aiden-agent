@@ -276,6 +276,37 @@ test("an allowed page re-reads its sources when shown and on Refresh; one waitin
   assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:refresh")!.args, [WORKSPACE.id, "art1"]);
 });
 
+test("under Ask, a page's workspace files load before its commands are allowed", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:refresh": () => ({}) });
+  const todo: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
+  renderPanel({ artifacts: state([view("art1", "Open PRs", { sources: [PULLS, todo] })]) });
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "workspaces:artifacts:refresh").length, 1));
+  screen.getByRole("button", { name: "Refresh Open PRs" });
+  screen.getByRole("button", { name: /Review/u });
+});
+
+test("allowing a page's commands reads them at once, even when its other data is fresh", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:refresh": () => ({}) });
+  const refreshes = () => calls.filter((call) => call.channel === "workspaces:artifacts:refresh").length;
+  const panel = (approved: boolean) => (
+    <TooltipProvider>
+      <ArtifactsPanel
+        workspace={WORKSPACE}
+        active
+        selectedId={null}
+        onSelect={() => undefined}
+        onAskAiden={() => undefined}
+        artifacts={state([view("art1", "Open PRs", { approved, pulls: [] })])}
+      />
+    </TooltipProvider>
+  );
+  const { rerender } = render(panel(false));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(refreshes(), 0);
+  rerender(panel(true));
+  await waitFor(() => assert.equal(refreshes(), 1));
+});
+
 test("a page the chat just refreshed is not re-read on open, and a hidden tab refreshes nothing", async () => {
   const calls = installBotTestIpc({ "workspaces:artifacts:refresh": () => ({}) });
   const { unmount } = renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true, pulls: [] })]) });

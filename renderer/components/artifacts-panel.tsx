@@ -29,6 +29,7 @@ import type { WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
 import {
   pickWorkspaceArtifact,
   workspaceArtifactPage,
+  workspaceArtifactCanRefresh,
   workspaceArtifactPageAccess,
   workspaceArtifactProblems,
 } from "../lib/workspace-artifacts-view";
@@ -113,7 +114,7 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const artifactId = view.artifact.id;
-  const canRun = view.artifact.sources.length > 0 && workspaceArtifactPageAccess(view, workspace) === "run";
+  const canRun = workspaceArtifactCanRefresh(view, workspace);
   const request = React.useRef(0);
   const refresh = React.useCallback(async () => {
     if (!canRun) return;
@@ -139,12 +140,18 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
     refreshedAtRef.current = view.snapshot?.refreshedAt;
   }, [view.snapshot?.refreshedAt]);
   const onOpen = view.artifact.refresh.onOpen;
+  const approved = view.artifact.approvedDigest === view.digest;
+  const approvedRef = React.useRef({ artifactId, approved });
   React.useEffect(() => {
-    if (!active || !onOpen) return;
+    const before = approvedRef.current;
+    approvedRef.current = { artifactId, approved };
+    // Allowing the page's commands loads what they read, however fresh the rest is.
+    const justApproved = approved && !before.approved && before.artifactId === artifactId;
+    if (!active || (!onOpen && !justApproved)) return;
     const last = refreshedAtRef.current;
-    if (last !== undefined && Date.now() - last < FRESH_ENOUGH_MS) return;
+    if (!justApproved && last !== undefined && Date.now() - last < FRESH_ENOUGH_MS) return;
     void refresh();
-  }, [active, onOpen, refresh]);
+  }, [active, approved, artifactId, onOpen, refresh]);
   const intervalSeconds = view.artifact.refresh.intervalSeconds;
   React.useEffect(() => {
     if (!active || !intervalSeconds) return;

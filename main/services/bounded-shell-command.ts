@@ -27,6 +27,10 @@ export interface BoundedShellCommandResult {
  */
 export function runBoundedShellCommand(options: BoundedShellCommandOptions): Promise<BoundedShellCommandResult> {
   const { signal } = options;
+  if (signal?.aborted) {
+    // Cancelled before it started: nothing runs.
+    return Promise.resolve({ stdout: "", stderr: "", exitCode: null, timedOut: false, outputLimitExceeded: false, aborted: true });
+  }
   return new Promise<BoundedShellCommandResult>((resolve, reject) => {
     const child = spawn(options.command, {
       cwd: options.cwd,

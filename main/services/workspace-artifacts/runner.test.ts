@@ -130,6 +130,15 @@ test("a button runs its saved command with the page's value as one literal argum
   await assert.rejects(fs.stat(path.join(folder, "hacked")));
 });
 
+test("a button cancelled before its command starts runs nothing", async (t) => {
+  const { runner, folder, context } = await setup(t);
+  // Access changed while the press was still being checked.
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), controller.signal), /Cancelled/u);
+  await assert.rejects(fs.stat(path.join(folder, "note.txt")));
+});
+
 test("buttons follow the workspace's access and only exist if the page declared them", async (t) => {
   const { runner, context } = await setup(t);
   await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("ask")), /Allow this page/u);

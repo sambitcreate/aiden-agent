@@ -40,6 +40,21 @@ export function workspaceArtifactPageAccess(
   return "run";
 }
 
+/**
+ * Whether a refresh would read anything now. Under Ask, file sources load
+ * before the page's commands are approved, so a page can refresh while its
+ * buttons still wait.
+ */
+export function workspaceArtifactCanRefresh(
+  view: WorkspaceArtifactView,
+  workspace: { permission: WorkspacePermission; folderPath?: string } | null,
+): boolean {
+  const approved = view.artifact.approvedDigest === view.digest;
+  const permission = workspace?.permission ?? "none";
+  const hasFolder = Boolean(workspace?.folderPath);
+  return view.artifact.sources.some((source) => workspaceArtifactSourceAccess(permission, hasFolder, source, approved) === "run");
+}
+
 export interface WorkspaceArtifactProblem {
   name: string;
   /** "blocked" waits on access or approval, which the access notice explains. */

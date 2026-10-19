@@ -39,7 +39,7 @@ Action values from the page never become shell syntax. Each `{{param}}` must be 
 Pages follow the workspace's access setting, the same way chats do:
 
 - **No access**: nothing runs. The page shows its last saved data and says why it is not live.
-- **Ask**: when Aiden creates or changes a page, the approval card lists every command it can run. Allowing it approves exactly that set of commands, and any later change to them needs approval again. The person can also review and allow a page from the tab. Each button press shows the exact command and waits for **Run**. File sources run without approval, because chats under Ask read workspace files without asking.
+- **Ask**: when Aiden creates or changes a page, the approval card lists every command it can run. Allowing it approves exactly that set of commands, and any later change to them needs approval again. The person can also review and allow a page from the tab, which reads its sources at once. Each button press shows the exact command and waits for **Run**. File sources run without approval, because chats under Ask read workspace files without asking.
 - **Full access**: sources and buttons run without asking.
 
 Changing a workspace's access cancels any refresh or button already running. Commands run with the same environment as `run_command`, and Aiden's own secrets are withheld.
