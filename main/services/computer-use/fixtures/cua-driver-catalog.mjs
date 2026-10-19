@@ -726,11 +726,15 @@ export function elementToken(snapshotId, index) {
 /**
  * Per-window snapshot bookkeeping: each get_window_state of a window replaces
  * its previous snapshot, staling that snapshot's tokens, and records whether
- * the capture carried a screenshot for pixel actions.
+ * the capture carried a screenshot for pixel actions. Tree reads are also
+ * remembered (markdown and view key) as `since` baselines, as
+ * `window_state_view.rs` does, even after their tokens go stale.
  */
 export class FakeSnapshotStore {
   nextId = 1;
   windows = new Map();
+  /** snapshot_id -> { pid, windowId, viewKey, markdown } */
+  baselines = new Map();
 
   publish(pid, windowId, withScreenshot) {
     const key = `${pid}:${windowId}`;
@@ -738,6 +742,10 @@ export class FakeSnapshotStore {
     const id = this.nextId++;
     this.windows.set(key, { id, withScreenshot });
     return { id, invalidated: previous ? [`s${previous.id.toString(16).padStart(8, "0")}`] : [] };
+  }
+
+  remember(snapshotId, pid, windowId, viewKey, markdown) {
+    this.baselines.set(snapshotId, { pid, windowId, viewKey, markdown });
   }
 
   /** Returns a refusal result, or null when the call may proceed. */
@@ -843,6 +851,58 @@ export const DEFAULT_ELEMENTS = [
  * when `tree_format` is "elements" or "both" or `full_output` is true. The
  * broker's unforwarded batch/script tools are refused, never dispatched.
  */
+/**
+ * A row-level stand-in for `window_state_view.rs::diff_markdown`: rows match
+ * by text; an unmatched new row whose index held a different old row is `~`
+ * (changed), otherwise `+`; unmatched old rows are `-`. Rendered like
+ * `DiffReport::render`.
+ */
+function diffRows(oldMarkdown, newMarkdown, since, snapshotId) {
+  const parse = (markdown) =>
+    markdown
+      .split("\n")
+      .filter((line) => line.trim().startsWith("- "))
+      .map((line) => {
+        const text = line.trim().slice(2);
+        const index = /^\[(\d+)\]/u.exec(text)?.[1];
+        return { text, index: index === undefined ? undefined : Number(index) };
+      });
+  const oldRows = parse(oldMarkdown);
+  const newRows = parse(newMarkdown);
+  const oldTexts = new Set(oldRows.map((row) => row.text));
+  const newTexts = new Set(newRows.map((row) => row.text));
+  const added = [];
+  const changed = [];
+  const replaced = new Set();
+  for (const row of newRows) {
+    if (oldTexts.has(row.text)) continue;
+    const old = oldRows.find((candidate) => candidate.index === row.index && !newTexts.has(candidate.text));
+    if (old) {
+      replaced.add(old.text);
+      changed.push(row);
+    } else {
+      added.push(row);
+    }
+  }
+  const removed = oldRows.filter((row) => !newTexts.has(row.text) && !replaced.has(row.text));
+  const counts = { added: added.length, changed: changed.length, removed: removed.length };
+  const empty = !added.length && !changed.length && !removed.length;
+  const text = empty
+    ? `no change since ${since}. Rows and indices are as before; use snapshot_id ${snapshotId} in element_tokens (${snapshotId}:N).`
+    : [
+        `since ${since}: ${counts.added} added, ${counts.changed} changed, ${counts.removed} removed. Use element_tokens ${snapshotId}:N for + and ~ rows and unchanged rows; - ids are from ${since}.`,
+        ...added.map((row) => `+ ${row.text}`),
+        ...changed.map((row) => `~ ${row.text}`),
+        ...removed.map((row) => `- ${row.text}`),
+      ].join("\n");
+  return {
+    empty,
+    text,
+    counts,
+    kept: [...added, ...changed].map((row) => row.index).filter((index) => index !== undefined),
+  };
+}
+
 export class FakeCuaDriver {
   constructor({
     windows = DEFAULT_WINDOWS,
@@ -892,6 +952,7 @@ export class FakeCuaDriver {
         const windows = this.windows.filter(
           (window) =>
             (args.pid === undefined || window.pid === args.pid) &&
+            (args.app === undefined || this.appFilterMatches(args.app, window)) &&
             (args.on_screen_only !== true || window.is_on_screen),
         );
         return {
@@ -917,6 +978,15 @@ export class FakeCuaDriver {
       default:
         return this.action(name, args);
     }
+  }
+
+  /** `tool_args.rs::app_filter_matches`: name substring or exact bundle id, ignoring case. */
+  appFilterMatches(filter, window) {
+    const query = String(filter).trim().toLowerCase();
+    if (!query) return true;
+    const bundleId = this.apps.find((app) => app.pid === window.pid)?.bundle_id;
+    if (typeof bundleId === "string" && bundleId.toLowerCase() === query) return true;
+    return window.app_name.toLowerCase().includes(query);
   }
 
   healthReport(args) {
@@ -1020,9 +1090,44 @@ export class FakeCuaDriver {
       args.tree_format === "elements" || args.tree_format === "both" || args.full_output === true;
     const treeMarkdown = elements
       .map((row) =>
-        `${"  ".repeat(row.depth ?? 0)}- [${row.element_index}] ${row.role} ${row.label ?? ""}`.trimEnd(),
+        `${"  ".repeat(row.depth ?? 0)}- [${row.element_index}] ${row.role} ${row.label ?? ""}${
+          row.value === undefined ? "" : ` = ${JSON.stringify(row.value)}`
+        }`.trimEnd(),
       )
       .join("\n");
+    const snapshotId = `s${id.toString(16).padStart(8, "0")}`;
+    const since = withTree ? this.sinceView(args, window, snapshotId, treeMarkdown) : null;
+    if (withTree) {
+      this.snapshots.remember(snapshotId, window.pid, window.window_id, args.max_elements ?? null, treeMarkdown);
+    }
+    if (since?.diff) {
+      // window_state_view.rs: a diff keeps only the + and ~ rows' elements
+      // and drops tree_markdown; the text body becomes the diff.
+      const keep = new Set(since.diff.kept);
+      content[content.length - 1] = {
+        type: "text",
+        text: `window_id=${window.window_id} pid=${window.pid} snapshot_id=${snapshotId}\n${since.diff.text}`,
+      };
+      return {
+        content,
+        structuredContent: {
+          window_id: window.window_id,
+          pid: window.pid,
+          element_count: elements.length,
+          ...(withElements
+            ? { elements: elements.filter((row) => keep.has(row.element_index)) }
+            : {}),
+          snapshot_id: snapshotId,
+          ...(invalidated.length ? { invalidated_snapshot_ids: invalidated } : {}),
+          since: args.since,
+          since_status: since.diff.empty ? "no_change" : "diff",
+          tree_diff: since.diff.text,
+          diff_counts: since.diff.counts,
+          app_name: window.app_name,
+          window_title: window.title,
+        },
+      };
+    }
     return {
       content,
       structuredContent: {
@@ -1034,7 +1139,8 @@ export class FakeCuaDriver {
         elements_complete: false,
         tree_markdown: treeMarkdown,
         ...(withElements ? { elements } : {}),
-        snapshot_id: `s${id.toString(16).padStart(8, "0")}`,
+        ...(since?.fallback ? { since: args.since, since_status: since.fallback } : {}),
+        snapshot_id: snapshotId,
         ...(invalidated.length ? { invalidated_snapshot_ids: invalidated } : {}),
         ...(withScreenshot
           ? {
@@ -1050,6 +1156,21 @@ export class FakeCuaDriver {
         window_title: window.title,
       },
     };
+  }
+
+  /**
+   * `window_state_view.rs` `since` resolution: a diff against a remembered
+   * read of the same window and view, or a fallback reason for a full read.
+   */
+  sinceView(args, window, snapshotId, markdown) {
+    if (typeof args.since !== "string" || args.full_output === true) return null;
+    const old = this.snapshots.baselines.get(args.since);
+    if (!old) return { fallback: "unknown_snapshot" };
+    if (old.pid !== window.pid || old.windowId !== window.window_id) {
+      return { fallback: "other_window" };
+    }
+    if (old.viewKey !== (args.max_elements ?? null)) return { fallback: "view_changed" };
+    return { diff: diffRows(old.markdown, markdown, args.since, snapshotId) };
   }
 
   /** `expectation.rs`: one sample, AND of predicates, absence never provable. */

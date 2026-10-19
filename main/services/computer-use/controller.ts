@@ -90,6 +90,8 @@ export interface ComputerUseResultDetails {
   /** Driver advice for the next rung; the harness decides whether to follow it. */
   escalation?: { target: string; reason: string };
   capturedAfter?: boolean;
+  /** capture only: a `changes_only` read that returned the driver's diff. */
+  changesOnly?: boolean;
   /** verify only: the aggregate verify_state status. */
   verifyStatus?: ComputerUseVerifyStatus;
 }
@@ -618,6 +620,20 @@ function textResult(
   return { content, details };
 }
 
+/** Adds a `note` to a capture result's JSON text block. */
+function withCaptureNote(
+  result: AgentToolResult<ComputerUseResultDetails>,
+  note: string,
+): AgentToolResult<ComputerUseResultDetails> {
+  const [first, ...rest] = result.content;
+  if (first?.type !== "text") return result;
+  const payload = JSON.parse(first.text) as Record<string, unknown>;
+  return {
+    ...result,
+    content: [{ type: "text", text: JSON.stringify({ ...payload, note }) }, ...rest],
+  };
+}
+
 function abortError(signal?: AbortSignal): ComputerUseSafetyError {
   return signal?.reason instanceof ComputerUseSafetyError
     ? signal.reason
@@ -750,6 +766,12 @@ export class ComputerUseController {
   private readonly driverCalls = new Set<Promise<unknown>>();
   private readonly lifecycle = new AbortController();
   private target: ActiveTarget | null = null;
+  /**
+   * The driver snapshot of this generation's latest tree read: the `since`
+   * baseline for a `changes_only` capture of the same window. It outlives
+   * element-map invalidation, since actions do not replace driver snapshots.
+   */
+  private lastTreeSnapshot: { pid: number; windowId: number; snapshotId: string } | null = null;
   private revision = 0;
   private readonly grants: ComputerUseGrantLedger;
 
@@ -993,6 +1015,7 @@ export class ComputerUseController {
     this.state = "poisoned";
     this.grants.clear();
     this.clearTarget();
+    this.lastTreeSnapshot = null;
     void this.session?.close().catch(() => {});
   }
 
@@ -1039,9 +1062,15 @@ export class ComputerUseController {
     this.revision += 1;
   }
 
-  private async loadWindows(signal: AbortSignal): Promise<WindowRecord[]> {
+  /** `app` filters host-side (0.36): a name substring or the exact bundle id. */
+  private async loadWindows(signal: AbortSignal, app?: string): Promise<WindowRecord[]> {
     return normalizeWindows(
-      await this.callDriver("list_windows", {}, signal, COMPUTER_USE_DISCOVERY_TIMEOUT_MS),
+      await this.callDriver(
+        "list_windows",
+        app === undefined ? {} : { app },
+        signal,
+        COMPUTER_USE_DISCOVERY_TIMEOUT_MS,
+      ),
     );
   }
 
@@ -1055,8 +1084,14 @@ export class ComputerUseController {
     input: { app?: string; pid?: number; window_id?: number },
     signal: AbortSignal,
   ): Promise<WindowRecord> {
-    const windows = await this.loadWindows(signal);
-    if (input.pid !== undefined && input.window_id !== undefined) {
+    const exactWindow = input.pid !== undefined && input.window_id !== undefined;
+    if (!exactWindow && !input.app) {
+      throw new ComputerUseDriverActionError(
+        "Capture requires app or exact pid and window_id. Call list_windows, then capture the intended target.",
+      );
+    }
+    const windows = await this.loadWindows(signal, exactWindow ? undefined : input.app?.trim());
+    if (exactWindow) {
       const exact = windows.find(
         (window) => window.pid === input.pid && window.windowId === input.window_id,
       );
@@ -1064,12 +1099,7 @@ export class ComputerUseController {
         throw new ComputerUseDriverActionError("The requested window is no longer available.");
       return exact;
     }
-    if (!input.app) {
-      throw new ComputerUseDriverActionError(
-        "Capture requires app or exact pid and window_id. Call list_windows, then capture the intended target.",
-      );
-    }
-    const query = input.app.trim().toLowerCase();
+    const query = (input.app ?? "").trim().toLowerCase();
     const directExact = windows.filter((window) => window.appName.trim().toLowerCase() === query);
     if (directExact.length) return directExact[0];
 
@@ -1099,11 +1129,8 @@ export class ComputerUseController {
         .filter((pid): pid is number => pid !== undefined),
     );
     const metadataPartial = windows.filter((window) => partialPids.has(window.pid));
-    const titleFallback = windows.filter(
-      (window) => !window.appName.trim() && window.title.toLowerCase().includes(query),
-    );
     const partialMatches = new Map<string, WindowRecord>();
-    for (const window of [...directPartial, ...metadataPartial, ...titleFallback]) {
+    for (const window of [...directPartial, ...metadataPartial]) {
       partialMatches.set(`${window.pid}:${window.windowId}`, window);
     }
     if (partialMatches.size === 1) return partialMatches.values().next().value as WindowRecord;
@@ -1137,19 +1164,43 @@ export class ComputerUseController {
     signal: AbortSignal,
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     const requestedMode = args.mode ?? "som";
+    // A changes_only read may keep the previous element map (no_change), so
+    // remember it before the new capture clears the target.
+    const previous = this.target;
     this.clearTarget();
     try {
       const target =
         args.app && DESKTOP_NAMES.has(args.app.trim().toLowerCase())
           ? await this.resolveDesktopWindow(signal)
           : await this.resolveTarget(args, signal);
-      return await this.captureWindow(
+      const baseline = this.lastTreeSnapshot;
+      const changes =
+        args.changes_only === true &&
+        baseline?.pid === target.pid &&
+        baseline.windowId === target.windowId
+          ? {
+              since: baseline.snapshotId,
+              previous:
+                previous?.pid === target.pid && previous.windowId === target.windowId
+                  ? previous
+                  : null,
+            }
+          : undefined;
+      const result = await this.captureWindow(
         target,
         requestedMode,
         args.max_elements ?? 100,
         signal,
         args.max_image_dimension,
+        changes,
       );
+      if (args.changes_only === true && !changes) {
+        return withCaptureNote(
+          result,
+          "changes_only: no previous capture of this window in this session to compare against, so this is a full capture.",
+        );
+      }
+      return result;
     } catch (error) {
       this.clearTarget();
       throw error;
@@ -1162,12 +1213,14 @@ export class ComputerUseController {
     maximumElements: number,
     signal: AbortSignal,
     maxImageDimension?: number,
+    changes?: { since: string; previous: ActiveTarget | null },
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     // A new snapshot invalidates every prior index/token even if the driver
     // subsequently reports an error.
     this.setTarget(window, []);
     const degraded = requestedMode === "vision" && !this.supportsImages;
-    const effectiveMode: ComputerUseMode = degraded ? "ax" : requestedMode;
+    // A changes_only read is a tree diff: no screenshot, so an ax read.
+    const effectiveMode: ComputerUseMode = degraded || changes ? "ax" : requestedMode;
     const includeScreenshot = this.supportsImages && effectiveMode !== "ax";
     // 0.34 ignores the deprecated capture_mode; the two include_* switches
     // select the work. Vision skips the AX walk entirely (its snapshot still
@@ -1189,6 +1242,9 @@ export class ComputerUseController {
             include_screenshot: includeScreenshot,
             max_elements: axWalkBudget(maximumElements),
             tree_format: "elements",
+            // 0.36 window_state_view.rs: rows changed since that snapshot, or
+            // "no change"; a full read (since_status = reason) when it cannot diff.
+            ...(changes ? { since: changes.since } : {}),
           };
     if (maxImageDimension !== undefined && driverArgs.include_screenshot === true) {
       driverArgs.max_image_dimension = maxImageDimension;
@@ -1201,6 +1257,23 @@ export class ComputerUseController {
     );
     if (includeScreenshot && !result.image) {
       throw new ComputerUseDriverActionError("Window capture returned no screenshot.");
+    }
+    // Every get_window_state publishes a new driver snapshot (staling the
+    // previous one's tokens); tree reads become the next `since` baseline.
+    const snapshotId = safeString(result.structured?.snapshot_id, 128);
+    if (effectiveMode !== "vision" && snapshotId) {
+      this.lastTreeSnapshot = { pid: window.pid, windowId: window.windowId, snapshotId };
+    }
+    const sinceStatus = changes ? safeString(result.structured?.since_status, 64) : undefined;
+    if (changes && (sinceStatus === "no_change" || sinceStatus === "diff")) {
+      return this.captureChangesResult(
+        window,
+        requestedMode,
+        result,
+        sinceStatus === "no_change",
+        snapshotId,
+        changes.previous,
+      );
     }
     const elements = effectiveMode === "vision" ? [] : normalizeElements(result, maximumElements);
     const target = this.setTarget(window, elements);
@@ -1230,6 +1303,11 @@ export class ComputerUseController {
       ...(result.structured?.degraded === true && safeString(result.structured.degraded_reason)
         ? { capture_note: safeString(result.structured.degraded_reason, 1_000) }
         : {}),
+      ...(changes
+        ? {
+            note: `changes_only: cua-driver could not diff against the previous capture (${sinceStatus ?? "no since_status"}), so this is a full accessibility capture without a screenshot.`,
+          }
+        : {}),
     };
     return textResult(
       payload,
@@ -1245,6 +1323,68 @@ export class ComputerUseController {
       },
       includeScreenshot ? result.image : undefined,
     );
+  }
+
+  /**
+   * A `since` read the driver answered with a diff or "no change". It never
+   * mints element numbers: with no change the previous capture's rows and
+   * indices still hold (upstream: "Rows and indices are as before"), so they
+   * are rebound to the new snapshot's tokens; any change can shift indices,
+   * so the element map stays empty until a full capture.
+   */
+  private captureChangesResult(
+    window: WindowRecord,
+    requestedMode: ComputerUseMode,
+    result: ParsedDriverResult,
+    noChange: boolean,
+    snapshotId: string | undefined,
+    previous: ActiveTarget | null,
+  ): AgentToolResult<ComputerUseResultDetails> {
+    const kept =
+      noChange && snapshotId && previous?.elements.size
+        ? [...previous.elements.values()].map((element) => {
+            const token = element.token ? `${snapshotId}:${element.index}` : undefined;
+            return {
+              ...element,
+              token: token && CUA_DRIVER_ELEMENT_TOKEN_PATTERN.test(token) ? token : undefined,
+              // This read took no screenshot; pixel geometry needs a full capture.
+              screenshotFrame: undefined,
+            };
+          })
+        : [];
+    const target = this.setTarget(window, kept);
+    const counts = asRecord(result.structured?.diff_counts);
+    const payload: Record<string, unknown> = {
+      ok: true,
+      action: "capture",
+      mode: "ax",
+      requested_mode: requestedMode,
+      changes_only: true,
+      target: this.targetDetails(target),
+      ...(noChange
+        ? { no_change: true }
+        : {
+            changes: safeString(result.structured?.tree_diff, 20_000) ?? "",
+            diff_counts: {
+              added: safeInteger(counts?.added, 0) ?? 0,
+              changed: safeInteger(counts?.changed, 0) ?? 0,
+              removed: safeInteger(counts?.removed, 0) ?? 0,
+            },
+          }),
+      note: kept.length
+        ? "Nothing changed since the previous capture; its element numbers are still valid. This read carries no element numbers of its own and no screenshot."
+        : noChange
+          ? "Nothing changed since the previous capture, but no element numbers are current. A changes_only read carries no element numbers; take a full capture before acting by element number or pixel."
+          : "A changes_only read carries no element numbers; earlier element numbers are no longer valid. Take a full capture before acting by element number or pixel.",
+    };
+    return textResult(payload, {
+      action: "capture",
+      mode: "ax",
+      requestedMode,
+      target: this.targetDetails(target),
+      elementCount: 0,
+      changesOnly: true,
+    });
   }
 
   private async listAppsResult(

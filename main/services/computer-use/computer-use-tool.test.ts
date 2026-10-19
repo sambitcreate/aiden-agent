@@ -721,6 +721,107 @@ test("som capture requests the elements tree_format and still mints tokens", asy
   await controller.close();
 });
 
+test("capture by app filters list_windows host-side", async () => {
+  const { controller, session } = harness(false);
+  // The bundle id names no window directly: only the host-side filter's
+  // bundle match returns Safari's row, and nothing else is offered.
+  const result = await controller.execute("by-bundle", {
+    action: "capture",
+    mode: "ax",
+    app: "com.apple.Safari",
+  });
+  const listings = session.calls.filter((call) => call.name === "list_windows");
+  assert.deepEqual(
+    listings.map((call) => call.args),
+    [{ app: "com.apple.Safari" }],
+  );
+  const returned = session.results.find((entry) => entry.name === "list_windows")!.result as {
+    structuredContent: { windows: Array<{ pid: number }> };
+  };
+  assert.deepEqual(
+    returned.structuredContent.windows.map((window) => window.pid),
+    [42],
+  );
+  assert.equal(result.details.target?.pid, 42);
+  assert.equal(result.details.target?.windowId, 7);
+
+  // A name the filter does not match finds no window, even though an
+  // unfiltered host listing has three.
+  await assert.rejects(
+    () => controller.execute("no-match", { action: "capture", mode: "ax", app: "Notes" }),
+    /No window matched app "Notes"/u,
+  );
+  assert.deepEqual(
+    session.calls.filter((call) => call.name === "list_windows").map((call) => call.args),
+    [{ app: "com.apple.Safari" }, { app: "Notes" }],
+  );
+  await controller.close();
+});
+
+test("changes_only capture sends since and reports no_change", async () => {
+  const { controller, session } = harness(false);
+  const changesOnly = { action: "capture", mode: "ax", app: "Safari", changes_only: true } as const;
+  const payloadOf = (result: Awaited<ReturnType<typeof capture>>) =>
+    JSON.parse((result.content[0] as { text: string }).text) as Record<string, unknown>;
+  const snapshotOf = (index: number) =>
+    (
+      session.results.filter((entry) => entry.name === "get_window_state")[index].result as {
+        structuredContent: { snapshot_id: string };
+      }
+    ).structuredContent.snapshot_id;
+  const reads = () => session.calls.filter((call) => call.name === "get_window_state");
+
+  // No earlier snapshot of this window: a normal full capture, said so.
+  const first = payloadOf(await controller.execute("changes-first", changesOnly));
+  assert.equal(reads()[0].args.since, undefined);
+  assert.equal((first.elements as unknown[]).length, 2);
+  assert.match(String(first.note), /no previous capture/u);
+
+  // Nothing changed: the driver diffs against the first snapshot and the
+  // model's element numbers stay usable.
+  const unchanged = payloadOf(await controller.execute("changes-none", changesOnly));
+  assert.equal(reads()[1].args.since, snapshotOf(0));
+  assert.equal(unchanged.no_change, true);
+  assert.equal(unchanged.elements, undefined);
+  assert.match(String(unchanged.note), /element numbers/u);
+  await approved(controller, "after-no-change", { action: "click", element: 1 });
+  const click = session.calls[session.calls.length - 1];
+  assert.equal(click.name, "click");
+  assert.equal(click.args.element_token, `${snapshotOf(1)}:1`);
+  assert.equal((session.results[session.results.length - 1].result as { isError?: boolean }).isError, undefined);
+
+  // Something changed: the diff rows come back without element numbers, and
+  // acting by number now needs a full capture.
+  session.driver.elements = () => [
+    { role: "AXButton", label: "First", frame: { x: 110, y: 60, w: 20, h: 20 }, depth: 1 },
+    { role: "AXButton", label: "Second", value: "on", frame: { x: 250, y: 100, w: 20, h: 20 }, depth: 1 },
+    { role: "AXButton", label: "Third", frame: { x: 150, y: 60, w: 20, h: 20 }, depth: 1 },
+  ];
+  const changed = payloadOf(await controller.execute("changes-some", changesOnly));
+  assert.equal(reads()[2].args.since, snapshotOf(1));
+  assert.equal(changed.no_change, undefined);
+  assert.equal(changed.elements, undefined);
+  assert.deepEqual(changed.diff_counts, { added: 1, changed: 1, removed: 0 });
+  assert.match(String(changed.changes), /^\+ .*Third/mu);
+  assert.match(String(changed.note), /full capture/u);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: 1 }),
+    /latest capture/u,
+  );
+
+  // A different element budget is a different view: the driver answers with
+  // a full read, which numbers elements like any full capture.
+  const fallback = payloadOf(
+    await controller.execute("changes-view", { ...changesOnly, max_elements: 400 }),
+  );
+  assert.equal(reads()[3].args.since, snapshotOf(2));
+  assert.equal((fallback.elements as unknown[]).length, 3);
+  assert.match(String(fallback.note), /view_changed/u);
+  await approved(controller, "after-fallback", { action: "click", element: 2 });
+  assert.equal(session.calls[session.calls.length - 1].args.element_token, `${snapshotOf(3)}:2`);
+  await controller.close();
+});
+
 test("capture with an open menu lists its items; a closed menu lists only titles", async () => {
   const menuBar = [
     { role: "AXMenuBarItem", label: "File", frame: { x: 110, y: 52, w: 30, h: 16 }, depth: 1 },

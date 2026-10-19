@@ -79,7 +79,15 @@ const BLOCKED_TYPE_PATTERNS = [
 
 const GLOBAL_KEYS = new Set(["action"]);
 const ACTION_KEYS: Readonly<Record<ComputerUseAction, ReadonlySet<string>>> = {
-  capture: new Set(["mode", "app", "pid", "window_id", "max_elements", "max_image_dimension"]),
+  capture: new Set([
+    "mode",
+    "app",
+    "pid",
+    "window_id",
+    "max_elements",
+    "max_image_dimension",
+    "changes_only",
+  ]),
   click: new Set([
     "element",
     "coordinate",
@@ -515,6 +523,16 @@ export function normalizeComputerUseArgs(input: ComputerUseArgs): ComputerUseArg
           );
         }
         result.max_image_dimension = dimension;
+      }
+      if (own(source, "changes_only")) {
+        if (typeof source.changes_only !== "boolean")
+          fail("invalid_changes_only", "changes_only must be a boolean.");
+        if (source.changes_only === true) {
+          // A vision read walks no accessibility tree, so there is nothing to diff.
+          if (mode === "vision")
+            fail("invalid_changes_only", "changes_only needs mode som or ax, not vision.");
+          result.changes_only = true;
+        }
       }
       break;
     }

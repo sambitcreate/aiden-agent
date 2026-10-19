@@ -68,6 +68,13 @@ export class FakeSnapshotStore {
     id: number;
     invalidated: string[];
   };
+  remember(
+    snapshotId: string,
+    pid: number,
+    windowId: number,
+    viewKey: number | null,
+    markdown: string,
+  ): void;
   admit(name: string, args: Record<string, unknown>): FakeToolResult | null;
 }
 

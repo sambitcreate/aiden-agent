@@ -116,6 +116,12 @@ export const ComputerUseParameters = Type.Object(
         description: "Capture only: cap the screenshot's long edge in pixels for a cheaper image.",
       }),
     ),
+    changes_only: Type.Optional(
+      Type.Boolean({
+        description:
+          "Capture only (som or ax): re-read the same window and return just the accessibility rows added, changed or removed since its previous capture, or no_change, without a screenshot. Carries no element numbers; act by number only after a full capture or a no_change result. Falls back to a full capture when there is no previous capture of that window.",
+      }),
+    ),
     element: Type.Optional(
       Type.Integer({
         minimum: 0,
