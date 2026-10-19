@@ -729,6 +729,7 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   // The daemon forks without summaries, and the fork's next turn carries the copied history to the model.
   const features = (await request("/server")).data.features;
   assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));
+  assert.ok(!features.includes("bot-durable-session-v1")); assert.ok(!features.includes("bot-memory-v1")); assert.ok(!features.includes("bot-proactive-v1"));
   const forked = await request(`/chats/${created.data.id}/fork`, "POST", { messageId: chat.data.messages.at(-1).id, position: "after" }, "fork-cli-test-000001", { "if-match": chat.data.revision });
   assert.equal(forked.status, 201, JSON.stringify(forked));
   assert.equal(forked.data.chat.forkedFrom.chatId, created.data.id);
@@ -1772,6 +1773,219 @@ test("daemon releases sessions and authority when extension binding fails or is 
       prototype.bindExtensions = originalBind;
       admission.release();
       await daemon.stop();
+    }
+  }
+});
+
+test("durable CLI Bot migration preserves history, dedupes across restart, and fences revoked access", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir);
+  const oldEntry = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
+  let calls = 0, hold = false;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body);
+    const write = JSON.stringify(parsed.messages).includes("Write durable file") && !parsed.messages.some((message) => message.role === "tool");
+    calls++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: write ? { role: "assistant", tool_calls: [{ index: 0, id: "durable-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "durable.txt", content: "Written by the durable Bot" }) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
+    if (hold) return;
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: write ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  assert.equal(host.durable, undefined);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+  const bot = await host.application.createBot({ audienceId, bot: { name: "Durable helper", instructions: "Reply briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: catalog.fileScopes.filter((item) => item.kind === "bot_home").map((item) => item.id), shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } });
+  const legacy = await host.application.createChat({ audienceId, botId: bot.id, providerId: "cli-test", model: "test" });
+  await daemon.chatStore.appendMessage(legacy.id, { role: "user", content: "Keep this legacy history" });
+  mkdirSync(dirname(daemon.sessionPath(legacy.id)), { recursive: true });
+  writeFileSync(daemon.sessionPath(legacy.id), "legacy journal bytes\n");
+  const grantBefore = await host.application.getBotAccess(bot.id);
+  const migrated = await host.command(["enable-durable"]);
+  assert.equal(calls, 0, "migration never invokes a provider");
+  assert.equal(migrated.legacyChatsPreserved, 1);
+  assert.equal(statSync(join(migrated.backup, "legacy-chats.json")).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(readFileSync(join(migrated.backup, "legacy-chats.json"))).chats[0].journal, "legacy journal bytes\n");
+  assert.equal((await daemon.chatStore.get(legacy.id)).messages[0].content, "Keep this legacy history");
+  assert.throws(() => host.assertLegacyChatAllowed(), /durable sessions/);
+  await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  assert.deepEqual(await host.application.getBotAccess(bot.id), grantBefore);
+  const markerPath = join(dir, api.CLI_DURABLE_BOT_MARKER);
+  renameSync(markerPath, `${markerPath}.held`);
+  try { assert.throws(() => host.assertLegacyChatAllowed(), /durable sessions/, "an active durable host never falls back when its marker disappears"); }
+  finally { renameSync(`${markerPath}.held`, markerPath); }
+
+  const scheduler = api.createCliScheduler(dir); host.setScheduler(scheduler);
+  const ledger = new api.AidenIdempotencyLedger();
+  const remoteBots = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  assert.equal(remoteBots.botSessions.supportsRoutines, true);
+  assert.equal(remoteBots.botSessions.supportsPresets, true);
+  assert.equal(remoteBots.botSessions.supportsMemory, true);
+  assert.equal(remoteBots.botSessions.supportsProactive, false);
+  assert.equal(remoteBots.botSessions.supportsAttachments, false);
+  assert.equal(remoteBots.botSessions.supportsActivity, false);
+  await remoteBots.botSessions.close();
+  const routine = await host.routines.create({ botId: bot.id, name: "Read update", prompt: "Give a brief update", schedule: { kind: "daily", time: "12:00" }, timezone: "UTC" });
+  const routineRun = await scheduler.service.runNow(routine.id, { runId: "stable-routine-fire" });
+  assert.equal(routineRun.result, "success");
+  const duplicateRun = await scheduler.service.runNow(routine.id, { runId: "stable-routine-fire" });
+  assert.equal(duplicateRun.result, "skipped");
+  assert.equal(duplicateRun.reason, "duplicate");
+  await host.routines.delete({ botId: bot.id, id: routine.id });
+
+  const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
+  const sent = await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first", attachments: [{ type: "image", mimeType: "image/png", data: imageData }] });
+  assert.deepEqual(await host.durable.runtime.awaitReply(bot.id, sent.submissionId, new AbortController().signal), { kind: "completed", text: "Durable answer" });
+  const durableEntries = (await (await host.durable.runtime.conversation(bot.id)).context(api.BACKGROUND_CONTEXT)).entries;
+  const callContext = api.cliDurableBotToolContext([...durableEntries].reverse(), { chatId: legacy.id, botId: bot.id });
+  const forkSnapshot = await callContext.loadChat();
+  assert.equal(callContext.attachments[0].data, imageData);
+  assert.equal(forkSnapshot.messages.find((message) => message.role === "user").attachments[0].data, imageData);
+  assert.deepEqual(forkSnapshot.messages.slice(-2).map((message) => message.content), ["Hello", "Durable answer"]);
+  assert.ok(!JSON.stringify(forkSnapshot).includes("Keep this legacy history"));
+  assert.equal(api.capturePersistedSubagentContext(forkSnapshot).messages.length, forkSnapshot.messages.length);
+  forkSnapshot.messages.find((message) => message.role === "user").content = "caller mutated snapshot";
+  assert.equal((await callContext.loadChat()).messages.find((message) => message.role === "user").content, "Hello", "call snapshot cannot be mutated by another consumer");
+
+  const writeTurn = await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" });
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
+  assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
+  assert.equal((await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" })).deduped, true);
+  const afterFirst = calls;
+  assert.ok(afterFirst > 0);
+  assert.equal((await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first" })).deduped, true);
+  assert.equal(calls, afterFirst);
+  const memory = await host.durable.memory.apply(bot.id, "user", [{ action: "add", content: "Prefers concise replies" }]);
+  assert.equal(memory.ok, true);
+  const view = await host.durable.memory.view(bot.id);
+  const entry = view.user.entries[0]; assert.equal(entry.text, "Prefers concise replies");
+  const edit = await host.durable.memory.edit({ botId: bot.id, edit: { kind: "replace", target: "user", entryId: entry.id, text: "Prefers complete replies" } });
+  assert.equal(edit.ok, true);
+  await host.stop();
+  host = await api.createCliBots(dir, daemon);
+  assert.equal((await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first" })).deduped, true);
+  assert.equal((await host.durable.memory.view(bot.id)).user.entries[0].text, "Prefers complete replies");
+  assert.equal(calls, afterFirst, "reopen and duplicate delivery never dispatch inference");
+  await host.stop();
+  async function crashTurn(requestId) {
+    hold = true;
+    const before = calls;
+    const child = spawn(process.execPath, [join(pkg, "tests/fixtures/durable-bot-child.mjs"), dir, bot.id, requestId], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    let childError = ""; child.stderr.on("data", (data) => { childError += data; });
+    try {
+      const deadline = Date.now() + 15000;
+      while (calls <= before) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for durable Bot: ${childError}`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const exited = once(child, "exit"); child.kill("SIGKILL"); await exited;
+    } finally { if (child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; } }
+  }
+  await crashTurn("interrupted-resume-request");
+  const beforeResume = calls;
+  host = await api.createCliBots(dir, daemon);
+  const interrupted = await host.durable.runtime.state(bot.id);
+  assert.equal(interrupted.kind, "interrupted");
+  assert.equal(calls, beforeResume, "startup scans do not resume the interrupted task");
+  hold = false;
+  await host.durable.runtime.resume(bot.id, "resume-once");
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, interrupted.submissionId, new AbortController().signal)).kind, "completed");
+  const afterResume = calls;
+  assert.equal(afterResume, beforeResume + 1);
+  await host.durable.runtime.resume(bot.id, "resume-once");
+  assert.equal(calls, afterResume);
+  await host.stop();
+  await crashTurn("interrupted-dismiss-request");
+  const beforeReopen = calls;
+  host = await api.createCliBots(dir, daemon);
+  assert.equal((await host.durable.runtime.state(bot.id)).kind, "interrupted");
+  const pausedScheduler = api.createCliScheduler(dir); host.setScheduler(pausedScheduler);
+  const pausedRoutine = await host.routines.create({ botId: bot.id, name: "Paused update", prompt: "Give an update", schedule: { kind: "daily", time: "12:00" }, timezone: "UTC" });
+  const skipped = await pausedScheduler.service.runNow(pausedRoutine.id, { runId: "paused-fire" });
+  assert.equal(skipped.result, "skipped"); assert.equal(skipped.reason, "bot_paused");
+  assert.equal((await host.durable.runtime.state(bot.id)).kind, "interrupted");
+  await host.routines.delete({ botId: bot.id, id: pausedRoutine.id });
+  await host.durable.runtime.dismiss(bot.id, "dismiss-once");
+  await host.durable.runtime.dismiss(bot.id, "dismiss-once");
+  assert.equal(calls, beforeReopen, "dismiss and routine fire after process death never invoke a provider");
+  await host.application.revokeNoticeAudience(audienceId);
+  await assert.rejects(host.durable.runtime.send(bot.id, { text: "Forbidden", requestId: "revoked-request" }));
+  assert.equal(calls, beforeReopen);
+});
+
+test("failed advisor attempts retain unknown usage and persist idempotently", async (t) => {
+  const dir = temporary(t);
+  const record = { source: "advisor", providerId: "test", providerLabel: "Test", modelId: "model", modelLabel: "Model", local: false, status: "failed", tokens: null, costStatus: "unavailable" };
+  await Promise.all([api.recordUsageRecord(dir, record, "attempt-one"), api.recordUsageRecord(dir, record, "attempt-one")]);
+  await api.recordUsageRecord(dir, { ...record, status: "cancelled" }, "attempt-two");
+  await api.recordUsageRecord(dir, { ...record, source: "chat", status: "completed", tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 2 }, costStatus: "reported", costUsd: 0.01 });
+  await api.recordUsageRecord(dir, record, "attempt-one");
+  const summary = await api.usageSummary(dir);
+  assert.equal(summary.totals.requests, 3);
+  assert.equal(summary.totals.failedRequests, 1);
+  assert.equal(summary.totals.cancelledRequests, 1);
+  assert.equal(summary.totals.unmeteredRequests, 2);
+  assert.equal(summary.totals.unpricedHostedRequests, 2);
+});
+
+test("durable migration fails closed on backup errors and can be completed explicitly", async (t) => {
+  const dir = temporary(t), journal = join(dir, "journal"), cancelled = [];
+  const chat = { id: "chat-migration", botId: "bot:migration", messages: [{ role: "user", content: "Original history" }] };
+  mkdirSync(journal);
+  const daemon = { chatStore: { list: async () => [chat], get: async () => chat },
+    llmClient: { cancelChat: async (id) => cancelled.push(id), waitForChatIdle: async () => {} }, sessionPath: () => journal };
+  await assert.rejects(api.enableCliDurableBots(dir, daemon), /directory|EISDIR/i);
+  const preparing = api.cliDurableBotMarker(dir);
+  assert.equal(preparing.state, "preparing");
+  assert.equal(existsSync(join(preparing.backup, "recovery.json")), false);
+  rmSync(journal, { recursive: true }); writeFileSync(journal, "Original journal");
+  const completed = await api.enableCliDurableBots(dir, daemon);
+  assert.equal(api.cliDurableBotMarker(dir).state, "enabled");
+  assert.notEqual(completed.backup, preparing.backup);
+  assert.equal(readFileSync(journal, "utf8"), "Original journal");
+  assert.equal(JSON.parse(readFileSync(join(completed.backup, "legacy-chats.json"))).chats[0].chat.messages[0].content, "Original history");
+  const replay = await api.enableCliDurableBots(dir, daemon);
+  assert.equal(replay.backup, completed.backup);
+  assert.deepEqual(cancelled, [chat.id, chat.id]);
+});
+
+test("CLI advisor failures and cancellation persist unknown attempts before marking usage", async (t) => {
+  const { fauxProvider } = await import("@earendil-works/pi-ai/providers/faux");
+  for (const mode of ["failed", "cancelled", "persistence-failed"]) {
+    const dir = temporary(t);
+    const controller = new AbortController();
+    const provider = fauxProvider({ api: "advisor-fixture", provider: "advisor-fixture", models: [{ id: "reviewer", contextWindow: 32000, maxTokens: 4096 }] });
+    const model = provider.getModel();
+    provider.provider.streamSimple = () => { if (mode === "cancelled") controller.abort(); throw new Error("Provider failed before response"); };
+    const ctx = { model: { ...model, id: "executor" }, scopedModels: [{ model }], hasUI: false,
+      sessionManager: { getBranch: () => [{ type: "message", message: { role: "user", content: "Review this fixture", timestamp: 1 } }] },
+      modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true }), getProvider: () => provider.provider },
+    };
+    const hooks = new Map(); let tool;
+    api.createAdvisorInlineExtension({ agentDir: dir, latestContext: () => ctx }).factory({ on: (name, handler) => hooks.set(name, handler), registerTool: (value) => { tool = value; } });
+    await hooks.get("before_agent_start")({ systemPrompt: "Fixture" }, ctx);
+    if (mode === "persistence-failed") mkdirSync(join(dir, "usage.json"));
+    await tool.execute("advisor-call", { providerId: model.provider, modelId: model.id }, controller.signal);
+    const attempt = JSON.parse(readFileSync(join(dir, "advisor", "advisor-attempts.json"), "utf8")).attempts[0];
+    assert.equal(attempt.state, mode === "cancelled" ? "cancelled" : "failed");
+    assert.equal(attempt.usageRecorded, mode !== "persistence-failed");
+    if (mode !== "persistence-failed") {
+      const summary = await api.usageSummary(dir);
+      assert.equal(summary.totals.requests, 1);
+      assert.equal(summary.totals.unmeteredRequests, 1);
+      assert.equal(summary.totals.unpricedHostedRequests, 1);
+      const ledger = JSON.parse(readFileSync(join(dir, "usage.json"), "utf8"));
+      assert.equal(ledger.accountedAttempts.length, 1);
     }
   }
 });

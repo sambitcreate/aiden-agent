@@ -61,11 +61,11 @@ Each row is a reviewable slice, not one large PR. H0 precedes implementation. In
 | H1a | Bounded workspace metadata retention and indexing status | H0 | Implemented; fresh review passed |
 | H1b | Progress-aware attended Assistant recovery | H0 | Implemented; fresh review findings addressed |
 | H1c | Discovery across admitted namespaces with bounded output | H0 | Implemented; fresh review findings addressed |
-| H1d | Failed CLI advisor accounting and useful CI receipts | H0 | Planned; separate commits |
+| H1d | Failed CLI advisor accounting and useful CI receipts | H0 | Implemented; fresh review passed |
 | H2a | Versioned, host-owned verification/evidence receipts | H0 | Private command/lifecycle foundation accepted; predicates/consumer H2b |
 | H2b | Protected six-task evaluation adapter and offline falsification | H2a | Planned |
 | H2c | One bounded baseline/candidate live pilot | H2b and resolved pilot budget/configuration | Planned; no trial started |
-| H3 | Portable durable Bot-session parity for CLI/native consumers | H0; portability decision below | Planned |
+| H3 | Portable durable Bot-session parity for CLI/native consumers | H0; portability decision below | Implemented; fresh review passed, physical pairing pending |
 | H4a | Packaged long-chat and idle performance baselines | H0 | Planned |
 | H4b | Measured transcript rendering improvement | H4a | Planned |
 | H5a | Versioned workflow evidence and lesson candidates | H2a, H2b | Planned |
@@ -241,3 +241,7 @@ H1b: bounded digest state at the validated tool boundary; independent failures d
 H2a: private versioned receipt store, branded command observations and production effect lifecycle integration. Commands establish only command success, never task acceptance. Fresh review found/fixed queued deletion resurrection, durable outbox recovery and legacy identity compatibility. 122 focused receipt/effect/output/harness tests pass. No UI/wire addition. Protected task/artifact producers and consumption remain H2b, not claimed here.
 
 H1c: global ranked corpus bounded at 4,096 tools, metadata validation at 16,384 admitted entries/8 MiB (over-budget fails explicitly); namespace filtering precedes ranking cap, and paged namespace directory exposes late services. Existing schema/result limits remain. Fresh review corrected byte-boundary cursor loss, directory offsets and complete envelope accounting. 42 discovery/codemode tests pass. Exploratory 15-search median timings for ~2KB descriptions: 64 tools 2.3ms, 512 tools 17.4ms, 1,536 tools 50.4ms (max60ms); these are local microbenchmarks, not packaged response latency. No authority or per-server MCP limit change.
+
+H1d: attempt-keyed CLI accounting preserves unknown tokens/cost and cancellation, with atomic idempotency markers and failed-persistence retry semantics. Safe Playwright failure receipts contain hashed repository test identity and bounded categories/timing, never assertion content or local paths. Fresh final review passed; 17 advisor, 3 reporter, 66 CI-policy and both 120-test CLI suites pass.
+
+H3: explicit preserving migration opts the CLI into the shared durable Bot-session core; current authority and durable SQLite context are reloaded at tool dispatch. Unsupported capabilities remain withheld. Fresh final review passed after correcting stale subagent/image context. macOS/Linux CLI 120/120 each, desktop Bot runtime216/216 and Remote sessions/routines78/78; focused iOS simulator and Android unit BotSession/RemoteClient suites passed. Physical pairing/background acceptance is pending. Pi additions match1.3.0; no upgrade of active pins.

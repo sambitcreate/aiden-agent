@@ -23,5 +23,7 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   serve [--remote] [--daemon] | stop | status   Scheduling, Telegram, and Remote daemon
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
   bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access
+  bots enable-durable                       Back up legacy Bot history; restart daemon to switch
+  bots session|send|resume|dismiss|stop|delete|approvals|approve
   reset                                     Reset first-run onboarding only
 `;

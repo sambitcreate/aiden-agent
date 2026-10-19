@@ -136,7 +136,7 @@ jobs:
         run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
       - name: Upload sanitized E2E failure receipt
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -701,7 +701,7 @@ jobs:
 
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() && matrix.arch == 'x64' }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
 
       - name: Upload sanitized E2E failure receipt
         if: ${{ failure() && matrix.arch == 'x64' }}

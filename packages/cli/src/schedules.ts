@@ -1,3 +1,4 @@
+import { createBotRoutineExecutor, type BotRoutineExecutorPorts } from "../../../main/services/scheduled-bot-routines.js";
 import { scheduledMcpServerBinding } from "../../../main/services/schedule-mcp-binding.js";
 import { storeFor } from "./mcp.ts";
 import { runScheduledInference } from "./scheduled-inference.ts";
@@ -24,17 +25,23 @@ async function providerFingerprint(agentDir: string, providerId?: string, modelI
 export function createCliScheduler(agentDir: string) {
   const store = createScheduleStore(new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []), new JsonStore<unknown[]>(join(agentDir, "schedule-runs.json"), []));
   const active = new Map<string, AbortController>();
+  let botPorts: BotRoutineExecutorPorts | undefined;
+  const routineExecutor = createBotRoutineExecutor({ store, ports: () => {
+    if (!botPorts) throw new Error("Durable Bot routines are unavailable on this host.");
+    return botPorts;
+  }, notify: () => {}, broadcast: () => {} });
   const service = createScheduleServiceCore({ store,
     globallyEnabled: async () => readJson<{ scheduledTasksEnabled?: boolean }>(join(agentDir, "aiden.json"), {}).scheduledTasksEnabled !== false,
     broadcast: () => {}, warn: (message) => process.stderr.write(message + "\n"), error: (message, error) => process.stderr.write(`${message} ${String(error)}\n`),
     execution: {
       cancel(id) { const controller = active.get(id); controller?.abort(); return !!controller; },
       cancelAll() { for (const controller of active.values()) controller.abort(); },
-      async run(task): Promise<ScheduledRun> {
+      async run(task, runId, trigger): Promise<ScheduledRun> {
         const startedAt = Date.now();
         const controller = new AbortController(); active.set(task.id, controller);
         let output = "", error: string | undefined;
         try {
+          if (task.botId) return await routineExecutor.run(task, { runId, trigger, signal: controller.signal });
           const workspace = (await workspaceStore(agentDir).load()).find((entry) => entry.id === task.workspaceId);
           if (!workspace) throw new Error("Register and select a workspace before running a schedule.");
           if (accessFor(agentDir, workspace.folderPath) !== "full") throw new Error("Unattended work requires the workspace's explicit full access tier.");
@@ -59,6 +66,7 @@ export function createCliScheduler(agentDir: string) {
   });
   async function saveInput(input: ScheduledTaskInput, options?: { expectedUpdatedAt?: number; signal?: AbortSignal }) {
     input = structuredClone(input);
+    if (input.botId) return service.save(input, options);
         if (input.mode === "script" && input.permission !== "full") throw new Error("Script schedules require explicit full permission.");
         const servers = await storeFor(agentDir).load();
         input.mcpServerBindings = (input.mcpServerIds ?? []).map((id) => {
@@ -125,7 +133,7 @@ export function createCliScheduler(agentDir: string) {
       default: throw new Error("Usage: schedule list | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>");
     }
   }
-  return { store, service: { ...service, save: saveInput }, command };
+  return { store, service: { ...service, save: saveInput }, command, setBotPorts(ports: BotRoutineExecutorPorts) { botPorts = ports; } };
 }
 
 export { daemonSocket, remoteDaemonCommand } from "./daemon-control.ts";

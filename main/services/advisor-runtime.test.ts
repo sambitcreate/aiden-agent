@@ -618,3 +618,24 @@ test("Pi-native reviewer auth is preflighted at dispatch and fails closed when a
   assert.equal(result.details?.status, "failed");
   assert.equal(unauthenticated.events.length, 0);
 });
+
+test("unreported usage receives the dispatched attempt identity and persistence failure leaves it unmarked", async () => {
+  const value = fixture();
+  let preparedId: string | undefined;
+  let recorded: { status: string; attemptId: string } | undefined;
+  const prepare = value.dependencies.attempts.prepare;
+  value.dependencies.attempts.prepare = async (attemptId, providerId, modelId) => {
+    preparedId = attemptId;
+    return prepare(attemptId, providerId, modelId);
+  };
+  value.runtime.streams.streamSimple = () => { throw new Error("No response"); };
+  value.dependencies.recordUnreportedUsage = async (_runtime, status, attemptId) => {
+    recorded = { status, attemptId };
+    throw new Error("Persistence unavailable");
+  };
+  const extension = await value.advisor.extensionForGeneration(input());
+  await extension!.tools![0].execute("failed-call", { providerId: candidate.providerId, modelId: candidate.modelId });
+  assert.deepEqual(recorded, { status: "failed", attemptId: preparedId });
+  assert.ok(preparedId);
+  assert.equal(value.events.includes("usage_recorded"), false);
+});
