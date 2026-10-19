@@ -2398,6 +2398,7 @@ export const llmClient = {
         });
         releaseGenerationSkillReservation(initialization);
         releaseGenerationBotAuthority(initialization);
+        approvedWorkspaceArtifactCalls.delete(streamId);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
@@ -2413,10 +2414,10 @@ export const llmClient = {
       await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
@@ -4203,6 +4204,7 @@ export const llmClient = {
         });
         releaseGenerationSkillReservation(initialization);
         releaseGenerationBotAuthority(initialization);
+        approvedWorkspaceArtifactCalls.delete(streamId);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
@@ -4218,10 +4220,10 @@ export const llmClient = {
       await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
@@ -4232,10 +4234,10 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
@@ -4440,10 +4442,10 @@ export const llmClient = {
       });
       releaseGenerationSkillReservation(activeGeneration);
       releaseGenerationBotAuthority(activeGeneration);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(
         streamId,
@@ -4728,10 +4730,10 @@ export const llmClient = {
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
+          approvedWorkspaceArtifactCalls.delete(streamId);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
-          approvedWorkspaceArtifactCalls.delete(streamId);
           questionnaires.releaseStream(streamId);
           broadcastChatSettled(
             streamId,

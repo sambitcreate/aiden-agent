@@ -38,7 +38,6 @@ import { workspaceIntakeService } from "../services/workspace-intake-main.js";
 import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
 import type { WorkspaceEnvironmentDirectory } from "../services/workspace-environment-application-service.js";
 import { workspaceWorktreeApplicationService } from "../services/workspace-worktree-application-service-main.js";
-import { workspaceArtifactStore } from "../services/workspace-artifacts/main.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -203,13 +202,9 @@ export function registerWorkspaceHandlers(): void {
     workspaceApplicationService.update(asString(id, "id"), patch),
   );
 
-  ipcMain.handle("workspaces:remove", async (_event, id: unknown) => {
-    const workspaceId = asString(id, "id");
-    const result = await workspaceApplicationService.remove(workspaceId);
-    // A removed workspace's artifacts can never be shown again.
-    await workspaceArtifactStore.removeWorkspace(workspaceId).catch(() => undefined);
-    return result;
-  });
+  ipcMain.handle("workspaces:remove", async (_event, id: unknown) =>
+    workspaceApplicationService.remove(asString(id, "id")),
+  );
 
   ipcMain.handle("workspaces:gitInfo", async (event, workspaceId: unknown) =>
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
