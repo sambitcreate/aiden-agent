@@ -132,6 +132,8 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "sh -c {{x}}",
     "xargs {{x}}",
     "if {{x}}; then echo ok; fi",
+    "FOO=1 {{x}}",
+    "if true; then {{x}}; fi",
     "eval echo {{x}}",
     "bash -lc {{x}}",
     "sudo -u me {{x}}",
@@ -146,7 +148,14 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "echo $AIDEN_ARG_1 {{x}}",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
-  for (const command of ["[[ {{x}} -gt 0 ]] && echo big", "(( {{x}} > 0 )) && echo big", "let {{x}}", "f() { local {{x}}; }; f"]) {
+  for (const command of [
+    "[[ {{x}} -gt 0 ]] && echo big",
+    "(( {{x}} > 0 )) && echo big",
+    "let {{x}}",
+    "f() { local {{x}}; }; f",
+    "seed=1 let {{x}}",
+    "if true; then let {{x}}; fi",
+  ]) {
     assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /arithmetic/u, command);
     assert.equal(parseWorkspaceArtifactActions(actions(command, "number")).length, 1, command);
   }
@@ -162,9 +171,49 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "echo '((' {{x}}",
     'echo "$(git rev-parse HEAD)" {{x}}',
     "sh -c 'printf %s \"$1\"' sh {{x}}",
+    // Words that merely spell a command name are data, not the command.
+    "printf '%s\\n' command | grep -F command -- {{x}}",
+    "printf '%s\\n' command is {{x}}",
+    "grep -c {{x}} notes.txt",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
+});
+
+test("no template the parser accepts lets a text value run code in bash", () => {
+  const marker = path.join(os.tmpdir(), `aiden-artifact-arith-${process.pid}`);
+  const value = `a[$(touch ${marker})0]`;
+  fs.rmSync(marker, { force: true });
+  const candidates = [
+    "[[ {{x}} -gt 0 ]]",
+    "(( {{x}} > 0 ))",
+    "let {{x}}",
+    "seed=1 let {{x}}",
+    "if true; then let {{x}}; fi",
+    "f() { local {{x}}; }; f",
+    "declare -i n; n=1; declare {{x}}",
+    "eval echo {{x}}",
+    "printf '%s' {{x}} # [[ later",
+    "[ {{x}} -gt 0 ]",
+    "test {{x}} -eq 1",
+    "printf '%s' {{x}}",
+  ];
+  let accepted = 0;
+  for (const template of candidates) {
+    let action: WorkspaceArtifactActionV1;
+    try {
+      action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command: template, params: [{ name: "x", type: "string" }] }])[0]!;
+    } catch {
+      continue;
+    }
+    accepted += 1;
+    const { command } = resolveWorkspaceArtifactCommand(action, [value]);
+    for (const [shell, args] of [["/bin/sh", ["-c"]], ["bash", ["--posix", "-c"]], ["bash", ["-c"]]] as const) {
+      spawnSync(shell, [...args, command], { encoding: "utf8" });
+      assert.equal(fs.existsSync(marker), false, `${template} ran the value under ${shell} ${args.join(" ")}`);
+    }
+  }
+  assert.ok(accepted >= 3, "the oracle should exercise accepted templates too");
 });
 
 test("filled-in values are checked against their declared types", () => {
