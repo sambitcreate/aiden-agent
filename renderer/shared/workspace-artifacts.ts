@@ -526,6 +526,8 @@ export function resolveWorkspaceArtifactCommand(
     if (param.type === "number") {
       const number = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() ? Number(raw) : Number.NaN;
       if (!Number.isFinite(number)) invalid(`${action.label} needs a number for ${param.name}.`);
+      // "-1" would reach the command as an option, or as "every process" to kill.
+      if (number < 0) invalid(`${action.label}: ${param.name} cannot be negative.`);
       return String(number);
     }
     if (typeof raw !== "string" && typeof raw !== "number") invalid(`${action.label} needs text for ${param.name}.`);

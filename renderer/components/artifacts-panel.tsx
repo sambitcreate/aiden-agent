@@ -32,7 +32,11 @@ import {
   workspaceArtifactPageAccess,
   workspaceArtifactProblems,
 } from "../lib/workspace-artifacts-view";
-import { workspaceArtifactCommandList, type WorkspaceArtifactView } from "../shared/workspace-artifacts";
+import {
+  resolveWorkspaceArtifactCommand,
+  workspaceArtifactCommandList,
+  type WorkspaceArtifactView,
+} from "../shared/workspace-artifacts";
 
 /** Page state is saved this long after the last change, like an inline visual's. */
 const STATE_SAVE_DELAY_MS = 400;
@@ -48,7 +52,7 @@ export interface ArtifactsPanelProps {
   onSelect: (artifactId: string) => void;
   /** Stages a change request for this page in the active chat's composer. */
   onAskAiden: (view: WorkspaceArtifactView) => void;
-  /** Follow-ups and other page actions that leave the page. */
+  /** Follow-ups and composer text the page hands to the chat; buttons (`run`) are handled here. */
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
 }
 
@@ -125,6 +129,8 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
     }
   }, [artifactId, canRun, workspace.id]);
   React.useEffect(() => {
+    // A refresh still running for the previous page must not report into this one.
+    request.current += 1;
     setError(null);
     setRefreshing(false);
   }, [artifactId]);
@@ -175,6 +181,15 @@ function ArtifactView({
 }) {
   const refresh = useArtifactRefresh(workspace, view, active);
   const pageRef = React.useRef<HTMLDivElement | null>(null);
+  const buttons = useArtifactButtons(workspace, refresh.refresh);
+  const { press } = buttons;
+  const handleAction = React.useCallback(
+    (target: WorkspaceArtifactView, action: AidenUiAction) => {
+      if (action.kind === "run") press(target, action.name, action.args);
+      else onAction?.(target, action);
+    },
+    [onAction, press],
+  );
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ArtifactsHeader
@@ -204,10 +219,94 @@ function ArtifactView({
           </Text>
         ) : null}
         <ArtifactAccessNotice key={view.artifact.id} workspace={workspace} view={view} returnFocus={() => pageRef.current} />
-        <ArtifactPage workspaceId={workspace.id} view={view} onAction={onAction} onStateSaved={onStateSaved} />
+        <ArtifactPage workspaceId={workspace.id} view={view} onAction={handleAction} onStateSaved={onStateSaved} />
+        {buttons.dialog}
       </div>
     </div>
   );
+}
+
+interface PendingButton {
+  artifactId: string;
+  digest: string;
+  name: string;
+  label: string;
+  args: unknown[];
+  preview: string;
+}
+
+/**
+ * A page's buttons run the command the page declared, filled with the values
+ * it passes. Under Ask the person confirms each press with the exact command;
+ * under Full a press runs at once, as a chat's commands would.
+ */
+function useArtifactButtons(workspace: Workspace, refresh: () => Promise<void>) {
+  const [pending, setPending] = React.useState<PendingButton | null>(null);
+  const [running, setRunning] = React.useState(false);
+  const run = React.useCallback(
+    async (button: PendingButton) => {
+      setRunning(true);
+      try {
+        const result = await workspaceArtifactsApi.run(workspace.id, button.artifactId, button.name, button.args, button.digest);
+        if (result.ok) toast.success(button.label, result.output ? { description: result.output } : undefined);
+        else toast.error(`${button.label} failed`, { description: result.output });
+        void refresh();
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : `${button.label} could not run.`);
+      } finally {
+        setRunning(false);
+        setPending(null);
+      }
+    },
+    [refresh, workspace.id],
+  );
+  const press = React.useCallback(
+    (view: WorkspaceArtifactView, name: string, args: unknown[]) => {
+      if (running) return;
+      const action = view.artifact.actions.find((entry) => entry.name === name);
+      if (!action) {
+        toast.error(`This page has no button named “${name}”. Ask Aiden to change it.`);
+        return;
+      }
+      const access = workspaceArtifactPageAccess(view, workspace);
+      if (access === "blocked") {
+        toast.error("Workspace access is off, so this page’s buttons can’t run.");
+        return;
+      }
+      if (access === "needs-approval") {
+        toast.error("Allow this page’s commands first.");
+        return;
+      }
+      let preview: string;
+      try {
+        preview = resolveWorkspaceArtifactCommand(action, args).preview;
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : `${action.label} could not run.`);
+        return;
+      }
+      const button = { artifactId: view.artifact.id, digest: view.digest, name, label: action.label, args, preview };
+      if (workspace.permission === "ask") setPending(button);
+      else void run(button);
+    },
+    [run, running, workspace],
+  );
+  const dialog = (
+    <Dialog
+      open={pending !== null}
+      onOpenChange={(open) => {
+        if (!open && !running) setPending(null);
+      }}
+      title={pending ? `${pending.label}?` : ""}
+      description={`This runs in ${workspace.name}:`}
+      confirmLabel="Run"
+      busy={running}
+      size="large"
+      onConfirm={() => (pending ? run(pending) : undefined)}
+    >
+      <pre className="m-0 whitespace-pre-wrap break-words rounded-card bg-well p-3 font-mono text-small">{pending?.preview}</pre>
+    </Dialog>
+  );
+  return { press, dialog };
 }
 
 function ArtifactsSkeleton() {

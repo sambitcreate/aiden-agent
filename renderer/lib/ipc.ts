@@ -1209,8 +1209,8 @@ export const workspaceArtifactsApi = {
   refresh: (workspaceId: string, artifactId: string) =>
     invoke<Record<string, WorkspaceArtifactSourceResultV1>>("workspaces:artifacts:refresh", workspaceId, artifactId),
   /** Runs one of the page's buttons; main fills in the saved command. */
-  run: (workspaceId: string, artifactId: string, action: string, args: unknown[]) =>
-    invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args),
+  run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
+    invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };

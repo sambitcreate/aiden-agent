@@ -27,7 +27,7 @@ async function setup(t: test.TestContext) {
         return {};
       },
       runAction: async (...args) => {
-        ran.push(["run", ...args.slice(0, 5)]);
+        ran.push(["run", ...args.slice(0, 5), args[6]]);
         return { ok: true, output: "" };
       },
     },
@@ -85,18 +85,21 @@ test("rename and delete announce the change; page state saves quietly", async (t
   assert.deepEqual(events.map((event) => event.reason), ["updated", "deleted"]);
 });
 
+const DIGEST = "c".repeat(64);
+
 test("refresh and buttons run in the resolved workspace folder, and only with well-formed input", async (t) => {
   const { invoke, ran } = await setup(t);
   await invoke(WORKSPACE_ARTIFACT_CHANNELS.refresh, "ws1", "art1");
-  await invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", [12]);
+  await invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", [12], DIGEST);
   const context = { folderPath: "/work/ws1", permission: "full" };
   assert.deepEqual(ran, [
     ["refresh", "ws1", "art1", context],
-    ["run", "ws1", "art1", "merge", [12], context],
+    ["run", "ws1", "art1", "merge", [12], context, DIGEST],
   ]);
-  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "rm -rf", []), /Invalid button/u);
-  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", "12"), /values/u);
-  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", Array(9).fill(1)), /values/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "rm -rf", [], DIGEST), /Invalid button/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", "12", DIGEST), /values/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", Array(9).fill(1), DIGEST), /values/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", [12]), /request/u);
   await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.refresh, "ws-gone", "art1"), /no longer exists/u);
   assert.equal(ran.length, 2);
 });

@@ -102,13 +102,14 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     );
   });
 
-  handle(WORKSPACE_ARTIFACT_CHANNELS.run, async (event, workspaceId, artifactId, actionName, args) => {
+  handle(WORKSPACE_ARTIFACT_CHANNELS.run, async (event, workspaceId, artifactId, actionName, args, digest) => {
     const workspace = await existingWorkspace(workspaceId);
     const id = asArtifactId(artifactId);
     if (!isWorkspaceArtifactName(actionName)) throw new Error("Invalid button.");
     if (!Array.isArray(args) || args.length > WORKSPACE_ARTIFACT_LIMITS.params) throw new Error("Invalid button values.");
+    if (typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest)) throw new Error("Invalid button request.");
     return dependencies.runInWorkspace(event, workspace, (context, signal) =>
-      dependencies.runner.runAction(workspace, id, actionName, args, context, signal),
+      dependencies.runner.runAction(workspace, id, actionName, args, context, signal, digest),
     );
   });
 }

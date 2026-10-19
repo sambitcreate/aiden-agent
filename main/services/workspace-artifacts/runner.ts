@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import {
   parseWorkspaceArtifactOutput,
   resolveWorkspaceArtifactCommand,
@@ -56,8 +57,57 @@ function failure(result: BoundedShellCommandResult): string {
   return detail ? `${reason} ${detail}` : reason;
 }
 
+type SourceResults = Record<string, WorkspaceArtifactSourceResultV1>;
+
+/** One refresh run, shared by every caller that asked for the same commands under the same access. */
+interface SharedRefresh {
+  /** Digest, permission and folder the run was started with. */
+  key: string;
+  promise: Promise<SourceResults>;
+  /** Aborts the run once every caller has left. */
+  controller: AbortController;
+  callers: number;
+}
+
+const FOLDER_UNAVAILABLE = "The workspace folder is unavailable.";
+
+/** The folder as it is now, so a moved or swapped folder never runs anything. */
+async function verifiedFolder(folderPath: string): Promise<string> {
+  try {
+    const real = await fs.realpath(folderPath);
+    if ((await fs.stat(real)).isDirectory()) return real;
+  } catch {
+    // Reported below.
+  }
+  throw new Error(FOLDER_UNAVAILABLE);
+}
+
+function withDeadline<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+/** The workspace file reader speaks about editing; say what it means for a page. */
+function fileError(file: string, error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOENT") return `There is no file at ${file}.`;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/too large|too many lines/iu.test(message)) return `${file} is larger than an artifact can read.`;
+  if (/binary|not valid UTF-8/iu.test(message)) return `${file} is not a text file.`;
+  return message;
+}
+
+function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): SourceResults {
+  const at = Date.now();
+  return Object.fromEntries(sources.map((source) => [source.name, { status: "error", at, error: "Cancelled." } as const]));
+}
+
 export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRunnerDependencies) {
-  const inFlight = new Map<string, Promise<Record<string, WorkspaceArtifactSourceResultV1>>>();
+  const inFlight = new Map<string, SharedRefresh>();
 
   async function runSource(
     source: WorkspaceArtifactSourceV1,
@@ -73,7 +123,18 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     let text: string;
     try {
       if (source.kind === "file") {
-        text = await dependencies.readFile(root, source.file, signal);
+        try {
+          text = await withDeadline(
+            dependencies.readFile(root, source.file, signal),
+            WORKSPACE_ARTIFACT_LIMITS.sourceTimeoutMs,
+            `Reading ${source.file} timed out.`,
+          );
+        } catch (error) {
+          return { status: "error", at, error: clip(fileError(source.file, error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
+        }
+        if (Buffer.byteLength(text, "utf8") > WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes) {
+          return { status: "error", at, error: `${source.file} is larger than an artifact can read.` };
+        }
       } else {
         const result = await dependencies.runShell({
           command: source.command,
@@ -101,7 +162,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     artifact: Pick<WorkspaceArtifactV1, "sources" | "actions" | "approvedDigest">,
     context: WorkspaceArtifactRunContext,
     signal: AbortSignal | undefined,
-  ): Promise<Record<string, WorkspaceArtifactSourceResultV1>> {
+  ): Promise<SourceResults> {
     const approved = artifact.approvedDigest === workspaceArtifactDigest(artifact.sources, artifact.actions);
     const entries = await Promise.all(
       artifact.sources.map(async (source) => [source.name, await runSource(source, approved, context, signal)] as const),
@@ -111,31 +172,77 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
 
   /**
    * Re-reads an artifact's sources, saves the snapshot and tells every
-   * window. A refresh already running for the same artifact is shared.
+   * window. A run already going for the same commands under the same access
+   * is shared; a caller that cancels leaves it, and the run stops only once
+   * every caller has left.
    */
-  function refresh(
+  async function refresh(
     workspaceId: string,
     artifactId: string,
     context: WorkspaceArtifactRunContext,
     signal?: AbortSignal,
-  ): Promise<Record<string, WorkspaceArtifactSourceResultV1>> {
-    const key = `${workspaceId}:${artifactId}`;
-    const running = inFlight.get(key);
-    if (running) return running;
-    const work = (async () => {
-      const view = await dependencies.store.get(workspaceId, artifactId);
-      if (!view) throw new Error("No artifact with that id exists in this workspace.");
-      const results = await runSources(view.artifact, context, signal);
-      if (signal?.aborted) return results;
-      // Save against the artifact as it is now: a page updated meanwhile keeps only its own sources.
-      const current = (await dependencies.store.get(workspaceId, artifactId))?.artifact;
-      if (!current) return results;
-      await dependencies.store.saveSnapshot(workspaceId, current, results);
-      dependencies.notify({ workspaceId, artifactId, reason: "refreshed" });
-      return results;
-    })().finally(() => inFlight.delete(key));
-    inFlight.set(key, work);
-    return work;
+  ): Promise<SourceResults> {
+    const view = await dependencies.store.get(workspaceId, artifactId);
+    if (!view) throw new Error("No artifact with that id exists in this workspace.");
+    if (signal?.aborted) return cancelledResults(view.artifact.sources);
+    const id = `${workspaceId}:${artifactId}`;
+    const key = `${view.digest}\0${context.permission}\0${context.folderPath ?? ""}`;
+    let shared = inFlight.get(id);
+    if (!shared || shared.key !== key || shared.controller.signal.aborted) {
+      const controller = new AbortController();
+      const entry: SharedRefresh = { key, controller, callers: 0, promise: Promise.resolve({}) };
+      entry.promise = (async () => {
+        let results: SourceResults;
+        try {
+          const folderPath = context.folderPath === undefined ? undefined : await verifiedFolder(context.folderPath);
+          results = await runSources(view.artifact, { ...context, folderPath }, controller.signal);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : FOLDER_UNAVAILABLE;
+          const at = Date.now();
+          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: message } as const]));
+        }
+        if (controller.signal.aborted) return results;
+        // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
+        const current = await dependencies.store.get(workspaceId, artifactId);
+        if (!current || current.digest !== view.digest) return results;
+        await dependencies.store.saveSnapshot(workspaceId, current.artifact, results);
+        dependencies.notify({ workspaceId, artifactId, reason: "refreshed" });
+        return results;
+      })().finally(() => {
+        if (inFlight.get(id) === entry) inFlight.delete(id);
+      });
+      inFlight.set(id, entry);
+      shared = entry;
+    }
+    return join(shared, view.artifact.sources, signal);
+  }
+
+  function join(shared: SharedRefresh, sources: readonly WorkspaceArtifactSourceV1[], signal: AbortSignal | undefined) {
+    shared.callers += 1;
+    return new Promise<SourceResults>((resolve, reject) => {
+      let left = false;
+      const leave = () => {
+        if (left) return false;
+        left = true;
+        signal?.removeEventListener("abort", onAbort);
+        shared.callers -= 1;
+        return true;
+      };
+      const onAbort = () => {
+        if (!leave()) return;
+        if (shared.callers === 0) shared.controller.abort();
+        resolve(cancelledResults(sources));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      shared.promise.then(
+        (results) => {
+          if (leave()) resolve(results);
+        },
+        (error: unknown) => {
+          if (leave()) reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
   }
 
   /**
@@ -149,9 +256,14 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     args: readonly unknown[],
     context: WorkspaceArtifactRunContext,
     signal?: AbortSignal,
+    /** The page's command digest when the person pressed the button; a page changed since then does not run. */
+    expectedDigest?: string,
   ): Promise<WorkspaceArtifactActionResult> {
     const view = await dependencies.store.get(workspaceId, artifactId);
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
+    if (expectedDigest !== undefined && expectedDigest !== view.digest) {
+      throw new Error("This page changed after you pressed the button. Try it again.");
+    }
     const action = view.artifact.actions.find((entry) => entry.name === actionName);
     if (!action) throw new Error(`This page has no button named "${actionName}".`);
     const approved = view.artifact.approvedDigest === view.digest;
@@ -164,9 +276,10 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     if (access === "blocked") throw new Error("Workspace access is off, so this page’s buttons can’t run.");
     if (access === "needs-approval") throw new Error("Allow this page’s commands first.");
     const { command } = resolveWorkspaceArtifactCommand(action, args);
+    const cwd = await verifiedFolder(context.folderPath!);
     const result = await dependencies.runShell({
       command,
-      cwd: context.folderPath!,
+      cwd,
       env: dependencies.env(),
       timeoutMs: WORKSPACE_ARTIFACT_LIMITS.actionTimeoutMs,
       maxOutputBytes: WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes,

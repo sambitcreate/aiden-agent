@@ -1063,7 +1063,8 @@
         "renderer/lib/workspace-menu.test.ts",
         "renderer/lib/draft-workspace-menu.test.ts",
         "renderer/shared/workspace-artifacts.test.ts",
-        "renderer/components/artifacts-panel.test.tsx"
+        "renderer/components/artifacts-panel.test.tsx",
+        "renderer/lib/chat-prompt-bridge.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",

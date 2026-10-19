@@ -11,7 +11,8 @@ import { ArtifactsPanel } from "./artifacts-panel";
 import { useWorkspaceArtifacts, type WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
 import { revealsWorkspaceArtifact, workspaceArtifactChangeRequest } from "../lib/workspace-artifacts-view";
 import { stageComposerText } from "../lib/composer-draft-store";
-import type { WorkspaceArtifactsChangedEvent } from "../shared/workspace-artifacts";
+import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../shared/workspace-artifacts";
+import { sendPromptToChat } from "../lib/chat-prompt-bridge";
 import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
 import type { BrowserState } from "../shared/browser";
 import { acceptBrowserState } from "../lib/browser-ui-state";
@@ -1446,7 +1447,13 @@ function EnvironmentPanelSurface({
     }
   }, [browserFocusRequest, browser, panel.tab, presented]);
 
-  const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
+  /** The chat beside the Artifacts tab, when it belongs to the page's workspace. */
+  const artifactChat = (view: WorkspaceArtifactView): string | null => {
+    const chatId = panel.activeChat.workspaceId === view.artifact.workspaceId ? panel.activeChat.chatId : null;
+    if (!chatId) toast.error("Open a chat in this workspace first.");
+    return chatId;
+  };
+    const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
     "new-tab": () => (
       <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={Boolean(active) && panel.artifacts.workspaceId === active?.id && panel.artifacts.views.length > 0} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
     ),
@@ -1459,12 +1466,15 @@ function EnvironmentPanelSurface({
         selectedId={panel.selectedArtifactId}
         onSelect={panel.selectArtifact}
         onAskAiden={(view) => {
-          const chatId = panel.activeChat.workspaceId === view.artifact.workspaceId ? panel.activeChat.chatId : null;
-          if (!chatId) {
-            toast.error("Open a chat in this workspace to ask Aiden.");
-            return;
-          }
-          stageComposerText(chatId, workspaceArtifactChangeRequest(view));
+          const chatId = artifactChat(view);
+          if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view));
+        }}
+        onAction={(view, action) => {
+          if (action.kind !== "send" && action.kind !== "compose") return;
+          const chatId = artifactChat(view);
+          if (!chatId) return;
+          // A confirmed follow-up sends through the chat's own path; compose only fills its composer.
+          if (action.kind === "compose" || !sendPromptToChat(chatId, action.text)) stageComposerText(chatId, action.text);
         }}
       />
     ),

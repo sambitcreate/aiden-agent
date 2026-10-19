@@ -135,3 +135,83 @@ test("buttons follow the workspace's access and only exist if the page declared 
   const failed = await runner.runAction("ws1", "art1", "note", ["-rf"], context("full")).catch((error: Error) => error);
   assert.match(String(failed), /cannot start with "-"/u);
 });
+
+test("a button pressed on an older version of the page does not run the newer command", async (t) => {
+  const { runner, store, commands, context } = await setup(t);
+  const before = (await store.get("ws1", "art1"))!;
+  await store.replace("ws1", "art1", {
+    title: "PRs",
+    visual: before.artifact.visual,
+    sources: before.artifact.sources,
+    actions: [{ ...ECHO, command: "printf '%s' {{text}} > other.txt" }],
+    refresh: before.artifact.refresh,
+  });
+  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), undefined, before.digest), /changed/u);
+  assert.deepEqual(commands, []);
+});
+
+async function until(check: () => boolean) {
+  for (let tries = 0; !check(); tries += 1) {
+    if (tries > 200) throw new Error("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test("a refresh asked for after the page's commands changed reads the new commands, and the old run saves nothing", async (t) => {
+  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: `sleep 0.3; printf '"OLD"'`, parse: "json" };
+  const { runner, store, commands, context } = await setup(t, { sources: [slow] });
+  const old = runner.refresh("ws1", "art1", context("full"));
+  await until(() => commands.length === 1);
+  const artifact = (await store.get("ws1", "art1"))!.artifact;
+  await store.replace("ws1", "art1", { title: "PRs", visual: artifact.visual, sources: [{ ...slow, command: `printf '"NEW"'` }], actions: [ECHO], refresh: artifact.refresh });
+  const fresh = await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(fresh.v!.dataJson, '"NEW"');
+  assert.equal((await old).v!.dataJson, '"OLD"');
+  assert.equal((await store.get("ws1", "art1"))!.snapshot!.sources.v!.dataJson, '"NEW"');
+});
+
+test("one caller cancelling leaves a shared refresh running for the others; the last one out stops it", async (t) => {
+  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.3; printf 1", parse: "json" };
+  const { runner, store, commands, context } = await setup(t, { sources: [slow] });
+  const turn = new AbortController();
+  const fromTurn = runner.refresh("ws1", "art1", context("full"), turn.signal);
+  const fromTab = runner.refresh("ws1", "art1", context("full"));
+  await until(() => commands.length === 1);
+  turn.abort();
+  assert.equal((await fromTurn).v!.error, "Cancelled.");
+  assert.equal((await fromTab).v!.dataJson, "1");
+  assert.equal((await store.get("ws1", "art1"))!.snapshot!.sources.v!.dataJson, "1");
+  assert.equal(commands.length, 1);
+
+  const alone = new AbortController();
+  const started = Date.now();
+  const cancelled = runner.refresh("ws1", "art1", context("full"), alone.signal);
+  await until(() => commands.length === 2);
+  alone.abort();
+  assert.equal((await cancelled).v!.error, "Cancelled.");
+  // The abandoned run is stopped rather than left to finish and save.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal((await store.get("ws1", "art1"))!.snapshot!.sources.v!.at < started, true);
+});
+
+test("a folder that is gone runs nothing and says so", async (t) => {
+  const { runner, folder, commands, context } = await setup(t);
+  await fs.rm(folder, { recursive: true });
+  const results = await runner.refresh("ws1", "art1", context("full"));
+  assert.deepEqual([results.pulls!.error, results.todo!.error], ["The workspace folder is unavailable.", "The workspace folder is unavailable."]);
+  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full")), /unavailable/u);
+  assert.deepEqual(commands, []);
+});
+
+test("file sources explain problems in terms of the page, within the source size limit", async (t) => {
+  const { runner, folder, context } = await setup(t, {
+    sources: [
+      { name: "missing", kind: "file", file: "nope.md", parse: "text" },
+      { name: "big", kind: "file", file: "big.txt", parse: "text" },
+    ],
+  });
+  await fs.writeFile(path.join(folder, "big.txt"), "x".repeat(300 * 1024));
+  const results = await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(results.missing!.error, "There is no file at nope.md.");
+  assert.equal(results.big!.error, "big.txt is larger than an artifact can read.");
+});

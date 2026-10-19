@@ -108,7 +108,8 @@ test("filled-in values are checked against their declared types", () => {
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["--upload-pack=x", 1]), /cannot start with "-"/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a", 1, "extra"]), /takes 2/u);
   assert.equal(resolveWorkspaceArtifactCommand(merge, ["x", "42"]).preview, "printf '%s|%s' 'x' '42'");
-  assert.equal(resolveWorkspaceArtifactCommand(merge, ["x", -1]).preview, "printf '%s|%s' 'x' '-1'");
+  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", -1]), /cannot be negative/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", "-1"]), /cannot be negative/u);
 });
 
 test("commands and labels reject characters that hide what runs", () => {

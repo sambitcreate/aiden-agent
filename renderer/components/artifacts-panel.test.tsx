@@ -16,7 +16,8 @@ import type { Workspace } from "../lib/types";
 import { useWorkspaceArtifacts, type WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
 import { compileAum } from "../shared/aiden-ui/compile";
 import { AIDEN_UI_CATALOG_VERSION } from "../shared/aiden-ui/types";
-import type { WorkspaceArtifactSourceV1, WorkspaceArtifactView } from "../shared/workspace-artifacts";
+import type { WorkspaceArtifactActionV1, WorkspaceArtifactSourceV1, WorkspaceArtifactView } from "../shared/workspace-artifacts";
+import type { AidenUiAction } from "./aiden-ui/aiden-ui-block";
 
 afterEach(() => {
   cleanup();
@@ -30,10 +31,20 @@ const DIGEST = "a".repeat(64);
 function view(
   id: string,
   title: string,
-  options: { approved?: boolean; sources?: WorkspaceArtifactSourceV1[]; pulls?: unknown; digest?: string; refreshedAt?: number; intervalSeconds?: number } = {},
+  options: {
+    approved?: boolean;
+    sources?: WorkspaceArtifactSourceV1[];
+    actions?: WorkspaceArtifactActionV1[];
+    markup?: string;
+    pulls?: unknown;
+    digest?: string;
+    refreshedAt?: number;
+    intervalSeconds?: number;
+  } = {},
 ): WorkspaceArtifactView {
   const compiled = compileAum(
-    `<Visual title="${title}" state={{tab: "all"}}><Each in={$pulls} as="pr"><Text>#{$pr.number} {$pr.title}</Text></Each><If test={$pulls == null}><Text>Not loaded</Text></If><Text>Tab {$tab}</Text><Button action={setState("tab", "mine")}>Mine</Button></Visual>`,
+    options.markup ??
+      `<Visual title="${title}" state={{tab: "all"}}><Each in={$pulls} as="pr"><Text>#{$pr.number} {$pr.title}</Text></Each><If test={$pulls == null}><Text>Not loaded</Text></If><Text>Tab {$tab}</Text><Button action={setState("tab", "mine")}>Mine</Button></Visual>`,
     { artifactActions: true },
   );
   const digest = options.digest ?? DIGEST;
@@ -55,7 +66,7 @@ function view(
         ...(compiled.state ? { state: compiled.state } : {}),
       },
       sources,
-      actions: [],
+      actions: options.actions ?? [],
       refresh: { onOpen: true, ...(options.intervalSeconds ? { intervalSeconds: options.intervalSeconds } : {}) },
       ...(options.approved ? { approvedDigest: digest } : {}),
       revision: 1,
@@ -352,4 +363,51 @@ test("a failed read leaves the tab open instead of treating the workspace as emp
   await mountProvider();
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.ok(probe().tabs.includes("artifacts"));
+});
+
+const MERGE: WorkspaceArtifactActionV1 = { name: "merge", label: "Merge pull request", command: "gh pr merge {{number}} --squash", params: [{ name: "number", type: "number" }] };
+const BUTTONS = `<Visual title="Open PRs"><Each in={$pulls} as="pr"><Button action={run("merge", $pr.number)}>{"Merge #" + $pr.number}</Button></Each><Button action={compose("Summarize the open PRs")}>Draft</Button><Button action={sendPrompt("Which PR is oldest?")}>Ask</Button></Visual>`;
+
+test("under Ask, a page button shows the exact command and runs only once the person confirms", async () => {
+  const calls = installBotTestIpc({
+    "workspaces:artifacts:run": () => ({ ok: true, output: "Merged #15" }),
+    "workspaces:artifacts:refresh": () => ({}),
+  });
+  renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true, actions: [MERGE], markup: BUTTONS, pulls: [{ number: 12 }, { number: 15 }] })]) });
+  fireEvent.click(screen.getByRole("button", { name: "Merge #15" }));
+  const dialog = await screen.findByRole("dialog");
+  within(dialog).getByText("gh pr merge '15' --squash");
+  assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:run"), false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Run" }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "workspaces:artifacts:run")));
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:run")!.args, [WORKSPACE.id, "art1", "merge", [15], DIGEST]);
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+});
+
+test("with Full access a button runs at once, and chat buttons go to the chat instead of running anything", async () => {
+  const calls = installBotTestIpc({
+    "workspaces:artifacts:run": () => ({ ok: true, output: "" }),
+    "workspaces:artifacts:refresh": () => ({}),
+  });
+  const handed: AidenUiAction[] = [];
+  renderPanel({
+    workspace: { ...WORKSPACE, permission: "full" },
+    onAction: (_view, action) => handed.push(action),
+    artifacts: state([view("art1", "Open PRs", { actions: [MERGE], markup: BUTTONS, pulls: [{ number: 12 }] })]),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Merge #12" }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "workspaces:artifacts:run")));
+  assert.equal(screen.queryByRole("dialog"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Draft" }));
+  assert.deepEqual(handed, [{ kind: "compose", text: "Summarize the open PRs" }]);
+  assert.equal(calls.filter((call) => call.channel === "workspaces:artifacts:run").length, 1);
+});
+
+test("a button whose page is waiting for approval does not run", async () => {
+  const calls = installBotTestIpc();
+  renderPanel({ artifacts: state([view("art1", "Open PRs", { actions: [MERGE], markup: BUTTONS, pulls: [{ number: 12 }] })]) });
+  fireEvent.click(screen.getByRole("button", { name: "Merge #12" }));
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+  assert.equal(screen.queryByRole("dialog", { name: /Merge pull request/u }), null);
+  assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:run"), false);
 });
