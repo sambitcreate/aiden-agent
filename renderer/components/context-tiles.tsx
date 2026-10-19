@@ -89,8 +89,8 @@ export type ContextTile =
 /**
  * Lays the window out as 100 tiles: used tiles per category (largest remainder,
  * so they always add up), then free, then the response reserve at the end.
- * Any used context shows at least one tile; an over-budget projection takes
- * tiles from the reserve before free space runs out.
+ * Any used context or reserve shows at least one tile; an over-budget
+ * projection takes tiles from the reserve once free space runs out.
  */
 export function contextTiles(pressure: ChatContextPressureV1): ContextTile[] {
   const window = pressure.contextWindow;
@@ -100,7 +100,10 @@ export function contextTiles(pressure: ChatContextPressureV1): ContextTile[] {
   const share = (tokens: number) => (tokens / window) * CONTEXT_TILE_COUNT;
   const usedTiles =
     usedTokens > 0 ? Math.min(CONTEXT_TILE_COUNT, Math.max(1, Math.round(share(usedTokens)))) : 0;
-  const reservedTiles = Math.min(CONTEXT_TILE_COUNT - usedTiles, Math.round(share(pressure.reservedTokens)));
+  const reservedTiles = Math.min(
+    CONTEXT_TILE_COUNT - usedTiles,
+    pressure.reservedTokens > 0 ? Math.max(1, Math.round(share(pressure.reservedTokens))) : 0,
+  );
 
   const exact = segments.map((segment) => (segment.tokens / usedTokens) * usedTiles);
   const counts = exact.map(Math.floor);

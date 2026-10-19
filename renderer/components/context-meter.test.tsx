@@ -62,6 +62,7 @@ test("the breakdown announces each label as the term and its token count as the 
       "system + tools",
       "recent work",
       "reserved",
+      "model context",
     ],
   );
   for (const [, value] of pairs) assert.match(value, /\d/u);
@@ -93,6 +94,10 @@ test("context details aggregate durable turn totals once without inventing unava
   assert.match(html, /Reported by 1 of 2 saved assistant turns/);
   assert.match(html, /Total cost<.*Unavailable/);
   assert.doesNotMatch(html, /\$0\.00/);
-  assert.match(html, /42% <span[^>]*>used<\/span>/);
-  assert.match(html, /~40K of 96K usable/);
+  const text = html.replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ");
+  assert.match(text, /42% used/u);
+  assert.match(text, /~40K of 96K usable/u);
+  // 500 of 640 prompt tokens (input 100 + cache read 500 + cache write 40) came from cache.
+  assert.match(text, /78% from cache/u);
 });
+

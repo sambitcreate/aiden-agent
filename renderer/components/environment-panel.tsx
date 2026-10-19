@@ -28,7 +28,7 @@ import {
   useEnvironmentSummary,
   useShowWorkspaceFolder,
 } from "./environment-overview";
-import { ContextBreakdown } from "./context-breakdown";
+import { ContextBreakdown, contextApproaching } from "./context-breakdown";
 import { ContextPips } from "./context-tiles";
 import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
 import { SubagentStatusGroups } from "./subagent-status-groups";
@@ -1583,8 +1583,7 @@ function ContextSummaryMeter({
   compacting: boolean;
 }) {
   const percent = contextPressurePercent(pressure);
-  // Same presentation threshold as the composer ContextMeter; a running compaction is emphasized too.
-  const approaching = compacting || pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
+  const approaching = contextApproaching(pressure, compacting);
   return (
     <>
       <span>{`${percent}%`}</span>

@@ -6,6 +6,7 @@ import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { projectChatContextPressure } from "../../main/services/generation-context.js";
 import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
 import { ContextBreakdown } from "./context-breakdown";
+import { ContextMeter } from "./context-meter";
 import { CONTEXT_TILE_COUNT, ContextPips, contextTiles } from "./context-tiles";
 
 afterEach(cleanup);
@@ -90,6 +91,7 @@ test("the deferred row shows its tokens and is not counted toward the window", (
   assert.ok(deferred);
   assert.ok(within(deferred).getByText("61.4K"));
   assert.ok(within(deferred).getByText("not counted"));
+  assert.match(screen.getByRole("note").textContent ?? "", /Deferred tools load through tool search and aren't counted until used\./u);
 });
 
 test("MCP tools by server starts folded and opens to list each server", () => {
@@ -232,7 +234,7 @@ test("the grid lays the window out as 100 tiles: used first, then free, then the
   assert.equal(kinds.filter((kind) => kind === "reserved").length, 3);
   assert.equal(kinds.lastIndexOf("used") < kinds.indexOf("free"), true);
   assert.equal(kinds.lastIndexOf("free") < kinds.indexOf("reserved"), true);
-  assert.ok(screen.getByText("Each tile is 10K tokens"));
+  assert.ok(screen.getByText("Each tile is 10K tokens, 1% of the 1M window"));
 });
 
 test("used tiles split by category always add up to the used share", () => {
@@ -271,4 +273,17 @@ test("pips light one per 10% of usable context, and at least one once anything i
     return Number(value);
   };
   assert.deepEqual([0, 2, 12, 84, 131].map(lit), [0, 1, 1, 8, 10]);
+});
+
+test("the composer popover warns as soon as its meter does, before compaction is due", () => {
+  render(<ContextMeter pressure={pressure({ percentOfUsableInput: 84 })} />);
+  fireEvent.click(screen.getByRole("button", { name: /^Context usage, 84 percent$/u }));
+  const popover = screen.getByRole("dialog", { name: "Context usage" });
+  assert.match(popover.textContent ?? "", /Approaching the limit/u);
+  assert.doesNotMatch(popover.textContent ?? "", /Context healthy/u);
+});
+
+test("a reserve under half a tile still gets one tile", () => {
+  const kinds = contextTiles(pressure({ reservedTokens: 4_000, inputBudgetTokens: 996_000 })).map((tile) => tile.kind);
+  assert.equal(kinds.filter((kind) => kind === "reserved").length, 1);
 });

@@ -54,8 +54,8 @@ export function recordedChatUsage(chat: Pick<Chat, "messages">) {
 
 function Chip({ children }: React.PropsWithChildren) {
   return (
-    <span className="inline-flex max-w-full items-center truncate rounded-[10px] bg-control px-2.5 py-0.5 text-small text-secondary">
-      {children}
+    <span className="inline-flex max-w-full items-center rounded-control bg-control px-2.5 py-0.5 text-small text-secondary">
+      <span className="truncate">{children}</span>
     </span>
   );
 }
@@ -70,7 +70,7 @@ const USAGE_PARTS = [
 function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }) {
   const reported = usage.turns > 0;
   const token = (value: number) => (reported ? value.toLocaleString() : "Unavailable");
-  const cacheable = usage.cacheRead + usage.input;
+  const cacheable = usage.cacheRead + usage.cacheWrite + usage.input;
   const cachePercent = reported && usage.cacheRead > 0 && cacheable > 0 ? Math.round((usage.cacheRead / cacheable) * 100) : null;
   const barTotal = USAGE_PARTS.reduce((sum, part) => sum + usage[part.key], 0);
   return (
@@ -90,7 +90,7 @@ function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }
           </span>
           <span className="text-regular text-secondary">tokens</span>
           {cachePercent !== null ? (
-            <span className="ml-auto rounded-[10px] bg-status-green-surface px-2.5 py-0.5 text-small text-status-green">
+            <span className="ml-auto rounded-control bg-status-green-surface px-2.5 py-0.5 text-small text-status-green">
               {`${cachePercent}% from cache`}
             </span>
           ) : null}
@@ -198,7 +198,7 @@ export function ChatContextPanel({
               <Chip>{details.modelLabel || "Unknown model"}</Chip>
               <Chip>{`${count(usage.userMessages)} user · ${count(usage.assistantMessages)} assistant`}</Chip>
             </div>
-            <dl className="mt-3 grid grid-cols-1 gap-3 text-small @min-[420px]:grid-cols-2">
+            <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-3 text-small">
               {dates.map(([label, value]) => (
                 <div key={label} className="min-w-0">
                   <dt className="text-tertiary">{label}</dt>

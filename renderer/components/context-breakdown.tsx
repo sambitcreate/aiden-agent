@@ -24,6 +24,10 @@ const DEFERRED_LABELS: Record<DeferredContextCategory["id"], { row: string; fold
   "mcp-tools": { row: "MCP tools (deferred)", fold: "MCP tools by server" },
 };
 
+function percentOfWindow(tokens: number, contextWindow: number): string {
+  return contextWindow > 0 ? `${((tokens / contextWindow) * 100).toFixed(1)}%` : "—";
+}
+
 function pluralMessages(count: number): string {
   return `${count} earlier ${count === 1 ? "message" : "messages"}`;
 }
@@ -54,7 +58,7 @@ export function ContextStatus({
     <p
       role={role}
       className={cn(
-        "m-0 inline-flex max-w-full items-start gap-1.5 rounded-[10px] px-2.5 py-1 text-small leading-snug",
+        "m-0 inline-flex max-w-full items-start gap-1.5 rounded-control px-2.5 py-1 text-small leading-snug",
         warning ? "bg-status-warning-surface text-status-warning" : "bg-status-green-surface text-status-green",
         className,
       )}
@@ -68,11 +72,14 @@ export function ContextStatus({
 function CategoryRow({
   label,
   tokens,
+  ofWindow,
   fill,
   share,
 }: {
   label: string;
   tokens: number;
+  /** Percent of the whole context window, e.g. "4.6%". */
+  ofWindow: string;
   fill: string;
   /** Bar length as a fraction of the largest category. */
   share: number;
@@ -85,7 +92,10 @@ function CategoryRow({
           {label}
         </span>
       </span>
-      <span className="text-small text-tertiary tabular-nums">{formatContextTokenCount(tokens)}</span>
+      <span className="text-small text-tertiary tabular-nums">
+        {formatContextTokenCount(tokens)}
+        <span className="ml-2 inline-block min-w-[3.2em] text-right text-secondary">{ofWindow}</span>
+      </span>
       <span aria-hidden="true" className="col-span-2 h-1 overflow-hidden rounded-full bg-control">
         <span
           className="block h-full rounded-full transition-[width] duration-(--motion-large-duration) ease-standard motion-reduce:transition-none"
@@ -192,12 +202,10 @@ export function ContextBreakdown({
         )}
       >
         {`${percent}%`}{" "}
-        <span className=" text-regular font-normal tracking-normal text-secondary">used</span>
+        <span className="text-regular font-normal tracking-normal text-secondary">used</span>
       </span>
       <span className="text-small text-tertiary tabular-nums">
-        {panel
-          ? `${estimate}${formatContextTokenCount(pressure.contextTokens)} of ${formatContextTokenCount(pressure.inputBudgetTokens)} usable`
-          : `${formatContextTokenCount(free)} free`}
+        {`${estimate}${formatContextTokenCount(pressure.contextTokens)} of ${formatContextTokenCount(pressure.inputBudgetTokens)} usable`}
       </span>
     </div>
   );
@@ -209,6 +217,7 @@ export function ContextBreakdown({
           key={segment.key}
           label={segment.label}
           tokens={segment.tokens}
+          ofWindow={percentOfWindow(segment.tokens, pressure.contextWindow)}
           fill={segment.fill}
           share={largest > 0 ? segment.tokens / largest : 0}
         />
@@ -229,7 +238,9 @@ export function ContextBreakdown({
   );
 
   const caption = (
-    <span className="text-mini text-tertiary">{`Each tile is ${tileTokens} tokens`}</span>
+    <span className="text-mini text-tertiary">
+      {`Each tile is ${tileTokens} tokens, 1% of the ${formatContextTokenCount(pressure.contextWindow)} window`}
+    </span>
   );
 
   return (
@@ -262,6 +273,7 @@ export function ContextBreakdown({
 
       <ContextStatus role="note" warning={approaching} className="mt-3">
         {compactionNote(pressure, approaching, compacting)}
+        {deferred.length > 0 ? " Deferred tools load through tool search and aren't counted until used." : null}
       </ContextStatus>
     </div>
   );

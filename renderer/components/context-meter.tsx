@@ -60,7 +60,10 @@ export function ContextMeter({
           ? "Context compacted."
           : pressure.shouldCompact
             ? "Aiden will compact context before the next request."
-            : "Context healthy — no compaction needed before the next request.";
+            : phase === "approaching"
+              ? "Approaching the limit. Aiden compacts before a request would cross it."
+              : "Context healthy. No compaction needed before the next request.";
+  const warning = emphasized || phase === "approaching";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -76,7 +79,7 @@ export function ContextMeter({
           aria-label={`Context usage, ${percent} percent${emphasized ? ", will compact before the next request" : ""}`}
           title="Projected context for the next request"
         >
-          <ContextPips percent={percent} warning={emphasized || phase === "approaching"} />
+          <ContextPips percent={percent} warning={warning} />
           <span className="context-meter-percent text-mini tabular-nums">{percent}%</span>
         </Button>
       </PopoverTrigger>
@@ -90,7 +93,7 @@ export function ContextMeter({
         <ContextMeterDetails
           pressure={pressure}
           percent={percent}
-          emphasized={emphasized}
+          emphasized={warning}
           stateText={stateText}
         />
         {onViewDetails ? <Button variant="muted" size="small" className="mt-3 w-full" onClick={() => { detailsRequested.current = true; setOpen(false); onViewDetails(); }}>View context details</Button> : null}
@@ -119,10 +122,14 @@ export function ContextMeterDetails({
     rows.push(["recent work", `~${formatContextTokenCount(pressure.addedAfterUsageAnchorTokens)}`]);
   }
   rows.push(["reserved", `~${formatContextTokenCount(pressure.reservedTokens)}`]);
+  rows.push(["model context", formatContextTokenCount(pressure.contextWindow)]);
   return (
     <>
       <div className="flex items-start gap-3.5">
-        <ContextTiles pressure={pressure} columns={10} className="w-20 shrink-0" />
+        <div className="flex w-20 shrink-0 flex-col gap-1">
+          <ContextTiles pressure={pressure} columns={10} />
+          <span className="text-mini text-tertiary">1% per tile</span>
+        </div>
         <div className="min-w-0 flex-1">
           <span
             className={cn(
