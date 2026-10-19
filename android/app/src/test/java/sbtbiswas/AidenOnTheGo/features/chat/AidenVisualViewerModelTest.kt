@@ -84,6 +84,10 @@ class AidenVisualViewerModelTest {
         assertNull(AidenVisualBridgeMessage.parse("""{"type":"openUrl","url":7}"""))
         assertTrue(AidenVisualBridgeMessage.isOpenableUrl("https://example.com"))
         assertTrue(AidenVisualBridgeMessage.isOpenableUrl("https://sub.example.com:8443/a/b?c=d"))
+        assertEquals(
+            AidenVisualBridgeMessage.OpenUrl("https://Example.com/A"),
+            AidenVisualBridgeMessage.parse("""{"type":"openUrl","url":"HTTPS://Example.com/A"}""")
+        )
     }
 
     @Test

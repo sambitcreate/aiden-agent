@@ -46,19 +46,20 @@ sealed interface AidenVisualBridgeMessage {
                 "openUrl" -> {
                     val url = root.stringValue("url") ?: return null
                     if (!isOpenableUrl(url)) return null
-                    OpenUrl(url)
+                    // Browser intent filters match the scheme case-sensitively.
+                    OpenUrl("https" + url.substring(url.indexOf(':')))
                 }
                 else -> null
             }
         }
 
-        /** Only an absolute `https:` URL with a host and no user info may be opened. */
+        /** Only an absolute `https:` URL (any case) with a host and no user info may be opened. */
         fun isOpenableUrl(url: String): Boolean {
             if (url.isEmpty() || url.length > MAXIMUM_URL_LENGTH) return false
             if (url.any { it.isWhitespace() || Character.isISOControl(it) }) return false
             val uri = try { URI(url) } catch (_: Exception) { return false }
             return uri.isAbsolute &&
-                uri.scheme == "https" &&
+                uri.scheme.equals("https", ignoreCase = true) &&
                 uri.rawUserInfo == null &&
                 !uri.host.isNullOrEmpty()
         }
