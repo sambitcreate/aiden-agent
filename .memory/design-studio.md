@@ -1,6 +1,6 @@
 # Design Studio DS-1a (headless core)
 
-Status (2026-10-07): DS-1a is implemented on `feature/design-studio-v2` (DS-1a.1 through DS-1a.19). It stays behind `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` (`designStudioEnabled()`). There is no UI yet; DS-1b (Studio UI) is next.
+Status: DS-1a (DS-1a.1 through DS-1a.19) merged in PR #385 (2026-10-08), shipped in 0.55.0. It stays behind `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` (`designStudioEnabled()`). There is no UI yet; DS-1b (Studio UI) is next.
 
 Context: umbrella plan `docs/plans/design-studio-create-images-rebuild-plan.md`, ADR `docs/plans/design-studio-adr.md`, history in `studio-rebuild.md`. Track F facts are in `studio-foundation.md`.
 

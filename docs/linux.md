@@ -1,9 +1,7 @@
 # Linux desktop support
 
 Aiden Agent's release pipeline produces native x64 and arm64 Linux builds as
-AppImage, Debian, and RPM packages. The current public `v0.40.0` release predates
-that pipeline and contains only the arm64 Mac build; Linux installation becomes
-available with the next accepted release. The `.deb` and `.rpm` formats are
+AppImage, Debian, and RPM packages, published with every release. The `.deb` and `.rpm` formats are
 recommended because the distro package manager installs Electron's runtime
 libraries and owns replacement or removal. AppImage is the portable fallback.
 

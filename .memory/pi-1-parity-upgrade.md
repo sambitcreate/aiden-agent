@@ -2,7 +2,7 @@
 
 Baseline Aiden origin/main `d2197dfef`; upstream pi pulled to `581e7ba78`, stable release v1.0.0 `a13d35a742`. Published 1.0 is the target, not Unreleased HEAD. See `docs/plans/pi-1-parity-plan.md` for the complete inventory, merge sequence and evidence.
 
-Eight open PRs form a normal-merge stack: #299 → #302 → #301 → #304 → #303 → #306 → #305 → #307. Only three task worktrees were used. No PR is merged. The superseded separate CLI PR #300 was closed after CI showed root/CLI pins must change atomically.
+Eight PRs formed a normal-merge stack: #299 → #302 → #301 → #304 → #303 → #306 → #305 → #307. Only three task worktrees were used. The stack later merged and was integrated through PR #357 (2026-10-05, 0.54.0); pins are now 1.2.0 (PR #471). The superseded separate CLI PR #300 was closed after CI showed root/CLI pins must change atomically.
 
 Live Agent/Models and CLI are pinned to 1.0. Pi removed experimental journal helpers; the named frozen 0.87.1 compatibility dependency preserves Aiden journals without replacing remote/security contracts. CLI migration separates Aiden array MCP config from native Pi object config and preserves revocation readers, worker permissions and WASM packaging.
 

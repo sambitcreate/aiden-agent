@@ -6,6 +6,8 @@ This checklist tracks the remaining owner decisions and GitHub settings required
 
 As audited on 2026-07-22, the source repository is private and has no GitHub topics. The current tree has no root `LICENSE`, `SECURITY.md`, or `CONTRIBUTING.md`. The `private: true` package flag is intentional protection against accidental npm publication; it does not control GitHub repository visibility.
 
+Update (2026-10-16): the repository is now public and MIT licensed (root `LICENSE`). It still has no GitHub topics, `SECURITY.md`, or `CONTRIBUTING.md`.
+
 ## Ready in the repository
 
 - Public-facing README with a real product screenshot, concise feature overview, privacy boundary, setup, verification, and release links.
@@ -16,8 +18,8 @@ As audited on 2026-07-22, the source repository is private and has no GitHub top
 
 ## Owner decisions before changing visibility
 
-- **Choose and add a source license.** No public license is currently granted. Do not label the project open source or accept outside contributions until the intended terms are explicit.
-- **Confirm the public source model.** Aiden will publish its signed beta assets directly in this repository's GitHub Releases. Its DMG download and auto-update feed are therefore public only after repository visibility changes.
+- **Source license.** Done: MIT (`LICENSE`).
+- **Public source model.** Done: signed beta assets publish in this repository's public GitHub Releases.
 - **Define contribution expectations.** Add `CONTRIBUTING.md`, `SECURITY.md`, and a code of conduct only if outside issues or contributions will be accepted. Avoid empty policy templates.
 - **Review repository history.** Run a full-history secret scan before changing visibility; checking only the current tree cannot rule out credentials in older commits.
 - **Configure GitHub protections.** Require CI on `main`, restrict release-environment deployment to trusted branches, protect release tags, and keep signing/notarization secrets scoped to the protected `release` environment.

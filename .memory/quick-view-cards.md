@@ -1,6 +1,6 @@
 # Quick View cards — 2026-10-15
 
-Quick View is now Claude-Code-style stacked cards (owner decisions 2026-10-15; plan `docs/superpowers/plans/2026-10-15-quick-view-cards.md`, branch `feature/env-panel-redesign-9cc415`, PR pending). The old single "Quick View" card with its header and `+` menu is gone. Renderer-only except one optional field on the desktop context projection: no new IPC channel, no network call, no Remote protocol, iOS, Android or `packages/cli` change.
+Quick View is now Claude-Code-style stacked cards (owner decisions 2026-10-15; plan `docs/superpowers/plans/2026-10-15-quick-view-cards.md`, merged in PR #487, shipped in 0.57.0). The old single "Quick View" card with its header and `+` menu is gone. Renderer-only except one optional field on the desktop context projection: no new IPC channel, no network call, no Remote protocol, iOS, Android or `packages/cli` change.
 
 ## Shape
 - Cards: Environment, Changes, Context, Subagents. Each is a borderless raised card (`bg-popover`, `rounded-dialog`, `shadow-popover`) with an 8px gap and no "Quick View" heading. `QuickViewCards`/`QuickViewCard` in `environment-panel.tsx` stack them; `renderer/components/quick-view-section.tsx` is one card; `renderer/lib/quick-view-layout.ts` is the pure model.

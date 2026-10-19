@@ -1,6 +1,6 @@
 # Live, smooth streaming across desktop, iOS and Android
 
-Status: Planned (2026-10-12) on `fix/live-cross-device-streaming`, rebased onto `origin/main` at `19e55a67`. Line references are from the research pass at `23bade81`. Since then, `renderer/components/message-list.tsx` has changed substantially (generative-UI live visuals, commit 57a5ff34), so re-verify those references before editing.
+Status: Merged (2026-10-13) through #448, #450–#459 and shipped in 0.56.0. Originally planned 2026-10-12 on `fix/live-cross-device-streaming`, rebased onto `origin/main` at `19e55a67`. Line references are from the research pass at `23bade81`. Since then, `renderer/components/message-list.tsx` has changed substantially (generative-UI live visuals, commit 57a5ff34), so re-verify those references before editing.
 
 References used, both MIT-licensed:
 - T3 Code at `80664d5266` (© 2026 T3 Tools Inc.).

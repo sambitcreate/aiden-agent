@@ -19,10 +19,8 @@ Homebrew remains available with `brew install --cask sambitcreate/tap/aiden-agen
 Intel Mac installation will become available when a signed x64 DMG is published;
 the installer currently fails rather than selecting the incompatible arm64 DMG.
 
-The release pipeline now produces Linux x64 and arm64 AppImage, `.deb`, and
-`.rpm` packages. The current public `v0.40.0` release predates that pipeline and
-contains only the arm64 Mac build; Linux packages and the installer become
-available with the next accepted release. See the
+Each release publishes the arm64 Mac DMG plus Linux x64 and arm64 AppImage,
+`.deb`, and `.rpm` packages. See the
 [Linux install and compatibility guide](docs/linux.md).
 
 ![Aiden Agent showing a workspace chat and Personal Model Pad](docs/assets/aiden-agent-app.png)
@@ -44,7 +42,7 @@ I don't come from a coding background. I'd been bouncing between the coding agen
   | Implementer: read/search, write/edit, shell | Writes and shell run under this child run without another card | One write grant and one separate shell grant per child run, requested on first use | No write or shell tools |
 
   Web and MCP calls keep their existing per-call approval behavior. Implementer cannot delegate to another subagent. Rollout flags and the parent capability ceiling can narrow every row.
-- **Bots and Web Search** - macOS can create durable Bots with explicit capability grants, persistent conversations, image understanding, and Telegram control. Every desktop can configure explicit Web Search routes from the expanded provider catalog; Bots remain hidden on Linux until their native security bindings are supported there.
+- **Bots and Web Search** - macOS and Linux can create durable Bots with explicit capability grants, persistent conversations, image understanding, and Telegram control (Linux needs an unlocked Secret Service keyring). Every desktop can configure explicit Web Search routes from the expanded provider catalog.
 - **Workspaces and managed worktrees** - use folders, scratch workspaces, or isolated managed worktrees with three access levels, workspace-scoped tools, Ask-mode approvals, guarded creation/deletion, and crash-aware cleanup.
 - **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Arrange a personal capability-and-pace map, optionally enrich hosted models with explicitly fetched Artificial Analysis scores through a benchmark-only OpenRouter key, and keep benchmark evidence visibly separate from runtime limits and availability.
 - **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
@@ -52,18 +50,18 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 - **Desktop integration and appearance** - native menus, encrypted system credential storage, **Parakeet**, the dictation pill, semantic themes, high contrast, reduced motion, and consistent light/dark rendering. Apple **Foundation Models**, Accessibility auto-paste, and the signed **Rust** Computer Use broker remain macOS-only.
 - **Shared browser and annotations** - browse beside the chat in Environment, preview workspace HTML/PDF files, use isolated profiles and responsive viewports, and share selected text, elements, drawings, and image crops with Aiden. Aiden's browser tools operate on those same tabs. See [browser behavior and controls](docs/environment-browser.md).
 - **Extensibility and background work** - use skills, **MCP**, **Exa** search, scheduled tasks, voice, and attachments through typed, allowlisted boundaries.
-- **Aiden On The Go** - opt in to a pinned local-network connection or an explicit non-Funnel Tailscale Serve route, pair each iPhone or iPad separately, and revoke devices from [Remote Access settings](docs/aiden-on-the-go-remote-access.md).
+- **Aiden On The Go** - opt in to a pinned local-network connection or an explicit non-Funnel Tailscale Serve route, pair each iPhone, iPad, or Android device separately, and revoke devices from [Remote Access settings](docs/aiden-on-the-go-remote-access.md).
 - **Updates and release safety** - signed builds use the verified GitHub release feed. Once an update is downloaded, Aiden shows the version above Profile with **Later** and **Restart now**, then follows the normal save and shutdown guards before relaunching.
 
 ## Upcoming
 
 The roadmap is maintained in [the plan index](docs/plans/README.md). These bullets name only the unfinished parts of partially shipped work or features with no runtime implementation yet; they are directions, not release promises:
 
-- **Designer Mode** - no Designer Mode runtime exists yet. The proposed flow selects UI in a local Vite app, requests a bounded change, requires approval, and reviews the exact action diff; Phase 0 remains a go/no-go validation gate. See the [Designer Mode plan](docs/plans/designer-mode-plan.md).
-- **Static-catalog overlays and provider completion** - Pi built-in discovery, encrypted credentials, provider-owned authentication, native streaming, stored dynamic catalogs, manual refresh, and voice credential lookup already ship. Remaining work includes remote overlays for otherwise-static hosted catalogs, Pi-native custom-endpoint composition, historical message provenance, scalable large-catalog recovery UX, and rollout cleanup. See the [Dynamic Model Catalog](docs/plans/dynamic-model-catalog-plan.md) and [Pi Provider Integration](docs/plans/pi-provider-integration-plan.md) plans.
+- **Design Studio and Create Images** - early work exists behind the default-off `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` and `AIDEN_EXPERIMENTAL_CREATE_IMAGES` flags. The former Designer Mode flow (select UI in a local Vite app, request a bounded change, approve, review the diff) is now phase DS-4 "Connected app", and its Phase 0 go/no-go gate is a DS-4 entry criterion. See the [Design Studio + Create Images plan](docs/plans/design-studio-create-images-rebuild-plan.md).
+- **Provider completion** - Pi built-in discovery, encrypted credentials, provider-owned authentication, native streaming, validated pi.dev catalog overlays with an offline cache, custom provider composition, canonical assistant provenance, and voice credential lookup already ship. Remaining work is scalable large-catalog UX and rollout cleanup. See the [Pi Provider Integration](docs/plans/pi-provider-integration-plan.md) plan.
 - **Truthful generation progress notes** - no progress-note runtime exists yet. The plan would show one temporary acknowledgement after an otherwise-silent start, using an explicitly selected on-device or verified hosted route without exposing hidden reasoning. See the [Generation Progress Notes plan](docs/plans/generation-progress-notes-plan.md).
-- **Long-session context and run control** - model-aware deterministic compaction already ships. Remaining work includes visible compaction activity, reconstructable structured checkpoints, durable-versus-working memory separation, queued follow-up messages, and safe mid-run redirects. See the [Compaction](docs/plans/compaction-plan.md) and [Taracodlab Learnings](docs/plans/taracodlab-learnings-plan.md) plans.
-- **iOS Simulator devices** - on macOS, the Environment **Simulator** tab streams and controls iOS Simulators on this Mac or a paired Mac, with optional procedural 3D frames and consent-gated `device_*` agent tools. On by default since 0.55.0; `AIDEN_EXPERIMENTAL_DEVICES=0` is the kill switch. Remaining work is real-Mac acceptance for agent tools, paired Macs and 3D frames, and SSH device hosts. See [Simulator devices](docs/devices.md).
+- **Long-session context** - model-aware compaction with Pi-native checkpoints, crash recovery, visible compaction activity, and busy-composer Steer/Queue already ship. Remaining work includes durable-versus-working memory separation and provider-native compaction paths. See the [Compaction](docs/plans/compaction-plan.md) and [Pi Compaction and Durable Memory Upgrade](docs/plans/pi-compaction-memory-upgrade-plan.md) plans.
+- **Simulator devices** - on macOS, the Environment **Simulator** tab streams and controls iOS Simulators and Android Emulators on this Mac, a paired Mac, or an SSH host, with optional procedural 3D frames and consent-gated `device_*` agent tools. On by default since 0.55.0; `AIDEN_EXPERIMENTAL_DEVICES=0` is the kill switch. Remaining work is real-Mac acceptance for agent tools, paired Macs and 3D frames. See [Simulator devices](docs/devices.md).
 - **Whole-app performance, durability, and battery gates** - atomic/recoverable chat storage and several bounded lifecycles already ship. The broader program still needs production-equivalent baselines, recovery and hard bounds across the remaining stores and payloads, zero-idle Git/renderer scheduling, cancellable heavy helpers, and enforceable packaged release budgets. See the [Performance, Stability, Battery, and Efficiency plan](docs/plans/performance-stability-efficiency-plan.md).
 
 ## Privacy and trust
@@ -72,7 +70,7 @@ Aiden stores chats, settings, workspace metadata, and downloaded speech models l
 
 Network access happens only when the selected feature needs it: hosted models receive the conversation content sent to them, cloud transcription receives selected audio, Exa receives search queries, remote MCP servers receive tool requests, and model downloads contact their upstream host. A fully local session can use a local model, on-device voice, no remote MCP servers, and web search disabled.
 
-On macOS, Computer Use is an opt-in beta with a global switch, a separate per-chat switch, permission checks, exact target binding, and one-use approval for every mutation. It is omitted from Linux builds. See the [Computer Use security design](docs/computer-use-integration.md) for the complete boundary.
+On macOS, Computer Use is an opt-in beta with a global switch, permission checks, and exact target binding. The model's first Computer Use call in a chat raises one access card (Deny, Allow for this chat, or Always allow); an allowed chat then acts without per-action cards, and Settings can turn off Always allow or reset chat permissions. It is omitted from Linux builds. See the [Computer Use security design](docs/computer-use-integration.md) for the complete boundary.
 
 ## Architecture
 
@@ -114,7 +112,7 @@ The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.m
 
 ### Mobile distribution
 
-The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation remains separate from the macOS release. Pull requests run the Android verification gates without retaining an installable artifact; relevant merges to `main` publish the debug APK and its checksum.
+The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation remains separate from the desktop release. Pull requests run the Android verification gates without retaining an installable artifact; relevant merges to `main` publish the debug APK and its checksum.
 
 The development launcher prepares a platform-appropriate **Aiden Agent Dev** runtime that can run beside the installed **Aiden Agent** app. Development uses separate app-data, Chromium session, log, crash, and `~/.aiden-dev` roots; it does not copy production data, register global shortcuts, or check the production update feed by default. Set `AIDEN_DEV_GLOBAL_SHORTCUTS=1` only when a development run intentionally needs the global bindings.
 
@@ -149,13 +147,12 @@ The checked-in models.dev snapshot is refreshed only through `npm run models:ref
 
 ## Project status
 
-Aiden Agent is a beta desktop release for macOS, with the reviewed Linux release
-pipeline prepared for the next release. Signed macOS DMG/ZIP builds and verified
-Linux AppImage/DEB/RPM builds for x64 and arm64 are published together with
-checksums once that release is accepted. A separate manual workflow builds
-non-release Linux installers for testing. macOS keeps automatic updates; Linux
-uses explicit package replacement. See [the macOS release guide](docs/releasing.md)
-and [Linux guide](docs/linux.md).
+Aiden Agent is a beta desktop release for macOS and Linux. Each release publishes
+signed macOS DMG/ZIP builds and verified Linux AppImage/DEB/RPM builds for x64 and
+arm64, with checksums. A separate manual workflow builds non-release Linux
+installers for testing. macOS and writable Linux AppImages update in-app; `.deb`
+and `.rpm` installs update through their package manager. See
+[the macOS release guide](docs/releasing.md) and [Linux guide](docs/linux.md).
 
 The canonical website download is the stable
 [`Aiden-Agent-Beta-arm64.dmg`](https://github.com/sambitcreate/aiden-agent/releases/latest/download/Aiden-Agent-Beta-arm64.dmg)
