@@ -504,7 +504,7 @@ export function shellQuote(value: string): string {
 }
 
 export interface ResolvedWorkspaceArtifactCommand {
-  /** What runs: the values are set as positional parameters and the template reads them as "$1", "$2"… */
+  /** What runs: the values are bound to read-only variables and the template reads them as "${AIDEN_ARG_1}"… */
   command: string;
   /** The same command with each value quoted in place, for the confirmation dialog. */
   preview: string;
@@ -512,9 +512,11 @@ export interface ResolvedWorkspaceArtifactCommand {
 
 /**
  * Fills an action's template. Arguments line up with its params in order.
- * The values never become shell code: they are quoted into `set --` and the
- * template refers to them only as "$N", so even a template that wraps a
- * placeholder in quotes or `$(…)` cannot run what a page passes in.
+ * The values never become shell code: they are quoted into read-only
+ * variables and the template refers to them only as "${AIDEN_ARG_N}", so even
+ * a template that wraps a placeholder in quotes or `$(…)` cannot run what a
+ * page passes in. Read-only, unlike "$1", means `set --`, `shift` or a shell
+ * function cannot swap the value the confirmation showed for another.
  */
 export function resolveWorkspaceArtifactCommand(
   action: WorkspaceArtifactActionV1,
@@ -546,9 +548,11 @@ export function resolveWorkspaceArtifactCommand(
       if (index === undefined) return invalid(`${action.label} needs a value for ${name}.`);
       return render(index);
     });
-  const body = fill((index) => `"\${${index + 1}}"`);
+  const variable = (index: number) => `AIDEN_ARG_${index + 1}`;
+  const body = fill((index) => `"\${${variable(index)}}"`);
+  const bind = values.map((value, index) => `${variable(index)}=${shellQuote(value)}`).join(" ");
   return {
-    command: values.length ? `set -- ${values.map(shellQuote).join(" ")}\n${body}` : body,
+    command: values.length ? `readonly ${bind}\n${body}` : body,
     preview: fill((index) => shellQuote(values[index]!)),
   };
 }

@@ -183,12 +183,14 @@ test("a refresh asked for after the page's commands changed reads the new comman
 });
 
 test("one caller cancelling leaves a shared refresh running for the others; the last one out stops it", async (t) => {
-  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.3; printf 1", parse: "json" };
+  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.6; printf 1", parse: "json" };
   const { runner, store, commands, context } = await setup(t, { sources: [slow] });
   const turn = new AbortController();
-  const fromTurn = runner.refresh("ws1", "art1", context("full"), turn.signal);
   const fromTab = runner.refresh("ws1", "art1", context("full"));
+  const fromTurn = runner.refresh("ws1", "art1", context("full"), turn.signal);
   await until(() => commands.length === 1);
+  // Both callers have joined well within the command's run before one leaves.
+  await new Promise((resolve) => setTimeout(resolve, 150));
   turn.abort();
   assert.equal((await fromTurn).v!.error, "Cancelled.");
   assert.equal((await fromTab).v!.dataJson, "1");
@@ -202,7 +204,7 @@ test("one caller cancelling leaves a shared refresh running for the others; the 
   alone.abort();
   assert.equal((await cancelled).v!.error, "Cancelled.");
   // The abandoned run is stopped rather than left to finish and save.
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => setTimeout(resolve, 900));
   assert.equal((await store.get("ws1", "art1"))!.snapshot!.sources.v!.at < started, true);
 });
 

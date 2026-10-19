@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -88,6 +88,26 @@ test("a value never runs as code, even where a template quotes its placeholder",
     }
   }
   assert.equal(fs.existsSync(marker), false);
+});
+
+test("a template cannot run with a different value from the one its confirmation shows", () => {
+  const action = (command: string): WorkspaceArtifactActionV1 => ({ name: "a", label: "A", command, params: [{ name: "target", type: "string" }] });
+  // Each template is accepted, yet tries to swap the value after it was bound.
+  for (const template of [
+    "set -- actual-target; printf '%s' {{target}}",
+    "f() { printf '%s' {{target}}; }; f actual-target",
+    "AIDEN_ARG_1=actual-target; printf '%s' {{target}}",
+    "f() { local AIDEN_ARG_1=actual-target; printf '%s' {{target}}; }; f",
+    "unset AIDEN_ARG_1; printf '%s' {{target}}",
+  ]) {
+    const parsed = parseWorkspaceArtifactActions([action(template)])[0]!;
+    const { command, preview } = resolveWorkspaceArtifactCommand(parsed, ["shown-target"]);
+    assert.equal(spawnSync("/bin/sh", ["-c", preview], { encoding: "utf8" }).stdout, "shown-target", template);
+    const ran = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
+    // Either it uses what the person confirmed, or the shell refuses; never the other target.
+    if (ran.status === 0) assert.equal(ran.stdout, "shown-target", template);
+    else assert.equal(ran.stdout.includes("actual-target"), false, template);
+  }
 });
 
 test("a placeholder must be its own unquoted word", () => {
