@@ -161,3 +161,13 @@ test("a pressure without a breakdown still parses", () => {
   assert.ok(parsed);
   assert.equal("breakdown" in parsed, false);
 });
+
+test("a prompt cache window survives parsing, and a malformed one is dropped without losing the projection", () => {
+  const promptCache = { ttlMs: 300_000, lastRequestAt: 1_700_000_000_000 };
+  assert.deepEqual(parseChatContextPressure({ ...pressure(), promptCache })?.promptCache, promptCache);
+  for (const bad of [{ ttlMs: 0, lastRequestAt: 1 }, { ttlMs: -5, lastRequestAt: 1 }, { ttlMs: 300_000 }, "5m"]) {
+    const parsed = parseChatContextPressure({ ...pressure(), promptCache: bad });
+    assert.ok(parsed);
+    assert.equal("promptCache" in parsed, false);
+  }
+});

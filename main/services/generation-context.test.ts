@@ -10,6 +10,7 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,
   chatContextPressureFromProjection,
+  promptCacheWindow,
   compactGenerationContext,
   createGenerationContextTransform,
   estimateContextBreakdown,
@@ -1355,4 +1356,19 @@ test("admitted MCP service guidance is measured from the transcript's mcp_server
   const cleared = breakdownAfter(removed);
   assert.equal(tokensOf(cleared, "mcp-instructions"), undefined);
   near(tokensOf(cleared, "system-prompt"), BASE_PROMPT);
+});
+
+test("the prompt cache window follows the last request that used the cache on the same model", () => {
+  const model = { provider: "openai-codex", id: "gpt-5.3-codex-spark", promptCache: { short: 300, long: 3600 } };
+  const cached = (timestamp: number, cacheRead: number): AssistantMessage => {
+    const message = assistant(`call-${timestamp}`);
+    return { ...message, timestamp, usage: { ...message.usage, cacheRead } };
+  };
+  const messages: AgentMessage[] = [user("a"), cached(1_000, 900), user("b"), cached(5_000, 0)];
+  // The newest response did not touch the cache, so the window runs from the earlier one.
+  assert.deepEqual(promptCacheWindow(model, messages), { ttlMs: 300_000, lastRequestAt: 1_000 });
+  // A model without a declared lifetime, a cache never used, or a switched model shows nothing.
+  assert.equal(promptCacheWindow({ ...model, promptCache: undefined }, messages), undefined);
+  assert.equal(promptCacheWindow(model, [user("a"), cached(5_000, 0)]), undefined);
+  assert.equal(promptCacheWindow({ ...model, id: "other-model" }, messages), undefined);
 });

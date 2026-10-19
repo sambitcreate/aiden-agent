@@ -14,6 +14,7 @@ import { gitInfo } from "./git.js";
 import {
   modelRetainsSystemUpdates,
   projectChatContextPressure,
+  promptCacheWindow,
   type GenerationContextOptions,
 } from "./generation-context.js";
 import { resolveCompactionModelMetadata } from "./model-runtime.js";
@@ -292,5 +293,7 @@ export async function chatContextPressure(
         ),
       ]
     : messages;
-  return projectChatContextPressure(projected, options);
+  const pressure = projectChatContextPressure(projected, options);
+  const promptCache = promptCacheWindow(model, messages);
+  return promptCache ? { ...pressure, promptCache } : pressure;
 }

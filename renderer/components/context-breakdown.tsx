@@ -4,13 +4,14 @@
 // (ChatContextPressureV1); nothing is re-estimated here.
 
 import * as React from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Timer } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
   contextPressurePercent,
   formatContextTokenCount,
   type ChatContextPressureV1,
   type DeferredContextCategory,
+  type PromptCacheWindowV1,
 } from "../shared/context-pressure";
 import {
   ContextTiles,
@@ -135,6 +136,50 @@ function QuietRow({
   );
 }
 
+function cacheTimeLeft(ms: number): string {
+  const totalSeconds = Math.ceil(ms / 1000);
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+/** Counts down the provider's prompt cache from the last request that used it. */
+export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWindowV1; initialNow?: number }) {
+  const expiresAt = cache.lastRequestAt + cache.ttlMs;
+  const [now, setNow] = React.useState(() => initialNow ?? Date.now());
+  const remaining = Math.max(0, Math.min(cache.ttlMs, expiresAt - now));
+  React.useEffect(() => {
+    // Ticks against the wall clock until the cache lapses; nothing else drives this.
+    if (expiresAt <= Date.now()) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [expiresAt]);
+  const lapsed = remaining === 0;
+  const low = !lapsed && remaining <= 60_000;
+  return (
+    <div className="mt-3 grid gap-1.5" role="group" aria-label="Prompt cache">
+      <div className="flex items-center gap-2 text-small">
+        <Timer aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
+        <span className="text-secondary">Prompt cache</span>
+        <span
+          className={cn("ml-auto tabular-nums", lapsed ? "text-tertiary" : low ? "text-support-warning" : "text-primary")}
+        >
+          {lapsed ? "Expired" : `${cacheTimeLeft(remaining)} left`}
+        </span>
+      </div>
+      <span aria-hidden="true" className="h-1 overflow-hidden rounded-full bg-control">
+        <span
+          className={cn("block h-full rounded-full", low ? "bg-support-warning" : "bg-accent")}
+          style={{ width: `${(remaining / cache.ttlMs) * 100}%` }}
+        />
+      </span>
+      <span className="text-mini text-tertiary">
+        {lapsed
+          ? "The next request rebuilds the cache."
+          : `Kept for ${Math.max(1, Math.round(cache.ttlMs / 60_000))} min after each request.`}
+      </span>
+    </div>
+  );
+}
+
 function DeferredFold({ deferred }: { deferred: DeferredContextCategory }) {
   const [open, setOpen] = React.useState(false);
   const listId = React.useId();
@@ -181,12 +226,15 @@ export function ContextBreakdown({
   pressure,
   compacting = false,
   layout = "card",
+  now,
 }: {
   pressure: ChatContextPressureV1;
   /** A compaction is running for this chat right now. */
   compacting?: boolean;
   /** `card`: Quick View's narrow column. `panel`: the Context tool, with the square grid beside the bars. */
   layout?: "card" | "panel";
+  /** Clock seed for the prompt cache countdown; defaults to the current time. */
+  now?: number;
 }): React.JSX.Element {
   const percent = contextPressurePercent(pressure);
   const approaching = contextApproaching(pressure, compacting);
@@ -276,6 +324,8 @@ export function ContextBreakdown({
       {deferred.map((entry) => (
         <DeferredFold key={`fold-${entry.id}`} deferred={entry} />
       ))}
+
+      {pressure.promptCache ? <PromptCacheTimer cache={pressure.promptCache} initialNow={now} /> : null}
 
       <ContextStatus role="note" warning={approaching} className="mt-3">
         {compactionNote(pressure, approaching, compacting)}

@@ -330,3 +330,22 @@ test("a little context in a huge window reads as under 1%, not 0%", () => {
   );
   assert.ok(screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === "<1% used"));
 });
+
+test("the prompt cache countdown runs from the last cached request and says when it has lapsed", () => {
+  const lastRequestAt = 1_000_000;
+  const promptCache = { ttlMs: 300_000, lastRequestAt };
+  const warm = render(<ContextBreakdown pressure={pressure({ promptCache })} now={lastRequestAt + 72_000} />);
+  const group = screen.getByRole("group", { name: "Prompt cache" });
+  assert.ok(within(group).getByText("3:48 left"));
+  assert.ok(within(group).getByText("Kept for 5 min after each request."));
+  warm.unmount();
+
+  render(<ContextBreakdown pressure={pressure({ promptCache })} now={lastRequestAt + 301_000} />);
+  const lapsed = screen.getByRole("group", { name: "Prompt cache" });
+  assert.ok(within(lapsed).getByText("Expired"));
+});
+
+test("no prompt cache window means no countdown", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  assert.equal(screen.queryByRole("group", { name: "Prompt cache" }), null);
+});

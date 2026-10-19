@@ -251,6 +251,7 @@ import {
   assertGenerationContextCapacity,
   updateGenerationContextOptions,
   chatContextPressureFromProjection,
+  promptCacheTtlMs,
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
@@ -3274,6 +3275,7 @@ export const llmClient = {
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
       const observedStream: typeof realStream = pace.wrap(warmedStream);
+      const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
@@ -3306,7 +3308,12 @@ export const llmClient = {
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
             chatId: params.chatId,
-            pressure: chatContextPressureFromProjection(projection, projectionOptions),
+            pressure: {
+              ...chatContextPressureFromProjection(projection, projectionOptions),
+              // Projections are emitted as each request is prepared, so the
+              // cache window restarts now for models that declare one.
+              ...(promptCacheTtl > 0 ? { promptCache: { ttlMs: promptCacheTtl, lastRequestAt: Date.now() } } : {}),
+            },
           });
         },
         ...agentRuntimeOptions,

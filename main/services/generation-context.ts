@@ -5,6 +5,7 @@ import {
   renderSystemMessageUpdate,
   type SystemMessage,
   type ToolResultMessage,
+  type ModelPromptCache,
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -14,6 +15,7 @@ import type {
   ContextBreakdownV1,
   ContextCategoryId,
   DeferredContextServer,
+  PromptCacheWindowV1,
 } from "../../renderer/shared/context-pressure.js";
 import { withoutAgentsInstructions } from "./agents-instructions.js";
 import { withoutMcpServersSection } from "./mcp-server-instructions.js";
@@ -693,6 +695,35 @@ export function chatContextPressureFromProjection(
     // Options that changed after the projection describe a different request.
     ...(breakdownTokens === projection.staticTokens ? { breakdown } : {}),
   };
+}
+
+/** Aiden's chat requests use Pi's default "short" cache retention. */
+export function promptCacheTtlMs(model: { promptCache?: ModelPromptCache }): number {
+  const seconds = model.promptCache?.short ?? 0;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+}
+
+/**
+ * The cache window left by the latest request from this provider and model
+ * that read or wrote the prompt cache. A model switch starts a new cache, so
+ * earlier requests from another model never count.
+ */
+export function promptCacheWindow(
+  model: { provider: string; id: string; promptCache?: ModelPromptCache },
+  messages: readonly AgentMessage[],
+): PromptCacheWindowV1 | undefined {
+  const ttlMs = promptCacheTtlMs(model);
+  if (ttlMs === 0) return undefined;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    if (message.provider !== model.provider || message.model !== model.id) return undefined;
+    const usage = message.usage;
+    if (usage && usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
+      return { ttlMs, lastRequestAt: message.timestamp };
+    }
+  }
+  return undefined;
 }
 
 function removeOldHistoricalTurns(

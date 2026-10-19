@@ -37,6 +37,18 @@ export interface ChatContextPressureV1 {
   computedAt: number;
   /** Where `staticTokens` comes from, per category, plus tools held back from the request. */
   breakdown?: ContextBreakdownV1;
+  /**
+   * The provider's prompt cache for this chat: present only when the model
+   * declares a cache lifetime and a request has used the cache.
+   */
+  promptCache?: PromptCacheWindowV1;
+}
+
+export interface PromptCacheWindowV1 {
+  /** How long the provider keeps an unused prompt cache, in ms. */
+  ttlMs: number;
+  /** Epoch ms of the last request that read or wrote the cache. */
+  lastRequestAt: number;
 }
 
 export const CONTEXT_CATEGORY_IDS = [
@@ -191,6 +203,7 @@ export function parseChatContextPressure(value: unknown): ChatContextPressureV1 
   ) {
     return undefined;
   }
+  const promptCache = parsePromptCacheWindow(candidate.promptCache);
   const breakdown =
     candidate.breakdown === undefined
       ? undefined
@@ -215,7 +228,18 @@ export function parseChatContextPressure(value: unknown): ChatContextPressureV1 
       ? {}
       : { addedAfterUsageAnchorTokens: candidate.addedAfterUsageAnchorTokens }),
     ...(breakdown ? { breakdown } : {}),
+    ...(promptCache ? { promptCache } : {}),
   };
+}
+
+/** A malformed cache window is dropped rather than failing the whole projection. */
+function parsePromptCacheWindow(value: unknown): PromptCacheWindowV1 | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (!safeNonNegative(candidate.ttlMs) || candidate.ttlMs === 0 || !safeNonNegative(candidate.lastRequestAt)) {
+    return undefined;
+  }
+  return { ttlMs: candidate.ttlMs, lastRequestAt: candidate.lastRequestAt };
 }
 
 /** Notification payload for `chat:context-pressure`. */
