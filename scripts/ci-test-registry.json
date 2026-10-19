@@ -325,7 +325,8 @@
         "main/services/shortcut-transaction-core.test.ts",
         "main/services/superseding-task-core.test.ts",
         "main/services/workspace-artifacts/store.test.ts",
-        "main/services/workspace-artifacts/tool.test.ts"
+        "main/services/workspace-artifacts/tool.test.ts",
+        "main/handlers/workspace-artifacts.test.ts"
       ],
       "preserved": [
         "browser",
@@ -1060,7 +1061,8 @@
         "renderer/components/workspace-picker.test.tsx",
         "renderer/lib/workspace-menu.test.ts",
         "renderer/lib/draft-workspace-menu.test.ts",
-        "renderer/shared/workspace-artifacts.test.ts"
+        "renderer/shared/workspace-artifacts.test.ts",
+        "renderer/components/artifacts-panel.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

@@ -7,6 +7,11 @@ import {
 import { Button, toast } from "./ui";
 import { ChatContextPanel, type ChatContextDetails } from "./chat-context-panel";
 import { WorkspaceToolLauncher, WORKSPACE_TOOLS, workspaceToolLabel } from "./workspace-tool-launcher";
+import { ArtifactsPanel } from "./artifacts-panel";
+import { useWorkspaceArtifacts, type WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
+import { revealsWorkspaceArtifact, workspaceArtifactChangeRequest } from "../lib/workspace-artifacts-view";
+import { stageComposerText } from "../lib/composer-draft-store";
+import type { WorkspaceArtifactsChangedEvent } from "../shared/workspace-artifacts";
 import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
 import type { BrowserState } from "../shared/browser";
 import { acceptBrowserState } from "../lib/browser-ui-state";
@@ -166,6 +171,10 @@ export interface EnvironmentPanelContextValue {
   tab: EnvironmentPanelTab;
   subagentsEnabled: boolean;
   devicesEnabled: boolean;
+  /** The active workspace's artifacts; the Artifacts tab exists only while there is one. */
+  artifacts: WorkspaceArtifactsState;
+  selectedArtifactId: string | null;
+  selectArtifact: (artifactId: string) => void;
   reviewMode: EnvironmentReviewMode;
   fileRequest: EnvironmentFileRequest | null;
   closeAll: () => void;
@@ -610,6 +619,33 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       else showTools("devices");
     });
   }, [devicesEnabled, revealChatId, showTools]);
+
+  const [selectedArtifactId, setSelectedArtifactId] = React.useState<string | null>(null);
+  const showToolsRef = React.useRef(showTools);
+  const activeChatRef = React.useRef(activeChat);
+  React.useLayoutEffect(() => {
+    showToolsRef.current = showTools;
+    activeChatRef.current = activeChat;
+  }, [activeChat, showTools]);
+  const onArtifactsChanged = React.useCallback((event: WorkspaceArtifactsChangedEvent) => {
+    // The chat that made a page shows it; every other window just updates its list.
+    if (!revealsWorkspaceArtifact(event, activeChatRef.current)) return;
+    setSelectedArtifactId(event.artifactId);
+    showToolsRef.current("artifacts");
+  }, []);
+  const artifacts = useWorkspaceArtifacts(activeId ?? null, onArtifactsChanged);
+  const artifactsSeenRef = React.useRef<{ workspaceId: string | null; count: number } | null>(null);
+  const artifactsTabOpen = (surfaceState.openTabs ?? [surfaceState.toolsTab]).includes("artifacts");
+  React.useEffect(() => {
+    if (!artifacts.loaded || artifacts.workspaceId !== (activeId ?? null)) return;
+    const previous = artifactsSeenRef.current;
+    const count = artifacts.views.length;
+    artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count };
+    // The tab exists only while the workspace has a page: it closes when the
+    // last one is deleted, or on a workspace that has none.
+    const emptied = previous?.workspaceId !== artifacts.workspaceId || previous.count > 0;
+    if (count === 0 && emptied && artifactsTabOpen) dispatchSurface({ type: "close-tab", tab: "artifacts" });
+  }, [activeId, artifacts.loaded, artifacts.views.length, artifacts.workspaceId, artifactsTabOpen]);
 
   const openReview = React.useCallback(
     (mode: EnvironmentReviewMode) => {
@@ -1091,6 +1127,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       tab,
       subagentsEnabled,
       devicesEnabled,
+      artifacts,
+      selectedArtifactId,
+      selectArtifact: setSelectedArtifactId,
       reviewMode,
       fileRequest,
       closeAll,
@@ -1194,6 +1233,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentViews,
       subagentsEnabled,
       devicesEnabled,
+      artifacts,
+      selectedArtifactId,
       surfaceMode,
       surfaceState.frontSurface,
       surfaceState.quickViewOpen,
@@ -1401,9 +1442,25 @@ function EnvironmentPanelSurface({
 
   const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
     "new-tab": () => (
-      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
+      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={Boolean(active) && panel.artifacts.workspaceId === active?.id && panel.artifacts.views.length > 0} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
     ),
     context: () => <ChatContextPanel details={panel.contextDetails} />,
+    artifacts: () => (
+      <ArtifactsPanel
+        workspace={active ?? null}
+        artifacts={panel.artifacts}
+        selectedId={panel.selectedArtifactId}
+        onSelect={panel.selectArtifact}
+        onAskAiden={(view) => {
+          const chatId = panel.activeChat.workspaceId === view.artifact.workspaceId ? panel.activeChat.chatId : null;
+          if (!chatId) {
+            toast.error("Open a chat in this workspace to ask Aiden.");
+            return;
+          }
+          stageComposerText(chatId, workspaceArtifactChangeRequest(view));
+        }}
+      />
+    ),
     terminal: () => <TerminalSideTarget presented={presented && panel.tab === "terminal"} />,
     review: () => (
       <ReviewPanel
