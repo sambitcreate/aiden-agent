@@ -70,6 +70,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         id: metadataId(chat.id, "message", message.id),
         kind: "transcript",
         text: boundedMetadataText(message.content),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: message.id,
       });
@@ -81,6 +82,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         text: boundedMetadataText(
           `Attachment ${attachment.name}; type ${attachment.mimeType}; ${attachment.size} bytes.`,
         ),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: attachment.id,
       });
@@ -90,6 +92,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         id: metadataId(chat.id, "ui-visual", visual.id),
         kind: "artifact",
         text: boundedMetadataText(`Visual ${visual.title}. ${visual.fallbackText}`),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: visual.id,
       });
@@ -101,6 +104,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         text: boundedMetadataText(
           `HTML artifact ${artifact.title}; type ${artifact.mimeType}; ${artifact.size} bytes.`,
         ),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: artifact.id,
       });

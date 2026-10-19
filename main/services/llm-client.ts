@@ -2754,11 +2754,15 @@ export const llmClient = {
             ? undefined
             : await configStore.getWorkspace(generationChat.workspaceId);
           const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
-          await memoryStore.replaceChatMetadata(
+          const indexing = await memoryStore.replaceChatMetadata(
             scope,
             generationChat.id,
             memoryMetadataForChat(generationChat),
           );
+          if (indexing.rejected || indexing.evicted) writeDiagnosticEvent({
+            level: "info", area: "persistence", event: "memory-indexed", outcome: "completed",
+            fields: { accepted: indexing.accepted, rejected: indexing.rejected, evicted: indexing.evicted, truncated: indexing.atCapacity },
+          });
           const provenance = memoryProvenanceForGeneration(
             generationChat,
             options.turnId,

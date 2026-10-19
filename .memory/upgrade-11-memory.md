@@ -26,3 +26,7 @@ Deterministic tests use a separate real SQLite connection that commits exactly b
 ## Pullfrog follow-up — lock-admission clock
 
 `put` now samples its one transaction timestamp only after `BEGIN IMMEDIATE` succeeds. Requested-expiry validation, collision/quotas, retirement, and inserted timestamps consistently use that admitted time, so waiting for a shared-store writer cannot reuse a pre-wait timestamp. Deterministic tests advance the injected clock in a second-connection transaction that commits before the target BEGIN: both quota scenarios renew an expired collision with fresh timestamps/provenance, and an input expiry that elapsed before admission rejects before superseding anything. These verify post-admission clock ordering; they do not exercise an actually blocked SQLite lock wait. All scenarios fail on `9b38a74170c9709562ce7eed30624e1f45a2fc6b` and pass after the correction. This remains shared-writer integration hardening, not a reproduced current-main production lock race.
+
+## Harness H1a retention — 2026-10-19
+
+Metadata now admits current-chat documents by transactionally evicting oldest other-chat metadata at the 5,000 scope cap (1,000 chat cap unchanged). Age is min(source createdAt, first admission, current clock), with deterministic chat/id ties. Approved facts unaffected. Index result exposes accepted/rejected/evicted/capacity counts; llm-client writes only count diagnostics. Store/context/surface 39 pass; fresh medium review verified skew fix and two-handle/rollback probes.

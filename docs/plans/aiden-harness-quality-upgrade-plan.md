@@ -58,7 +58,7 @@ Each row is a reviewable slice, not one large PR. H0 precedes implementation. In
 | Slice | Deliverable | Depends on | Status |
 | --- | --- | --- | --- |
 | H0 | Current-main baseline, ownership, and acceptance inventory | None | Complete; fresh review passed |
-| H1a | Bounded workspace metadata retention and indexing status | H0 | Planned |
+| H1a | Bounded workspace metadata retention and indexing status | H0 | Implemented; fresh review passed |
 | H1b | Progress-aware attended Assistant recovery | H0 | Planned |
 | H1c | Discovery across admitted namespaces with bounded output | H0 | Planned |
 | H1d | Failed CLI advisor accounting and useful CI receipts | H0 | Planned; separate commits |
@@ -233,3 +233,5 @@ Ownership: H1 owns focused corrections; the existing compaction plan retains its
 Acceptance ledger: deterministic local checks, lifecycle replay, protected task quality, live pilot, packaged performance, native/physical acceptance, and exact-head CI are tracked separately. Live pilot provider/model and cumulative spend are awaiting user configuration; independent implementation proceeds.
 
 H0 focused validation on the merged checkout: Assistant guard, discovery and advisor runtime suites: 36 pass; CI registry and required checks: 23 pass. Memory is being changed in H1a and its post-change acceptance is recorded separately. CLI capability/bundle and packaged/native baselines remain pending their slices; no current acceptance is inferred from historical counts. H0 review identified stale overlapping claims; dated reconciliation notes now exist in CLI and long-thread plans.
+
+H1a: metadata retention uses source age bounded by first admission (including clock skew); eviction transaction touches only scoped metadata, facts unchanged. Structured indexing counts feed sanitized diagnostics. Store/context/surface suites: 39 pass, scoped lint and root type-check pass. Fresh reviewer identified and verified the clock-skew correction; independent concurrent-store and rollback probes passed. No UI/wire change.

@@ -85,6 +85,7 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "todo-storage-disabled",
   "todo-snapshot-invalid",
   "store-write-failed",
+  "memory-indexed",
   "skills-discovery-failed",
   "oversize",
   "rotation-fixture",
@@ -190,6 +191,7 @@ const SAFE_REFERENCE = /^RD-[A-Za-z0-9-]{8,80}$/u;
 const SAFE_FINGERPRINT = /^[0-9a-f]{16}$/u;
 
 const NUMBER_FIELDS = new Set([
+  "accepted", "rejected", "evicted",
   "attempt",
   "attempts",
   "backoffMs",

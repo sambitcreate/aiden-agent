@@ -37,12 +37,21 @@ export interface MemorySearchResult extends MemoryFact {
   rank: number;
 }
 
+export interface MemoryIndexResult {
+  accepted: number;
+  rejected: number;
+  evicted: number;
+  atCapacity: boolean;
+}
+
 export interface MemoryMetadataInput {
   id: string;
   kind: "transcript" | "artifact";
   text: string;
   chatId: string;
   sourceId: string;
+  /** Source age, never the time a passive refresh happened. */
+  createdAt?: number;
 }
 
 export interface MemoryRecallResult {
@@ -735,18 +744,20 @@ export class MemoryStore {
     scope: MemoryScope,
     chatId: string,
     documents: readonly MemoryMetadataInput[],
-  ): Promise<number> {
+  ): Promise<MemoryIndexResult> {
     const database = await this.db();
     const valid = validateScope(scope);
     const sourceChatId = safeId(chatId, "source chat");
     const prepared = documents.slice(-MAX_CHAT_DOCUMENTS).flatMap((document) => {
       try {
-        if (document.chatId !== sourceChatId) return [];
+        if (document.chatId !== sourceChatId || !["transcript", "artifact"].includes(document.kind)) return [];
+        if (document.createdAt !== undefined && (!Number.isSafeInteger(document.createdAt) || document.createdAt < 0)) return [];
         return [{
           id: safeId(document.id, "document ID"),
           kind: document.kind,
           text: normalizeMemoryText(document.text),
           sourceId: safeId(document.sourceId, "document source"),
+          createdAt: document.createdAt,
         }];
       } catch {
         // Secret-like, internal, oversized, or malformed source material is not indexed.
@@ -755,7 +766,15 @@ export class MemoryStore {
     });
     database.exec("BEGIN IMMEDIATE");
     let inserted = 0;
+    let evicted = 0;
+    let atCapacity = false;
     try {
+      const now = this.now();
+      const previousAges = new Map((database.prepare(`
+        SELECT id, updated_at FROM memory_documents
+        WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?
+      `).all(sourceChatId, valid.kind, valid.id) as Array<{ id: string; updated_at: number }>).
+        map((row) => [row.id, row.updated_at]));
       // Scoped delete: legacy-scope copies of this chat's documents (imported
       // for downgrade compatibility) must not be wiped by a new-scope write.
       database.prepare("DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?")
@@ -763,14 +782,20 @@ export class MemoryStore {
       const existing = database.prepare(`
         SELECT count(*) AS count FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
       `).get(valid.kind, valid.id) as { count: number };
-      const remaining = Math.max(0, MAX_SCOPE_DOCUMENTS - Number(existing.count));
+      const excess = Math.max(0, Number(existing.count) + prepared.length - MAX_SCOPE_DOCUMENTS);
+      evicted = Number(database.prepare(`
+        DELETE FROM memory_documents WHERE rowid IN (
+          SELECT rowid FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
+          ORDER BY updated_at ASC, source_chat_id ASC, id ASC LIMIT ?
+        )
+      `).run(valid.kind, valid.id, excess).changes);
+      atCapacity = Number(existing.count) - evicted + prepared.length >= MAX_SCOPE_DOCUMENTS;
       const insert = database.prepare(`
         INSERT INTO memory_documents (
           id, scope_kind, scope_id, kind, normalized_text, source_chat_id, source_id, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      const accepted = remaining === 0 ? [] : prepared.slice(-remaining);
-      for (const document of accepted) {
+      for (const document of prepared) {
         insert.run(
           document.id,
           valid.kind,
@@ -779,7 +804,7 @@ export class MemoryStore {
           document.text,
           sourceChatId,
           document.sourceId,
-          this.now(),
+          Math.min(now, document.createdAt ?? now, previousAges.get(document.id) ?? now),
         );
         inserted += 1;
       }
@@ -789,7 +814,7 @@ export class MemoryStore {
       throw error;
     }
     await this.repairPrivateModes();
-    return inserted;
+    return { accepted: inserted, rejected: documents.length - inserted, evicted, atCapacity };
   }
 
   async recall(scope: MemoryScope, query: string, limit = 8): Promise<MemoryRecallResult[]> {
