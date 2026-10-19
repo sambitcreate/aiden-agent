@@ -86,7 +86,7 @@ export function ContextMeter({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-72 p-3.5"
+        className="w-[max(18rem,calc(var(--ui-font-size)*22))] max-w-[calc(100vw-2rem)] p-3.5"
         align="end"
         side="top"
         aria-label="Context usage"
@@ -146,9 +146,9 @@ export function ContextMeterDetails({
           </span>
           <dl className="mt-2.5 space-y-1 text-small">
             {rows.map(([term, value]) => (
-              <div key={term} className="flex items-baseline justify-between gap-3">
+              <div key={term} className="flex flex-wrap items-baseline justify-between gap-x-3">
                 <dt className="whitespace-nowrap text-tertiary">{term}</dt>
-                <dd className="text-secondary tabular-nums">{value}</dd>
+                <dd className="ml-auto text-secondary tabular-nums">{value}</dd>
               </div>
             ))}
           </dl>
