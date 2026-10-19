@@ -1,19 +1,27 @@
 /* global Buffer, structuredClone */
 
 /**
- * The macOS tools/list surface of cua-driver-rs-v0.34.1, restricted to the
- * tools Aiden's broker allowlists, plus the driver's argument boundary and
- * result shapes. Shared by the stdio fake driver and the in-memory test
- * sessions so both reject exactly what the pinned driver rejects.
+ * The macOS tools/list surface of cua-driver-rs-v0.36.0 for the tools Aiden's
+ * broker allowlists, plus the upstream-only batch and script tools the broker
+ * filters out (`UNFORWARDED_TOOLS`), the driver's argument boundary and result
+ * shapes. Shared by the stdio fake driver and the in-memory test sessions so
+ * both reject exactly what the pinned driver rejects. Hand-maintained from the
+ * upstream sources below; there is no generator.
  *
- * Sources (all at tag cua-driver-rs-v0.34.1, libs/cua-driver/):
- * - input schemas: rust/crates/platform-macos/src/tools/*.rs `def()`, with the
- *   advertised `session` (closed schemas) and typed `target` added by
+ * Sources (all at tag cua-driver-rs-v0.36.0, libs/cua-driver/):
+ * - input schemas: rust/crates/platform-macos/src/tools/*.rs `def()` (and
+ *   cua-driver-core/src/window_state_view.rs::schema_properties for the
+ *   get_window_state view options), with the advertised `session` (closed
+ *   schemas) and typed `target` added by
  *   cua-driver-core/src/tool.rs::advertised_runtime_input_schema; contract
- *   tools (verify_state, invoke_menu, set_window_frame, sessions) from
- *   contract/manifest.json. Descriptions are omitted.
- * - capabilities: cua-driver-core/src/tool.rs::default_capabilities_for plus
- *   the schema-derived `input.delivery_mode`.
+ *   tools (verify_state, invoke_menu, set_window_frame, sessions) and the
+ *   `target` field from contract/manifest.json, which 0.35 made
+ *   Vertex-compatible (no type arrays, oneOf, const, or nullable defaults);
+ *   run_steps from cua-driver-core/src/batch_tools.rs and run_script from
+ *   cua-driver-core/src/script_tool.rs. Descriptions are omitted.
+ * - capabilities: the manifest's per-tool capabilities, else
+ *   cua-driver-core/src/tool.rs::default_capabilities_for, plus the
+ *   schema-derived `input.delivery_mode` and `input.scroll.coordinates`.
  * - unknown arguments: tool.rs::unknown_argument -> protected_refusal
  *   `{status:"refused", refusal:{code:"invalid_arguments"}}`.
  * - action results: cua-driver-contract/src/outputs.rs::ActionResult.
@@ -27,27 +35,70 @@ const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
 const deliveryMode = { type: "string", enum: ["background", "foreground"] };
 const scope = { type: "string", enum: ["window", "desktop"] };
+const scopeDefaultWindow = { ...scope, default: "window" };
 const button = { type: "string", enum: ["left", "right", "middle"] };
 const elementTokenSchema = { type: "string", pattern: "^s[0-9a-f]{8}:[0-9]+$" };
+// 0.35 flattened the tagged union into one open object; the driver still
+// enforces the window/desktop shapes at dispatch (`action_target.rs`).
 const actionTarget = {
-  oneOf: [
-    {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    kind: { type: "string", enum: ["window", "desktop"] },
+    pid: { type: "integer", minimum: 0 },
+    window_id: { type: "integer", minimum: 0 },
+    display_id: { type: "string" },
+  },
+  required: ["kind"],
+};
+
+/** One verify_state predicate (`contract/manifest.json`, `expectation.rs`). */
+const verifyPredicate = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    element: {
       type: "object",
       additionalProperties: false,
       properties: {
-        kind: { const: "window" },
-        pid: { type: "integer", minimum: 1 },
-        window_id: { type: "integer", minimum: 1 },
+        enabled: boolean,
+        exists: boolean,
+        selected: boolean,
+        selector: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label_contains: { type: "string", minLength: 1 },
+            role: { type: "string", minLength: 1 },
+          },
+          required: [],
+        },
+        value_equals: string,
       },
-      required: ["kind", "pid", "window_id"],
+      required: ["selector"],
     },
-    {
+    window: {
       type: "object",
       additionalProperties: false,
-      properties: { kind: { const: "desktop" }, display_id: { const: "primary" } },
-      required: ["kind", "display_id"],
+      properties: {
+        bounds: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            height: number,
+            tolerance_px: { type: "number", minimum: 0, maximum: 100 },
+            width: number,
+            x: number,
+            y: number,
+          },
+          required: ["x", "y", "width", "height"],
+        },
+        exists: boolean,
+      },
+      required: [],
     },
-  ],
+  },
+  required: [],
 };
 
 function closed(properties, required = []) {
@@ -90,8 +141,57 @@ export const TOOL_DEFINITIONS = {
     inputSchema: open({
       session: string,
       capture_scope: { type: "string", enum: ["auto", "window", "desktop"] },
-      cursor_motion: { type: ["object", "null"] },
-      cursor_theme: { type: ["object", "null"] },
+      cursor_motion: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          arc_flow: number,
+          arc_size: number,
+          dwell_after_click_ms: number,
+          effects: {
+            type: "object",
+            additionalProperties: false,
+            properties: Object.fromEntries(
+              ["glow", "magnet", "ripple", "squish", "trail"].map((effect) => [
+                effect,
+                { type: "string", enum: ["on", "off", "default"] },
+              ]),
+            ),
+            required: [],
+          },
+          end_handle: number,
+          glide_duration_ms: number,
+          idle_hide_ms: number,
+          spring: number,
+          start_handle: number,
+          style: {
+            type: "string",
+            enum: [
+              "signature_arc",
+              "spring_settle",
+              "magnetic",
+              "comet_swoop",
+              "adaptive",
+              "classic",
+            ],
+          },
+          timing: {
+            type: "string",
+            enum: ["native", "fitts", "fixed", "relaxed", "steady", "calm", "deliberate"],
+          },
+          turn_radius: number,
+        },
+        required: [],
+      },
+      cursor_theme: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          reduced_motion: { type: "string", enum: ["auto", "on", "off"], default: "auto" },
+          theme_id: string,
+        },
+        required: ["theme_id"],
+      },
     }),
     capabilities: ["session.lifecycle.start", "session.capture_scope"],
   },
@@ -104,7 +204,10 @@ export const TOOL_DEFINITIONS = {
     capabilities: [],
   },
   check_permissions: {
-    inputSchema: closed({ prompt: boolean, probe_direct_capture: boolean }),
+    inputSchema: closed({
+      prompt: { type: "boolean", default: false },
+      probe_direct_capture: boolean,
+    }),
     capabilities: [
       "system.permissions.tcc",
       "system.permissions.tcc.accessibility",
@@ -113,7 +216,7 @@ export const TOOL_DEFINITIONS = {
   },
   list_apps: { inputSchema: closed({}), capabilities: ["app.list"] },
   list_windows: {
-    inputSchema: closed({ pid: integer, on_screen_only: boolean }),
+    inputSchema: closed({ pid: integer, app: string, on_screen_only: boolean }),
     capabilities: ["window.list"],
   },
   get_window_state: {
@@ -128,9 +231,14 @@ export const TOOL_DEFINITIONS = {
         screenshot_out_file: string,
         max_elements: { type: "integer", minimum: 1 },
         max_depth: { type: "integer", minimum: 1 },
-        timeout_ms: { type: "integer", minimum: 1 },
+        timeout_ms: { type: "integer", minimum: 100, maximum: 120_000, default: 1_000 },
         max_dimension: { type: "integer", minimum: 1 },
         max_image_dimension: { type: "integer", minimum: 0 },
+        // window_state_view.rs: the 0.35 lean-read view options.
+        tree_format: { type: "string", enum: ["markdown", "elements", "both"] },
+        since: string,
+        verbose: boolean,
+        full_output: boolean,
         display_only: boolean,
       },
       ["pid", "window_id"],
@@ -150,8 +258,8 @@ export const TOOL_DEFINITIONS = {
       {
         pid: { type: "integer", minimum: 1 },
         window_id: integer,
-        expect: { type: "array", minItems: 1, maxItems: 8, items: { type: "object" } },
-        include_screenshot: { type: ["boolean", "null"] },
+        expect: { type: "array", minItems: 1, maxItems: 8, items: verifyPredicate },
+        include_screenshot: boolean,
         stable_samples: { type: "integer", minimum: 1, maximum: 5, default: 2 },
         timeout_ms: { type: "integer", minimum: 0, maximum: 10_000, default: 5_000 },
       },
@@ -203,7 +311,7 @@ export const TOOL_DEFINITIONS = {
         element_token: elementTokenSchema,
         delivery_mode: deliveryMode,
       },
-      ["pid"],
+      [],
     ),
     capabilities: [
       "input.pointer.click",
@@ -224,7 +332,7 @@ export const TOOL_DEFINITIONS = {
         modifier: stringArray,
         delivery_mode: deliveryMode,
       },
-      ["pid"],
+      [],
     ),
     capabilities: [
       "input.pointer.click",
@@ -247,7 +355,7 @@ export const TOOL_DEFINITIONS = {
         modifier: stringArray,
         button,
         from_zoom: boolean,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -266,13 +374,18 @@ export const TOOL_DEFINITIONS = {
         element_token: elementTokenSchema,
         x: number,
         y: number,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
       ["direction"],
     ),
-    capabilities: ["input.pointer.scroll", "accessibility.element_tokens", "input.delivery_mode"],
+    capabilities: [
+      "input.pointer.scroll",
+      "accessibility.element_tokens",
+      "input.delivery_mode",
+      "input.scroll.coordinates",
+    ],
   },
   type_text: {
     inputSchema: closed(
@@ -284,7 +397,7 @@ export const TOOL_DEFINITIONS = {
         x: number,
         y: number,
         delay_ms: { type: "integer", minimum: 0, maximum: 200 },
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -307,7 +420,7 @@ export const TOOL_DEFINITIONS = {
         element_token: elementTokenSchema,
         x: number,
         y: number,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -324,7 +437,7 @@ export const TOOL_DEFINITIONS = {
         y: number,
         window_id: integer,
         element_token: elementTokenSchema,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -335,7 +448,7 @@ export const TOOL_DEFINITIONS = {
   set_value: {
     inputSchema: closed(
       { pid: integer, window_id: integer, element_token: elementTokenSchema, value: string },
-      ["pid", "value"],
+      ["value"],
     ),
     capabilities: ["input.keyboard.type", "accessibility.element_tokens"],
   },
@@ -369,7 +482,74 @@ export const TOOL_DEFINITIONS = {
     ),
     capabilities: ["window.frame.set"],
   },
+  // Upstream-only: the broker never forwards these (see UNFORWARDED_TOOLS).
+  run_steps: {
+    inputSchema: closed(
+      {
+        steps: {
+          type: "array",
+          minItems: 1,
+          maxItems: 64,
+          items: {
+            type: "object",
+            additionalProperties: true,
+            properties: {
+              tool: {
+                type: "string",
+                enum: [
+                  "click",
+                  "double_click",
+                  "right_click",
+                  "set_value",
+                  "type_text",
+                  "press_key",
+                  "hotkey",
+                  "scroll",
+                  "drag",
+                  "move_cursor",
+                ],
+              },
+              args: { type: "object" },
+              wait_for: { type: "object" },
+              expect: { type: "array", maxItems: 4, items: { type: "object" } },
+              timeout_ms: { type: "integer", minimum: 0, maximum: 10_000 },
+            },
+          },
+        },
+        delay_ms: { type: "integer", minimum: 0, maximum: 2_000 },
+        pid: integer,
+        window_id: integer,
+        app: string,
+        window: string,
+        delivery_mode: deliveryMode,
+        foreground_fallback: boolean,
+        observe: { type: "object" },
+      },
+      ["steps"],
+    ),
+    capabilities: ["input.batch", "input.delivery_mode"],
+  },
+  run_script: {
+    inputSchema: closed(
+      {
+        script: { type: "string", minLength: 1, maxLength: 64 * 1024 },
+        timeout_ms: { type: "integer", minimum: 100, maximum: 120_000 },
+        max_calls: { type: "integer", minimum: 1, maximum: 500 },
+      },
+      ["script"],
+    ),
+    capabilities: ["input.script"],
+  },
 };
+
+/**
+ * Tools 0.36.0 lists that Aiden's broker allowlist drops from tools/list and
+ * refuses on tools/call: one call would run many actions (or arbitrary
+ * script) past Aiden's per-action approval. The broker also starts the driver
+ * with CUA_DRIVER_DISABLE_RUN_SCRIPT=1, so a live driver omits run_script.
+ * `run_actions` is run_steps' hidden alias and is never listed.
+ */
+export const UNFORWARDED_TOOLS = new Set(["run_steps", "run_script"]);
 
 const ACTION_RESULT_OUTPUT_SCHEMA = {
   type: "object",
@@ -399,7 +579,7 @@ const ACTION_RESULT_OUTPUT_SCHEMA = {
   ],
 };
 
-/** tools/list entries in the 0.34.1 wire shape for the given tool names. */
+/** tools/list entries in the 0.36.0 wire shape for the given tool names. */
 export function toolListEntries(names) {
   return names.map((name) => {
     const definition = TOOL_DEFINITIONS[name];
@@ -425,7 +605,7 @@ export function toolListEntries(names) {
   });
 }
 
-/** The full 0.34.1 tools/list result for the given tool names. */
+/** The full 0.36.0 tools/list result for the given tool names. */
 export function toolListResult(names) {
   return {
     tools: toolListEntries(names),
@@ -652,6 +832,7 @@ export const DEFAULT_WINDOWS = [
   },
 ];
 
+/** 0.36 `list_apps` records: unknown optional fields are omitted, no `windows`. */
 export const DEFAULT_APPS = [
   { pid: 42, name: "Safari", bundle_id: "com.apple.Safari", running: true, active: true },
   { pid: 84, name: "Hidden App", bundle_id: "com.example.hidden", running: true, active: false },
@@ -665,10 +846,12 @@ export const DEFAULT_ELEMENTS = [
 ];
 
 /**
- * Stateful 0.34.1 driver behaviour for Aiden's allowlisted tools: closed
+ * Stateful 0.36.0 driver behaviour for Aiden's allowlisted tools: closed
  * argument schemas, per-window snapshot tokens that the next capture stales,
  * same-session screenshot context for pixels, background-drag refusal, and
- * the closed ActionResult on success.
+ * the closed ActionResult on success. Its get_window_state still returns the
+ * structured `elements` array by default, as 0.34 did; 0.35's lean default
+ * (markdown only unless `tree_format` asks for elements) is not modelled yet.
  */
 export class FakeCuaDriver {
   constructor({
@@ -745,11 +928,11 @@ export class FakeCuaDriver {
     const names = ["binary_version", "platform_supported", "session_active"];
     const include = Array.isArray(args.include) ? new Set(args.include) : null;
     return {
-      content: [{ type: "text", text: "cua-driver 0.34.1 on darwin — ok" }],
+      content: [{ type: "text", text: "cua-driver 0.36.0 on darwin — ok" }],
       structuredContent: {
         schema_version: "1",
         platform: "darwin",
-        driver_version: "0.34.1",
+        driver_version: "0.36.0",
         overall: "ok",
         checks: names.map((check) =>
           include && !include.has(check)

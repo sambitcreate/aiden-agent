@@ -17,10 +17,11 @@ fit a signed desktop product.
 
 ## Driver release policy
 
-Aiden pins the macOS universal `cua-driver` 0.34.1 artifact from tag
-`cua-driver-rs-v0.34.1` and source commit
-`0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc` (upgraded from 0.8.3 on 2026-10-09;
-see [the upgrade plan](plans/cua-driver-0-34-upgrade-plan.md)). Both the archive
+Aiden pins the macOS universal `cua-driver` 0.36.0 artifact from tag
+`cua-driver-rs-v0.36.0` and source commit
+`6d6c734c127025fb39ad5d585a10382808b39dc1` (upgraded from 0.34.1 on 2026-10-19,
+see [the 0.36 upgrade plan](plans/cua-driver-0-36-upgrade-plan.md); 0.34.1
+replaced 0.8.3 on 2026-10-09, see [the 0.34 plan](plans/cua-driver-0-34-upgrade-plan.md)). Both the archive
 and extracted binary SHA-256 values are recorded in
 `resources/computer-use/cua-driver-artifact.json`. The release archive now holds
 five signed files (CLI, cursor theme, SDK dylib, Node runtime, C header); Aiden
@@ -34,7 +35,11 @@ driver from `PATH`, never follows an executable path returned by the driver's
 manifest, and never invokes its self-updater. Upstream telemetry and update
 checks are disabled in every child process, including upstream's
 `DO_NOT_TRACK=1` opt-out, which takes precedence over persisted driver
-configuration. The MIT notice ships beside the helper.
+configuration. The broker also starts the driver with
+`CUA_DRIVER_DISABLE_RUN_SCRIPT=1`, so 0.36's on-by-default `run_script`
+(sandboxed JavaScript that drives the driver's own tools) is not offered; it
+and the `run_steps` batch tool are also outside the broker's tool allowlist.
+The MIT notice ships beside the helper.
 
 Upstream publishes a cosign (Sigstore) bundle beside each release asset. The
 pinned archive SHA-256 stays the authority; `npm run computer-use:vendor --
@@ -48,7 +53,7 @@ length and SHA-256 pinned in `driver.rs` afterwards). The generator uses Apple's
 LightweightCodeRequirements encoder and reproduces the former 0.8.3 bytes
 exactly.
 
-Every upstream `cua-driver-rs` release, including the pinned 0.34.1, is marked pre-release. Aiden treats
+Every upstream `cua-driver-rs` release, including the pinned 0.36.0, is marked pre-release. Aiden treats
 Computer Use as a gated beta until the real-driver smoke matrix and release
 signing checks in Phase 4 pass. The bare universal asset carries Cua's valid
 Developer ID signature (`YCK386LBJ7`) but Gatekeeper does not accept it as an
@@ -268,7 +273,7 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
 
 - Hermes: `tools/computer_use/schema.py`, `tool.py`, `cua_backend.py`,
   `permissions.py`, and multimodal routing in `run_agent.py`.
-- Cua: the 0.8.3 and 0.34.1 release checksums, `Skills/cua-driver/EMBEDDING.md`,
+- Cua: the 0.8.3, 0.34.1 and 0.36.0 release checksums, `Skills/cua-driver/EMBEDDING.md`,
   `WORKFLOW.md` and `MACOS.md` (0.34.1), the action-result contract, telemetry
   documentation, platform support, installer scripts, and release workflow.
 - Aiden: Pi agent/tool types, `llm-client.ts`, generic MCP manager, approval UI,

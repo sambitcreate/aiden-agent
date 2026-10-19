@@ -1,4 +1,4 @@
-// Types for the shared 0.34.1 fake driver used by the TypeScript tests.
+// Types for the shared 0.36.0 fake driver used by the TypeScript tests.
 
 export interface FakeToolResult {
   content: Array<Record<string, unknown>>;
@@ -44,6 +44,7 @@ export const TOOL_DEFINITIONS: Record<
   { inputSchema: Record<string, unknown>; capabilities: string[] }
 >;
 export const ACTION_RESULT_TOOLS: ReadonlySet<string>;
+export const UNFORWARDED_TOOLS: ReadonlySet<string>;
 export const DEFAULT_WINDOWS: FakeWindow[];
 export const DEFAULT_APPS: Array<Record<string, unknown>>;
 export const DEFAULT_ELEMENTS: FakeElementRow[];

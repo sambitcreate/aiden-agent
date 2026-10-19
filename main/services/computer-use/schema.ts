@@ -42,7 +42,7 @@ const Modifier = Type.Union(
   ].map((modifier) => Type.Literal(modifier)),
 );
 
-/** One verify_state predicate: exactly one of element or window (cua-driver 0.34.1). */
+/** One verify_state predicate: exactly one of element or window (cua-driver 0.36.0). */
 const VerifyPredicate = Type.Object(
   {
     element: Type.Optional(

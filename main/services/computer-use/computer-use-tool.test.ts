@@ -40,7 +40,7 @@ interface Call {
   signal?: AbortSignal;
 }
 
-/** Aiden's allowlisted 0.34.1 catalog, parsed exactly as a live session parses it. */
+/** Aiden's allowlisted 0.36.0 catalog, parsed exactly as a live session parses it. */
 function pinnedCatalog(): Map<string, CuaDriverToolInfo> {
   return parseCuaDriverTools(toolListResult([...CUA_DRIVER_ALLOWED_TOOLS])).tools;
 }
@@ -115,7 +115,7 @@ class FakeHost implements CuaDriverHostLike {
   }
 }
 
-/** The 0.34.1 driver's answer, with extra driver data Aiden must not forward. */
+/** The 0.36.0 driver's answer, with extra driver data Aiden must not forward. */
 function fakeResponse(call: Call, driver: FakeCuaDriver): unknown {
   const result = driver.call(call.name, call.args) as {
     structuredContent?: Record<string, unknown>;
@@ -634,7 +634,7 @@ test("maps capture modes to Pi images only for positively vision-capable models"
   assert.equal(JSON.stringify(som.details).includes(SCREENSHOT_SENTINEL), false);
   assert.equal(JSON.stringify(som.details).includes("SHOULD_NOT_LEAK"), false);
   const captureCall = vision.session.calls.find((call) => call.name === "get_window_state")!;
-  // 0.34 ignores the deprecated capture_mode, so Aiden never sends it.
+  // 0.36 ignores the deprecated capture_mode, so Aiden never sends it.
   assert.deepEqual(captureCall.args, {
     pid: 42,
     window_id: 7,
@@ -785,7 +785,7 @@ test("desktop resolution ignores Finder folders and desktop-named third-party ap
   await missing.controller.close();
 });
 
-test("maps every action to arguments the pinned 0.34.1 schemas admit", async () => {
+test("maps every action to arguments the pinned 0.36.0 schemas admit", async () => {
   const { controller, session } = harness(true);
   const tokens: string[] = [];
   await capture(controller, "som");
