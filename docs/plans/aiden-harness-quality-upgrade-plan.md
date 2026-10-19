@@ -66,8 +66,8 @@ Each row is a reviewable slice, not one large PR. H0 precedes implementation. In
 | H2b | Protected six-task evaluation adapter and offline falsification | H2a | Implemented; fresh review passed on macOS |
 | H2c | One bounded baseline/candidate live pilot | H2b and resolved pilot budget/configuration | Planned; no trial started |
 | H3 | Portable durable Bot-session parity for CLI/native consumers | H0; portability decision below | Implemented; fresh review passed, physical pairing pending |
-| H4a | Packaged long-chat and idle performance baselines | H0 | Planned |
-| H4b | Measured transcript rendering improvement | H4a | Planned |
+| H4a | Packaged long-chat and idle performance baselines | H0 | Local production package measured; signed release separate |
+| H4b | Measured transcript rendering improvement | H4a | Implemented; fresh review and local budgets/browser checks passed |
 | H5a | Versioned workflow evidence and lesson candidates | H2a, H2b | Implemented private foundation; fresh review passed |
 | H5b | Explicit workflow experiment and adoption UI | H5a, completed H2c with usable measurement pipeline | Planned; off by default |
 
@@ -253,3 +253,5 @@ H5a: private workflow evidence captures actual host receipt digests; bounded, ex
 H2a child follow-up: a real-harness cap-three reproduction previously dispatched four model requests/three effects without a report. The final existing-budget turn is now text-only, producing at most three requests/two effects and an explicitly failed/incomplete/unverified partial report. Stale tool calls cannot execute. 139 focused tests, types/lint and fresh review pass. No deadline or mutation authority increase.
 
 Integration refreshed through origin/main4eb306584 (merge d1ff95802); only documentation/comment changes arrived. Root test-chain union is preserved, no Remote revision change is required. Broader local gates: compaction545, MCP290, Assistant automations239 passed.
+
+H4: older settled text rows use browser containment; artifact/interactive rows and the latest 32 remain normal. Three paired production-package runs improved 2,000-message median opening 18.3% (1,282→1,047 ms), with 50-message regression 2.1% (139→142 ms); declared 15%/20%-or-25 ms targets pass. Active-stream input 42–49 ms with measured server-emitted deltas passes 100 ms target. Fresh review corrections and Electron find/keyboard/copy/scroll/handoff/wide-artifact checks are recorded in [the performance report](../research/harness-transcript-performance.md). All rows remain mounted; no heap/battery benefit claimed.43 renderer tests and initial-JS budget pass; signed release acceptance stays separate.

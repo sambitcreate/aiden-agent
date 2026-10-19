@@ -122,3 +122,44 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
   // The settled reply keeps its tree and stops fading anything in.
   await expect(page.locator(".streaming-reveal").last()).not.toHaveAttribute("data-streaming", /.*/);
 });
+
+test("older transcript content remains findable, copyable and keyboard reachable with reduced motion", async ({ aiden }) => {
+  const { mkdir, readFile, writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  await finishLmStudioOnboarding(aiden.page);
+  const page = await aiden.relaunch(async () => {
+    const folder = join(aiden.userDataDir, "chats");
+    const indexPath = join(folder, "index.json");
+    await mkdir(folder, { recursive: true });
+    const index = JSON.parse(await readFile(indexPath, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return "[]"; throw error; }));
+    const meta = { id: "long-transcript-fixture", title: "Long transcript fixture", createdAt: Date.now(), updatedAt: Date.now() };
+    const messages = Array.from({ length: 100 }, (_, i) => ({ id: `history-${i}`, role: i % 2 ? "assistant" : "user", content: `History marker ${i}.\n\n${"A stable historical paragraph. ".repeat((i % 7 + 1) * 4)}`, createdAt: meta.createdAt + i }));
+    await writeFile(join(folder, `${meta.id}.json`), JSON.stringify({ ...meta, messages }));
+    await writeFile(indexPath, JSON.stringify([...index, meta]));
+  });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.getByRole("complementary").getByRole("button", { name: "Long transcript fixture", exact: true }).click();
+  const viewport = page.locator("[data-follow]").first();
+  await expect(page.getByText("History marker 99.", { exact: false })).toBeVisible();
+  await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
+  const box = await viewport.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.wheel(0, -500);
+  await expect(viewport).toHaveAttribute("data-follow", "false");
+  const found = await page.evaluate(() => (window as unknown as { find(text: string): boolean }).find("History marker 0."));
+  expect(found).toBe(true);
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("History marker 0.");
+  const copy = page.getByRole("button", { name: "Copy message", exact: true }).first();
+  await copy.focus();
+  await expect(copy).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(copy).not.toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(copy).toBeFocused();
+  await expect(copy).toBeInViewport();
+  await copy.press("Enter");
+  await expect.poll(() => aiden.app.evaluate(({ clipboard }) => clipboard.readText())).toContain("History marker 0.");
+  await page.getByRole("button", { name: "Scroll to bottom" }).click();
+  await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
+  await expect(page.getByText("History marker 99.", { exact: false })).toBeInViewport();
+});
