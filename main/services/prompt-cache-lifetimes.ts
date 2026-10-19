@@ -16,7 +16,8 @@ const HOUR = 60 * MINUTE;
  * defaults for that request shape. Only providers that publish a fixed idle
  * lifetime that each cache read restarts are listed; best-effort ranges
  * ("5 to 10 minutes", "a few hours") and undocumented caches return 0 so no
- * guessed countdown is shown. Sources were checked on 2026-10-19:
+ * guessed countdown is shown. Documented lifetimes are guarantees, so a
+ * cache may outlive the countdown. Sources were checked on 2026-10-19:
  * - Claude: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
  *   (5 min, measured from request start, refreshed on each read; the same on
  *   Bedrock, Google Cloud and gateways that pass cache_control through, per
@@ -26,10 +27,10 @@ const HOUR = 60 * MINUTE;
  * - OpenAI GPT-5.6 and later: https://developers.openai.com/api/docs/guides/prompt-caching
  *   (30 min after the latest write or reuse); Azure OpenAI keeps them at
  *   least 30 min: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/prompt-caching
- * - Moonshot Kimi: https://platform.kimi.ai/docs/guide/use-context-caching-feature-of-kimi-api
- *   (5 min default, each hit renews it).
- * - MiniMax Anthropic-compatible API: https://platform.minimax.io/docs/api-reference/text-prompt-caching
- *   (5 min, renewed with continued use).
+ * - Moonshot Kimi K3: https://platform.kimi.ai/docs/guide/use-context-caching-feature-of-kimi-api
+ *   (5 min default, each hit renews it; K2.6 and K2.7 do not write caches).
+ * - MiniMax M2 series, explicit caching: https://platform.minimax.io/docs/api-reference/text-prompt-caching
+ *   (5 min, renewed with continued use; automatic caching varies with load).
  * - GitHub Copilot: https://docs.github.com/en/enterprise-cloud@latest/copilot/tutorials/optimize-ai-usage
  *   (24 h idle for OpenAI models, 1 h for Claude).
  */
@@ -48,10 +49,12 @@ export function promptCacheTtlMs(model: PromptCacheModel): number {
   if (isClaude(model) && (model.api === "anthropic-messages" || cacheControlFormat(model) === "anthropic")) {
     return 5 * MINUTE;
   }
-  if ((model.provider === "minimax" || model.provider === "minimax-cn") && model.api === "anthropic-messages") {
+  // Explicit caching, which Pi's cache_control markers request, covers M2-series models only.
+  if ((model.provider === "minimax" || model.provider === "minimax-cn") && model.api === "anthropic-messages" && /^minimax-m2(?:[.-]|$)/u.test(id)) {
     return 5 * MINUTE;
   }
-  if (model.provider === "moonshotai" || model.provider === "moonshotai-cn") return 5 * MINUTE;
+  // Kimi documents cache writes, and so a lifetime, only for K3.
+  if ((model.provider === "moonshotai" || model.provider === "moonshotai-cn") && /^kimi-k3(?:[.-]|$)/u.test(id)) return 5 * MINUTE;
   if ((model.provider === "openai" || model.provider === "azure") && isThirtyMinuteOpenAiModel(model)) {
     return 30 * MINUTE;
   }

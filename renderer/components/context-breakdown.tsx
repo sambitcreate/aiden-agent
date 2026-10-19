@@ -151,18 +151,23 @@ function cacheLifetime(ms: number): string {
 /** Counts down the provider's prompt cache from the last request that used it. */
 export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWindowV1; initialNow?: number }) {
   const expiresAt = cache.lastRequestAt + cache.ttlMs;
-  const [now, setNow] = React.useState(() => initialNow ?? Date.now());
+  const [clock, setClock] = React.useState(() => Date.now());
+  const now = initialNow ?? clock;
   const remaining = Math.max(0, Math.min(cache.ttlMs, expiresAt - now));
   React.useEffect(() => {
-    // Ticks against the wall clock until the cache lapses; nothing else drives this.
+    // Ticks against the wall clock until the cache lapses; nothing else drives
+    // this. A new window re-reads the clock first, so one that arrives already
+    // lapsed never shows the time left from an earlier render.
+    if (initialNow !== undefined) return;
+    setClock(Date.now());
     if (expiresAt <= Date.now()) return;
     const timer = window.setInterval(() => {
       const current = Date.now();
-      setNow(current);
+      setClock(current);
       if (current >= expiresAt) window.clearInterval(timer);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [expiresAt]);
+  }, [expiresAt, initialNow]);
   const lapsed = remaining === 0;
   const low = !lapsed && remaining <= 60_000;
   return (
@@ -184,7 +189,7 @@ export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWind
       </span>
       <span className="text-mini text-tertiary">
         {lapsed
-          ? "The next request rebuilds the cache."
+          ? "The next request may need to rebuild it."
           : `Kept for ${cacheLifetime(cache.ttlMs)} after each request.`}
       </span>
     </div>

@@ -58,13 +58,13 @@ test("GitHub Copilot publishes its own idle lifetimes per model family", () => {
   assert.equal(promptCacheTtlMs(catalogModel("github-copilot", "gemini-3.8-flash")), 0);
 });
 
-test("Kimi and MiniMax use five minutes; providers without a documented lifetime show none", () => {
-  for (const model of catalogModels(JSON.parse(readFileSync(join(catalogDir, "moonshotai.json"), "utf8")))) {
-    assert.equal(promptCacheTtlMs(model), 5 * MINUTE);
-  }
-  for (const model of catalogModels(JSON.parse(readFileSync(join(catalogDir, "minimax.json"), "utf8")))) {
-    assert.equal(promptCacheTtlMs(model), 5 * MINUTE);
-  }
+test("Kimi K3 and MiniMax M2 use five minutes; models and providers without a documented lifetime show none", () => {
+  assert.equal(promptCacheTtlMs(catalogModel("moonshotai", "kimi-k3")), 5 * MINUTE);
+  assert.equal(promptCacheTtlMs(catalogModel("moonshotai", "kimi-k2.6")), 0);
+  assert.equal(promptCacheTtlMs(catalogModel("moonshotai-cn", "kimi-k2.7-code")), 0);
+  assert.equal(promptCacheTtlMs(catalogModel("minimax", "MiniMax-M2.7")), 5 * MINUTE);
+  assert.equal(promptCacheTtlMs(catalogModel("minimax-cn", "MiniMax-M2.7-highspeed")), 5 * MINUTE);
+  assert.equal(promptCacheTtlMs(catalogModel("minimax", "MiniMax-M3")), 0);
   for (const provider of ["google", "xai", "deepseek", "zai", "mistral", "groq", "fireworks", "kimi-coding"]) {
     for (const model of catalogModels(JSON.parse(readFileSync(join(catalogDir, `${provider}.json`), "utf8")))) {
       assert.equal(promptCacheTtlMs(model), 0, `${provider}/${model.id}`);
