@@ -14,7 +14,7 @@ import {
 } from "./controller.js";
 import { normalizeComputerUseArgs } from "./safety.js";
 import { createComputerUseAgentTool } from "./tool.js";
-import { authorizeAllowedComputerUseAction } from "./access-gate.js";
+import { COMPUTER_USE_SETUP_REASON, authorizeAllowedComputerUseAction } from "./access-gate.js";
 import {
   BOT_COMPUTER_USE_REVOKED_REASON,
   botComputerUseApproval,
@@ -1641,5 +1641,141 @@ test("a durable Bot's input action whose grant is revoked while its card waits n
     new RegExp(BOT_COMPUTER_USE_REVOKED_REASON),
   );
   assert.equal(revoked, 2);
+  await controller.close();
+});
+
+/** The closed 0.36 action result for a refusal: `effect:"refused"` with `error.code`. */
+function refusedAction(code: string) {
+  return {
+    content: [{ type: "text", text: "refused" }],
+    structuredContent: {
+      effect: "refused",
+      route: "accessibility",
+      error: { code, hint: `${code} from driver` },
+    },
+  };
+}
+
+/** Run one approved action the driver refuses with `code` after an ax capture. */
+async function refuseAfterCapture(
+  code: string,
+  tool: string,
+  args: Parameters<ComputerUseController["authorize"]>[1],
+) {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === tool ? refusedAction(code) : fakeResponse(call, session.driver);
+  let raised: (Error & { code?: string }) | undefined;
+  await assert.rejects(
+    () => approved(controller, code, args),
+    (error: Error & { code?: string }) => {
+      raised = error;
+      return true;
+    },
+  );
+  return { controller, session, error: raised! };
+}
+
+/** Whether the element numbers from the capture before the refusal still resolve. */
+async function captureStillUsable(controller: ComputerUseController): Promise<boolean> {
+  try {
+    await controller.approvalFor({ action: "click", element: 0 });
+    return true;
+  } catch (error) {
+    if (/latest capture/u.test((error as Error).message)) return false;
+    throw error;
+  }
+}
+
+test("write_not_applied invalidates the capture and asks for another route", async () => {
+  const { controller, error } = await refuseAfterCapture("write_not_applied", "set_value", {
+    action: "set_value",
+    element: 1,
+    value: "Blue",
+  });
+  assert.equal(error.code, "write_not_applied");
+  assert.match(
+    error.message,
+    /^cua-driver read the control back and the value did not change\. Capture the window again and choose another route \(element click, press_key\) instead of repeating set_value\./u,
+  );
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+for (const code of ["window_not_key", "target_focus_unconfirmed"]) {
+  test(`${code} reports that nothing was sent and keeps the capture`, async () => {
+    const { controller, error } = await refuseAfterCapture(code, "type_text", {
+      action: "type",
+      text: "hi",
+    });
+    assert.equal(error.code, "focus_unconfirmed");
+    assert.match(
+      error.message,
+      /^The target did not have keyboard focus, so nothing was sent\. Click the element first or capture again\./u,
+    );
+    assert.equal(controller.lifecycleState, "ready");
+    assert.equal(await captureStillUsable(controller), true);
+    await controller.close();
+  });
+}
+
+for (const code of [
+  "windowserver_connection_invalid",
+  "permission_required",
+  "direct_capture_consent_required",
+]) {
+  test(`${code} is reported as unfinished macOS setup`, async () => {
+    const { controller, error } = await refuseAfterCapture(code, "type_text", {
+      action: "type",
+      text: "hi",
+    });
+    assert.equal(error.code, "permission_required");
+    assert.ok(error.message.includes(COMPUTER_USE_SETUP_REASON), error.message);
+    assert.ok(error.message.includes(code), error.message);
+    await controller.close();
+  });
+}
+
+for (const code of ["desktop_coordinate_scope_required", "element_bounds_unavailable"]) {
+  test(`${code} drops the active target and asks to recapture an exact window`, async () => {
+    const { controller, error } = await refuseAfterCapture(code, "type_text", {
+      action: "type",
+      text: "hi",
+    });
+    assert.equal(error.code, "target_unavailable");
+    assert.match(error.message, /list_windows/u);
+    assert.equal(controller.lifecycleState, "ready");
+    await assert.rejects(
+      () => controller.approvalFor({ action: "type", text: "hi" }),
+      /No active window/u,
+    );
+    await controller.close();
+  });
+}
+
+test("foreground_partial_unknown is an unknown execution that invalidates the capture", async () => {
+  const { controller, error } = await refuseAfterCapture("foreground_partial_unknown", "type_text", {
+    action: "type",
+    text: "hello",
+  });
+  assert.equal(error.code, "execution_unknown");
+  assert.match(error.message, /may already have taken effect/u);
+  assert.match(error.message, /never repeat/u);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+test("electron_main_process_unavailable asks for an approved foreground retry", async () => {
+  const { controller, error } = await refuseAfterCapture(
+    "electron_main_process_unavailable",
+    "type_text",
+    { action: "type", text: "hi" },
+  );
+  assert.equal(error.code, "foreground_required");
+  assert.match(error.message, /delivery_mode "foreground"/u);
+  assert.equal(controller.lifecycleState, "ready");
   await controller.close();
 });

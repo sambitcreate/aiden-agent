@@ -21,6 +21,7 @@ import {
 } from "./safety.js";
 import type { FormFillBatchPlan, FormFillBatchResult, FormFillRowResult } from "../form-fill/batch-core.js";
 import { FORM_FILL_UNAVAILABLE_MESSAGE } from "../../../renderer/shared/form-fill-availability.js";
+import { COMPUTER_USE_SETUP_REASON } from "./access-gate.js";
 
 const ACTION_TIMEOUT_MS = 30_000;
 export const COMPUTER_USE_DISCOVERY_TIMEOUT_MS = 120_000;
@@ -208,7 +209,19 @@ const WINDOW_TARGET_REFUSALS = new Set([
   "window_target_not_found",
   "window_id_not_found",
   "window_owner_pid_mismatch",
+  "desktop_coordinate_scope_required",
+  "element_bounds_unavailable",
 ]);
+/** 0.36 refusals proving the target lacked keyboard focus; nothing was sent. */
+const FOCUS_REFUSALS = new Set(["window_not_key", "target_focus_unconfirmed"]);
+/** 0.36 refusals that only macOS setup (permissions, capture consent) can clear. */
+const READINESS_REFUSALS = new Set([
+  "windowserver_connection_invalid",
+  "permission_required",
+  "direct_capture_consent_required",
+]);
+/** Refusals a visible foreground retry can satisfy. */
+const FOREGROUND_REFUSALS = new Set(["background_unavailable", "electron_main_process_unavailable"]);
 
 class ComputerUseDriverActionError extends Error {
   constructor(
@@ -917,7 +930,8 @@ export class ComputerUseController {
    */
   private refusalError(error: ComputerUseDriverActionError): Error {
     const detail = error.message.slice(0, 1_000);
-    if (error.executionUnknown) {
+    // foreground_partial_unknown: the foreground route may have delivered part of the input.
+    if (error.executionUnknown || error.code === "foreground_partial_unknown") {
       // The UI may already have changed; nothing captured before can be trusted.
       if (this.target) this.invalidateTargetSnapshot(this.target);
       return new ComputerUseSafetyError(
@@ -946,7 +960,26 @@ export class ComputerUseController {
         `The captured window no longer resolves to one exact target (${error.code}). Call list_windows, then capture the intended pid and window_id again. (${detail})`,
       );
     }
-    if (error.code === "background_unavailable") {
+    if (error.code === "write_not_applied") {
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      return new ComputerUseSafetyError(
+        "write_not_applied",
+        `cua-driver read the control back and the value did not change. Capture the window again and choose another route (element click, press_key) instead of repeating set_value. (${detail})`,
+      );
+    }
+    if (error.code && FOCUS_REFUSALS.has(error.code)) {
+      return new ComputerUseSafetyError(
+        "focus_unconfirmed",
+        `The target did not have keyboard focus, so nothing was sent. Click the element first or capture again. (${detail})`,
+      );
+    }
+    if (error.code && READINESS_REFUSALS.has(error.code)) {
+      return new ComputerUseSafetyError(
+        "permission_required",
+        `macOS has not granted Aiden Computer Use what this action needs (${error.code}). ${COMPUTER_USE_SETUP_REASON} (${detail})`,
+      );
+    }
+    if (error.code && FOREGROUND_REFUSALS.has(error.code)) {
       return new ComputerUseSafetyError(
         "foreground_required",
         `cua-driver cannot deliver this action in the background. Retry it with delivery_mode "foreground", which visibly fronts the window and needs its own approval. (${detail})`,
