@@ -15,11 +15,25 @@ async function setup(t: test.TestContext) {
   const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => "art1" });
   const events: WorkspaceArtifactsChangedEvent[] = [];
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const ran: unknown[][] = [];
   registerWorkspaceArtifactHandlers({
     handle: (channel, handler) => handlers.set(channel, handler),
     store,
     workspaceExists: async (id) => id === "ws1",
     notify: (event) => events.push(event),
+    runner: {
+      refresh: async (...args) => {
+        ran.push(["refresh", ...args.slice(0, 3)]);
+        return {};
+      },
+      runAction: async (...args) => {
+        ran.push(["run", ...args.slice(0, 5)]);
+        return { ok: true, output: "" };
+      },
+    },
+    // The real binding resolves the folder for the calling window.
+    runInWorkspace: (_event, _workspaceId, operation) =>
+      operation({ folderPath: "/work/ws1", permission: "full" }, new AbortController().signal),
   });
   const invoke = (channel: string, ...args: unknown[]) => Promise.resolve(handlers.get(channel)!({}, ...args));
   const compiled = compileAum('<Visual title="PRs"><Text>{len($pulls)}</Text></Visual>');
@@ -30,7 +44,7 @@ async function setup(t: test.TestContext) {
     actions: [],
     refresh: { onOpen: true },
   });
-  return { store, events, invoke, handlers };
+  return { store, events, invoke, handlers, ran };
 }
 
 test("every channel the renderer calls is registered", async (t) => {
@@ -69,4 +83,20 @@ test("rename and delete announce the change; page state saves quietly", async (t
   assert.deepEqual(await invoke(WORKSPACE_ARTIFACT_CHANNELS.delete, "ws1", "art1"), { removed: true });
   assert.deepEqual(await invoke(WORKSPACE_ARTIFACT_CHANNELS.delete, "ws1", "art1"), { removed: false });
   assert.deepEqual(events.map((event) => event.reason), ["updated", "deleted"]);
+});
+
+test("refresh and buttons run in the resolved workspace folder, and only with well-formed input", async (t) => {
+  const { invoke, ran } = await setup(t);
+  await invoke(WORKSPACE_ARTIFACT_CHANNELS.refresh, "ws1", "art1");
+  await invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", [12]);
+  const context = { folderPath: "/work/ws1", permission: "full" };
+  assert.deepEqual(ran, [
+    ["refresh", "ws1", "art1", context],
+    ["run", "ws1", "art1", "merge", [12], context],
+  ]);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "rm -rf", []), /Invalid button/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", "12"), /values/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.run, "ws1", "art1", "merge", Array(9).fill(1)), /values/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.refresh, "ws-gone", "art1"), /no longer exists/u);
+  assert.equal(ran.length, 2);
 });

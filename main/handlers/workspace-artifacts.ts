@@ -3,9 +3,12 @@
 
 import {
   isWorkspaceArtifactId,
+  isWorkspaceArtifactName,
   isWorkspaceArtifactWorkspaceId,
+  WORKSPACE_ARTIFACT_LIMITS,
   type WorkspaceArtifactsChangedEvent,
 } from "../../renderer/shared/workspace-artifacts.js";
+import type { WorkspaceArtifactRunContext, WorkspaceArtifactRunner } from "../services/workspace-artifacts/runner.js";
 import type { WorkspaceArtifactStore } from "../services/workspace-artifacts/store.js";
 import { parseUiVisualState } from "./chat-ui-visual-state.js";
 
@@ -15,6 +18,8 @@ export const WORKSPACE_ARTIFACT_CHANNELS = {
   delete: "workspaces:artifacts:delete",
   saveState: "workspaces:artifacts:saveState",
   approve: "workspaces:artifacts:approve",
+  refresh: "workspaces:artifacts:refresh",
+  run: "workspaces:artifacts:run",
 } as const;
 
 export interface WorkspaceArtifactHandlerDependencies {
@@ -22,6 +27,16 @@ export interface WorkspaceArtifactHandlerDependencies {
   store: Pick<WorkspaceArtifactStore, "list" | "rename" | "delete" | "saveState" | "approve">;
   workspaceExists: (workspaceId: string) => Promise<boolean>;
   notify: (event: WorkspaceArtifactsChangedEvent) => void;
+  runner: Pick<WorkspaceArtifactRunner, "refresh" | "runAction">;
+  /**
+   * Resolves the workspace's folder for the calling window (realpath, access
+   * checked) and runs `operation` while the window owns it.
+   */
+  runInWorkspace: <T>(
+    event: unknown,
+    workspaceId: string,
+    operation: (context: WorkspaceArtifactRunContext, signal: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
 }
 
 function asWorkspaceId(value: unknown): string {
@@ -77,5 +92,23 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     const artifact = await store.approve(workspace, asArtifactId(artifactId), digest);
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
     return artifact;
+  });
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.refresh, async (event, workspaceId, artifactId) => {
+    const workspace = await existingWorkspace(workspaceId);
+    const id = asArtifactId(artifactId);
+    return dependencies.runInWorkspace(event, workspace, (context, signal) =>
+      dependencies.runner.refresh(workspace, id, context, signal),
+    );
+  });
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.run, async (event, workspaceId, artifactId, actionName, args) => {
+    const workspace = await existingWorkspace(workspaceId);
+    const id = asArtifactId(artifactId);
+    if (!isWorkspaceArtifactName(actionName)) throw new Error("Invalid button.");
+    if (!Array.isArray(args) || args.length > WORKSPACE_ARTIFACT_LIMITS.params) throw new Error("Invalid button values.");
+    return dependencies.runInWorkspace(event, workspace, (context, signal) =>
+      dependencies.runner.runAction(workspace, id, actionName, args, context, signal),
+    );
   });
 }

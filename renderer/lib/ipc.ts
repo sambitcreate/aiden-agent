@@ -260,6 +260,7 @@ import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-f
 import type {
   WorkspaceArtifactsChangedEvent,
   WorkspaceArtifactV1,
+  WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
 import { invoke, onNotification } from "./ipc-bridge";
@@ -1204,6 +1205,12 @@ export const workspaceArtifactsApi = {
     invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
   approve: (workspaceId: string, artifactId: string, digest: string) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
+  /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
+  refresh: (workspaceId: string, artifactId: string) =>
+    invoke<Record<string, WorkspaceArtifactSourceResultV1>>("workspaces:artifacts:refresh", workspaceId, artifactId),
+  /** Runs one of the page's buttons; main fills in the saved command. */
+  run: (workspaceId: string, artifactId: string, action: string, args: unknown[]) =>
+    invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };

@@ -467,7 +467,11 @@ import {
   workspaceArtifactCallApproval,
   type WorkspaceArtifactCallApproval,
 } from "./workspace-artifacts/tool.js";
-import { notifyWorkspaceArtifactsChanged, workspaceArtifactStore } from "./workspace-artifacts/main.js";
+import {
+  notifyWorkspaceArtifactsChanged,
+  workspaceArtifactRunner,
+  workspaceArtifactStore,
+} from "./workspace-artifacts/main.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
 import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
@@ -1992,6 +1996,8 @@ async function prepareGeneration(
           hasFolder: Boolean(folderPath),
           store: workspaceArtifactStore,
           takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
+          refresh: (artifact, refreshSignal) =>
+            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
           workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
         }),

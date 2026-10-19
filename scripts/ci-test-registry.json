@@ -326,7 +326,8 @@
         "main/services/superseding-task-core.test.ts",
         "main/services/workspace-artifacts/store.test.ts",
         "main/services/workspace-artifacts/tool.test.ts",
-        "main/handlers/workspace-artifacts.test.ts"
+        "main/handlers/workspace-artifacts.test.ts",
+        "main/services/workspace-artifacts/runner.test.ts"
       ],
       "preserved": [
         "browser",
