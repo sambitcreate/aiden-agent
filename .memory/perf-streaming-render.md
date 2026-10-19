@@ -1,6 +1,6 @@
 # Streaming and transcript render performance (2026-10)
 
-Branch `perf/streaming-render` (optimization audit, section 3.4). Not merged yet.
+Branch `perf/streaming-render` (optimization audit, section 3.4). Merged in PR #329 (0.53.0).
 
 ## What changed
 - **LLM deltas (MAIN-30):** `main/services/generation-delta-coalescer.ts` merges `chat:delta` /

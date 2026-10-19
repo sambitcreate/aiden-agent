@@ -1,5 +1,7 @@
 # Pi 1.0.3 runtime upgrade
 
+> Historical (2026-10-16): these notes cover the Pi 1.0.3 upgrade. Desktop and CLI now pin Pi 1.3.0 (PR #505; 1.2.0 came with the [MCP and Plugins remediation plan](plans/completed/mcp-plugins-remediation-plan.md)); the 0.87.1 legacy harness note below still applies.
+
 Aiden's desktop and standalone CLI now use exact Pi 1.0.3 packages. The integrated upgrade includes permissioned Tool Scripts, deferred MCP tool discovery with complete bounded inventories, image generation and classification, opt-in local classification, foreground cache warming, provider-authenticated MCP connections, and per-model compaction budgets.
 
 ## Existing data

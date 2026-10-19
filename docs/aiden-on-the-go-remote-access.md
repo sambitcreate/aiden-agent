@@ -1,6 +1,6 @@
 # Aiden On The Go remote access
 
-Aiden Agent can expose a small authenticated API to Aiden On The Go on phones and tablets. Phone access is off by default. Aiden must remain running on the Mac, although its window may be closed.
+Aiden Agent can expose a small authenticated API to Aiden On The Go on phones and tablets. Phone access is off by default. Aiden must remain running on the desktop (Mac or Linux), although its window may be closed.
 
 ## Local Network setup
 

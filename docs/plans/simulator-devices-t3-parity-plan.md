@@ -1,6 +1,6 @@
 # Simulator Devices: T3 Code parity upgrade
 
-Status: Active (2026-10-08). Parent plan: [Simulator Devices](simulator-devices-plan.md).
+Status: Implemented, merged in PR #391 (2026-10-08) and shipped in 0.55.0. Parent plan: [Simulator Devices](simulator-devices-plan.md).
 
 ## Goal
 

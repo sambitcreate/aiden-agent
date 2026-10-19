@@ -36,7 +36,7 @@ authority. Ordinary model reads and application startup remain offline.
 
 ## Release behavior
 
-- `.github/workflows/ci.yml` verifies pull requests and pushes on GitHub's `macos-26` image.
+- `.github/workflows/ci.yml` verifies pull requests and pushes on GitHub-hosted `macos-26` and `ubuntu-24.04` runners (see [continuous integration](ci.md)).
 - `.github/workflows/release.yml` is considered enabled only when the source repository variable
   `RELEASES_ENABLED` is exactly `true`.
 - A release uses the complete SemVer declared in `package.json` exactly. For example, `0.35.0`
@@ -102,7 +102,7 @@ does not install Actions artifacts from the standalone manual Linux-installer
 workflow. That manual workflow is for downloading and testing unpromoted builds
 and has no release-publication permission.
 
-For a future release produced by this workflow, independently select the approved
+For a release produced by this workflow (v0.50.0 and later), independently select the approved
 40-character source commit from the reviewed release record. Verify each downloaded
 file with a trusted, current GitHub CLI. Use an absolute artifact path and substitute
 the approved commit for the placeholder; do not take the expected commit from the

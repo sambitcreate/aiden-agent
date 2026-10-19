@@ -31,4 +31,4 @@ Branch `perf/remote-server`. Desktop-side only; no protocol revision change.
 
 ## EXT-35: deferred
 - Behavior fixtures need coordinated iOS/Android test consumers; Android's
-  fixture-directory read is still on unmerged `perf/android-lifecycle-streaming`.
+  fixture-directory read landed with `perf/android-lifecycle-streaming` (PR #332).

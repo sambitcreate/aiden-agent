@@ -192,16 +192,17 @@ Use unavailable.
    homogeneous numeric arrays bounded to exactly two items so OpenAI-compatible
    providers receive object-valued JSON Schema `items`; runtime validation still
    independently requires two finite nonnegative values.
-3. **Product surface:** persisted global enablement and per-chat activation;
-   readiness/doctor/permission IPC; Settings and composer controls; accessible
-   allow-once approval details; lifecycle cleanup.
+3. **Product surface:** persisted global enablement, a per-chat access card
+   (Deny / Allow for this chat / Always allow) raised by the first call, and
+   Always allow / Reset chat permissions in Settings;
+   readiness/doctor/permission IPC; lifecycle cleanup.
 4. **Release and acceptance:** isolated development output plus transactional
    distribution staging; mandatory Developer ID and notarization preflight;
    nested signature, staple, Gatekeeper, entitlement, fuse, and
    packaged-resource validation; privacy documentation; the full test suite;
    and an opt-in operator-driven real-driver smoke against an isolated profile
    and uniquely titled disposable TextEdit window. The smoke seeds both gates
-   off, then uses the normal Settings, macOS TCC, per-chat, Allow-once, Stop, and
+   off, then uses the normal Settings, macOS TCC, per-chat access card, Stop, and
    quit paths with a capability-authenticated, loopback-only scripted
    vision/tool model—never a privileged test backdoor. It validates and owns the
    exact system TextEdit executable, correlates every result to its tool-call ID
@@ -222,7 +223,8 @@ AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged
 ```
 
 The acceptance command intentionally stops for visible macOS TCC decisions and
-two normal Aiden **Allow once** decisions (type, then save). On success it writes
+one Computer Use access card (choose **Allow for this chat**); the type,
+save-key and stale-click actions then run without further cards. On success it writes
 an evidence-only receipt to `build/computer-use-acceptance-receipt.json`, bound
 to the tested app's signed CDHash, app-ASAR hash, bundle ID, and versions. A new
 package or acceptance run invalidates the old receipt. TCC grants are persistent
@@ -245,8 +247,10 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
 
 - Capture-derived AX/OCR text is untrusted application content, never system
   instructions.
-- Capture, wait, and enumeration are read-only. Every user-visible input action
-  requires a fresh Allow once decision, independent of workspace permission.
+- Capture, wait, and enumeration are read-only. Input actions require Computer
+  Use access for the chat (a one-time access card or Always allow), independent
+  of workspace permission; each action's grant is still bound to the exact
+  target and consumed once.
 - Foreground delivery is a distinct visible-risk approval and is unavailable
   unless the driver advertises the capability.
 - Dangerous system shortcuts and destructive shell-like text are rejected

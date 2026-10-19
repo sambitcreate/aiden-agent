@@ -1,10 +1,10 @@
 # Built-in Aiden knowledge and app actions
 
-Status: **Implemented MVP in [open PR #312](https://github.com/sambitcreate/aiden-agent/pull/312); automated acceptance is tracked on the PR. Release hardware acceptance remains open.**
+Status: **Implemented MVP merged in [PR #312](https://github.com/sambitcreate/aiden-agent/pull/312) (2026-10-15) and shipped in 0.57.0. Release hardware acceptance remains open.**
 Date: 2026-10-03.
 Baseline: Aiden main `3f86d41af16ea653e907606fb2952d3f67b2dd6e` (0.52.0); desktop and CLI Pi pins remain 0.87.1.
 Pi reference: `/Users/sambitbiswas/projects/opp/pi`, `a276dabe57911253350bffb93cb7d7aff6a73261`; stable published target **1.0.0**, tag `a13d35a742`.
-Related evidence: [all-PR improvement audit](aiden-pr-improvement-audit-20261003.md), [interactive chat controls and json-render research](aiden-chat-controls-json-render-research.md), [Assistant plan](aiden-assistant-plan.md), [CLI plan](aiden-cli-plan.md), [multi-host plan](desktop-multi-host-control-plan.md).
+Related evidence: [all-PR improvement audit](aiden-pr-improvement-audit-20261003.md), [interactive chat controls and json-render research](aiden-chat-controls-json-render-research.md), [Assistant plan](aiden-assistant-plan.md), [CLI plan](aiden-cli-plan.md), [multi-host plan](completed/desktop-multi-host-control-plan.md).
 
 Scope update 2026-10-03: the user requested actual settings controls inside the conversation, using json-render where appropriate, with iOS and Android support. This revision makes portable interactive panels part of the MVP; it supersedes the initial local-only mutation scope and optional result-card treatment. The bounded MVP has now been implemented on the pinned Pi 0.87.1 public APIs, with exact json-render 0.21.0 core/React and scoped Zod 4.3.6. The pending Pi 1.0 stack remains independent.
 

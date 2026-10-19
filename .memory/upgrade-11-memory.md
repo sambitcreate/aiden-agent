@@ -13,7 +13,7 @@ Reference lessons (behavior only; no copied source):
 
 Validation: all four new store regressions fail on baseline and pass after the fix. Store/context/surface-matrix tests after review follow-ups: 33 pass. Memory-policy suite: 8 pass. Type-check and scoped ESLint pass. Existing test registration in `test:compaction` already includes this file. No schema, wire contract, native implementation, UI, or onboarding change; no new feature is advertised. No broad mobile suites, Electron build, or visual checks run for this store-only change. Hosted CI and independent review remain separate gates.
 
-Open PR #121 changes the same store for shared CLI memory and moves write prechecks into a transaction, but retains this expired-duplicate defect. The expiry fix is independent; later integration must preserve the admission transaction and expired-row retirement described below.
+PR #121 (merged 2026-09-26) changes the same store for shared CLI memory and moves write prechecks into a transaction, but retains this expired-duplicate defect. The expiry fix is independent; later integration must preserve the admission transaction and expired-row retirement described below.
 
 ## Pullfrog follow-up — atomic admission
 
