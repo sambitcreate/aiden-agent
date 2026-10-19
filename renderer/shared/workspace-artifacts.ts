@@ -155,18 +155,112 @@ function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
   return false;
 }
 
-const WORD_BREAK_BEFORE = /[\s;&|()]/u;
 const WORD_BREAK_AFTER = /[\s;&|)]/u;
 /** Reserved words that come before a command's name without being it. */
-const COMMAND_PREFIX_WORDS = new Set(["!", "do", "elif", "else", "if", "then", "until", "while"]);
+const COMMAND_PREFIX_WORDS = new Set(["!", "coproc", "do", "elif", "else", "if", "then", "until", "while"]);
 /** `NAME=value` (or `NAME[i]=`, `NAME+=`) before a command's name. */
 const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/u;
+/** A redirection operator; one ending in `&2` or `&-` has no target word. */
+const REDIRECTION = /^(?:&>>?|<<<|<>|[<>]&(?:[0-9]+-?|-)|[<>]&|>>|>\||[<>])/u;
 /** Commands that run their arguments as code or as another program. */
-const RUNS_ARGUMENT = new Set([".", "builtin", "command", "doas", "env", "eval", "exec", "nice", "nohup", "source", "ssh", "su", "sudo", "time", "timeout", "watch", "xargs"]);
-/** Shells whose `-c` argument is a script. */
-const SHELLS = new Set(["ash", "bash", "dash", "ksh", "sh", "zsh"]);
-/** Commands whose arguments bash may evaluate as arithmetic, which can run code. */
-const ARITHMETIC_COMMANDS = new Set(["declare", "let", "local", "typeset"]);
+const RUNS_ARGUMENT = new Set([
+  ".",
+  "arch",
+  "builtin",
+  "bunx",
+  "busybox",
+  "caffeinate",
+  "chroot",
+  "command",
+  "doas",
+  "env",
+  "eval",
+  "exec",
+  "flock",
+  "ionice",
+  "nice",
+  "nohup",
+  "npx",
+  "parallel",
+  "pkexec",
+  "pnpx",
+  "runuser",
+  "setsid",
+  "sg",
+  "source",
+  "ssh",
+  "stdbuf",
+  "strace",
+  "su",
+  "sudo",
+  "systemd-run",
+  "time",
+  "timeout",
+  "trap",
+  "unbuffer",
+  "uvx",
+  "watch",
+  "xargs",
+  "xcrun",
+]);
+
+/**
+ * Programs that read some argument as code: `code` matches the options whose
+ * value is code or names the code to run, `valued` the other options that take
+ * the next word, and `operand` says which plain arguments are code (the first
+ * for `awk '{…}' file` unless a code option gave it, or each after the first
+ * for `sqlite3 db 'select …'`).
+ */
+interface CodeArguments {
+  code: RegExp;
+  valued?: RegExp;
+  operand?: "first" | "after-first";
+}
+const SHELL_CODE: CodeArguments = { code: /^-[A-Za-z]*c$/u, valued: /^[-+][oO]$/u, operand: "first" };
+const AWK_CODE: CodeArguments = { code: /^(?:-[feE]|--file|--source|--exec)$/u, valued: /^(?:-[Fv]|--field-separator|--assign)$/u, operand: "first" };
+const NODE_CODE: CodeArguments = { code: /^(?:-[epr]|--eval|--print|--require|--import|--loader|--experimental-loader)$/u, operand: "first" };
+const CODE_ARGUMENTS: Record<string, CodeArguments> = {
+  ash: SHELL_CODE,
+  bash: SHELL_CODE,
+  csh: SHELL_CODE,
+  dash: SHELL_CODE,
+  fish: SHELL_CODE,
+  ksh: SHELL_CODE,
+  mksh: SHELL_CODE,
+  sh: SHELL_CODE,
+  tcsh: SHELL_CODE,
+  zsh: SHELL_CODE,
+  awk: AWK_CODE,
+  gawk: AWK_CODE,
+  mawk: AWK_CODE,
+  nawk: AWK_CODE,
+  sed: { code: /^(?:-[A-Za-z]*[ef]|--expression|--file)$/u, valued: /^(?:-l|--line-length)$/u, operand: "first" },
+  gsed: { code: /^(?:-[A-Za-z]*[ef]|--expression|--file)$/u, valued: /^(?:-l|--line-length)$/u, operand: "first" },
+  python: { code: /^-[A-Za-z]*[cm]$/u, valued: /^-[WX]$/u, operand: "first" },
+  pypy: { code: /^-[A-Za-z]*[cm]$/u, valued: /^-[WX]$/u, operand: "first" },
+  node: NODE_CODE,
+  nodejs: NODE_CODE,
+  bun: NODE_CODE,
+  perl: { code: /^(?:-[A-Za-z]*[eE]|-[mM])$/u, valued: /^-[Ix]$/u, operand: "first" },
+  ruby: { code: /^(?:-[A-Za-z]*e|-r)$/u, valued: /^-[IC]$/u, operand: "first" },
+  php: { code: /^-[rBREf]$/u, operand: "first" },
+  lua: { code: /^-[el]$/u, operand: "first" },
+  luajit: { code: /^-[el]$/u, operand: "first" },
+  osascript: { code: /^-e$/u, operand: "first" },
+  R: { code: /^(?:-e|--file)$/u },
+  Rscript: { code: /^-e$/u, operand: "first" },
+  pwsh: { code: /^-(?:c|command|e|ec|encodedcommand|f|file)$/iu, operand: "first" },
+  powershell: { code: /^-(?:c|command|e|ec|encodedcommand|f|file)$/iu, operand: "first" },
+  sqlite: { code: /^-(?:cmd|init)$/u, valued: /^-(?:separator|nullvalue|newline|vfs|mmap|maxsize|lookaside|pagecache|heap)$/u, operand: "after-first" },
+  psql: { code: /^(?:-c|--command|-f|--file)$/u },
+  mysql: { code: /^(?:-e|--execute)$/u },
+  mariadb: { code: /^(?:-e|--execute)$/u },
+  git: { code: /^(?:-c|--config-env|--exec-path)$/u },
+};
+/** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
+const NAME_COMMANDS = new Set(["declare", "export", "getopts", "let", "local", "mapfile", "read", "readarray", "readonly", "typeset", "unset"]);
+/** Builtins whose `-v` (or `wait -p`) value is a variable name. */
+const NAME_OPTION_COMMANDS: Record<string, RegExp> = { printf: /^-v$/u, test: /^-[vR]$/u, "[": /^-[vR]$/u, wait: /^-[A-Za-z]*p$/u };
 
 interface PlaceholderPlacement {
   /** Where a placeholder sits wrongly for any value. */
@@ -175,14 +269,66 @@ interface PlaceholderPlacement {
   arithmetic?: string;
 }
 
+/** A word as the shell reads it once quotes, backslashes and line continuations go. */
+function unquotedWord(word: string): string {
+  return word.replace(/\\\n/gu, "").replace(/["'\\]/gu, "");
+}
+
+/**
+ * Judges a placeholder by the words of its simple command before it (as
+ * written, without redirections): whether it would be the command itself, an
+ * argument that command runs as code, or a word bash reads as a variable name
+ * or arithmetic. Returns a reason for any value, `"name"` when only text
+ * values are unsafe, or undefined.
+ */
+function placeholderCommandProblem(words: readonly string[], inArithmetic: boolean): string | "name" | undefined {
+  let start = 0;
+  while (start < words.length && (COMMAND_PREFIX_WORDS.has(words[start]!) || ASSIGNMENT_WORD.test(words[start]!))) start += 1;
+  if (start >= words.length) return inArithmetic ? "name" : "the command itself";
+  const command = unquotedWord(words[start]!);
+  // A name built by expansion, a glob or braces is only known when it runs.
+  if (/[$`*?{}]/u.test(command) || (command !== "[" && command.includes("["))) return "an argument to a command chosen when it runs";
+  const base = command.replace(/^.*\//u, "");
+  // python3.12 and lua5.4 follow python and lua's rules.
+  const name = base.replace(/[0-9][0-9.]*$/u, "") || base;
+  if (RUNS_ARGUMENT.has(base) || RUNS_ARGUMENT.has(name)) return `an argument to ${base}, which runs it`;
+  const args = words.slice(start + 1).map(unquotedWord);
+  const last = args[args.length - 1] ?? "";
+  if (base === "find" && args.some((arg) => /^-(?:exec|execdir|ok|okdir)$/u.test(arg))) return "an argument to find -exec, which runs it";
+  const spec = CODE_ARGUMENTS[base] ?? CODE_ARGUMENTS[name];
+  if (spec) {
+    if (spec.code.test(last)) return `the code given to ${base} ${last}`;
+    let operands = 0;
+    let codeGiven = false;
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index]!;
+      if (arg === "--") {
+        operands += args.length - index - 1;
+        break;
+      }
+      if (spec.code.test(arg)) {
+        codeGiven = true;
+        index += 1;
+      } else if (spec.valued?.test(arg)) index += 1;
+      else if (!arg.startsWith("-") || arg === "-") operands += 1;
+    }
+    if (spec.operand === "first" && !codeGiven && operands === 0) return `the program ${base} runs`;
+    if (spec.operand === "after-first" && operands >= 1) return `the code ${base} runs`;
+  }
+  if (inArithmetic || NAME_COMMANDS.has(base) || NAME_OPTION_COMMANDS[base]?.test(last)) return "name";
+  return undefined;
+}
+
 /**
  * Each placeholder must stand alone as an unquoted argument (`gh pr merge
  * {{number}}`): never inside quotes, backticks, `$(…)`, `${…}`, a heredoc,
  * a comment or a longer word, never the command itself, and never an
- * argument a command runs as code (`eval`, `sh -c`). Returns where a
- * placeholder sits wrongly, or undefined. The value itself never becomes
- * shell code (see `resolveWorkspaceArtifactCommand`); this keeps each value
- * one plain argument, as the person's confirmation shows it.
+ * argument a command runs as code (`eval`, `sh -c`, `python -c`, an awk
+ * program). Returns where a placeholder sits wrongly, or undefined. The value
+ * itself never becomes shell code (see `resolveWorkspaceArtifactCommand`);
+ * this keeps each value one plain argument, as the person's confirmation
+ * shows it. The list of programs that run code is the common ones, not every
+ * program; under Ask each press still shows the exact command.
  */
 function placeholderPlacement(template: string, isText: (name: string) => boolean): PlaceholderPlacement {
   const misplaced = (reason: string): PlaceholderPlacement => ({ misplaced: reason });
@@ -191,13 +337,23 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
   if (/<<(?!<)/u.test(template)) return misplaced("inside a heredoc");
   type Quote = "'" | '"' | "`" | "$'" | null;
   let quote: Quote = null;
-  // Open $(…), ${…} and $[…] expansions, each with the quoting it started in.
+  // Open $(…), ${…}, $[…], <(…) and >(…), each with the quoting it started in.
   const expansions: { close: string; quote: Quote }[] = [];
   // Unquoted [[ … ]] and (( … )), where bash reads words as arithmetic.
   let testBrackets = false;
   let arithmeticParens = 0;
-  // Where the current top-level simple command starts.
-  let clauseStart = 0;
+  // The words so far of the current top-level simple command, as written,
+  // without redirections; where the word being read started; and whether
+  // that word is a redirection's target rather than an argument.
+  let words: string[] = [];
+  let wordStart = -1;
+  let redirectTarget = false;
+  const endWord = (index: number) => {
+    if (wordStart < 0) return;
+    if (redirectTarget) redirectTarget = false;
+    else words.push(template.slice(wordStart, index));
+    wordStart = -1;
+  };
   const checked = new Set<number>();
   for (let index = 0; index < template.length; index += 1) {
     const char = template[index]!;
@@ -206,70 +362,83 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
       else if (char === "'") quote = null;
       continue;
     }
+    const depth = expansions.length;
+    const top = quote === null && depth === 0;
     if (char === "\\") {
+      // A line continuation joins words; any other backslash starts or extends one.
+      if (top && wordStart < 0 && template[index + 1] !== "\n") wordStart = index;
       index += 1;
       continue;
     }
-    const depth = expansions.length;
-    if (quote === null && depth === 0 && char === "#" && (index === 0 || WORD_BREAK_BEFORE.test(template[index - 1]!))) {
-      // A comment runs to the end of its line; quotes inside it mean nothing.
+    if (top && wordStart < 0 && char === "#") {
+      // A comment runs to the end of its line, which then ends the command.
       const newline = template.indexOf("\n", index);
       if (newline < 0) break;
-      index = newline;
+      index = newline - 1;
       continue;
     }
     if (template.startsWith("{{", index)) {
       PLACEHOLDER_AT.lastIndex = index;
       const match = PLACEHOLDER_AT.exec(template);
-      if (!match) continue;
-      checked.add(index);
-      if (quote === '"') return misplaced("inside double quotes");
-      if (quote === "`") return misplaced("inside backticks");
-      if (depth > 0) return misplaced("inside a $(…), ${…} or $[…] expansion");
-      const before = index === 0 ? " " : template[index - 1]!;
-      const end = index + match[0].length;
-      const after = end >= template.length ? " " : template[end]!;
-      if (!WORD_BREAK_BEFORE.test(before) || !WORD_BREAK_AFTER.test(after)) return misplaced("part of a longer word");
-      const head = template.slice(0, index);
-      const inArithmetic = arithmeticParens > 0 || testBrackets;
-      // The words of this placeholder's simple command before it, without the
-      // keywords and NAME=value assignments that can precede the command's name.
-      const words = head.slice(clauseStart).trim().split(/\s+/u).filter(Boolean);
-      let start = 0;
-      while (start < words.length && (COMMAND_PREFIX_WORDS.has(words[start]!) || ASSIGNMENT_WORD.test(words[start]!))) start += 1;
-      // The shell drops quotes and backslashes from the name: 'eval' and e\val are eval.
-      const command = words[start]?.replace(/["'\\]/gu, "");
-      if (command !== undefined && /[$`]/u.test(command)) return misplaced("an argument to a command chosen when it runs");
-      const last = words[words.length - 1] ?? "";
-      if (!inArithmetic && command === undefined) return misplaced("the command itself");
-      if (command !== undefined && RUNS_ARGUMENT.has(command)) return misplaced(`an argument to ${command}, which runs it`);
-      // `sh -c {{x}}` runs the value as a script; `sh -c '…' sh {{x}}` only passes it in.
-      if (command !== undefined && SHELLS.has(command.replace(/^.*\//u, "")) && /^-[A-Za-z]*c$/u.test(last)) {
-        return misplaced(`the script of ${command} ${last}`);
+      if (match) {
+        checked.add(index);
+        if (quote === '"') return misplaced("inside double quotes");
+        if (quote === "`") return misplaced("inside backticks");
+        if (depth > 0) return misplaced("inside a $(…), ${…}, $[…] or <(…) expansion");
+        const end = index + match[0].length;
+        const after = end >= template.length ? " " : template[end]!;
+        if (wordStart >= 0 || !WORD_BREAK_AFTER.test(after)) return misplaced("part of a longer word");
+        // A redirection's target is only ever a file name (`cat > {{x}}`).
+        const problem = redirectTarget ? undefined : placeholderCommandProblem(words, arithmeticParens > 0 || testBrackets);
+        if (problem === "name") {
+          if (isText(match[1]!)) return { arithmetic: match[1]! };
+        } else if (problem !== undefined) return misplaced(problem);
+        wordStart = index;
+        index = end - 1;
+        continue;
       }
-      if (command === "find" && words.some((word) => /^-(?:exec|execdir|ok|okdir)$/u.test(word))) {
-        return misplaced("an argument to find -exec, which runs it");
-      }
-      if ((inArithmetic || (command !== undefined && ARITHMETIC_COMMANDS.has(command))) && isText(match[1]!)) {
-        return { arithmetic: match[1]! };
-      }
-      index = end - 1;
-      continue;
     }
-    if (quote === null && depth === 0) {
-      if (";&|(){}\n".includes(char)) clauseStart = index + 1;
-      const wordStart = index === 0 || WORD_BREAK_BEFORE.test(template[index - 1]!);
-      if (!testBrackets && wordStart && template.startsWith("[[", index)) {
+    if (top) {
+      if (char === "<" || char === ">" || (char === "&" && template[index + 1] === ">")) {
+        if (char !== "&" && template[index + 1] === "(") {
+          // <(…) and >(…) are words whose inside is a command.
+          if (wordStart < 0) wordStart = index;
+          expansions.push({ close: ")", quote: null });
+          index += 1;
+          continue;
+        }
+        // An fd written against the operator (2>, {fd}>) belongs to it.
+        if (wordStart >= 0 && /^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$/u.test(template.slice(wordStart, index))) wordStart = -1;
+        endWord(index);
+        const operator = REDIRECTION.exec(template.slice(index))![0];
+        redirectTarget = !/&(?:[0-9]+-?|-)$/u.test(operator);
+        index += operator.length - 1;
+        continue;
+      }
+      const startsWord = wordStart < 0;
+      // `{` and `}` group commands only as words of their own.
+      const brace = (char === "{" && startsWord && /\s/u.test(template[index + 1] ?? " ")) || (char === "}" && startsWord);
+      if (";&|()\n".includes(char) || brace) {
+        endWord(index);
+        words = [];
+        redirectTarget = false;
+      } else if (/\s/u.test(char)) {
+        endWord(index);
+        continue;
+      } else if (startsWord) wordStart = index;
+      if (!testBrackets && startsWord && template.startsWith("[[", index)) {
         testBrackets = true;
+        wordStart = -1;
         index += 1;
         continue;
       }
       if (testBrackets && template.startsWith("]]", index)) {
         testBrackets = false;
+        wordStart = -1;
         index += 1;
         continue;
       }
-      if (arithmeticParens === 0 && wordStart && template.startsWith("((", index)) {
+      if (arithmeticParens === 0 && startsWord && template.startsWith("((", index)) {
         arithmeticParens = 2;
         index += 1;
         continue;
