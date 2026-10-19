@@ -373,7 +373,7 @@ function validateTypedText(value: unknown, options: { typedAsKeys?: boolean } = 
   if (options.typedAsKeys && /[\n\r\t]/u.test(value)) {
     fail(
       "blocked_text",
-      "Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then press_key Return or Tab as its own action.",
+      "Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then send Return or Tab with the key action.",
     );
   }
   // Normalize compatibility characters, quoted executable names, escaped

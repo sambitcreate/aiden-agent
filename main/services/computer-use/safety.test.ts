@@ -565,7 +565,7 @@ test("validateTypedText normalizes obfuscation before matching", () => {
 });
 
 const LINE_BREAK_MESSAGE =
-  "Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then press_key Return or Tab as its own action.";
+  "Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then send Return or Tab with the key action.";
 
 function assertLineBreakRefusal(text: string): void {
   assert.throws(
