@@ -57,6 +57,8 @@ export function codedRefusal(
   message: string,
   extra?: Record<string, unknown>,
 ): FakeToolResult;
+export function dragAndDropSessionRefusal(pid: number, windowId: number): FakeToolResult;
+export function windowServerConnectionRefusal(pid: number, windowId: number): FakeToolResult;
 export function actionResult(name: string, overrides?: Record<string, unknown>): FakeToolResult;
 export function staleTokenRefusal(pid: number): FakeToolResult;
 export function screenshotContextRefusal(pid: number, windowId: number): FakeToolResult;

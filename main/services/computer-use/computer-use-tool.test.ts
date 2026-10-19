@@ -25,6 +25,8 @@ import {
   FakeCuaDriver,
   actionResult,
   codedRefusal,
+  dragAndDropSessionRefusal,
+  windowServerConnectionRefusal,
   toolListResult,
 } from "./fixtures/cua-driver-catalog.mjs";
 
@@ -586,16 +588,55 @@ test("element drag without a screenshot frame is refused before approval", async
   await controller.close();
 });
 
-test("drag refused with background_unavailable offers a foreground retry and does not resend", async () => {
+test("a background drag that started a drag-and-drop session drops the capture and asks to check first", async () => {
   const { controller, session } = harness(true);
   await capture(controller, "som");
-  // 0.36 drags in the background unless macOS starts a native drag-and-drop
-  // session; the driver then releases at once and names the foreground retry.
+  // drag.rs: the press and moves were already posted when macOS started a
+  // drag-and-drop session; the driver released at once (effect no_drop), so
+  // the window may have changed and nothing captured before is trustworthy.
+  session.handler = (call) =>
+    call.name === "drag" ? dragAndDropSessionRefusal(42, 7) : fakeResponse(call, session.driver);
+  let raised: (Error & { code?: string }) | undefined;
+  await assert.rejects(
+    () => approved(controller, "drag-dnd", { action: "drag", from_coordinate: [1, 1], to_coordinate: [9, 9] }),
+    (error: Error & { code?: string }) => {
+      raised = error;
+      return true;
+    },
+  );
+  assert.equal(raised?.code, "drag_released");
+  assert.match(raised!.message, /started a macOS drag-and-drop session and was released/u);
+  assert.match(raised!.message, /Capture the window again/u);
+  assert.match(raised!.message, /only if nothing changed/u);
+  const drags = session.calls.filter((call) => call.name === "drag");
+  assert.equal(drags.length, 1);
+  assert.equal(drags[0].args.delivery_mode, undefined);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  // A foreground retry cannot reuse the old screenshot's coordinates either.
+  await assert.rejects(
+    () =>
+      controller.approvalFor({
+        action: "drag",
+        from_coordinate: [1, 1],
+        to_coordinate: [9, 9],
+        delivery_mode: "foreground",
+      }),
+    /screenshot/u,
+  );
+  await controller.close();
+});
+
+test("a background drag refused before any input offers a foreground retry and keeps the capture", async () => {
+  const { controller, session } = harness(true);
+  await capture(controller, "som");
+  // drag.rs Electron route: refused before dispatch (effect refused).
   session.handler = (call) =>
     call.name === "drag"
-      ? codedRefusal("background_unavailable", "This drag started a drag-and-drop session.", {
+      ? codedRefusal("background_unavailable", "Background drag is unavailable for this Electron window.", {
+          event_kind: "mouse_drag",
           suggestion: 'Retry this action with delivery_mode:"foreground".',
-          escalation: { recommended: "foreground", reason: "drag-and-drop session" },
+          escalation: { recommended: "foreground", reason: "Electron windows lose the release" },
         })
       : fakeResponse(call, session.driver);
   await assert.rejects(
@@ -603,10 +644,46 @@ test("drag refused with background_unavailable offers a foreground retry and doe
     (error: Error & { code?: string }) =>
       error.code === "foreground_required" && /delivery_mode "foreground"/u.test(error.message),
   );
-  const drags = session.calls.filter((call) => call.name === "drag");
-  assert.equal(drags.length, 1);
-  assert.equal(drags[0].args.delivery_mode, undefined);
+  assert.equal(session.calls.filter((call) => call.name === "drag").length, 1);
   assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), true);
+  await controller.close();
+});
+
+test("a background_unavailable refusal after input was sent is an unknown execution", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "type_text"
+      ? codedRefusal("background_unavailable", "Stopped after the first characters.", { effect: "partial" })
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "bg-partial", { action: "type", text: "hello" }),
+    (error: Error & { code?: string }) =>
+      error.code === "execution_unknown" && /never repeat it blindly/u.test(error.message),
+  );
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+test("a WindowServer connection refusal is reported as setup, not a foreground retry", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  // tools/mod.rs: code background_unavailable with reason windowserver_connection_invalid.
+  session.handler = (call) =>
+    call.name === "type_text" ? windowServerConnectionRefusal(42, 7) : fakeResponse(call, session.driver);
+  let raised: (Error & { code?: string }) | undefined;
+  await assert.rejects(
+    () => approved(controller, "ws-invalid", { action: "type", text: "hi" }),
+    (error: Error & { code?: string }) => {
+      raised = error;
+      return true;
+    },
+  );
+  assert.equal(raised?.code, "permission_required");
+  assert.ok(raised!.message.includes("windowserver_connection_invalid"), raised!.message);
+  assert.doesNotMatch(raised!.message, /delivery_mode/u);
   assert.equal(await captureStillUsable(controller), true);
   await controller.close();
 });
@@ -820,6 +897,39 @@ test("changes_only capture sends since and reports no_change", async () => {
   assert.match(String(fallback.note), /view_changed/u);
   await approved(controller, "after-fallback", { action: "click", element: 2 });
   assert.equal(session.calls[session.calls.length - 1].args.element_token, `${snapshotOf(3)}:2`);
+  await controller.close();
+});
+
+test("changes_only reports the focused row on no_change and needs a baseline snapshot", async () => {
+  const { controller, session } = harness(false);
+  const changesOnly = { action: "capture", mode: "ax", app: "Safari", changes_only: true } as const;
+  const payloadOf = (result: Awaited<ReturnType<typeof capture>>) =>
+    JSON.parse((result.content[0] as { text: string }).text) as Record<string, unknown>;
+  const reads = () => session.calls.filter((call) => call.name === "get_window_state");
+  session.driver.elements = () => [
+    { role: "AXButton", label: "First", frame: { x: 110, y: 60, w: 20, h: 20 }, depth: 1 },
+    { role: "AXTextField", label: "Search", focused: true, frame: { x: 250, y: 100, w: 20, h: 20 }, depth: 1 },
+  ];
+  await capture(controller, "ax");
+  const unchanged = payloadOf(await controller.execute("focus-none", changesOnly));
+  assert.equal(unchanged.no_change, true);
+  assert.equal(unchanged.focused_element, '[1] AXTextField "Search"');
+
+  // A tree read that publishes no snapshot_id leaves nothing to diff against:
+  // the next changes_only read is a full capture, not a diff against an
+  // older snapshot.
+  session.handler = (call) => {
+    const result = fakeResponse(call, session.driver) as { structuredContent?: Record<string, unknown> };
+    if (call.name !== "get_window_state") return result;
+    const { snapshot_id: _dropped, ...rest } = result.structuredContent ?? {};
+    return { ...result, structuredContent: rest };
+  };
+  await capture(controller, "ax");
+  session.handler = (call) => fakeResponse(call, session.driver);
+  const full = payloadOf(await controller.execute("after-no-id", changesOnly));
+  assert.equal(reads()[reads().length - 1].args.since, undefined);
+  assert.equal((full.elements as unknown[]).length, 2);
+  assert.match(String(full.note), /no previous capture/u);
   await controller.close();
 });
 
@@ -1655,12 +1765,15 @@ test("the system prompt carries Computer Use guidance only when the tool is offe
     assert.match(guidance, /never contain line breaks or tabs/iu);
     assert.match(guidance, /only after a foreground_required error/u);
     assert.match(guidance, /write_not_applied[^.;]*another route/u);
+    assert.match(guidance, /For any action, use delivery_mode foreground only after a foreground_required error/u);
+    assert.match(guidance, /drag_released[^.;]*capture and check/u);
   }
   // The parameter schema repeats the rules where the model fills each field.
   const describe = (field: keyof typeof ComputerUseParameters.properties) =>
     String((ComputerUseParameters.properties[field] as { description?: string }).description);
   assert.match(describe("text"), /line breaks or tabs/u);
   assert.match(describe("delivery_mode"), /only after a foreground_required error/u);
+  assert.match(describe("delivery_mode"), /after drag_released once a fresh capture shows nothing changed/u);
   assert.match(describe("changes_only"), /never vision/u);
 });
 

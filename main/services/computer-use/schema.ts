@@ -171,7 +171,7 @@ export const ComputerUseParameters = Type.Object(
     delivery_mode: Type.Optional(
       Type.Union([Type.Literal("background"), Type.Literal("foreground")], {
         description:
-          "Background is non-intrusive and the default. Foreground may visibly change focus. Clicks with modifiers are foreground-only on macOS and default to it. drag runs in the background first; retry it with foreground only after a foreground_required error, never after any other refusal.",
+          "Background is non-intrusive and the default. Foreground may visibly change focus. Clicks with modifiers are foreground-only on macOS and default to it. drag runs in the background first; retry it with foreground only after a foreground_required error, or after drag_released once a fresh capture shows nothing changed, never after any other refusal.",
       }),
     ),
     bring_to_front: Type.Optional(

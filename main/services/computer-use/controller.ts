@@ -214,15 +214,28 @@ const WINDOW_TARGET_REFUSALS = new Set([
   "desktop_coordinate_scope_required",
   "element_bounds_unavailable",
 ]);
-/** 0.36 refusals proving the target lacked keyboard focus; nothing was sent. */
+/**
+ * Refusals proving the target lacked keyboard focus; nothing was sent. The
+ * macOS 0.36.0 driver sends window_not_key; target_focus_unconfirmed is a
+ * forward-compatible mapping for later releases.
+ */
 const FOCUS_REFUSALS = new Set(["window_not_key", "target_focus_unconfirmed"]);
-/** 0.36 refusals that only macOS setup (permissions, capture consent) can clear. */
+/**
+ * Refusals only macOS setup can clear. The macOS 0.36.0 driver sends none of
+ * these as a `code` (it reports windowserver_connection_invalid as a `reason`
+ * under background_unavailable, handled in refusalError); they are
+ * forward-compatible mappings.
+ */
 const READINESS_REFUSALS = new Set([
   "windowserver_connection_invalid",
   "permission_required",
   "direct_capture_consent_required",
 ]);
-/** Refusals a visible foreground retry can satisfy. */
+/**
+ * Refusals a visible foreground retry can satisfy. The macOS 0.36.0 driver
+ * sends background_unavailable; electron_main_process_unavailable is a
+ * forward-compatible mapping.
+ */
 const FOREGROUND_REFUSALS = new Set(["background_unavailable", "electron_main_process_unavailable"]);
 
 class ComputerUseDriverActionError extends Error {
@@ -233,6 +246,12 @@ class ComputerUseDriverActionError extends Error {
     readonly code?: string,
     /** The driver could not account for input it may already have delivered. */
     readonly executionUnknown = false,
+    /**
+     * The envelope's `effect` and `reason` (`delivery.rs`
+     * background_unavailable_result): an effect other than `refused` means
+     * input was already posted before the driver stopped.
+     */
+    readonly envelope: { effect?: string; reason?: string } = {},
   ) {
     super(message);
     this.name = "ComputerUseDriverActionError";
@@ -388,14 +407,18 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
     .replace(/[a-z0-9+/]{256,}={0,2}/giu, "[encoded data omitted]")
     .slice(0, MAX_DRIVER_TEXT_CHARS);
   if (parsed.isError === true) {
+    const structured = asRecord(parsed.structuredContent);
+    const effect = identifier(structured?.effect);
+    const reason = identifier(structured?.reason);
     throw new ComputerUseDriverActionError(
       text.trim()
         ? `cua-driver rejected the action: ${text.trim().slice(0, 2_000)}`
         : "cua-driver rejected the action.",
       false,
-      refusalCode(asRecord(parsed.structuredContent)),
+      refusalCode(structured),
       // tool.rs / mcp_result.rs: output-contract failures after dispatch.
-      asRecord(parsed.structuredContent)?.execution_state === "unknown",
+      structured?.execution_state === "unknown",
+      { ...(effect ? { effect } : {}), ...(reason ? { reason } : {}) },
     );
   }
   return { text, image, structured: asRecord(parsed.structuredContent) };
@@ -408,8 +431,14 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
  */
 function refusalCode(structured: Record<string, unknown> | null): string | undefined {
   if (!structured) return undefined;
-  const code = structured.code ?? asRecord(structured.refusal)?.code ?? asRecord(structured.error)?.code;
-  return typeof code === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(code) ? code : undefined;
+  return identifier(
+    structured.code ?? asRecord(structured.refusal)?.code ?? asRecord(structured.error)?.code,
+  );
+}
+
+/** A driver machine identifier (`code`, `effect`, `reason`), or undefined. */
+function identifier(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : undefined;
 }
 
 function enumString(value: unknown, allowed: ReadonlySet<string>): string | undefined {
@@ -947,11 +976,15 @@ export class ComputerUseController {
 
   /**
    * Translate the driver's machine-readable refusals into Aiden's recovery
-   * instructions, and drop local state the refusal proves stale. Nothing was
-   * delivered for any of these, so the session stays usable.
+   * instructions, and drop local state the refusal proves stale. The session
+   * stays usable. Most refusals deliver nothing; execution_unknown and a
+   * background_unavailable whose effect is not `refused` (a drag that started
+   * a drag-and-drop session) may already have changed the window, so they
+   * invalidate the capture and ask for a fresh look before any retry.
    */
   private refusalError(error: ComputerUseDriverActionError): Error {
     const detail = error.message.slice(0, 1_000);
+    const { effect, reason } = error.envelope;
     // foreground_partial_unknown: the foreground route may have delivered part of the input.
     if (error.executionUnknown || error.code === "foreground_partial_unknown") {
       // The UI may already have changed; nothing captured before can be trusted.
@@ -995,10 +1028,35 @@ export class ComputerUseController {
         `The target did not have keyboard focus, so nothing was sent. Click the element first or capture again. (${detail})`,
       );
     }
-    if (error.code && READINESS_REFUSALS.has(error.code)) {
+    // tools/mod.rs: the 0.36.0 driver reports an invalid WindowServer
+    // connection as a reason under background_unavailable. Foreground input
+    // would not fix the daemon, so it is setup, not a foreground retry.
+    const readiness =
+      error.code && READINESS_REFUSALS.has(error.code)
+        ? error.code
+        : error.code === "background_unavailable" && reason === "windowserver_connection_invalid"
+          ? reason
+          : undefined;
+    if (readiness) {
       return new ComputerUseSafetyError(
         "permission_required",
-        `macOS has not granted Aiden Computer Use what this action needs (${error.code}). ${COMPUTER_USE_SETUP_REASON} (${detail})`,
+        `macOS has not granted Aiden Computer Use what this action needs (${readiness}). ${COMPUTER_USE_SETUP_REASON} (${detail})`,
+      );
+    }
+    if (
+      error.code === "background_unavailable" &&
+      (reason === "drag_and_drop_session" || (effect !== undefined && effect !== "refused"))
+    ) {
+      // drag.rs: the press and moves were posted before macOS started a
+      // drag-and-drop session; the driver released at once (effect no_drop).
+      // The window may have changed, so the old capture cannot be trusted.
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      const dragAndDrop = reason === "drag_and_drop_session";
+      return new ComputerUseSafetyError(
+        dragAndDrop ? "drag_released" : "execution_unknown",
+        dragAndDrop
+          ? `The background drag started a macOS drag-and-drop session and was released at once, so the drop did not land at the requested point but the window may have changed. Capture the window again and check what changed. Prefer a route that is not a drag (a button, menu, or key action); only if nothing changed and the drag is the only route, retry it with delivery_mode "foreground", which visibly fronts the window and needs its own approval. (${detail})`
+          : `cua-driver stopped this background action after some input was already sent${effect ? ` (effect ${effect})` : ""}, so it may already have taken effect. Capture the window again and check before any retry, and never repeat it blindly. (${detail})`,
       );
     }
     if (error.code && FOREGROUND_REFUSALS.has(error.code)) {
@@ -1260,9 +1318,13 @@ export class ComputerUseController {
     }
     // Every get_window_state publishes a new driver snapshot (staling the
     // previous one's tokens); tree reads become the next `since` baseline.
+    // A tree read without a snapshot_id leaves no baseline: the previous one
+    // is already stale, so the next changes_only read takes a full capture.
     const snapshotId = safeString(result.structured?.snapshot_id, 128);
-    if (effectiveMode !== "vision" && snapshotId) {
-      this.lastTreeSnapshot = { pid: window.pid, windowId: window.windowId, snapshotId };
+    if (effectiveMode !== "vision") {
+      this.lastTreeSnapshot = snapshotId
+        ? { pid: window.pid, windowId: window.windowId, snapshotId }
+        : null;
     }
     const sinceStatus = changes ? safeString(result.structured?.since_status, 64) : undefined;
     if (changes && (sinceStatus === "no_change" || sinceStatus === "diff")) {
@@ -1272,7 +1334,7 @@ export class ComputerUseController {
         result,
         sinceStatus === "no_change",
         snapshotId,
-        changes.previous,
+        changes,
       );
     }
     const elements = effectiveMode === "vision" ? [] : normalizeElements(result, maximumElements);
@@ -1338,11 +1400,18 @@ export class ComputerUseController {
     result: ParsedDriverResult,
     noChange: boolean,
     snapshotId: string | undefined,
-    previous: ActiveTarget | null,
+    { since, previous }: { since: string; previous: ActiveTarget | null },
   ): AgentToolResult<ComputerUseResultDetails> {
+    // The previous numbers carry over only when every token was minted by the
+    // `since` snapshot the driver compared against; otherwise they describe
+    // some other read and the model must take a full capture.
+    const previousElements = previous ? [...previous.elements.values()] : [];
     const kept =
-      noChange && snapshotId && previous?.elements.size
-        ? [...previous.elements.values()].map((element) => {
+      noChange &&
+      snapshotId &&
+      previousElements.length &&
+      previousElements.every((element) => !element.token || element.token.startsWith(`${since}:`))
+        ? previousElements.map((element) => {
             const token = element.token ? `${snapshotId}:${element.index}` : undefined;
             return {
               ...element,
@@ -1354,6 +1423,9 @@ export class ComputerUseController {
         : [];
     const target = this.setTarget(window, kept);
     const counts = asRecord(result.structured?.diff_counts);
+    // window_state_view.rs: an unchanged read names the focused row, if any
+    // (untrusted application text, like every row label).
+    const focused = noChange ? safeString(result.structured?.focused_element, 500) : undefined;
     const payload: Record<string, unknown> = {
       ok: true,
       action: "capture",
@@ -1362,7 +1434,7 @@ export class ComputerUseController {
       changes_only: true,
       target: this.targetDetails(target),
       ...(noChange
-        ? { no_change: true }
+        ? { no_change: true, ...(focused ? { focused_element: focused } : {}) }
         : {
             changes: safeString(result.structured?.tree_diff, 20_000) ?? "",
             diff_counts: {

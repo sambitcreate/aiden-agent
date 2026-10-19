@@ -633,6 +633,61 @@ export function codedRefusal(code, message, extra = {}) {
 }
 
 /**
+ * `cua_driver_core::delivery::background_unavailable_result`: the error
+ * envelope a background route that cannot finish answers with. `fields` sets
+ * `effect` and `reason`; the helper adds `code`, `suggestion` and the
+ * foreground `escalation`.
+ */
+function backgroundUnavailable(message, escalationReason, fields) {
+  return {
+    isError: true,
+    content: [{ type: "text", text: message }],
+    structuredContent: {
+      ...fields,
+      code: "background_unavailable",
+      suggestion: 'Retry this action with delivery_mode:"foreground".',
+      escalation: { recommended: "foreground", reason: escalationReason },
+    },
+  };
+}
+
+/**
+ * `drag.rs` `drag_and_drop_session_result`: a background drag whose press and
+ * moves were already posted started a macOS drag-and-drop session; the driver
+ * released at once, so the drop did not land where it was asked to.
+ */
+export function dragAndDropSessionRefusal(pid, windowId) {
+  return backgroundUnavailable(
+    `The background drag in pid ${pid} window ${windowId} started a macOS drag-and-drop session (for example reordering a list, moving a file or dragging page content). macOS tracks drag-and-drop with the real pointer, so the drop did not land at the requested point; the driver released at once. Look for a route that is not a drag (a Move Up/Down button or menu item, a context-menu command, a keyboard shortcut, cut and paste). If the drag is the only route and the user allows the window to come forward, retry with delivery_mode:"foreground".`,
+    "drag-and-drop sessions follow the hardware pointer on macOS",
+    {
+      effect: "no_drop",
+      event_kind: "mouse_drag",
+      reason: "drag_and_drop_session",
+      requires: ["delivery_mode:foreground", "window_id"],
+    },
+  );
+}
+
+/**
+ * `tools/mod.rs` `windowserver_connection_refusal`: a daemon without its own
+ * app-bundle identity has no valid WindowServer connection. Nothing was sent.
+ */
+export function windowServerConnectionRefusal(pid, windowId) {
+  return backgroundUnavailable(
+    `Background input is not available for pid ${pid}: the WindowServer connection is invalid (SLPSPostEventRecordTo returned 1002).`,
+    'the daemon has no valid WindowServer connection, so no-raise focus cannot work; run the app-bundle daemon, or retry with delivery_mode:"foreground".',
+    {
+      reason: "windowserver_connection_invalid",
+      status: 1002,
+      effect: "refused",
+      pid,
+      window_id: windowId,
+    },
+  );
+}
+
+/**
  * The dispatch-boundary check: unknown arguments of a closed schema and
  * missing required arguments are refused before the platform tool runs.
  * Returns null when the arguments are admissible.
@@ -1104,6 +1159,9 @@ export class FakeCuaDriver {
       // window_state_view.rs: a diff keeps only the + and ~ rows' elements
       // and drops tree_markdown; the text body becomes the diff.
       const keep = new Set(since.diff.kept);
+      // get_window_state.rs focused_element_description: an empty diff names
+      // the focused row (a row marked `focused: true` here).
+      const focused = since.diff.empty ? elements.find((row) => row.focused === true) : undefined;
       content[content.length - 1] = {
         type: "text",
         text: `window_id=${window.window_id} pid=${window.pid} snapshot_id=${snapshotId}\n${since.diff.text}`,
@@ -1123,6 +1181,13 @@ export class FakeCuaDriver {
           since_status: since.diff.empty ? "no_change" : "diff",
           tree_diff: since.diff.text,
           diff_counts: since.diff.counts,
+          ...(focused
+            ? {
+                focused_element: `[${focused.element_index}] ${focused.role}${
+                  focused.label ? ` "${focused.label}"` : ""
+                }`,
+              }
+            : {}),
           app_name: window.app_name,
           window_title: window.title,
         },
