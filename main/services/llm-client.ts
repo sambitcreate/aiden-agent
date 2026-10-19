@@ -484,11 +484,19 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 type GenerationPermission = WorkspacePermission | "read-only";
 
 /**
- * `${streamId}:${toolCallId}` of workspace_artifact calls the person allowed on
- * the approval card. The tool consumes its entry once, so only an allowed
- * card records an approval for the artifact's commands.
+ * Per stream, the command digest each allowed workspace_artifact approval card
+ * showed, by tool call id. The tool consumes its entry first thing, and only
+ * a save whose commands match that digest records an approval. A stream's
+ * entries go when it ends.
  */
-const approvedWorkspaceArtifactCalls = new Set<string>();
+const approvedWorkspaceArtifactCalls = new Map<string, Map<string, string>>();
+
+function takeApprovedWorkspaceArtifactCall(streamId: string, toolCallId: string): string | undefined {
+  const calls = approvedWorkspaceArtifactCalls.get(streamId);
+  const digest = calls?.get(toolCallId);
+  calls?.delete(toolCallId);
+  return digest;
+}
 
 function uniqueResponseImages(
   sharedImages: readonly Attachment[],
@@ -1983,7 +1991,8 @@ async function prepareGeneration(
           permission,
           hasFolder: Boolean(folderPath),
           store: workspaceArtifactStore,
-          wasApproved: (toolCallId) => approvedWorkspaceArtifactCalls.delete(`${streamId}:${toolCallId}`),
+          takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
+          workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
         }),
       ],
@@ -2395,6 +2404,7 @@ export const llmClient = {
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
@@ -3477,6 +3487,8 @@ export const llmClient = {
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
+          /** Commands digest an allowed workspace_artifact card showed. */
+          let artifactApprovalDigest: string | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
@@ -3602,6 +3614,7 @@ export const llmClient = {
                 };
               }
             }
+            if (artifactApproval?.required) artifactApprovalDigest = artifactApproval.digest;
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             if (
@@ -3844,8 +3857,10 @@ export const llmClient = {
             owner.documentId,
           );
           const allowed = approvalOutcome === "allowed";
-          if (allowed && context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME) {
-            approvedWorkspaceArtifactCalls.add(`${streamId}:${context.toolCall.id}`);
+          if (allowed && context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && artifactApprovalDigest) {
+            const calls = approvedWorkspaceArtifactCalls.get(streamId) ?? new Map<string, string>();
+            calls.set(context.toolCall.id, artifactApprovalDigest);
+            approvedWorkspaceArtifactCalls.set(streamId, calls);
           }
           if (allowed && scopedRuleTarget) {
             const toolCallId = timeline.publicToolCallId(context.toolCall.id);
@@ -4194,6 +4209,7 @@ export const llmClient = {
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
@@ -4207,6 +4223,7 @@ export const llmClient = {
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
@@ -4414,6 +4431,7 @@ export const llmClient = {
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       questionnaires.releaseStream(streamId);
       broadcastChatSettled(
         streamId,
@@ -4701,6 +4719,7 @@ export const llmClient = {
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
+          approvedWorkspaceArtifactCalls.delete(streamId);
           questionnaires.releaseStream(streamId);
           broadcastChatSettled(
             streamId,

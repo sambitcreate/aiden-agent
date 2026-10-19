@@ -28,6 +28,11 @@ import {
 export interface WorkspaceArtifactsDocument {
   version: 1;
   artifacts: WorkspaceArtifactV1[];
+  /**
+   * Entries this version cannot read (edited by hand, or written under looser
+   * limits), kept verbatim rather than lost on the next write.
+   */
+  unreadable?: unknown[];
 }
 
 export interface WorkspaceArtifactSnapshotsDocument {
@@ -36,6 +41,7 @@ export interface WorkspaceArtifactSnapshotsDocument {
 }
 
 const ARTIFACTS_MAX_BYTES = 12 * 1024 * 1024;
+const UNREADABLE_LIMIT = WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2;
 const SNAPSHOTS_MAX_BYTES = 16 * 1024 * 1024;
 
 function emptyArtifacts(): WorkspaceArtifactsDocument {
@@ -55,14 +61,18 @@ export function normalizeWorkspaceArtifactsDocument(workspaceId: string) {
     if (!isRecord(value) || !Array.isArray(value.artifacts)) return emptyArtifacts();
     const seen = new Set<string>();
     const artifacts: WorkspaceArtifactV1[] = [];
+    const unreadable: unknown[] = Array.isArray(value.unreadable) ? value.unreadable.slice(0, UNREADABLE_LIMIT) : [];
     for (const entry of value.artifacts) {
-      if (artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) break;
       const artifact = parseWorkspaceArtifactV1(entry);
-      if (!artifact || artifact.workspaceId !== workspaceId || seen.has(artifact.id)) continue;
+      if (artifact && seen.has(artifact.id)) continue;
+      if (!artifact || artifact.workspaceId !== workspaceId || artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
+        if (unreadable.length < UNREADABLE_LIMIT) unreadable.push(entry);
+        continue;
+      }
       seen.add(artifact.id);
       artifacts.push(artifact);
     }
-    return { version: 1, artifacts };
+    return { version: 1, artifacts, ...(unreadable.length ? { unreadable } : {}) };
   };
 }
 

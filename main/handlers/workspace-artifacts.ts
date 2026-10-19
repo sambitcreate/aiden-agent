@@ -1,17 +1,28 @@
 // Workspace artifact IPC. The renderer names a workspace and an artifact by
 // id; every value is parsed here, and only main reads or writes the files.
 
-import { ipcMain } from "../platform.js";
-import { configStore } from "../services/config-store.js";
 import {
   isWorkspaceArtifactId,
   isWorkspaceArtifactWorkspaceId,
+  type WorkspaceArtifactsChangedEvent,
 } from "../../renderer/shared/workspace-artifacts.js";
-import {
-  notifyWorkspaceArtifactsChanged,
-  workspaceArtifactStore,
-} from "../services/workspace-artifacts/main.js";
+import type { WorkspaceArtifactStore } from "../services/workspace-artifacts/store.js";
 import { parseUiVisualState } from "./chat-ui-visual-state.js";
+
+export const WORKSPACE_ARTIFACT_CHANNELS = {
+  list: "workspaces:artifacts:list",
+  rename: "workspaces:artifacts:rename",
+  delete: "workspaces:artifacts:delete",
+  saveState: "workspaces:artifacts:saveState",
+  approve: "workspaces:artifacts:approve",
+} as const;
+
+export interface WorkspaceArtifactHandlerDependencies {
+  handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => void;
+  store: Pick<WorkspaceArtifactStore, "list" | "rename" | "delete" | "saveState" | "approve">;
+  workspaceExists: (workspaceId: string) => Promise<boolean>;
+  notify: (event: WorkspaceArtifactsChangedEvent) => void;
+}
 
 function asWorkspaceId(value: unknown): string {
   if (!isWorkspaceArtifactWorkspaceId(value)) throw new Error("The workspace identifier is invalid.");
@@ -28,52 +39,43 @@ function asText(value: unknown, name: string, max: number): string {
   return value;
 }
 
-async function existingWorkspace(value: unknown): Promise<string> {
-  const id = asWorkspaceId(value);
-  if (!(await configStore.getWorkspace(id))) throw new Error("That workspace no longer exists.");
-  return id;
-}
+export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifactHandlerDependencies): void {
+  const { handle, store, notify } = dependencies;
 
-export function registerWorkspaceArtifactHandlers(): void {
-  ipcMain.handle("workspaces:artifacts:list", async (_event, workspaceId: unknown) =>
-    workspaceArtifactStore.list(await existingWorkspace(workspaceId)),
-  );
+  async function existingWorkspace(value: unknown): Promise<string> {
+    const id = asWorkspaceId(value);
+    if (!(await dependencies.workspaceExists(id))) throw new Error("That workspace no longer exists.");
+    return id;
+  }
 
-  ipcMain.handle(
-    "workspaces:artifacts:rename",
-    async (_event, workspaceId: unknown, artifactId: unknown, title: unknown) => {
-      const workspace = await existingWorkspace(workspaceId);
-      const artifact = await workspaceArtifactStore.rename(workspace, asArtifactId(artifactId), asText(title, "title", 200));
-      notifyWorkspaceArtifactsChanged({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
-      return artifact;
-    },
-  );
+  handle(WORKSPACE_ARTIFACT_CHANNELS.list, async (_event, workspaceId) => store.list(await existingWorkspace(workspaceId)));
 
-  ipcMain.handle("workspaces:artifacts:delete", async (_event, workspaceId: unknown, artifactId: unknown) => {
+  handle(WORKSPACE_ARTIFACT_CHANNELS.rename, async (_event, workspaceId, artifactId, title) => {
+    const workspace = await existingWorkspace(workspaceId);
+    const artifact = await store.rename(workspace, asArtifactId(artifactId), asText(title, "title", 200));
+    notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
+    return artifact;
+  });
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.delete, async (_event, workspaceId, artifactId) => {
     const workspace = await existingWorkspace(workspaceId);
     const id = asArtifactId(artifactId);
-    const removed = await workspaceArtifactStore.delete(workspace, id);
-    if (removed) notifyWorkspaceArtifactsChanged({ workspaceId: workspace, artifactId: id, reason: "deleted" });
+    const removed = await store.delete(workspace, id);
+    if (removed) notify({ workspaceId: workspace, artifactId: id, reason: "deleted" });
     return { removed };
   });
 
-  ipcMain.handle(
-    "workspaces:artifacts:saveState",
-    async (_event, workspaceId: unknown, artifactId: unknown, state: unknown) => {
-      const workspace = await existingWorkspace(workspaceId);
-      // State saves are frequent and local to the page, so they notify nobody.
-      await workspaceArtifactStore.saveState(workspace, asArtifactId(artifactId), parseUiVisualState(state));
-    },
-  );
+  handle(WORKSPACE_ARTIFACT_CHANNELS.saveState, async (_event, workspaceId, artifactId, state) => {
+    const workspace = await existingWorkspace(workspaceId);
+    // State saves are frequent and local to the page, so they notify nobody.
+    await store.saveState(workspace, asArtifactId(artifactId), parseUiVisualState(state));
+  });
 
-  ipcMain.handle(
-    "workspaces:artifacts:approve",
-    async (_event, workspaceId: unknown, artifactId: unknown, digest: unknown) => {
-      const workspace = await existingWorkspace(workspaceId);
-      if (typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest)) throw new Error("Invalid approval.");
-      const artifact = await workspaceArtifactStore.approve(workspace, asArtifactId(artifactId), digest);
-      notifyWorkspaceArtifactsChanged({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
-      return artifact;
-    },
-  );
+  handle(WORKSPACE_ARTIFACT_CHANNELS.approve, async (_event, workspaceId, artifactId, digest) => {
+    const workspace = await existingWorkspace(workspaceId);
+    if (typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest)) throw new Error("Invalid approval.");
+    const artifact = await store.approve(workspace, asArtifactId(artifactId), digest);
+    notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
+    return artifact;
+  });
 }

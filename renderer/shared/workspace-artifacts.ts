@@ -122,12 +122,19 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const ARTIFACT_ID = /^[A-Za-z0-9_-]{1,64}$/u;
 const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
 const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
+const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
+const PLACEHOLDER_TEST = /\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/u;
 const RESERVED_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Control characters, plus the invisible ones (zero-width, bidi overrides,
+ * line separators, BOM) that could make text on an approval card read
+ * differently from what runs.
+ */
 function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
   for (const char of value) {
     const code = char.codePointAt(0)!;
@@ -135,8 +142,65 @@ function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
       if (allowLineBreaks && (code === 0x09 || code === 0x0a || code === 0x0d)) continue;
       return true;
     }
+    if (
+      (code >= 0x80 && code <= 0x9f) ||
+      (code >= 0x200b && code <= 0x200f) ||
+      (code >= 0x2028 && code <= 0x202e) ||
+      (code >= 0x2060 && code <= 0x2069) ||
+      code === 0xfeff
+    ) {
+      return true;
+    }
   }
   return false;
+}
+
+const WORD_BREAK_BEFORE = /[\s;&|()]/u;
+const WORD_BREAK_AFTER = /[\s;&|)]/u;
+
+/**
+ * Each placeholder must stand alone as an unquoted shell word (`gh pr merge
+ * {{number}}`), never inside quotes, backticks, `$(…)`, `${…}`, a heredoc or
+ * a longer word. Values never become shell code either way (see
+ * `resolveWorkspaceArtifactCommand`); this keeps each value one argument.
+ */
+function placeholderOutsideWord(template: string): string | undefined {
+  if (/<<(?!<)/u.test(template) && PLACEHOLDER_TEST.test(template)) return "a heredoc";
+  let quote: "'" | '"' | "`" | null = null;
+  let depth = 0;
+  for (let index = 0; index < template.length; index += 1) {
+    const char = template[index]!;
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      else if (template.startsWith("{{", index)) return "single quotes";
+      continue;
+    }
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (template.startsWith("{{", index)) {
+      PLACEHOLDER_AT.lastIndex = index;
+      const match = PLACEHOLDER_AT.exec(template);
+      if (!match) continue;
+      if (quote === '"') return "double quotes";
+      if (quote === "`") return "backticks";
+      if (depth > 0) return "a $(…) or ${…} expansion";
+      const before = index === 0 ? " " : template[index - 1]!;
+      const end = index + match[0].length;
+      const after = end >= template.length ? " " : template[end]!;
+      if (!WORD_BREAK_BEFORE.test(before) || !WORD_BREAK_AFTER.test(after)) return "a longer word";
+      index = end - 1;
+      continue;
+    }
+    if (quote === null && (char === "'" || char === '"' || char === "`")) quote = char;
+    else if (quote !== null && char === quote) quote = null;
+    else if (char === "$" && (template[index + 1] === "(" || template[index + 1] === "{")) {
+      depth += 1;
+      index += 1;
+    } else if (depth > 0 && (char === ")" || char === "}")) depth -= 1;
+  }
+  return undefined;
 }
 
 function byteLength(text: string): number {
@@ -255,6 +319,10 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
     const template = command(entry.command, where);
     for (const match of template.matchAll(PLACEHOLDER)) {
       if (!paramNames.has(match[1]!)) return invalid(`${where}: {{${match[1]}}} is not one of its params.`);
+    }
+    const misplaced = placeholderOutsideWord(template);
+    if (misplaced) {
+      return invalid(`${where}: each {{param}} must be its own unquoted word, not inside ${misplaced}. Write gh pr comment {{number}} --body {{body}}.`);
     }
     return { name: entry.name, label, command: template, params };
   });
@@ -435,33 +503,52 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+export interface ResolvedWorkspaceArtifactCommand {
+  /** What runs: the values are set as positional parameters and the template reads them as "$1", "$2"… */
+  command: string;
+  /** The same command with each value quoted in place, for the confirmation dialog. */
+  preview: string;
+}
+
 /**
  * Fills an action's template. Arguments line up with its params in order.
- * Every value is shell-quoted, so a page can never inject shell syntax.
+ * The values never become shell code: they are quoted into `set --` and the
+ * template refers to them only as "$N", so even a template that wraps a
+ * placeholder in quotes or `$(…)` cannot run what a page passes in.
  */
-export function resolveWorkspaceArtifactCommand(action: WorkspaceArtifactActionV1, args: readonly unknown[]): string {
+export function resolveWorkspaceArtifactCommand(
+  action: WorkspaceArtifactActionV1,
+  args: readonly unknown[],
+): ResolvedWorkspaceArtifactCommand {
   if (args.length > action.params.length) invalid(`${action.label} takes ${action.params.length} value(s).`);
-  const values = new Map<string, string>();
-  action.params.forEach((param, index) => {
+  const values = action.params.map((param, index) => {
     const raw = args[index];
     if (param.type === "number") {
       const number = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() ? Number(raw) : Number.NaN;
       if (!Number.isFinite(number)) invalid(`${action.label} needs a number for ${param.name}.`);
-      values.set(param.name, String(number));
-      return;
+      return String(number);
     }
     if (typeof raw !== "string" && typeof raw !== "number") invalid(`${action.label} needs text for ${param.name}.`);
     const text = String(raw);
     if (text.length > WORKSPACE_ARTIFACT_LIMITS.argumentChars || hasControlCharacter(text, false)) {
       invalid(`${action.label}: ${param.name} is too long or contains control characters.`);
     }
-    values.set(param.name, text);
+    // A leading dash would reach the command as an option (--upload-pack=…).
+    if (text.startsWith("-")) invalid(`${action.label}: ${param.name} cannot start with "-".`);
+    return text;
   });
-  return action.command.replace(PLACEHOLDER, (_match, name: string) => {
-    const value = values.get(name);
-    if (value === undefined) return invalid(`${action.label} needs a value for ${name}.`);
-    return shellQuote(value);
-  });
+  const position = new Map(action.params.map((param, index) => [param.name, index]));
+  const fill = (render: (index: number) => string) =>
+    action.command.replace(PLACEHOLDER, (_match, name: string) => {
+      const index = position.get(name);
+      if (index === undefined) return invalid(`${action.label} needs a value for ${name}.`);
+      return render(index);
+    });
+  const body = fill((index) => `"\${${index + 1}}"`);
+  return {
+    command: values.length ? `set -- ${values.map(shellQuote).join(" ")}\n${body}` : body,
+    preview: fill((index) => shellQuote(values[index]!)),
+  };
 }
 
 export type WorkspaceArtifactSourceAccess = "run" | "needs-approval" | "blocked";

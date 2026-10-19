@@ -13,6 +13,11 @@ import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
 import { registerPullRequestHandlers } from "./pull-requests.js";
 import { registerWorkspaceArtifactHandlers } from "./workspace-artifacts.js";
+import { configStore } from "../services/config-store.js";
+import {
+  notifyWorkspaceArtifactsChanged,
+  workspaceArtifactStore,
+} from "../services/workspace-artifacts/main.js";
 import { registerAttachmentHandlers } from "./attachments.js";
 import { registerChatImageActionHandlers } from "./chat-image-actions.js";
 import { registerPhase2Handlers } from "./phase2.js";
@@ -71,7 +76,12 @@ export function registerHandlers(): void {
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
   registerPullRequestHandlers();
-  registerWorkspaceArtifactHandlers();
+  registerWorkspaceArtifactHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    store: workspaceArtifactStore,
+    workspaceExists: async (id) => Boolean(await configStore.getWorkspace(id)),
+    notify: notifyWorkspaceArtifactsChanged,
+  });
   registerAttachmentHandlers();
   registerChatImageActionHandlers();
   registerPhase2Handlers();

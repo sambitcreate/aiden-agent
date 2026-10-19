@@ -112,7 +112,7 @@ test("deleting an artifact removes its snapshot, and removing the workspace remo
   assert.deepEqual(await store.list("ws1"), []);
 });
 
-test("an entry edited into an invalid shape is dropped, not repaired", async (t) => {
+test("an entry edited into an invalid shape is set aside, not repaired, and survives later writes", async (t) => {
   const { store, reopen, dir } = await openStore(t);
   await store.create("ws1", content());
   await store.create("ws1", content({ title: "Second" }));
@@ -120,8 +120,12 @@ test("an entry edited into an invalid shape is dropped, not repaired", async (t)
   const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: Record<string, unknown>[] };
   document.artifacts[0]!.sources = [{ name: "x", kind: "file", file: "../../etc/passwd" }];
   await fs.writeFile(file, JSON.stringify(document));
-  const listed = await reopen().list("ws1");
+  const reopened = reopen();
+  const listed = await reopened.list("ws1");
   assert.deepEqual(listed.map((view) => view.artifact.visual.title), ["Second"]);
+  await reopened.create("ws1", content({ title: "Third" }));
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as { unreadable?: { sources: unknown }[] };
+  assert.deepEqual(written.unreadable?.[0]?.sources, [{ name: "x", kind: "file", file: "../../etc/passwd" }]);
 });
 
 test("page state is saved only while it stays small and wire-safe", async (t) => {

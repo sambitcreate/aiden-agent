@@ -49,8 +49,13 @@ export interface WorkspaceArtifactToolOptions {
   /** The workspace has a folder the tools may read. */
   hasFolder: boolean;
   store: Pick<WorkspaceArtifactStore, "list" | "get" | "create" | "replace" | "delete">;
-  /** True when the person allowed this exact call on the chat approval card. */
-  wasApproved?: (toolCallId: string) => boolean;
+  /**
+   * Takes (once) the command digest an allowed approval card showed for this
+   * call. A save records an approval only when its commands match it.
+   */
+  takeApprovedDigest?: (toolCallId: string) => string | undefined;
+  /** False once the workspace was removed; a late call then writes nothing. */
+  workspaceExists?: () => boolean | Promise<boolean>;
   /** Runs the artifact's sources once and returns each one's result. */
   refresh?: (
     artifact: WorkspaceArtifactV1,
@@ -152,6 +157,8 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
 export interface WorkspaceArtifactCallApproval {
   required: boolean;
   summary?: string;
+  /** Digest of the commands the card lists; set when saving commands asks. */
+  digest?: string;
 }
 
 /**
@@ -203,6 +210,7 @@ export async function workspaceArtifactCallApproval(
   const verb = operation === "create" ? "Create" : "Update";
   return {
     required: true,
+    digest: workspaceArtifactDigest(sources, actions),
     summary: `${verb} the artifact "${title}". It can run these commands in this workspace whenever it refreshes or you press its buttons:\n${describeWorkspaceArtifactCommands(sources, actions)}`,
   };
 }
@@ -249,7 +257,7 @@ function text(value: string): AgentToolResult<null> {
  * `workspace_artifact`: lets the model keep interactive pages in the
  * workspace's Artifacts tab. Approval happens before execution (see
  * `workspaceArtifactCallApproval`); the host reports allowed calls through
- * `wasApproved`, and only those record an approval for the commands.
+ * `takeApprovedDigest`, and only those record an approval for the commands they showed.
  */
 export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOptions): AgentTool {
   return declarePiRuntimeReplay(
@@ -310,10 +318,15 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         ),
       }),
       execute: async (toolCallId, params, signal): Promise<AgentToolResult<null>> => {
+        // Consumed before anything can fail, so an entry never outlives its call.
+        const shownDigest = options.takeApprovedDigest?.(toolCallId);
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
         const input = (params ?? {}) as ArtifactToolInput;
         const operation = operationOf(input);
         const { workspaceId, chatId, store } = options;
+        if (options.workspaceExists && !(await options.workspaceExists())) {
+          throw new Error("This workspace no longer exists.");
+        }
         if (operation === "list") return text(listing(await store.list(workspaceId)));
         if (operation === "delete") {
           const id = idOf(input);
@@ -327,9 +340,10 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         if (operation === "update" && !previous) throw new Error("No artifact with that id exists in this workspace.");
         const { content, diagnostics } = contentFor(input, previous);
         assertSourcesRunnable(content, options);
-        // Only an allowed approval card covers new commands; otherwise an
-        // unchanged set keeps the approval it already had.
-        const approved = options.wasApproved?.(toolCallId) === true;
+        // Only an allowed card that listed exactly these commands covers them;
+        // otherwise an unchanged set keeps the approval it already had.
+        const approved =
+          shownDigest !== undefined && shownDigest === workspaceArtifactDigest(content.sources, content.actions);
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
         const artifact = previous
           ? await store.replace(workspaceId, previous.id, content, { approved })
