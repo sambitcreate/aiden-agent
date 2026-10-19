@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
+import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
+import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
+import { WorkspaceArtifactStore } from "./workspace-artifacts/store.js";
 import type { Workspace } from "./types.js";
 import {
   createWorkspaceApplicationService,
@@ -245,4 +251,36 @@ test("agent workspace Memory redirects before intent while the caller is awaitin
   assert.equal(ledger.length, 0);
   assert.deepEqual(application.events, []);
   assert.equal(application.saved.length, 0);
+});
+
+test("removing a workspace drops its artifacts, and a failure there does not undo the removal", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-workspace-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const store = new WorkspaceArtifactStore({ root: () => dir });
+  const compiled = compileAum('<Visual title="PRs"><Text>Open</Text></Visual>');
+  await store.create(
+    "workspace-1",
+    {
+      title: "PRs",
+      visual: { version: 1, kind: "ui", id: "x", title: "PRs", catalogVersion: AIDEN_UI_CATALOG_VERSION, tree: compiled.tree!, fallbackText: "" },
+      sources: [],
+      actions: [],
+      refresh: { onOpen: true },
+    },
+    { approved: false },
+  );
+  const application = fixture();
+  (application.deps as { workspaceArtifacts?: unknown }).workspaceArtifacts = store;
+  await application.service.remove("workspace-1");
+  assert.deepEqual(await store.list("workspace-1"), []);
+  assert.ok(application.events.includes("remove-record"));
+
+  const failing = fixture();
+  (failing.deps as { workspaceArtifacts?: unknown }).workspaceArtifacts = {
+    removeWorkspace: async () => {
+      throw new Error("disk full");
+    },
+  };
+  await failing.service.remove("workspace-1");
+  assert.ok(failing.events.includes("remove-record"));
 });

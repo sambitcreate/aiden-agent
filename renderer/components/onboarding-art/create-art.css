@@ -220,6 +220,19 @@
 .oa-wsp-branch { display: flex; align-items: center; gap: 3px; color: var(--text-tertiary); font-size: 7px; line-height: 8px; }
 .oa-wsp-branch .oa-icon { width: 7px; height: 7px; }
 
+/* Workspace Artifacts */
+.oa-artifacts-head { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 9px; }
+.oa-artifacts-head .oa-icon { width: 8px; height: 8px; color: var(--text-secondary); }
+.oa-artifacts-title { font-size: 9px; font-weight: 650; color: var(--text-primary); }
+.oa-artifacts-page { display: grid; gap: 6px; margin: 2px 9px 0; padding: 8px; border-radius: 9px; background: var(--oa-surface); }
+.oa-artifacts-row { display: flex; align-items: center; gap: 4px; height: 18px; padding: 0 5px; border-radius: 6px; background: var(--oa-fill); }
+.oa-artifacts-row .oa-icon { width: 8px; height: 8px; color: var(--status-green); }
+.oa-artifacts-row .oa-bar { height: 3.5px; }
+.oa-artifacts-row .oa-button { height: 12px; padding: 0 5px; font-size: 7px; }
+.oa-artifacts-number { font: 600 7.5px/1 var(--font-code-family); color: var(--text-primary); }
+.oa-artifacts-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); }
+.oa-artifacts-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
+
 /* Inline Visuals */
 .oa-visual-text { padding: 0 10px; }
 .oa-visual-card { display: grid; gap: 7px; margin: 9px 10px 0; padding: 8px; border-radius: 9px; background: var(--oa-surface); }

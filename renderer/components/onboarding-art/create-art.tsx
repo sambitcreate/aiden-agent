@@ -14,8 +14,10 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
+  LayoutDashboard,
   ListPlus,
   MessageCirclePlus,
+  MoreHorizontal,
   MousePointer2,
   Plus,
   RotateCw,
@@ -492,6 +494,59 @@ export function InlineVisualsArt() {
       </div>
       <div className="oa-ws-reply oa-visual-text">
         <Bar width="76%" tone="soft" />
+      </div>
+    </ArtWindow>
+  );
+}
+
+const ARTIFACT_PULLS = [
+  { number: "#554", width: "72%", draft: false },
+  { number: "#551", width: "54%", draft: false },
+  { number: "#548", width: "64%", draft: true },
+] as const;
+
+export function WorkspaceArtifactsArt() {
+  return (
+    <ArtWindow style={{ left: 12, top: 10, width: 200, height: 250 }}>
+      <div className="oa-term-tabs oa-separator-bottom">
+        <span className="oa-term-tab">
+          <ArtIcon icon={SquareTerminal} />
+        </span>
+        <span className="oa-term-tab oa-selected">
+          <ArtIcon icon={LayoutDashboard} />
+          Artifacts
+        </span>
+      </div>
+      <div className="oa-artifacts-head">
+        <span className="oa-artifacts-title">Open PRs</span>
+        <ArtIcon icon={ChevronDown} />
+        <span className="oa-grow" />
+        <ArtIcon icon={RotateCw} />
+        <ArtIcon icon={MoreHorizontal} />
+      </div>
+      <div className="oa-artifacts-page">
+        <div className="oa-visual-stat">
+          <Bar width={30} tone="soft" />
+          <span className="oa-visual-number">3 open</span>
+        </div>
+        {ARTIFACT_PULLS.map((pull, index) => (
+          <div key={pull.number} className="oa-artifacts-row">
+            <ArtIcon icon={GitPullRequest} />
+            <span className="oa-artifacts-number">{pull.number}</span>
+            <Bar width={pull.width} tone="soft" />
+            <span className="oa-grow" />
+            {pull.draft ? (
+              <i className="oa-artifacts-dot" />
+            ) : (
+              <ArtButton variant={index === 0 ? "primary" : "ghost"} className={index === 0 ? "oa-anim-press" : undefined}>
+                Merge
+              </ArtButton>
+            )}
+          </div>
+        ))}
+        <div className="oa-artifacts-actions">
+          <ArtButton variant="ghost">Ask Aiden</ArtButton>
+        </div>
       </div>
     </ArtWindow>
   );

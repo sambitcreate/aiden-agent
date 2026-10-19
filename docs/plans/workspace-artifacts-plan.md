@@ -1,6 +1,6 @@
 # Workspace Artifacts Plan
 
-Status: Proposed (2026-10-19). Desktop only (macOS and Linux) for v1.
+Status: Built in PR #554 (2026-10-19). Desktop only (macOS and Linux) for v1. The user guide is [docs/workspace-artifacts.md](../workspace-artifacts.md); "As built" below records where the build departed from this plan.
 Owner decisions (2026-10-19): Artifacts is a Tools-panel tab that exists only once the workspace has an artifact; the workspace owns artifacts, and the person deletes them from the tab or by asking Aiden; data sources follow the chat's own permissions; phones and CLI are out of scope for v1.
 
 ## Outcome
@@ -16,6 +16,21 @@ How this differs from what ships today:
 | Data | Frozen at render time | Re-read from declared sources |
 | Lifetime | Scrolls away with the chat | Until deleted |
 | Actions | send, set, open, copy | Those, plus compose and run |
+
+## As built (2026-10-19)
+
+The original plan below is kept as written. The build differs in these ways:
+
+- **Sources are `shell` and `file` only.** Tool and MCP sources were left out of v1. The file source field is `file`, not `path`. Run actions are shell templates only.
+- **Contract.** The compiled page is stored as a `ChatUiVisualV1` (`visual`, including its local `state`) rather than a bare tree. Artifacts carry `approvedDigest`, and the store keeps snapshots in a separate per-workspace file. Storage is `<userData>/workspace-artifacts/<workspaceId>.json` and `<workspaceId>.snapshots.json`; removing a workspace removes both.
+- **Approval.** There is no "Allow always" per source. Under Ask, the tool's approval card lists every command the page can run (sources and actions), and allowing it records a digest of exactly that set. Any change to the commands needs approval again, from a later card or from **Review** in the tab. Each button press under Ask shows the resolved command and waits for **Run**. File sources run under Ask without approval. Under Full, creating or updating a page and pressing its buttons need no card. Deleting a page through the tool always shows a card, at every access level.
+- **Command safety.** Each `{{param}}` must be a standalone unquoted word. Values go in through `set -- 'value' …` and `"${N}"`, may not start with `-` or be negative numbers, and may not contain control or invisible characters. A button press carries the page digest, and main refuses it if the page changed since.
+- **Refresh.** Concurrent refreshes of the same page under the same commands, approval and access share one run. One caller cancelling leaves the run going for the others. Only the newest run for a page saves, so results for commands that changed mid-run, or read under access that was narrowed since, are never saved. The workspace folder is re-verified (realpath, directory) before anything runs.
+- **Send target.** `sendPrompt` goes to the chat on screen beside the tab through its normal send path. If that chat is not mounted, the text is staged in its composer. There is no new-chat fallback.
+- **Skill.** `aiden-artifacts` is a built-in skill registered in main (`main/services/workspace-artifacts/skill.ts`), not a bundled `SKILL.md`, because `resources/aiden-help` is copied into the CLI. Turns without the tool (phones, Telegram, Bots, read-only runs) drop it from their skill list, and the phone and Telegram skill catalogs leave it out.
+- **No transcript card or phone fallback text** beyond the normal tool row. **No `workspaceArtifacts` host capability**, because the feature is identical on macOS and Linux and absent from other surfaces by registration (`workspace_artifact` is registered only for attended desktop chats).
+- **IPC.** `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh` and `run`, and the `workspaces:artifacts-changed` notification.
+- **Not done in v1.** A Playwright flow. A page that fails to draw falls back through `AidenUiBlock`'s own error boundary, so no separate page boundary was added.
 
 ## Building blocks already on main
 

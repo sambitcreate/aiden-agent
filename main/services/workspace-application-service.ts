@@ -36,6 +36,8 @@ export interface WorkspaceApplicationDependencies {
   >;
   terminalService: Pick<typeof terminalService, "closeForWorkspace">;
   browserService?: { closeForWorkspace(workspaceId: string): void };
+  /** Drops the workspace's artifacts once its record is gone. */
+  workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
   workspaceOperationRegistry: Pick<typeof workspaceOperationRegistry, "cancelAndSettle">;
   createScratchWorkspaceDirectory: typeof createScratchWorkspaceDirectory;
@@ -272,6 +274,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             await deps.llmClient.cancelWorkspaceAndSettle(id);
             await deps.scheduleService.cancelWorkspace(id);
             await deps.configStore.removeWorkspace(id);
+            await deps.workspaceArtifacts?.removeWorkspace(id).catch((error: unknown) => {
+              deps.logError("workspace", "Could not remove the workspace's artifacts.", error);
+            });
             deps.onChanged?.();
             keepPaused();
           },
