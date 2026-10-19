@@ -257,6 +257,11 @@ import type {
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
+import type {
+  WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactV1,
+  WorkspaceArtifactView,
+} from "../shared/workspace-artifacts";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -1184,6 +1189,23 @@ export const pullRequestsApi = {
     invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
   adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
     invoke<ChatPullRequestLinkResult>("pullRequests:adopt", chatId, operationId, ref),
+};
+
+// ── Workspace artifacts ───────────────────────────────────────────────
+// Pages a workspace keeps in the Tools panel's Artifacts tab. Main owns the
+// files and runs every source; the renderer only names ids.
+export const workspaceArtifactsApi = {
+  list: (workspaceId: string) => invoke<WorkspaceArtifactView[]>("workspaces:artifacts:list", workspaceId),
+  rename: (workspaceId: string, artifactId: string, title: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
+  delete: (workspaceId: string, artifactId: string) =>
+    invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
+  saveState: (workspaceId: string, artifactId: string, state: Record<string, unknown>) =>
+    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
+  approve: (workspaceId: string, artifactId: string, digest: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
+  onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
+    onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────

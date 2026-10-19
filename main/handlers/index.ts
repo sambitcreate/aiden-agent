@@ -12,6 +12,7 @@ import { registerChatHistoryHandlers } from "./chats.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
 import { registerPullRequestHandlers } from "./pull-requests.js";
+import { registerWorkspaceArtifactHandlers } from "./workspace-artifacts.js";
 import { registerAttachmentHandlers } from "./attachments.js";
 import { registerChatImageActionHandlers } from "./chat-image-actions.js";
 import { registerPhase2Handlers } from "./phase2.js";
@@ -70,6 +71,7 @@ export function registerHandlers(): void {
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
   registerPullRequestHandlers();
+  registerWorkspaceArtifactHandlers();
   registerAttachmentHandlers();
   registerChatImageActionHandlers();
   registerPhase2Handlers();

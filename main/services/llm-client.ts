@@ -461,6 +461,13 @@ import {
 } from "./ask-user-question-coordinator.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
+import {
+  createWorkspaceArtifactTool,
+  WORKSPACE_ARTIFACT_TOOL_NAME,
+  workspaceArtifactCallApproval,
+  type WorkspaceArtifactCallApproval,
+} from "./workspace-artifacts/tool.js";
+import { notifyWorkspaceArtifactsChanged, workspaceArtifactStore } from "./workspace-artifacts/main.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
 import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
@@ -475,6 +482,13 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+/**
+ * `${streamId}:${toolCallId}` of workspace_artifact calls the person allowed on
+ * the approval card. The tool consumes its entry once, so only an allowed
+ * card records an approval for the artifact's commands.
+ */
+const approvedWorkspaceArtifactCalls = new Set<string>();
 
 function uniqueResponseImages(
   sharedImages: readonly Attachment[],
@@ -1947,6 +1961,33 @@ async function prepareGeneration(
       },
     });
     generationExtensions.push(generativeUiRuntime.extension);
+  }
+  if (
+    !botContext &&
+    !assistantMode &&
+    workspace &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    options.visualAudience !== "remote" &&
+    permission !== "read-only" &&
+    !options.excludeToolNames?.has(WORKSPACE_ARTIFACT_TOOL_NAME)
+  ) {
+    // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone and
+    // Telegram turns never get the tool.
+    generationExtensions.push({
+      id: "aiden.workspace-artifacts",
+      tools: [
+        createWorkspaceArtifactTool({
+          workspaceId: workspace.id,
+          chatId: params.chatId,
+          permission,
+          hasFolder: Boolean(folderPath),
+          store: workspaceArtifactStore,
+          wasApproved: (toolCallId) => approvedWorkspaceArtifactCalls.delete(`${streamId}:${toolCallId}`),
+          onChanged: notifyWorkspaceArtifactsChanged,
+        }),
+      ],
+    });
   }
   if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
     const outputs = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
@@ -3544,6 +3585,23 @@ export const llmClient = {
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
               context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
+            let artifactApproval: WorkspaceArtifactCallApproval | undefined;
+            if (context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && workspaceId) {
+              try {
+                artifactApproval = await workspaceArtifactCallApproval(context.args, {
+                  workspaceId,
+                  permission: permission === "read-only" ? "none" : permission,
+                  store: workspaceArtifactStore,
+                });
+              } catch (error) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason: error instanceof Error ? error.message : "The artifact could not be read for approval.",
+                };
+              }
+            }
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             if (
@@ -3552,6 +3610,7 @@ export const llmClient = {
               !disclosureApproval &&
               !memoryApproval &&
               !botMcpApproval &&
+              !artifactApproval?.required &&
               !browserFileApproval?.requiresApproval
             ) {
               timeline.toolRunning(context.toolCall.id);
@@ -3695,7 +3754,9 @@ export const llmClient = {
               }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
-            } else
+            } else if (artifactApproval?.required)
+              summary = artifactApproval.summary ?? "Save this artifact.";
+            else
               summary = editScheduleApproval
                 ? summarizeEditAutomationToolCall(context.args)
                 : preparedStandardScheduleSummary
@@ -3783,6 +3844,9 @@ export const llmClient = {
             owner.documentId,
           );
           const allowed = approvalOutcome === "allowed";
+          if (allowed && context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME) {
+            approvedWorkspaceArtifactCalls.add(`${streamId}:${context.toolCall.id}`);
+          }
           if (allowed && scopedRuleTarget) {
             const toolCallId = timeline.publicToolCallId(context.toolCall.id);
             const scope = toolCallId
