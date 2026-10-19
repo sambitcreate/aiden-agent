@@ -12,6 +12,16 @@ import { registerChatHistoryHandlers } from "./chats.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
 import { registerPullRequestHandlers } from "./pull-requests.js";
+import { registerWorkspaceArtifactHandlers } from "./workspace-artifacts.js";
+import { configStore } from "../services/config-store.js";
+import {
+  notifyWorkspaceArtifactsChanged,
+  workspaceArtifactRunner,
+  workspaceArtifactStore,
+} from "../services/workspace-artifacts/main.js";
+import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
+import type { IpcMainInvokeEvent } from "electron";
 import { registerAttachmentHandlers } from "./attachments.js";
 import { registerChatImageActionHandlers } from "./chat-image-actions.js";
 import { registerPhase2Handlers } from "./phase2.js";
@@ -70,6 +80,19 @@ export function registerHandlers(): void {
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
   registerPullRequestHandlers();
+  registerWorkspaceArtifactHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    store: workspaceArtifactStore,
+    workspaceExists: async (id) => Boolean(await configStore.getWorkspace(id)),
+    notify: notifyWorkspaceArtifactsChanged,
+    runner: workspaceArtifactRunner,
+    runInWorkspace: (event, workspaceId, operation) =>
+      workspaceEnvironmentApplicationService.run(
+        rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Artifacts need the active window.")),
+        workspaceId,
+        ({ folderPath, workspace }, signal) => operation({ folderPath, permission: workspace.permission }, signal),
+      ),
+  });
   registerAttachmentHandlers();
   registerChatImageActionHandlers();
   registerPhase2Handlers();

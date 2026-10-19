@@ -119,9 +119,10 @@ import {
 } from "./bot-tool-authority.js";
 import { mcpAgentToolIdentity, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
-import { type SkillRegistrySnapshot } from "./skill-registry.js";
+import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
+import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -464,6 +465,17 @@ import {
 } from "./ask-user-question-coordinator.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
+import {
+  createWorkspaceArtifactTool,
+  WORKSPACE_ARTIFACT_TOOL_NAME,
+  workspaceArtifactCallApproval,
+  type WorkspaceArtifactCallApproval,
+} from "./workspace-artifacts/tool.js";
+import {
+  notifyWorkspaceArtifactsChanged,
+  workspaceArtifactRunner,
+  workspaceArtifactStore,
+} from "./workspace-artifacts/main.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
 import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
@@ -478,6 +490,21 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+/**
+ * Per stream, the command digest each allowed workspace_artifact approval card
+ * showed, by tool call id. The tool consumes its entry first thing, and only
+ * a save whose commands match that digest records an approval. A stream's
+ * entries go when it ends.
+ */
+const approvedWorkspaceArtifactCalls = new Map<string, Map<string, string>>();
+
+function takeApprovedWorkspaceArtifactCall(streamId: string, toolCallId: string): string | undefined {
+  const calls = approvedWorkspaceArtifactCalls.get(streamId);
+  const digest = calls?.get(toolCallId);
+  calls?.delete(toolCallId);
+  return digest;
+}
 
 function uniqueResponseImages(
   sharedImages: readonly Attachment[],
@@ -1385,8 +1412,22 @@ async function prepareGeneration(
   // Assistant modes use positive allowlists: the dock gets safe metadata plus
   // scheduling, while an approved automation gets only its project tools and
   // exact MCP identities. Computer Use, skills, and delegation stay out.
+  // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
+  // Telegram and Bot turns get neither the tool nor its skill.
+  const offerWorkspaceArtifacts =
+    !botContext &&
+    !assistantMode &&
+    Boolean(workspace) &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    options.visualAudience !== "remote" &&
+    permission !== "read-only" &&
+    !options.excludeToolNames?.has(WORKSPACE_ARTIFACT_TOOL_NAME);
   let skillSnapshot =
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
+  if (skillSnapshot && !offerWorkspaceArtifacts) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
+  }
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
     if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
@@ -1951,6 +1992,26 @@ async function prepareGeneration(
     });
     generationExtensions.push(generativeUiRuntime.extension);
   }
+  if (offerWorkspaceArtifacts && workspace) {
+    // Gated by offerWorkspaceArtifacts above.
+    generationExtensions.push({
+      id: "aiden.workspace-artifacts",
+      tools: [
+        createWorkspaceArtifactTool({
+          workspaceId: workspace.id,
+          chatId: params.chatId,
+          permission,
+          hasFolder: Boolean(folderPath),
+          store: workspaceArtifactStore,
+          takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
+          refresh: (artifact, refreshSignal) =>
+            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
+          onChanged: notifyWorkspaceArtifactsChanged,
+        }),
+      ],
+    });
+  }
   if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
     const outputs = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
       () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)), workspace);
@@ -2339,6 +2400,7 @@ export const llmClient = {
         });
         releaseGenerationSkillReservation(initialization);
         releaseGenerationBotAuthority(initialization);
+        approvedWorkspaceArtifactCalls.delete(streamId);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
@@ -2354,6 +2416,7 @@ export const llmClient = {
       await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -3456,6 +3519,8 @@ export const llmClient = {
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
+          /** Commands digest an allowed workspace_artifact card showed. */
+          let artifactApprovalDigest: string | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
@@ -3564,6 +3629,24 @@ export const llmClient = {
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
               context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
+            let artifactApproval: WorkspaceArtifactCallApproval | undefined;
+            if (context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && workspaceId) {
+              try {
+                artifactApproval = await workspaceArtifactCallApproval(context.args, {
+                  workspaceId,
+                  permission: permission === "read-only" ? "none" : permission,
+                  store: workspaceArtifactStore,
+                });
+              } catch (error) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason: error instanceof Error ? error.message : "The artifact could not be read for approval.",
+                };
+              }
+            }
+            if (artifactApproval?.required) artifactApprovalDigest = artifactApproval.digest;
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             if (
@@ -3572,6 +3655,7 @@ export const llmClient = {
               !disclosureApproval &&
               !memoryApproval &&
               !botMcpApproval &&
+              !artifactApproval?.required &&
               !browserFileApproval?.requiresApproval
             ) {
               timeline.toolRunning(context.toolCall.id);
@@ -3715,7 +3799,9 @@ export const llmClient = {
               }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
-            } else
+            } else if (artifactApproval?.required)
+              summary = artifactApproval.summary ?? "Save this artifact.";
+            else
               summary = editScheduleApproval
                 ? summarizeEditAutomationToolCall(context.args)
                 : preparedStandardScheduleSummary
@@ -3803,6 +3889,11 @@ export const llmClient = {
             owner.documentId,
           );
           const allowed = approvalOutcome === "allowed";
+          if (allowed && context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && artifactApprovalDigest) {
+            const calls = approvedWorkspaceArtifactCalls.get(streamId) ?? new Map<string, string>();
+            calls.set(context.toolCall.id, artifactApprovalDigest);
+            approvedWorkspaceArtifactCalls.set(streamId, calls);
+          }
           if (allowed && scopedRuleTarget) {
             const toolCallId = timeline.publicToolCallId(context.toolCall.id);
             const scope = toolCallId
@@ -4132,6 +4223,7 @@ export const llmClient = {
         });
         releaseGenerationSkillReservation(initialization);
         releaseGenerationBotAuthority(initialization);
+        approvedWorkspaceArtifactCalls.delete(streamId);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
@@ -4147,6 +4239,7 @@ export const llmClient = {
       await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -4160,6 +4253,7 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -4367,6 +4461,7 @@ export const llmClient = {
       });
       releaseGenerationSkillReservation(activeGeneration);
       releaseGenerationBotAuthority(activeGeneration);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -4654,6 +4749,7 @@ export const llmClient = {
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
+          approvedWorkspaceArtifactCalls.delete(streamId);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);

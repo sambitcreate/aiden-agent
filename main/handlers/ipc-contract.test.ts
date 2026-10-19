@@ -257,6 +257,14 @@ test("Bot IPC handlers and renderer Bot invokes match exactly", () => {
   assert.deepEqual(sorted(botInvokes), sorted(botHandlers), "Bot handlers and renderer/lib/ipc.ts drifted");
 });
 
+test("workspace artifact IPC handlers and renderer invokes match exactly", () => {
+  const prefix = "workspaces:artifacts:";
+  const handlers = rendererHandlers.filter((channel) => channel.startsWith(prefix));
+  const invokes = [...rendererInvokes].filter((channel) => channel.startsWith(prefix));
+  assert.ok(handlers.length > 0, "workspace artifact handlers were not found");
+  assert.deepEqual(sorted(invokes), sorted(handlers), "Workspace artifact handlers and renderer/lib/ipc.ts drifted");
+});
+
 test("every live renderer-facing handler is covered by an INVOKE_PREFIX", () => {
   assert.ok(rendererHandlers.length > 80, "IPC source scan found too few handlers");
   const offenders = rendererHandlers.filter(

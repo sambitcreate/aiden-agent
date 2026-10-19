@@ -1,4 +1,13 @@
-export type EnvironmentPanelTab = "review" | "subagents" | "files" | "browser" | "devices" | "new-tab" | "context" | "terminal";
+export type EnvironmentPanelTab =
+  | "review"
+  | "subagents"
+  | "files"
+  | "browser"
+  | "devices"
+  | "new-tab"
+  | "context"
+  | "terminal"
+  | "artifacts";
 export type EnvironmentSurface = "quick-view" | "tools";
 export type EnvironmentSurfaceMode = "closed" | "tools-pinned" | "tools-floating";
 
@@ -30,6 +39,7 @@ export const ENVIRONMENT_PANEL_TABS = [
   "new-tab",
   "context",
   "terminal",
+  "artifacts",
 ] as const satisfies readonly EnvironmentPanelTab[];
 
 interface EnvironmentPanelStorage {
@@ -182,6 +192,7 @@ const ENVIRONMENT_PANEL_VIEW_ORDER = [
   "files",
   "browser",
   "devices",
+  "artifacts",
 ] as const satisfies readonly EnvironmentPanelTab[];
 
 /** Views the tools surface mounts, in DOM order; a disabled capability's view is not mounted at all. */

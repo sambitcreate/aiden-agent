@@ -6,12 +6,13 @@
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
 import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
 import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { agentShellCommandEnvironment } from "./agent-command-environment.js";
+import { runBoundedShellCommand } from "./bounded-shell-command.js";
 import {
   constants as fsConstants,
   realpathSync,
@@ -1991,124 +1992,13 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         throw signal.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
       await verifyWorkspaceRoot(workspace, signal);
-      const result = await new Promise<{
-        stdout: string;
-        stderr: string;
-        exitCode: number | null;
-        timedOut: boolean;
-        outputLimitExceeded: boolean;
-        aborted: boolean;
-      }>((resolve, reject) => {
-        const child = spawn(command, {
-          cwd: root,
-          detached: process.platform !== "win32",
-          env: runCommandEnv(options, agentShellCommandEnvironment()),
-          shell: true,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        const stdout: Buffer[] = [];
-        const stderr: Buffer[] = [];
-        let bytes = 0;
-        let timedOut = false;
-        let outputLimitExceeded = false;
-        let aborted = false;
-        let settled = false;
-        let terminationRequested = false;
-        let forceKill: ReturnType<typeof setTimeout> | undefined;
-        let finishTermination: (() => void) | undefined;
-        let terminationCleanup: Promise<void> | undefined;
-
-        const processGroupExists = () => {
-          if (process.platform === "win32" || !child.pid) return false;
-          try {
-            process.kill(-child.pid, 0);
-            return true;
-          } catch (error) {
-            return (error as NodeJS.ErrnoException).code !== "ESRCH";
-          }
-        };
-
-        const signalProcess = (processSignal: NodeJS.Signals) => {
-          if (process.platform !== "win32" && child.pid) {
-            try {
-              process.kill(-child.pid, processSignal);
-              return;
-            } catch {
-              // The process group may have exited; fall back to the child handle.
-            }
-          }
-          child.kill(processSignal);
-        };
-        const terminate = () => {
-          if (terminationRequested) return;
-          terminationRequested = true;
-          signalProcess("SIGTERM");
-          if (!child.pid) return;
-          terminationCleanup = new Promise<void>((resolve) => {
-            finishTermination = resolve;
-            forceKill = setTimeout(() => {
-              // The shell can close before its descendants leave the process group.
-              // Keep this timer owned by the group, independent of shell settlement.
-              signalProcess("SIGKILL");
-              finishTermination?.();
-              finishTermination = undefined;
-            }, 1_000);
-          });
-        };
-        const abort = () => {
-          aborted = true;
-          terminate();
-        };
-        const capture = (target: Buffer[]) => (chunk: Buffer | string) => {
-          const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          const remaining = Math.max(0, MAX_COMMAND_OUTPUT_BYTES - bytes);
-          if (remaining > 0) target.push(value.subarray(0, remaining));
-          bytes += value.length;
-          if (bytes > MAX_COMMAND_OUTPUT_BYTES && !outputLimitExceeded) {
-            outputLimitExceeded = true;
-            terminate();
-          }
-        };
-        child.stdout.on("data", capture(stdout));
-        child.stderr.on("data", capture(stderr));
-        child.once("error", (error) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          signal?.removeEventListener("abort", abort);
-          void (async () => {
-            await terminationCleanup;
-            reject(error);
-          })();
-        });
-        child.once("close", (exitCode) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          signal?.removeEventListener("abort", abort);
-          if (finishTermination && !processGroupExists()) {
-            clearTimeout(forceKill);
-            finishTermination();
-            finishTermination = undefined;
-          }
-          void (async () => {
-            await terminationCleanup;
-            resolve({
-              stdout: Buffer.concat(stdout).toString("utf-8"),
-              stderr: Buffer.concat(stderr).toString("utf-8"),
-              exitCode,
-              timedOut,
-              outputLimitExceeded,
-              aborted,
-            });
-          })();
-        });
-        signal?.addEventListener("abort", abort, { once: true });
-        const timeout = setTimeout(() => {
-          timedOut = true;
-          terminate();
-        }, options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS);
-        timeout.unref?.();
+      const result = await runBoundedShellCommand({
+        command,
+        cwd: root,
+        env: runCommandEnv(options, agentShellCommandEnvironment()),
+        timeoutMs: options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS,
+        maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+        signal,
       });
       if (result.aborted) {
         throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");

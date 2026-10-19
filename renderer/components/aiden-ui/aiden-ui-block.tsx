@@ -20,7 +20,11 @@ import { useLinkOpener } from "../../lib/link-opener";
 export type AidenUiAction =
   | { kind: "send"; text: string }
   | { kind: "copy"; text: string }
-  | { kind: "open"; url: string };
+  | { kind: "open"; url: string }
+  /** Workspace artifacts only: put text in the chat's composer without sending it. */
+  | { kind: "compose"; text: string }
+  /** Workspace artifacts only: run one of the page's declared buttons with these values. */
+  | { kind: "run"; name: string; args: unknown[] };
 
 function parseData(dataJson: string | undefined): Record<string, unknown> {
   if (!dataJson) return {};
@@ -192,6 +196,15 @@ function AidenUiVisualBody({
           onActionRef.current?.({ kind: "copy", text });
           return;
         }
+        case "compose": {
+          const text = asString(evaluate(action.text, scope)).trim();
+          if (text && text.length <= MAX_GUEST_PROMPT_CHARS) onActionRef.current?.({ kind: "compose", text });
+          return;
+        }
+        case "run":
+          // The host confirms and runs the saved command; the page supplies only values.
+          onActionRef.current?.({ kind: "run", name: action.name, args: action.a.map((arg) => evaluate(arg, scope)) });
+          return;
         case "open": {
           const url = asString(evaluate(action.url, scope));
           try {
