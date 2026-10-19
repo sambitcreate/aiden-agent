@@ -358,12 +358,22 @@ export function parseComputerUseKeyChord(value: unknown): ParsedKeyChord {
   return { key: keys[0], modifiers };
 }
 
-function validateTypedText(value: unknown): string {
+function validateTypedText(value: unknown, options: { typedAsKeys?: boolean } = {}): string {
   if (typeof value !== "string") fail("invalid_text", "type requires text.");
   if (value.length > APPROVAL_PAYLOAD_MAX_CHARS) {
     fail(
       "payload_too_large",
       "type and set_value payloads are limited to 4,000 characters for approval safety.",
+    );
+  }
+  // cua-driver 0.35+ types \n and \r as Return and \t as Tab whenever it
+  // synthesizes keys, so a line break could submit a form or address bar.
+  // Submission stays an explicit key action. Checked on the raw value,
+  // before the shell scan below strips line continuations.
+  if (options.typedAsKeys && /[\n\r\t]/u.test(value)) {
+    fail(
+      "blocked_text",
+      "Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then press_key Return or Tab as its own action.",
     );
   }
   // Normalize compatibility characters, quoted executable names, escaped
@@ -598,7 +608,7 @@ export function normalizeComputerUseArgs(input: ComputerUseArgs): ComputerUseArg
       break;
     }
     case "type":
-      result.text = validateTypedText(source.text);
+      result.text = validateTypedText(source.text, { typedAsKeys: true });
       applyDelivery(source, result);
       copyCaptureAfter(source, result);
       break;
