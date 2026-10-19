@@ -1,5 +1,5 @@
 import type { Locator } from "@playwright/test";
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { expect, finishLmStudioOnboarding, test, E2E_MODEL_ID, LM_STUDIO_PROVIDER_ID } from "./fixtures";
 
 const PROMPT = "Stream a long structured answer for the follow-the-bottom check.";
 
@@ -124,6 +124,7 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
 });
 
 test("older transcript content remains findable, copyable and keyboard reachable with reduced motion", async ({ aiden }) => {
+  test.skip(!aiden.lmStudio.enqueueStreamedReply, "requires the deterministic streaming fixture");
   const { mkdir, readFile, writeFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
   await finishLmStudioOnboarding(aiden.page);
@@ -132,7 +133,7 @@ test("older transcript content remains findable, copyable and keyboard reachable
     const indexPath = join(folder, "index.json");
     await mkdir(folder, { recursive: true });
     const index = JSON.parse(await readFile(indexPath, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return "[]"; throw error; }));
-    const meta = { id: "long-transcript-fixture", title: "Long transcript fixture", createdAt: Date.now(), updatedAt: Date.now() };
+    const meta = { providerId: LM_STUDIO_PROVIDER_ID, model: E2E_MODEL_ID, id: "long-transcript-fixture", title: "Long transcript fixture", createdAt: Date.now(), updatedAt: Date.now() };
     const messages = Array.from({ length: 100 }, (_, i) => ({ id: `history-${i}`, role: i % 2 ? "assistant" : "user", content: `History marker ${i}.\n\n${"A stable historical paragraph. ".repeat((i % 7 + 1) * 4)}`, createdAt: meta.createdAt + i }));
     await writeFile(join(folder, `${meta.id}.json`), JSON.stringify({ ...meta, messages }));
     await writeFile(indexPath, JSON.stringify([...index, meta]));
@@ -162,4 +163,18 @@ test("older transcript content remains findable, copyable and keyboard reachable
   await page.getByRole("button", { name: "Scroll to bottom" }).click();
   await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
   await expect(page.getByText("History marker 99.", { exact: false })).toBeInViewport();
+  // The same old history stays mounted as a new turn streams and settles.
+  const prompt = "Continue this old transcript with a measured reply.";
+  const reply = aiden.lmStudio.enqueueStreamedReply!(prompt);
+  await page.locator("textarea").fill(prompt);
+  await page.locator("textarea").press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  for (const chunk of replyChunks().slice(0, 12)) {
+    reply.push(chunk.text);
+    await revealed(viewport, chunk);
+    await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
+  }
+  reply.finish();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
 });
