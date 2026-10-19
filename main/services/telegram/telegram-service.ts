@@ -27,6 +27,8 @@ import { contextLifecycleService } from "../context-lifecycle-service-main.js";
 import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
 import { transcribe } from "../transcription.js";
 import { skillRegistry } from "../skill-registry-main.js";
+import { withoutSkills } from "../skill-registry.js";
+import { DESKTOP_ARTIFACT_SKILLS } from "../workspace-artifacts/skill.js";
 import {
   mkdir,
   readFile,
@@ -686,7 +688,8 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
         }),
       );
       if (!workspaceId) return extensionCommands;
-      const snapshot = await skillRegistry.snapshot(workspaceId);
+      // Telegram turns never get workspace_artifact, so its skill is not a command here.
+      const snapshot = withoutSkills(await skillRegistry.snapshot(workspaceId), DESKTOP_ARTIFACT_SKILLS);
       const skillCommands = snapshot.catalog.flatMap((skill) => {
         if (!skill.available) return [];
         const command = skill.name

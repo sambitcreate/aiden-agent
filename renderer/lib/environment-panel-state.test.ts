@@ -20,23 +20,23 @@ test("Simulator tab sits after Browser only when the devices capability is on", 
     "files",
     "browser",
     "devices",
-    "new-tab", "context", "terminal",
+    "new-tab", "context", "terminal", "artifacts",
   ]);
   assert.deepEqual(availableEnvironmentPanelTabs(false, true), [
     "review",
     "files",
     "browser",
     "devices",
-    "new-tab", "context", "terminal",
+    "new-tab", "context", "terminal", "artifacts",
   ]);
   assert.deepEqual(availableEnvironmentPanelTabs(true, false), [
     "review",
     "subagents",
     "files",
     "browser",
-    "new-tab", "context", "terminal",
+    "new-tab", "context", "terminal", "artifacts",
   ]);
-  assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files", "browser", "new-tab", "context", "terminal"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files", "browser", "new-tab", "context", "terminal", "artifacts"]);
 });
 
 test("a disabled Simulator tab normalizes to Review without rewriting storage", () => {
@@ -94,10 +94,10 @@ test("tab storage filters unknown and duplicate values and migrates malformed/le
 });
 
 test("the tools surface mounts workspace views in a fixed order and leaves out disabled ones", () => {
-  assert.deepEqual(environmentPanelViewOrder(false, false), ["new-tab", "context", "terminal", "review", "files", "browser"]);
-  assert.deepEqual(environmentPanelViewOrder(true, false), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser"]);
-  assert.deepEqual(environmentPanelViewOrder(false, true), ["new-tab", "context", "terminal", "review", "files", "browser", "devices"]);
-  assert.deepEqual(environmentPanelViewOrder(true, true), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser", "devices"]);
+  assert.deepEqual(environmentPanelViewOrder(false, false), ["new-tab", "context", "terminal", "review", "files", "browser", "artifacts"]);
+  assert.deepEqual(environmentPanelViewOrder(true, false), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser", "artifacts"]);
+  assert.deepEqual(environmentPanelViewOrder(false, true), ["new-tab", "context", "terminal", "review", "files", "browser", "devices", "artifacts"]);
+  assert.deepEqual(environmentPanelViewOrder(true, true), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser", "devices", "artifacts"]);
 });
 
 test("the view order is a permutation of the tab list, so every tab has a mounted view", () => {

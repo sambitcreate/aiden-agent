@@ -438,3 +438,25 @@ test("a visual that fails to draw shows its fallback text while the transcript k
   assert.ok(screen.getByText("Fallback words"));
   assert.ok(screen.getByText("Transcript continues"));
 });
+
+test("an artifact page's run() and compose() buttons hand the host the evaluated values", () => {
+  const compiled = compileAum(
+    `<Visual title="PRs"><Each in={$pulls} as="pr"><Button action={run("merge", $pr.number, "squash")}>{"Merge #" + $pr.number}</Button></Each><Button action={compose("Review #" + $pulls[0].number)}>Draft</Button></Visual>`,
+    { artifactActions: true },
+  );
+  assert.ok(compiled.tree);
+  const actions: AidenUiAction[] = [];
+  render(
+    <AidenUiBlock
+      visual={{ version: 1, kind: "ui", id: "art", title: "PRs", catalogVersion: 1, tree: compiled.tree, dataJson: '{"pulls":[{"number":12},{"number":15}]}', fallbackText: "" }}
+      onAction={(action) => actions.push(action)}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Merge #15" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draft" }));
+  // Neither waits on an in-block confirmation: the host confirms commands and the person sends composed text.
+  assert.deepEqual(actions, [
+    { kind: "run", name: "merge", args: [15, "squash"] },
+    { kind: "compose", text: "Review #12" },
+  ]);
+});

@@ -42,7 +42,17 @@ interface Context {
   stateKeys: Set<string>;
   /** Unknown tag names already reported, so one repeated tag is one diagnostic. */
   unknownReported: Set<string>;
+  /** Workspace artifacts may also use compose() and run(). */
+  artifactActions: boolean;
 }
+
+export interface CompileAumOptions {
+  draft?: boolean;
+  /** Accept the workspace-artifact actions compose() and run(); inline visuals reject them. */
+  artifactActions?: boolean;
+}
+
+const MAX_RUN_ARGUMENTS = 8;
 
 function report(context: Context, diagnostic: AidenUiDiagnostic): void {
   if (context.diagnostics.length < 200) context.diagnostics.push(diagnostic);
@@ -90,6 +100,12 @@ function compileProp(
     const action = parsed.action;
     if (action.act === "open" && action.url.op === "lit" && !(typeof action.url.v === "string" && action.url.v.startsWith("https://"))) {
       return invalid("openUrl only accepts https:// links");
+    }
+    if ((action.act === "compose" || action.act === "run") && !context.artifactActions) {
+      return invalid(`${action.act === "run" ? "run" : "compose"}() works only in workspace artifacts; use sendPrompt("…") here`);
+    }
+    if (action.act === "run" && (!/^[A-Za-z_][A-Za-z0-9_]{0,39}$/u.test(action.name) || action.a.length > MAX_RUN_ARGUMENTS)) {
+      return invalid(`run("${action.name.slice(0, 40)}") needs an action name from the artifact's actions and at most ${MAX_RUN_ARGUMENTS} values`);
     }
     if (action.act === "set" && !context.stateKeys.has(action.key)) {
       return invalid(`setState("${action.key}") needs "${action.key}" declared in <Visual state={{…}}>`);
@@ -310,7 +326,7 @@ function assignKeys(node: AidenUiNodeV1, key: string): void {
 }
 
 /** Never throws: anything unexpected becomes a limit diagnostic and no tree. */
-export function compileAum(markup: string, options: { draft?: boolean } = {}): CompiledAum {
+export function compileAum(markup: string, options: CompileAumOptions = {}): CompiledAum {
   try {
     return compileUnchecked(markup, options);
   } catch {
@@ -321,7 +337,7 @@ export function compileAum(markup: string, options: { draft?: boolean } = {}): C
   }
 }
 
-function compileUnchecked(markup: string, options: { draft?: boolean }): CompiledAum {
+function compileUnchecked(markup: string, options: CompileAumOptions): CompiledAum {
   const parsed = parseAum(markup);
   const context: Context = {
     diagnostics: options.draft ? [] : [...parsed.diagnostics],
@@ -331,6 +347,7 @@ function compileUnchecked(markup: string, options: { draft?: boolean }): Compile
     data: {},
     stateKeys: new Set(),
     unknownReported: new Set(),
+    artifactActions: options.artifactActions === true,
   };
   const meaningful = parsed.nodes.filter((node) => node.kind !== "text" || node.text.trim());
   const rootElement =
