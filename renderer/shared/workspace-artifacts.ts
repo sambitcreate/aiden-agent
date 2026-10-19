@@ -215,8 +215,14 @@ interface CodeArguments {
   code: RegExp;
   valued?: RegExp;
   operand?: "first" | "after-first";
-  /** Code options count only before the subcommand, the first operand this matches (as git's do). */
+  /**
+   * Code options count only before the subcommand, the first operand this
+   * matches (as git's do). Before it, any option not in `flags` is taken to
+   * consume the next word, so an option this list does not know cannot pass
+   * its value off as the subcommand.
+   */
   subcommand?: RegExp;
+  flags?: RegExp;
 }
 const SHELL_CODE: CodeArguments = { code: /^-[A-Za-z]*c$/u, valued: /^[-+][oO]$/u, operand: "first" };
 const AWK_CODE: CodeArguments = { code: /^(?:-[feE]|--file|--source|--exec)$/u, valued: /^(?:-[Fv]|--field-separator|--assign)$/u, operand: "first" };
@@ -259,8 +265,9 @@ const CODE_ARGUMENTS: Record<string, CodeArguments> = {
   mariadb: { code: /^(?:-e|--execute)$/u },
   git: {
     code: /^(?:-c|--config-env|--exec-path)$/u,
-    valued: /^(?:-C|--git-dir|--work-tree|--namespace|--super-prefix|--attr-source)$/u,
+    valued: /^-C$/u,
     subcommand: /^[a-z][a-z0-9-]*$/u,
+    flags: /^(?:-[pPv]|--(?:paginate|no-pager|bare|version|help|no-replace-objects|no-lazy-fetch|no-optional-locks|no-advice|(?:no|literal|glob|noglob|icase)-pathspecs|(?:html|man|info)-path))$/u,
   },
 };
 /** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
@@ -317,6 +324,7 @@ function placeholderCommandProblem(words: readonly string[], inArithmetic: boole
           codeGiven = true;
           index += 1;
         } else if (spec.valued?.test(arg)) index += 1;
+        else if (spec.subcommand && !subcommand && arg.startsWith("-") && !arg.includes("=") && !spec.flags?.test(arg)) index += 1;
         else if (!arg.startsWith("-") || arg === "-") {
           operands += 1;
           subcommand ||= spec.subcommand?.test(arg) === true;

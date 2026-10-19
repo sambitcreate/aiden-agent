@@ -182,6 +182,8 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "git -c {{x}} status",
     "git --git-dir .git -c {{x}} probe",
     "git --namespace review -c {{x}} probe",
+    "git --shallow-file shallow -c {{x}} probe",
+    "git --some-future-option value -c {{x}} probe",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
   for (const command of [
@@ -231,6 +233,7 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "read -r first < {{x}}; printf %s \"$first\"",
     "git grep -c {{x}}",
     "git log -c {{x}}",
+    "git --no-pager -C repo log -c {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
@@ -277,6 +280,7 @@ test("no template the parser accepts lets a text value run code", () => {
     "python3 -c {{x}}",
     "git -c {{x}} probe",
     "git --git-dir .git -c {{x}} probe",
+    "git --shallow-file shallow -c {{x}} probe",
     "printf '%s' {{x}} # [[ later",
     "[ {{x}} -gt 0 ]",
     "test {{x}} -eq 1",
