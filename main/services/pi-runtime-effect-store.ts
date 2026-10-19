@@ -1,3 +1,5 @@
+import { PiVerificationStore, verificationIdentity, verificationSnapshot } from "./pi-verification-store.js";
+import { toolOutputScope } from "./tool-output-store.js";
 import { DataStore } from "./data-store.js";
 import {
   MAX_PI_RUNTIME_EFFECTS,
@@ -125,6 +127,7 @@ function makeDataStore(
  * effect by itself; operation resumption remains a harness policy decision.
  */
 export class PiRuntimeEffectStore {
+  readonly verification: PiVerificationStore;
   private readonly now: () => number;
   private readonly data: DataStore<DurablePiRuntimeEffectDatabase>;
   private readonly localUnknown = new Map<string, DurablePiRuntimeEffect>();
@@ -133,6 +136,7 @@ export class PiRuntimeEffectStore {
 
   constructor(options: PiRuntimeEffectStoreOptions) {
     this.now = options.now ?? Date.now;
+    this.verification = new PiVerificationStore(options.root, this.now);
     this.data = options.dataStore ?? makeDataStore(options);
   }
 
@@ -199,14 +203,18 @@ export class PiRuntimeEffectStore {
       database.operations = database.operations.map((operation) => {
         if (operation.state !== "running") return operation;
         changed = true;
-        return {
-          ...operation,
-          state: "interrupted" as const,
-          updatedAt: Math.max(operation.updatedAt, restartAt),
+        const recovered: DurablePiRuntimeOperation = {
+          ...operation, state: "interrupted", updatedAt: Math.max(operation.updatedAt, restartAt),
         };
+        return recovered;
       });
       if (changed) database.revision += 1;
     });
+    // Terminal operations are the durable publication outbox. Retry any receipt
+    // lost after the effect journal committed, including a previous startup retry.
+    for (const operation of (await this.data.load()).operations) {
+      if (operation.state !== "running") await this.recordOperationVerification(operation);
+    }
     this.initialized = true;
   }
 
@@ -296,7 +304,17 @@ export class PiRuntimeEffectStore {
       return structuredClone(finished);
     });
     for (const effect of localTerminalEffects) this.localUnknown.delete(effect.effectId);
+    await this.recordOperationVerification(finished);
     return finished;
+  }
+
+  private async recordOperationVerification(finished: DurablePiRuntimeOperation): Promise<void> {
+    await this.verification.check(finished.chatId, toolOutputScope({ runId: finished.runId, sessionId: finished.sessionId }), {
+      checkId: verificationIdentity("check", finished.operationId), runId: verificationIdentity("run", finished.runId), turnId: verificationIdentity("turn", finished.operationId),
+      artifactId: verificationIdentity("artifact", finished.operationId), kind: "response_ended",
+      snapshot: async () => verificationSnapshot(JSON.stringify(finished)),
+      observe: async () => ({ result: finished.state === "completed" ? "passed" : finished.state === "app_cancelled" ? "not_run" : "inconclusive" }),
+    });
   }
 
   async prepareEffect(input: PreparePiRuntimeEffectInput): Promise<DurablePiRuntimeEffect> {
@@ -656,6 +674,7 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (effect.chatId === chatId) this.localUnknown.delete(effectId);
     }
+    await this.verification.deleteByChat(chatId);
   }
 
   /** Remove private effect evidence whose visible chat no longer exists. */
@@ -680,6 +699,7 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (!valid.has(effect.chatId)) this.localUnknown.delete(effectId);
     }
+    await this.verification.reconcileChats(validChatIds);
   }
 }
 

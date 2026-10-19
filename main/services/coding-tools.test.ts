@@ -1555,17 +1555,17 @@ test("run_command reports real exit failures through Pi and codemode without re-
     assert.deepEqual(outcomes, [true]);
     assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "x", "reporting a failure must not rerun its effects");
 
-    const firstGuard = advanceAttendedToolErrorState(0, [{ isError: outcomes[0] }]);
+    const firstGuard = advanceAttendedToolErrorState(undefined, [{ isError: outcomes[0] }]);
     assert.equal(firstGuard.shouldStop, false);
     const retry = await runCommand.execute("retry", { command: "node failure.cjs" });
     assert.equal(retry.isError, true);
-    assert.equal(advanceAttendedToolErrorState(firstGuard.consecutiveErrorTurns, [retry]).shouldStop, true);
+    assert.equal(advanceAttendedToolErrorState(firstGuard, [retry]).shouldStop, true);
     assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "xx", "only the explicit retry may execute again");
 
     const success = await runCommand.execute("success", { command: "node -e 'process.stdout.write(\"ok\")'" });
     assert.notEqual(success.isError, true);
     assert.equal(success.content[0].type === "text" ? success.content[0].text : "", "ok");
-    assert.equal(advanceAttendedToolErrorState(1, [success]).consecutiveErrorTurns, 0);
+    assert.equal(advanceAttendedToolErrorState(firstGuard, [success]).totalFailures, 1);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

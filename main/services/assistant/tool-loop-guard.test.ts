@@ -13,35 +13,28 @@ import { createPiTurnContextPreparation } from "../pi-turn-context.js";
 
 import {
   ATTENDED_TOOL_FAILURE_RECOVERY_REPLY,
-  MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS,
   advanceAttendedToolErrorState,
   attendedToolRecoveryMessage,
   recoverAttendedToolErrorContext,
+  recordAttendedToolArguments,
 } from "./tool-loop-guard.js";
 
-test("attended tool errors allow one correction and stop the second failed turn", () => {
-  const first = advanceAttendedToolErrorState(0, [{ isError: true }]);
-  assert.deepEqual(first, {
-    consecutiveErrorTurns: 1,
-    shouldStop: false,
-  });
-
-  const second = advanceAttendedToolErrorState(first.consecutiveErrorTurns, [{ isError: true }]);
-  assert.deepEqual(second, {
-    consecutiveErrorTurns: MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS,
-    shouldStop: true,
-  });
+test("identical failures stop even with unrelated successes; independent failures can progress", () => {
+  const first = advanceAttendedToolErrorState(undefined, [{ isError: true, toolName: "one" }]);
+  assert.equal(first.shouldStop, false);
+  const second = advanceAttendedToolErrorState(first, [{ isError: true, toolName: "two" }, { isError: false }]);
+  assert.equal(second.shouldStop, false);
+  const success = advanceAttendedToolErrorState(second, [{ isError: false }]);
+  assert.equal(advanceAttendedToolErrorState(success, [{ isError: true, toolName: "one" }]).shouldStop, true);
 });
 
-test("a successful or text-only turn resets the attended tool error streak", () => {
-  assert.deepEqual(advanceAttendedToolErrorState(1, [{ isError: false }]), {
-    consecutiveErrorTurns: 0,
-    shouldStop: false,
-  });
-  assert.deepEqual(advanceAttendedToolErrorState(1, []), {
-    consecutiveErrorTurns: 0,
-    shouldStop: false,
-  });
+test("changed arguments remain bounded and denied actions terminate immediately", () => {
+  let state;
+  for (let i = 0; i < 8; i++) {
+    state = advanceAttendedToolErrorState(state, [{ isError: true, toolName: "read", toolCallId: "call" }], [{ id: "call", name: "read", arguments: { path: `file${i}` } }]);
+    assert.equal(state.shouldStop, i === 7);
+  }
+  assert.equal(advanceAttendedToolErrorState(undefined, [{ isError: true, content: [{ type: "text", text: "The user denied this action." }] }]).shouldStop, true);
 });
 
 test("repeated attended tool errors recover with one host-directed text-only turn", () => {
@@ -104,7 +97,7 @@ test("managed attended recovery publishes removed schemas before emergency conte
     streamFn: (_model, context) => {
       const text = JSON.stringify(context);
       requests.push({ tools: getCurrentTools(context.messages).map((item) => item.name), hasOriginalIntent: text.includes("ORIGINAL_USER_INTENT_47"),
-        hasRecoveryInstruction: text.includes("Two consecutive tool attempts failed"), messages: context.messages.length });
+        hasRecoveryInstruction: text.includes("Tool recovery reached its failure or permission limit"), messages: context.messages.length });
       const next = responses.shift(); assert.ok(next, "unexpected extra foreground request");
       // Deliberately model a provider that does not report token usage, rather
       // than faux's heuristic usage injection, to isolate captured static cost.
@@ -172,5 +165,61 @@ test("unattended preparation publishes trusted policy changes without applying t
     const update = await prepare(turn);
     assert.equal(update?.context?.messages.length, 1);
     assert.equal(generationOptions.systemPrompt, "revised policy");
+  }
+});
+
+test("unfingerprintable failures do not alias and terminal state stays bounded", () => {
+  let state;
+  for (let i = 0; i < 12; i++) {
+    state = advanceAttendedToolErrorState(state, [{ isError: true, toolName: "edit", toolCallId: "call" }], [{ id: "call", name: "edit", arguments: { text: String(i).repeat(17000) } }]);
+    assert.equal(state.shouldStop, i >= 7);
+    assert.ok(state.failures.size <= 8);
+    assert.ok(state.totalFailures <= 8);
+  }
+});
+
+test("real attended harness stops refused/cancelled actions and normalized repeated calls", async () => {
+  for (const reason of ["The user declined this automation. Do not retry it.", "The action was cancelled before approval.", "normalized failure"]) {
+    const core = createFauxCore({ api: "guard-fixture", provider: "guard-fixture", models: [{ id: "fixture", contextWindow: 16000, maxTokens: 4000 }] });
+    const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: `guard-${reason.length}` }));
+    let effects = 0;
+    let requests = 0;
+    const tools: AgentTool[] = [{ name: "action", label: "Action", description: "Fixture action", parameters: Type.Object({ value: Type.String() }),
+      prepareArguments: () => ({ value: "normalized" }),
+      execute: async () => { effects++; return { content: [{ type: "text", text: reason }], details: null, isError: true }; },
+    }];
+    const model = core.getModel();
+    const models = createModels(); models.setProvider(fauxProvider({ api: model.api, provider: model.provider, models: [{ id: model.id, contextWindow: 16000, maxTokens: 4000 }] }).provider);
+    const generationOptions = { contextWindow: 16000, systemPrompt: "Fixture", tools };
+    const initialMessages: AgentMessage[] = [{ role: "user", content: "Perform fixture action", timestamp: 1 }];
+    const harness = new PiAgentRuntimeHarness({
+      convertToLlm,
+      initialState: { systemPrompt: "Fixture", thinkingLevel: "off", tools, messages: initialMessages, model },
+      durability: { session, initialMessages, appendMessages: appendPiMessages, compaction: { models, model, thinkingLevel: "off", settings: { enabled: false } } },
+      prepareNextTurnWithContext: createPiTurnContextPreparation({ attended: true, generationOptions, prepareContext: async (context) => context, onRecovery: () => {} }),
+      streamFn: (_model, context) => {
+        requests++;
+        assert.ok(requests <= 4);
+        const next = getCurrentTools(context.messages).length
+          ? fauxAssistantMessage([fauxToolCall("action", { value: `variant${requests}` }, { id: `call${requests}` })], { stopReason: "toolUse" })
+          : fauxAssistantMessage("Stopped.");
+        const message = { ...next, api: model.api, provider: model.provider, model: model.id };
+        const stream = createAssistantMessageEventStream(); stream.push({ type: "done", reason: next.stopReason === "toolUse" ? "toolUse" : "stop", message }); stream.end(message); return stream;
+      },
+    });
+    const outcome = await harness.runManaged({ kind: "continue-durable-tail" });
+    assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+    assert.equal(effects, reason === "normalized failure" ? 2 : 1, reason);
+    assert.equal(requests, effects + 1);
+  }
+});
+
+test("unhashable validated arguments never fall back to identical raw provider arguments", () => {
+  let state;
+  for (let i = 0; i < 2; i++) {
+    const call = { id: `call-${i}`, name: "edit", arguments: { template: "same" } };
+    recordAttendedToolArguments(call, { text: String(i).repeat(17000) });
+    state = advanceAttendedToolErrorState(state, [{ isError: true, toolName: "edit", toolCallId: call.id }], [call]);
+    assert.equal(state.shouldStop, false);
   }
 });
