@@ -189,6 +189,9 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "f() { local {{x}}; }; f",
     "seed=1 let {{x}}",
     "if true; then let {{x}}; fi",
+    "(( 0 < {{x}} ))",
+    "(( 0 >> {{x}} ))",
+    "[[ 0 > {{x}} ]]",
     // Builtins that take a variable name evaluate its [subscript].
     "read {{x}} </dev/null",
     "printf -v {{x}} %s ok",
@@ -224,6 +227,8 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "gh pr merge \\\n  {{x}} --squash",
     "printf -v out %s {{x}}",
     "read -r first < {{x}}; printf %s \"$first\"",
+    "git grep -c {{x}}",
+    "git log -c {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
@@ -240,6 +245,8 @@ test("no template the parser accepts lets a text value run code", () => {
   const candidates = [
     "[[ {{x}} -gt 0 ]]",
     "(( {{x}} > 0 ))",
+    "(( 0 < {{x}} ))",
+    "(( 0 >> {{x}} ))",
     "let {{x}}",
     "seed=1 let {{x}}",
     "if true; then let {{x}}; fi",

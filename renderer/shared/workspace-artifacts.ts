@@ -215,6 +215,8 @@ interface CodeArguments {
   code: RegExp;
   valued?: RegExp;
   operand?: "first" | "after-first";
+  /** Code options count only before the first operand, as git's do before its subcommand. */
+  leading?: boolean;
 }
 const SHELL_CODE: CodeArguments = { code: /^-[A-Za-z]*c$/u, valued: /^[-+][oO]$/u, operand: "first" };
 const AWK_CODE: CodeArguments = { code: /^(?:-[feE]|--file|--source|--exec)$/u, valued: /^(?:-[Fv]|--field-separator|--assign)$/u, operand: "first" };
@@ -255,7 +257,7 @@ const CODE_ARGUMENTS: Record<string, CodeArguments> = {
   psql: { code: /^(?:-c|--command|-f|--file)$/u },
   mysql: { code: /^(?:-e|--execute)$/u },
   mariadb: { code: /^(?:-e|--execute)$/u },
-  git: { code: /^(?:-c|--config-env|--exec-path)$/u },
+  git: { code: /^(?:-c|--config-env|--exec-path)$/u, valued: /^-C$/u, leading: true },
 };
 /** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
 const NAME_COMMANDS = new Set(["declare", "export", "getopts", "let", "local", "mapfile", "read", "readarray", "readonly", "typeset", "unset"]);
@@ -297,21 +299,25 @@ function placeholderCommandProblem(words: readonly string[], inArithmetic: boole
   if (base === "find" && args.some((arg) => /^-(?:exec|execdir|ok|okdir)$/u.test(arg))) return "an argument to find -exec, which runs it";
   const spec = CODE_ARGUMENTS[base] ?? CODE_ARGUMENTS[name];
   if (spec) {
-    if (spec.code.test(last)) return `the code given to ${base} ${last}`;
-    let operands = 0;
-    let codeGiven = false;
-    for (let index = 0; index < args.length; index += 1) {
-      const arg = args[index]!;
-      if (arg === "--") {
-        operands += args.length - index - 1;
-        break;
+    const scan = (words: readonly string[]) => {
+      let operands = 0;
+      let codeGiven = false;
+      for (let index = 0; index < words.length; index += 1) {
+        const arg = words[index]!;
+        if (arg === "--") {
+          operands += words.length - index - 1;
+          break;
+        }
+        if (spec.code.test(arg)) {
+          codeGiven = true;
+          index += 1;
+        } else if (spec.valued?.test(arg)) index += 1;
+        else if (!arg.startsWith("-") || arg === "-") operands += 1;
       }
-      if (spec.code.test(arg)) {
-        codeGiven = true;
-        index += 1;
-      } else if (spec.valued?.test(arg)) index += 1;
-      else if (!arg.startsWith("-") || arg === "-") operands += 1;
-    }
+      return { operands, codeGiven };
+    };
+    if (spec.code.test(last) && !(spec.leading && scan(args.slice(0, -1)).operands > 0)) return `the code given to ${base} ${last}`;
+    const { operands, codeGiven } = scan(args);
     if (spec.operand === "first" && !codeGiven && operands === 0) return `the program ${base} runs`;
     if (spec.operand === "after-first" && operands >= 1) return `the code ${base} runs`;
   }
@@ -399,7 +405,9 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
       }
     }
     if (top) {
-      if (char === "<" || char === ">" || (char === "&" && template[index + 1] === ">")) {
+      // Inside (( )) and [[ ]], < and > compare rather than redirect.
+      const redirects = arithmeticParens === 0 && !testBrackets;
+      if (redirects && (char === "<" || char === ">" || (char === "&" && template[index + 1] === ">"))) {
         if (char !== "&" && template[index + 1] === "(") {
           // <(…) and >(…) are words whose inside is a command.
           if (wordStart < 0) wordStart = index;
