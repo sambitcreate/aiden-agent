@@ -4,6 +4,7 @@ import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import {
   formatAvailableSkills,
   SkillRegistry,
+  withoutSkills,
   type SkillRegistryDependencies,
 } from "./skill-registry.js";
 import { buildSkillTools, piResourcesForSkillSnapshot } from "./skill-tools.js";
@@ -466,4 +467,17 @@ test("owned product skill wins a discovered collision and obeys the global gate"
   assert.equal(entry?.instructions, "Use owned help");
   const off = harness({ listBuiltin: async () => [builtin], isEnabled: async () => false });
   assert.equal((await off.registry.snapshot("one")).available.length, 0);
+});
+
+test("a surface can drop a built-in skill it cannot use from the prompt, tools and catalog alike", async () => {
+  const app = { stableId: "builtin:aiden-app", name: "aiden-app", description: "Owned help", instructions: "Use owned help", enabled: true, source: "builtin" as const };
+  const desktop = { stableId: "builtin:desktop-only", name: "desktop-only", description: "Desktop pages", instructions: "Only on desktop", enabled: true, source: "builtin" as const };
+  const h = harness({ listBuiltin: async () => [app, desktop] });
+  const full = await h.registry.snapshot("one");
+  const phone = withoutSkills(full, new Set(["builtin:desktop-only"]));
+  assert.deepEqual(phone.catalog.map(({ name }) => name), ["aiden-app"]);
+  assert.equal(buildSkillTools(phone).length, buildSkillTools(full).length - 1);
+  assert.doesNotMatch(formatAvailableSkills(phone) ?? "", /desktop-only/u);
+  assert.match(formatAvailableSkills(full) ?? "", /desktop-only/u);
+  assert.equal(withoutSkills(full, new Set(["builtin:missing"])), full);
 });

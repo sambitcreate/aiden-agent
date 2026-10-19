@@ -37,6 +37,7 @@ import { workspaceEnvironmentApplicationService } from "./workspace-environment-
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
+import { removeWorkspaceArtifacts } from "./workspace-artifacts/main.js";
 
 export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplicationService({
   environment: workspaceEnvironmentApplicationService,
@@ -118,7 +119,10 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     }
   },
   saveWorkspace: (workspace) => configStore.saveWorkspace(workspace),
-  removeWorkspace: (workspaceId) => configStore.removeWorkspace(workspaceId),
+  removeWorkspace: async (workspaceId) => {
+    await configStore.removeWorkspace(workspaceId);
+    await removeWorkspaceArtifacts(workspaceId);
+  },
   beginWorkspaceMutation: (workspaceId) => workspaceMutationGate.begin(workspaceId),
   workspaceIsChanging: (workspaceId) => workspaceMutationGate.isChanging(workspaceId),
   cancelWorkspaceOperations: (workspaceId, exceptSignal) =>

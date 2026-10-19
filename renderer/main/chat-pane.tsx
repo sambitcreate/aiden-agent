@@ -13,6 +13,7 @@ import {
   updateChatDraft,
   updateChatDraftWorktree,
 } from "../lib/chat-draft";
+import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
 import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
@@ -1975,6 +1976,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     },
     [chatId, handleSend],
+  );
+  // Follow-ups confirmed on a workspace artifact go through the same path.
+  React.useEffect(
+    () => registerChatPromptTarget(chatId, (text) => handleVisualPrompt(text, "")),
+    [chatId, handleVisualPrompt],
   );
 
   const handleStop = React.useCallback(() => {

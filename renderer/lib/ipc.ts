@@ -257,6 +257,12 @@ import type {
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
+import type {
+  WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactV1,
+  WorkspaceArtifactSourceResultV1,
+  WorkspaceArtifactView,
+} from "../shared/workspace-artifacts";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -1184,6 +1190,29 @@ export const pullRequestsApi = {
     invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
   adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
     invoke<ChatPullRequestLinkResult>("pullRequests:adopt", chatId, operationId, ref),
+};
+
+// ── Workspace artifacts ───────────────────────────────────────────────
+// Pages a workspace keeps in the Tools panel's Artifacts tab. Main owns the
+// files and runs every source; the renderer only names ids.
+export const workspaceArtifactsApi = {
+  list: (workspaceId: string) => invoke<WorkspaceArtifactView[]>("workspaces:artifacts:list", workspaceId),
+  rename: (workspaceId: string, artifactId: string, title: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
+  delete: (workspaceId: string, artifactId: string) =>
+    invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
+  saveState: (workspaceId: string, artifactId: string, state: Record<string, unknown>) =>
+    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
+  approve: (workspaceId: string, artifactId: string, digest: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
+  /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
+  refresh: (workspaceId: string, artifactId: string) =>
+    invoke<Record<string, WorkspaceArtifactSourceResultV1>>("workspaces:artifacts:refresh", workspaceId, artifactId),
+  /** Runs one of the page's buttons; main fills in the saved command. */
+  run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
+    invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
+  onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
+    onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────

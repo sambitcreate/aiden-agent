@@ -4,6 +4,7 @@ import {
   Files,
   GitCompareArrows,
   Globe,
+  LayoutDashboard,
   List,
   Plus,
   Smartphone,
@@ -22,6 +23,7 @@ export const WORKSPACE_TOOLS = [
   { id: "browser", label: "Browser", icon: Globe, folder: false },
   { id: "subagents", label: "Subagents", icon: Users, folder: false },
   { id: "devices", label: "Device", icon: Smartphone, folder: false },
+  { id: "artifacts", label: "Artifacts", icon: LayoutDashboard, folder: false },
 ] as const;
 
 export function workspaceToolLabel(tab: EnvironmentPanelTab): string {
@@ -34,6 +36,7 @@ export function WorkspaceToolLauncher({
   canOpenTerminal,
   subagents,
   devices,
+  artifacts = false,
   busy,
   onOpen,
   onUrl,
@@ -44,6 +47,8 @@ export function WorkspaceToolLauncher({
   canOpenTerminal: boolean;
   subagents: boolean;
   devices: boolean;
+  /** The workspace has at least one artifact; the tool is not offered before that. */
+  artifacts?: boolean;
   busy: boolean;
   onOpen: (tab: EnvironmentPanelTab) => void;
   onUrl: (url: string) => Promise<void>;
@@ -80,7 +85,7 @@ export function WorkspaceToolLauncher({
           disabled={!hasWorkspace || busy || pending}
         />
         {error ? (
-          <p role="alert" className="mt-2 text-small text-support-danger">
+          <p role="alert" className="mt-2 text-small text-status-red">
             {error}
           </p>
         ) : null}
@@ -91,10 +96,11 @@ export function WorkspaceToolLauncher({
           (tool) =>
             (tool.id !== "subagents" || subagents) &&
             (tool.id !== "devices" || devices) &&
+            (tool.id !== "artifacts" || artifacts) &&
             (more || (tool.id !== "subagents" && tool.id !== "devices")),
         ).map(({ id, label, icon: Icon, folder }) => {
           const unavailable =
-            id === "context"
+            id === "context" || id === "artifacts"
               ? null
               : !hasWorkspace
                 ? "Choose a workspace"

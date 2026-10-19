@@ -141,6 +141,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "tts:event",
   "voice:stream-text",
   "workspaces:changed",
+  /** A workspace artifact was created, changed, refreshed or deleted: `WorkspaceArtifactsChangedEvent`. */
+  "workspaces:artifacts-changed",
   /** Progress for a clone, sent only to the document that started it: `WorkspaceCloneProgress`. */
   "workspaces:clone-progress",
   /** New-worktree progress for a first send, sent only to the sending document: `FirstMessageWorktreeProgress`. */

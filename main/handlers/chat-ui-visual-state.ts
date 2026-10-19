@@ -20,20 +20,25 @@ function keysAreWireSafe(value: unknown, depth = 0): boolean {
   return Object.entries(value).every(([key, inner]) => isWireSafeKey(key) && keysAreWireSafe(inner, depth + 1));
 }
 
-/** Validates a renderer request to remember a visual's local state (at most 4 KiB). */
-export function parseUiVisualStateUpdate(input: unknown): UiVisualStateUpdate {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid visual state update.");
-  const record = input as Record<string, unknown>;
-  const state = record.state;
+/** Validates a visual's local state: a wire-safe object of at most 4 KiB. */
+export function parseUiVisualState(state: unknown): Record<string, unknown> {
   if (!state || typeof state !== "object" || Array.isArray(state)) throw new Error("Visual state must be an object.");
   if (!keysAreWireSafe(state)) throw new Error("Visual state uses a reserved key name.");
   if (new TextEncoder().encode(JSON.stringify(state)).length > AIDEN_UI_LIMITS.stateBytes) {
     throw new Error("Visual state is too large.");
   }
+  return state as Record<string, unknown>;
+}
+
+/** Validates a renderer request to remember a visual's local state (at most 4 KiB). */
+export function parseUiVisualStateUpdate(input: unknown): UiVisualStateUpdate {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid visual state update.");
+  const record = input as Record<string, unknown>;
+  const state = parseUiVisualState(record.state);
   return {
     chatId: id(record.chatId, "chatId"),
     messageId: id(record.messageId, "messageId"),
     visualId: id(record.visualId, "visualId"),
-    state: state as Record<string, unknown>,
+    state,
   };
 }

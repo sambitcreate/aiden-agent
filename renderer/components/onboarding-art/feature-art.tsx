@@ -12,6 +12,7 @@ import {
   ReviewDiffsArt,
   TerminalArt,
   WorkspaceAgentArt,
+  WorkspaceArtifactsArt,
   WorkspacesArt,
 } from "./create-art";
 import {
@@ -56,6 +57,7 @@ export const FEATURE_ART = {
   subagents: { tint: "mint", Art: NativeSubagentsArt },
   browser: { tint: "peach", Art: BrowserArt },
   inlineVisuals: { tint: "rose", Art: InlineVisualsArt },
+  workspaceArtifacts: { tint: "lilac", Art: WorkspaceArtifactsArt },
   filesEditor: { tint: "sun", Art: FilesEditorArt },
   reviewDiffs: { tint: "aqua", Art: ReviewDiffsArt },
   terminal: { tint: "periwinkle", Art: TerminalArt },

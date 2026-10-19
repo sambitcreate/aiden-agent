@@ -314,6 +314,26 @@ function escapeSkillXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Drops built-in skills a surface cannot use (for example a desktop-only
+ * tool's skill on a phone), keeping the prompt list, skill tools and
+ * catalog in step.
+ */
+export function withoutSkills(
+  snapshot: SkillRegistrySnapshot,
+  stableIds: ReadonlySet<string>,
+): SkillRegistrySnapshot {
+  if (!snapshot.skills.some((skill) => stableIds.has(skill.stableId))) return snapshot;
+  const skills = snapshot.skills.filter((skill) => !stableIds.has(skill.stableId));
+  const invocationIds = new Set(skills.map(({ invocationId }) => invocationId));
+  return Object.freeze({
+    ...snapshot,
+    catalog: Object.freeze(snapshot.catalog.filter(({ invocationId }) => invocationIds.has(invocationId))),
+    skills: Object.freeze(skills),
+    available: Object.freeze(snapshot.available.filter(({ invocationId }) => invocationIds.has(invocationId))),
+  });
+}
+
 export function formatAvailableSkills(
   snapshot: SkillRegistrySnapshot,
   allowedToolNames?: ReadonlySet<string>,
