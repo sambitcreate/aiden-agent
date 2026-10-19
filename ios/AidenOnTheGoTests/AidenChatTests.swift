@@ -2388,6 +2388,31 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAMacRunsTimelineReachesTheLiveTranscriptAndImageProgress() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let fixture = AidenLiveForeignRunFixture()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied, responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            streamingRevealTick: { await ticks.tick() }
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { model.streamState == .running && ticks.pending == 1 }
+        let timeline = #"{"timeline":{"version":3,"generationId":"generation-image","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"generate_image","label":"Create image","status":"running","startedAt":1000,"updatedAt":1000,"contentOffset":8}]}}"#
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(3, "timeline", timeline))
+        try await waitUntil { model.activityTimeline != nil }
+        XCTAssertEqual(model.liveText, "Hello wor", "the timeline must flush preceding buffered text")
+        XCTAssertEqual(model.activityTimeline?.steps.first?.toolName, "generate_image")
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.items(model.activityTimeline).count, 1)
+        XCTAssertNotNil(AidenChronologicalProjection.rows(text: model.liveText, reasoning: "", timeline: model.activityTimeline))
+        let completed = timeline.replacingOccurrences(of: "\"status\":\"running\",\"startedAt\":1000,\"updatedAt\":1000", with: "\"status\":\"completed\",\"startedAt\":1000,\"updatedAt\":2000,\"finishedAt\":2000")
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(4, "timeline", completed))
+        try await waitUntil { model.imageArrivalRevealGenerationIDs.contains("generation-image") }
+    }
+
+    @MainActor
     func testAMacRunsRetainedTextShowsWithTheToolThatFollowedItWhenThePhoneAttaches() async throws {
         defer { AidenChatProgressLifecycleURLProtocol.reset() }
         let ticks = AidenManualRevealTicks()

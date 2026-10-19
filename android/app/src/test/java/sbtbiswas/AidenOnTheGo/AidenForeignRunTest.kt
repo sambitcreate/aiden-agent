@@ -43,6 +43,24 @@ class AidenForeignRunTest {
     }
 
     @Test
+    fun timelineUpdatesSurviveReplayAndClearOnGapSnapshot() {
+        fun frame(sequence: Int, type: String, payload: String) = AidenRunEventCodec.decode(
+            """{"protocolVersion":1,"streamId":"run-1","sequence":$sequence,"timestamp":"2026-10-05T10:00:00Z","type":"$type","terminal":false,"payload":$payload}""".toByteArray()
+        )
+        val projection = AidenForeignRunProjection("run-1")
+        val timeline = frame(2, "timeline", """{"timeline":{"version":3,"generationId":"generation-image","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"generate_image","label":"Create image","status":"running","startedAt":1000,"updatedAt":1000,"contentOffset":0}]}}""")
+        projection.apply(timeline)
+        assertEquals("generate_image", projection.timeline?.steps?.single()?.toolName)
+        assertEquals(1, sbtbiswas.AidenOnTheGo.features.chat.AidenImageGenerationPlaceholderState.items(projection.timeline).size)
+        val newer = frame(3, "timeline", """{"timeline":{"version":3,"generationId":"generation-image","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[]}}""")
+        projection.apply(newer)
+        projection.apply(timeline)
+        assertEquals(sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus.COMPLETED, projection.timeline?.status)
+        projection.apply(frame(0, "snapshot", """{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"""))
+        assertNull(projection.timeline)
+    }
+
+    @Test
     fun phoneRunFixtureDrivesForeignRunProjectionThroughFirstResponderOutcomes() {
         val events = fixtureRunEvents()
         assertEquals(13, events.size)

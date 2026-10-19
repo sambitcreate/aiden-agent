@@ -80,6 +80,8 @@ class AidenForeignRunProjection(val runId: String) {
         private set
     private val _tools = mutableListOf<AidenLiveTool>()
     val tools: List<AidenLiveTool> get() = _tools.map { it.copy() }
+    var timeline: AidenGenerationTimeline? = null
+        private set
     var state = AidenStreamState.RUNNING
         private set
     private val _approvals = mutableListOf<AidenRemoteRunApproval>()
@@ -162,6 +164,7 @@ class AidenForeignRunProjection(val runId: String) {
             }
             is AidenRemoteRunEvent.Kind.Snapshot -> {
                 _tools.clear()
+                timeline = null
                 _approvals.clear()
                 _approvals.addAll(kind.snapshot.approvals.filter { it.approvalId !in locallyAnswered })
                 _questions.clear()
@@ -204,6 +207,10 @@ class AidenForeignRunProjection(val runId: String) {
             }
             AidenRemoteEventType.REASONING_DELTA -> {
                 listOf(Effect.ReasoningAppended(payload.text.orEmpty()))
+            }
+            AidenRemoteEventType.TIMELINE -> {
+                timeline = payload.timeline
+                emptyList()
             }
             AidenRemoteEventType.TOOL_STARTED -> {
                 val id = payload.toolId ?: return emptyList()

@@ -1334,6 +1334,22 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(projection.apply(events[12]), [], "An ended run accepts nothing further.")
     }
 
+    func testForeignTimelineReplayCannotRollbackAndGapClearsIt() throws {
+        func frame(_ sequence: Int, _ type: String, _ payload: String) throws -> AidenRemoteRunEvent {
+            let json = "{\"protocolVersion\":1,\"streamId\":\"run-1\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}"
+            return try XCTUnwrap(AidenRunSSEParser().consumeAll(["id: \(sequence)", "event: \(type)", "data: \(json)", ""]).first)
+        }
+        var projection = AidenForeignRunProjection(runId: "run-1")
+        let first = try frame(2, "timeline", #"{"timeline":{"version":3,"generationId":"g","status":"running","startedAt":1000,"steps":[]}}"#)
+        _ = projection.apply(first)
+        XCTAssertEqual(projection.timeline?.status, .running)
+        _ = projection.apply(try frame(3, "timeline", #"{"timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[]}}"#))
+        _ = projection.apply(first)
+        XCTAssertEqual(projection.timeline?.status, .completed)
+        _ = projection.apply(try frame(0, "snapshot", #"{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"#))
+        XCTAssertNil(projection.timeline)
+    }
+
     func testRunStreamGapSnapshotAtSequenceZeroRestatesPendingPrompts() throws {
         let snapshot = #"{"protocolVersion":1,"streamId":"run-1","sequence":0,"timestamp":"2026-10-05T10:00:00Z","type":"snapshot","terminal":false,"payload":{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":["approval-1"],"pendingQuestionIds":[],"approvals":[{"approvalId":"approval-1","summary":"Run the tests?","toolName":"run_command","canAllow":true,"scopes":["once"]}],"questions":[],"nextSequence":1}}"#
         let text = #"{"protocolVersion":1,"streamId":"run-1","sequence":1,"timestamp":"2026-10-05T10:00:01Z","type":"text_delta","terminal":false,"payload":{"text":"Still going"}}"#

@@ -4248,11 +4248,22 @@ final class AidenBotChatPolishTests: XCTestCase {
         XCTAssertEqual(aidenBotBusyMode(.steer, isRunning: false), .queue, "and goes back to Queue when it ends")
     }
 
-    func testNewRowsFollowOnlyAReaderAtTheEnd() {
-        XCTAssertTrue(aidenBotFollowsTranscriptEnd(distanceFromEnd: 0))
-        XCTAssertTrue(aidenBotFollowsTranscriptEnd(distanceFromEnd: -12), "an overscrolled end is the end")
-        XCTAssertTrue(aidenBotFollowsTranscriptEnd(distanceFromEnd: 60), "near the end counts")
-        XCTAssertFalse(aidenBotFollowsTranscriptEnd(distanceFromEnd: 600), "someone reading back stays put")
+    @MainActor
+    func testStreamingGrowthKeepsFollowingUntilTheReaderScrollsAway() async {
+        let follow = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        follow.setStreaming(true)
+        follow.updateMetrics(.init(distanceFromBottom: 400, isUserInteracting: false, movedAwayFromBottom: false))
+        var scrolls = 0
+        await follow.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in scrolls += 1 }?.value
+        XCTAssertEqual(scrolls, 1, "a large streamed block must not turn off follow")
+        follow.handle(.userScrollBegin)
+        follow.handle(.userScrollEnd(isAtBottom: false))
+        follow.updateMetrics(.init(distanceFromBottom: 800, isUserInteracting: false, movedAwayFromBottom: false))
+        await follow.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in scrolls += 1 }?.value
+        XCTAssertEqual(scrolls, 1, "growth must leave a reader looking back in place")
+        await follow.scheduleFollowScroll(isUserInitiated: true, animated: false) { _ in scrolls += 1 }?.value
+        XCTAssertEqual(scrolls, 2, "Send and Jump to latest restore follow")
+        XCTAssertTrue(follow.isFollowing)
     }
 
     /// WCAG 2 relative luminance, computed here from the hex, as the oracle.
