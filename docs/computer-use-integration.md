@@ -54,15 +54,28 @@ Return or Tab with the `key` action as its own step. Capture by app sends
 bundle identifier. An optional `changes_only` capture (not with `vision`) sends
 `since` with the window's previous snapshot and returns the driver's diff rows
 or `no_change` without element numbers; `no_change` keeps the previous numbers
-valid, and after a diff the model takes a full capture before acting. The 0.36
-refusal codes map to specific recovery messages: `write_not_applied` (the
-control read back unchanged), `window_not_key` and `target_focus_unconfirmed`
-(focus not confirmed), `windowserver_connection_invalid`,
-`permission_required` and `direct_capture_consent_required` (reported as
-`permission_required` with the setup text), `foreground_partial_unknown`
-(treated as an unknown execution outcome), and
-`desktop_coordinate_scope_required` and `element_bounds_unavailable` (window
-target refusals).
+valid, and after a diff the model takes a full capture before acting; on
+`no_change` the driver's `focused_element` row is passed through. Of the 0.36
+refusal codes, the macOS 0.36.0 driver sends `write_not_applied` (the control
+read back unchanged, so choose another route), `window_not_key` (focus not
+confirmed), `desktop_coordinate_scope_required` and
+`element_bounds_unavailable` (window target refusals), and
+`background_unavailable`. Aiden reads `background_unavailable` by its
+`reason` and `effect`: reason `windowserver_connection_invalid` (a daemon with
+no valid WindowServer connection; nothing was sent) is reported as
+`permission_required` with the setup text, not a foreground retry; reason
+`drag_and_drop_session` with effect `no_drop` (the drag's press and moves were
+posted and released at once) and any other effect besides `refused` invalidate
+the capture and ask the model to capture and check before any foreground retry
+(`drag_released`, or `execution_unknown` for a non-drag action); anything else
+offers the approved foreground retry. The remaining mappings are
+forward-compatible and not sent by the macOS 0.36.0 driver:
+`target_focus_unconfirmed` (focus not confirmed, added upstream after 0.36),
+`windowserver_connection_invalid`, `permission_required` and
+`direct_capture_consent_required` as codes (reported as
+`permission_required`), `electron_main_process_unavailable` (foreground
+retry), and `foreground_partial_unknown` (Linux/Hyprland only; an unknown
+execution outcome).
 
 Upstream publishes a cosign (Sigstore) bundle beside each release asset. The
 pinned archive SHA-256 stays the authority; `npm run computer-use:vendor --
@@ -154,9 +167,11 @@ direct-capture consent appears during the explicit grant rather than over the
 user's window (#5352), and a bundle-identifier approval counts as that consent
 (#5402). Whether the consent now appears during **Request access** in Aiden,
 given the status-only rewrite, is unverified until packaged acceptance; if it
-appears over the first capture instead, the driver refuses with
-`direct_capture_consent_required` and Aiden reports `permission_required` with
-the setup text (it does not yet reopen the readiness checklist mid-chat). Readiness therefore rests on the
+appears over the first capture instead, Aiden's fallback is unverified: the
+macOS 0.36.0 driver does not send a `direct_capture_consent_required` code, so
+the mapping that reports it as `permission_required` with the setup text is
+forward-compatible only (Aiden does not yet reopen the readiness checklist
+mid-chat). Readiness therefore rests on the
 Accessibility and Screen Recording TCC preflight booleans; an explicit `false`
 from a probe that did run still vetoes. This is weaker than the 0.8.3 live
 probe: a stale preflight can report ready, after which the first screenshot
@@ -293,9 +308,12 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
   unless the driver advertises the capability. Menu actions and modified clicks
   are always foreground. Drag (including a modified drag) defaults to the
   background since 0.36; Aiden offers a foreground retry, with its own
-  approval, only when the driver refuses with `background_unavailable` (for a
-  native drag-and-drop session) or `electron_main_process_unavailable`, and
-  never re-sends the drag itself. Drag still has no element endpoints: a named
+  approval, when the driver refuses with `background_unavailable` before any
+  input (for example an Electron window). When a background drag starts a
+  native drag-and-drop session the driver has already posted the press and
+  moves and releases at once (`reason: "drag_and_drop_session"`, effect
+  `no_drop`); Aiden then invalidates the capture and tells the model to capture
+  and check before any foreground retry. Aiden never re-sends the drag itself. Drag still has no element endpoints: a named
   element becomes its center point.
 - Dangerous system shortcuts and destructive shell-like text are rejected
   before the approval prompt.

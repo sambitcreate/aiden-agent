@@ -34,7 +34,7 @@ Status: implemented on this branch, 2026-10-19 (Tasks 1–6, 8 and 9). Task 7 (o
 | `list_apps` omits `bundle_id`, `launch_path`, `kind`, `last_used` when unknown and drops `windows: []` (#4916) | `publicApp` normalization may assume present-but-null fields | Treat those fields as optional |
 | Pixel `double_click` routes through `click`, needs a same-session screenshot, result reads "Posted double-click to pid …" (#4976) | Already capture-first; result text differs | Update fake driver and any result-text assertion |
 | `click` refuses an unknown AX action name; accepts `show_alternate_ui`/`show_default_ui` (#5005) | Aiden sends no `action` field | None; pin by test that Aiden never forwards an `action` field |
-| New refusal codes: `write_not_applied` (set_value read-back shows no change, was "Sent (unverified)"), `window_not_key`, `windowserver_connection_invalid`, `target_focus_unconfirmed`, `direct_capture_consent_required`, `desktop_coordinate_scope_required`, `foreground_partial_unknown`, `electron_main_process_unavailable`, `element_bounds_unavailable`, `permission_required` | Fall through to the generic refusal message | Map each to an Aiden error with a one-line recovery instruction (see Task 4) |
+| New refusal codes: `write_not_applied` (set_value read-back shows no change, was "Sent (unverified)"), `window_not_key`, `windowserver_connection_invalid`, `target_focus_unconfirmed`, `direct_capture_consent_required`, `desktop_coordinate_scope_required`, `foreground_partial_unknown`, `electron_main_process_unavailable`, `element_bounds_unavailable`, `permission_required` | Fall through to the generic refusal message | Map each to an Aiden error with a one-line recovery instruction (see Task 4). The macOS 0.36.0 driver actually sends `write_not_applied`, `window_not_key`, `desktop_coordinate_scope_required` and `element_bounds_unavailable` as codes; `windowserver_connection_invalid` arrives only as a `reason` under `background_unavailable` (`tools/mod.rs`), `permission_required` only as an escalation reason, and `direct_capture_consent_required`, `electron_main_process_unavailable`, `target_focus_unconfirmed` (post-0.36) and `foreground_partial_unknown` (Linux/Hyprland only) not at all on macOS. Those are kept as forward-compatible mappings. |
 | `verify_state.include_screenshot` is `boolean`, not `["boolean","null"]` | None (Aiden sends `true` or omits) | Covered by the regenerated catalog |
 
 ### B. Improvements that arrive with the re-pin
@@ -62,7 +62,7 @@ Status: implemented on this branch, 2026-10-19 (Tasks 1–6, 8 and 9). Task 7 (o
 | Recovery hints `hint` + `next_call` on every refusal (#5493, unreleased) | Adopt at the next pin | Aiden already reads `error.hint`; `next_call` is a safe read the model can be offered verbatim. |
 | `screen_locked` refusal and display keep-awake assertion (#5483, unreleased) | Adopt at the next pin | Surface a "screen is locked" state instead of a foreground suggestion; decide the `CUA_DRIVER_KEEP_DISPLAY_AWAKE` default then. |
 | Pointer excluded from window screenshots (#5480, unreleased) | Adopt at the next pin | Fixes a ~37 px pixel-target miss when the user's pointer sits outside the captured window. Strong reason to re-pin promptly after 0.37 ships. |
-| `press_key` refuses when target focus cannot be confirmed (#5372, #5402, unreleased) | Adopt at the next pin | New `target_focus_unconfirmed` code. |
+| `press_key` refuses when target focus cannot be confirmed (#5372, #5402, unreleased) | Adopt at the next pin | New `target_focus_unconfirmed` code (already mapped forward-compatibly in Task 4). |
 | `CUA_DRIVER_ALLOW_BRIEF_FOREGROUND=1` auto-escalates a refused drag to a brief foreground drag (#5481, unreleased) | Decline | Daemon-level escalation bypasses Aiden's explicit foreground approval. Keep the explicit `delivery_mode:"foreground"` retry. |
 | Agents approving Cua Driver's own macOS TCC prompts (#5467) | Not applicable | Aiden's broker owns the prompts and the user clicks them. |
 | Browser tools (`browser_prepare`, `browser_select`, background Chrome attach on another Space, CDP trusted pointer staying in the background) | Out of scope | Browsers belong to the Web Access rehaul; Aiden keeps CDP tools off the allowlist. |
@@ -149,10 +149,10 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 - Test: `main/services/computer-use/computer-use-tool.test.ts`
 
 **Interfaces:**
-- Produces: one `CuaDriverError` message per code:
-  - `write_not_applied`: invalidates the capture; "cua-driver read the control back and the value did not change. Capture the window again and choose another route (element click, press_key) instead of repeating set_value."
+- Produces: one `CuaDriverError` message per code (only `write_not_applied`, `window_not_key`, `desktop_coordinate_scope_required` and `element_bounds_unavailable` are sent as codes by the macOS 0.36.0 driver; the rest are forward-compatible mappings, see §A):
+  - `write_not_applied`: invalidates the capture; "cua-driver read the control back and the value did not change. Capture the window again and choose another route (an element click or the key action) instead of repeating set_value."
   - `window_not_key`, `target_focus_unconfirmed`: "The target did not have keyboard focus, so nothing was sent. Click the element first or capture again."
-  - `windowserver_connection_invalid`, `permission_required`, `direct_capture_consent_required`: surfaced as a readiness failure (the same path as a failed first screenshot) so the user sees the permission checklist.
+  - `windowserver_connection_invalid`, `permission_required`, `direct_capture_consent_required`: reported as `permission_required` with the setup text. Reopening the readiness checklist mid-chat is deferred (see the status line). Final review: `windowserver_connection_invalid` arrives on macOS 0.36.0 as `reason` under `background_unavailable`, so the controller maps that reason to the same readiness message instead of a foreground retry.
   - `desktop_coordinate_scope_required`, `element_bounds_unavailable`: joins `WINDOW_TARGET_REFUSALS`.
   - `foreground_partial_unknown`: treated as `execution_unknown`.
   - `electron_main_process_unavailable`: joins the `background_unavailable` branch (foreground retry offered).
@@ -173,6 +173,7 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 - [x] **Step 2: Run**; expected FAIL (drag forces foreground).
 - [x] **Step 3: Implement**: remove the forced `delivery_mode:"foreground"`; the generic `background_unavailable` branch already produces the `foreground_required` message.
 - [x] **Step 4: Run** `npm run test:computer-use`; PASS. Commit `feat(computer-use): background drag with cua-driver 0.36`.
+- [x] **Final-review fix**: upstream `drag.rs` returns its drag-and-drop refusal after the press and moves were posted (`code: "background_unavailable"`, `effect: "no_drop"`, `reason: "drag_and_drop_session"`). Aiden now invalidates the capture and answers `drag_released`, asking the model to capture and check before any foreground retry; a `background_unavailable` refused before any input (`effect: "refused"`) keeps the capture and offers the foreground retry.
 
 ### Task 6: cheaper captures
 
@@ -222,12 +223,13 @@ Skip this task if the owner prefers not to widen the broker allowlist in this re
 ## Phase 4: acceptance (owner-only)
 
 - [ ] `npm run test:computer-use` (TS and native), `npm run typecheck`, `npm run test:ci-policy`.
-- [ ] `npm run package`, `npm run package:verify`, then `AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged` with real TCC prompts. Confirm the report still carries `embedded: true` and `attribution: "host"` under `--direct`, that the Screen Recording consent now appears during **Request access** rather than over the first capture (#5352), and that a background drag of a TextEdit selection delivers without fronting the window.
+- [ ] `npm run package`, `npm run package:verify`, then `AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged` with real TCC prompts. Confirm the report still carries `embedded: true` and `attribution: "host"` under `--direct`, record where the Screen Recording consent appears (during **Request access**, as #5352 intends, or over the first capture), and that a background drag of a TextEdit selection delivers without fronting the window.
+- [ ] Background drag of a Finder list row with the user's pointer parked over another app: record where the drag-and-drop session ends and whether anything dropped. If the drop can land outside the target window, make drag foreground-approved again for apps whose rows start drag-and-drop sessions.
 - [ ] Record the receipt in this plan's status line and move the README row to Implemented.
 
 ## Phase 5: next pin (0.37, when released)
 
-Not part of this PR. When upstream tags the release that contains #5480, #5483, #5493, #5491 and #5372: re-pin, surface `next_call` to the model, add `screen_locked` to the readiness UI, add `target_focus_unconfirmed` to Task 4's map, and decide `CUA_DRIVER_KEEP_DISPLAY_AWAKE`. The 24 unreleased commits also include faster batched steps (#5487), Electron background drags through the main process (#5351), `browser_select` (#5232), and the desktop point ratio derived from the display mode (#5340).
+Not part of this PR. When upstream tags the release that contains #5480, #5483, #5493, #5491 and #5372: re-pin, surface `next_call` to the model, add `screen_locked` to the readiness UI, and decide `CUA_DRIVER_KEEP_DISPLAY_AWAKE`. The 24 unreleased commits also include faster batched steps (#5487), Electron background drags through the main process (#5351), `browser_select` (#5232), and the desktop point ratio derived from the display mode (#5340).
 
 ## Gates
 

@@ -92,3 +92,7 @@ Source-only re-read of `cua-driver-rs-v0.34.1..cua-driver-rs-v0.36.0` while the 
 - Long text is typed in spare-keycode batches (#5168).
 
 None of these adds caller authentication to `org.cua.WinRects` or a protected extension install. The blocker is unchanged: Aiden's trust boundary, not GNOME compatibility.
+
+## 2026-10-19 correction: #4882 timing
+
+The 2026-10-19 addendum lists WinRects helper API 10 (#4882) as new since 0.34.1. It is not: `cua-driver-rs-v0.34.1` was tagged from a release branch that already carried #4882 (6c7b96cf7), and both tags ship the same API 10 helper (`winrects@cua/metadata.json` `version: 10`, Shell 45–50). It appears in `git log cua-driver-rs-v0.34.1..cua-driver-rs-v0.36.0` only because main carries its own copy (78212adac) and 0.34.1 is not an ancestor of 0.36.0. The 2026-10-09 rows that cite #4882 stand.
