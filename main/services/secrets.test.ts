@@ -38,6 +38,7 @@ interface SecretsApi {
   reconcileProviderKeyQuarantine(id: string, desiredBinding: string | null): Promise<void>;
   hasKey(id: string): Promise<boolean>;
   deleteKey(id: string): Promise<void>;
+  deleteProviderKeyWithQuarantine(id: string): Promise<void>;
   deleteKeyFamily(id: string): Promise<void>;
   clearAll(): Promise<void>;
 }
@@ -366,6 +367,32 @@ test("reconciling an endpoint rotation swaps the matching quarantined key back",
 
   await h.secrets.reconcileProviderKeyQuarantine("custom", second);
   assert.equal(await h.secrets.getProviderKey("custom", second), `${SENTINEL}-two`);
+});
+
+test("removing a provider drops its quarantined keys so re-adding the same ID starts keyless", async () => {
+  const h = await harness();
+  const original = "https://one.example.test";
+  const edited = "https://two.example.test";
+  // A pre-binding key lands in the legacy quarantine; a bound key in the endpoint quarantine.
+  await h.secrets.setKey("custom:lmstudio", `${SENTINEL}-legacy`);
+  await h.secrets.quarantineUnboundProviderKey("custom:lmstudio");
+  await h.secrets.setProviderKey("custom:lmstudio", `${SENTINEL}-bound`, original);
+  await h.secrets.reconcileProviderKeyQuarantine("custom:lmstudio", edited);
+  await h.secrets.setProviderKey("custom:other", `${SENTINEL}-other`, original);
+
+  await h.secrets.deleteProviderKeyWithQuarantine("custom:lmstudio");
+
+  // Re-adding the template at its original URL reconciles against that binding on startup.
+  await h.secrets.reconcileProviderKeyQuarantine("custom:lmstudio", original);
+  assert.equal(await h.secrets.getProviderKey("custom:lmstudio", original), null);
+  assert.equal(await h.secrets.hasKey("custom:lmstudio"), false);
+  const remaining = Object.keys(JSON.parse(await fs.readFile(h.file, "utf8")) as object);
+  assert.deepEqual(
+    remaining.filter((id) => id.endsWith("custom:lmstudio")),
+    [],
+    "no recovery copy of the removed provider's key survives",
+  );
+  assert.equal(await h.secrets.getProviderKey("custom:other", original), `${SENTINEL}-other`);
 });
 
 test("alias migration moves and binds a key, and leaves the map untouched on conflict", async () => {

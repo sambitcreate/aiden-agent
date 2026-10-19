@@ -20,6 +20,7 @@ import { TelegramApiError } from "./telegram-bot-api.js";
 import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps, TelegramTurnResult } from "./telegram-turn.js";
 import type { TelegramBotIngress, TelegramBotMessage } from "./bot-reply-outbox.js";
+import type { BotSessionErrorReason } from "../bot-runtime/bot-session-service.js";
 import { sendTelegramTurn, ensureTelegramChat, telegramChatId } from "./telegram-turn.js";
 import {
   createTelegramQueue,
@@ -65,6 +66,31 @@ import {
 
 const POLL_TIMEOUT_SECONDS = 30;
 const ERROR_SLEEP_MS = 3_000;
+/** Longest pause between retries of one update that keeps failing. */
+const MAX_UPDATE_RETRY_SLEEP_MS = 60_000;
+/** Attempts one update gets before it is reported to its chat and skipped. */
+const MAX_UPDATE_ATTEMPTS = 5;
+/** Bot session failures that recur on every redelivery until the person acts. */
+const TERMINAL_BOT_SESSION_REASONS: ReadonlySet<BotSessionErrorReason> = new Set<BotSessionErrorReason>([
+  "needs_model",
+  "model_error",
+  "unavailable",
+  "bot_deleted",
+]);
+
+/** Duck-typed so this module does not load the Bot runtime (the CLI bundles it without one). */
+/** An accepted Bot turn whose reply row is not yet durable; skipping its update would lose the answer. */
+function isAdmittedUnrecordedError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "BotReplyAdmittedUnrecordedError";
+}
+
+function isTerminalBotSessionError(cause: unknown): boolean {
+  return (
+    cause instanceof Error &&
+    cause.name === "BotSessionError" &&
+    TERMINAL_BOT_SESSION_REASONS.has((cause as { reason?: BotSessionErrorReason }).reason as BotSessionErrorReason)
+  );
+}
 const TYPING_INTERVAL_MS = 2_500;
 const MEDIA_GROUP_DEBOUNCE_MS = 1_200;
 
@@ -476,6 +502,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
 
     let offset = await deps.config.getOffset();
+    /**
+     * Consecutive failures of the update Telegram keeps redelivering. `admitted` sticks once the
+     * Bot accepted its turn without a reply row: from then on only a successful admission settles it.
+     */
+    let failing: { updateId: number; attempts: number; admitted: boolean } | undefined;
 
     while (started && !signal.aborted) {
       let updates: TelegramUpdate[];
@@ -506,9 +537,30 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
             handled = true;
           } else {
             deps.error(`Telegram handleUpdate failed for ${update.update_id}.`, cause);
+            const same = failing?.updateId === update.update_id ? failing : undefined;
+            const attempts = (same?.attempts ?? 0) + 1;
+            const admitted = (same?.admitted ?? false) || isAdmittedUnrecordedError(cause);
+            failing = { updateId: update.update_id, attempts, admitted };
+            if (!admitted && (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause))) {
+              // The update fails the same way every time: tell the chat and move
+              // past it, so one poison update cannot block the whole profile.
+              const message = update.message ?? update.edited_message ?? update.callback_query?.message;
+              if (message) {
+                const text = `⚠️ Error: ${cause instanceof Error ? cause.message : String(cause)}`;
+                await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text }).catch(() => undefined);
+              }
+              handled = true;
+            }
           }
         }
-        if (!handled) break;
+        if (!handled) {
+          // Telegram answers the next poll at once while the update is pending,
+          // so wait (longer each time) before asking for it again.
+          const pause = Math.min(ERROR_SLEEP_MS * 2 ** ((failing?.attempts ?? 1) - 1), MAX_UPDATE_RETRY_SLEEP_MS);
+          await deps.sleep(pause, signal).catch(() => undefined);
+          break;
+        }
+        failing = undefined;
         // Persist the resume offset (update_id + 1) ONLY after successful
         // handling. On failure the update will be retried on the next poll.
         // Monotonic max is enforced inside persistOffset.

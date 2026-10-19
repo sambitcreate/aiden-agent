@@ -251,6 +251,9 @@ export async function verifyPackagedModelCatalogResources(appAsar) {
     throw new Error("Packaged models.dev capability snapshot is not valid JSON.");
   }
   validateModelsDevSnapshot(snapshot);
+  if (bytes.toString("utf8") !== JSON.stringify(snapshot)) {
+    throw new Error("Packaged models.dev capability snapshot must be compact JSON.");
+  }
 }
 
 export function assertPackagedSubagentInferenceWorkerEntries(entries) {

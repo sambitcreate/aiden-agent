@@ -15,6 +15,7 @@ import {
   downloadModel,
   cancelDownload,
   deleteModel,
+  isModelInstalled,
 } from "../services/local-speech-models.js";
 import { configStore } from "../services/config-store.js";
 import { resolveVoiceProviderNow } from "../services/voice-provider-resolution.js";
@@ -61,7 +62,12 @@ export function registerLocalVoiceHandlers(): void {
   // ── Model management ─────────────────────────────────────────────────
   ipcMain.handle("localModels:list", async () => listModels());
   ipcMain.handle("localModels:download", async (_event, id: unknown) => {
-    await downloadModel(asString(id, "id"));
+    const modelId = asString(id, "id");
+    // Already installed: nothing to fetch, and replacing it would swap files
+    // under a recognizer that may have them loaded. Settings only offers
+    // Download for missing models, and Aiden Remote skips installed ones too.
+    if (isModelInstalled(modelId)) return;
+    await downloadModel(modelId);
   });
   ipcMain.handle("localModels:cancel", async (_event, id: unknown) => {
     return cancelDownload(asString(id, "id"));

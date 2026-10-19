@@ -353,6 +353,60 @@ test("Aiden commands are available over the RPC (GUI-interop) surface", () => {
 	}
 });
 
+test("/dictate settles and clears its status when the recorder exits early or is missing", { skip: process.platform === "win32" }, () => {
+	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-dictate-"));
+	try {
+		const agentDir = path.join(root, "agent"), bin = path.join(root, "bin");
+		mkdirSync(agentDir); mkdirSync(bin);
+		writeFileSync(path.join(agentDir, "aiden.json"), JSON.stringify({ voice: { provider: "gemini" } }));
+		// A recorder that exits immediately without producing audio (no microphone permission, device busy).
+		writeFileSync(path.join(bin, "rec"), "#!/bin/sh\nexit 0\n"); chmodSync(path.join(bin, "rec"), 0o755);
+		const voiceUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "voice.ts")).href);
+		const script = `
+import { createVoiceInlineExtension } from ${voiceUrl};
+const unhandled = []; process.on("unhandledRejection", (reason) => unhandled.push(String(reason)));
+const commands = new Map();
+createVoiceInlineExtension({ agentDir: ${JSON.stringify(agentDir)} }).factory({ registerCommand: (name, command) => commands.set(name, command), on: () => {} });
+async function dictate() {
+	const notes = [], statuses = {}; let dismissed = false;
+	const ctx = { mode: "tui", ui: {
+		setStatus: (key, value) => { statuses[key] = value; },
+		notify: (message, level) => notes.push(level + ": " + message),
+		// The user presses Enter after 300 ms unless the extension dismisses the prompt first.
+		input: (_title, _placeholder, opts) => new Promise((resolve) => {
+			const timer = setTimeout(() => resolve(""), 300);
+			opts?.signal?.addEventListener("abort", () => { clearTimeout(timer); dismissed = true; resolve(undefined); });
+		}),
+		pasteToEditor: () => {},
+	} };
+	await Promise.race([
+		commands.get("dictate").handler("", ctx),
+		new Promise((_, reject) => setTimeout(() => reject(new Error("/dictate hung")), 5_000)),
+	]);
+	return { notes, status: statuses["aiden-dictate"], dismissed };
+}
+process.env.PATH = ${JSON.stringify(bin)} + ":/usr/bin:/bin";
+const early = await dictate();
+process.env.PATH = "/usr/bin:/bin";
+const missing = await dictate();
+await new Promise((resolve) => setTimeout(resolve, 50));
+console.log(JSON.stringify({ early, missing, unhandled }));
+`;
+		const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "--no-warnings", "-e", script], {
+			encoding: "utf-8", timeout: 60_000,
+			env: { ...process.env, GEMINI_API_KEY: "test-key", AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const report = JSON.parse(result.stdout.trim().split("\n").pop());
+		assert.deepEqual(report.unhandled, []);
+		assert.ok(report.early.notes.some((note) => note.startsWith("error: Dictation failed:")), JSON.stringify(report.early));
+		assert.equal(report.early.status, undefined, "status must be cleared after an early recorder exit");
+		assert.equal(report.early.dismissed, true, "the prompt is dismissed once the recorder stops");
+		assert.ok(report.missing.notes.some((note) => note.includes("No audio recorder found")), JSON.stringify(report.missing));
+		assert.equal(report.missing.status, undefined);
+	} finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("native MCP command routing leaves Aiden's migrated inventory intact", () => {
   const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
   try {

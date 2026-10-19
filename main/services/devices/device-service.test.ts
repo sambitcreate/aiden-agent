@@ -95,6 +95,8 @@ interface FakeHostOptions {
   agentGate?: Promise<void>;
   /** Holds `ensureReady` the same way, as a slow first install would. */
   hubGate?: Promise<void>;
+  /** Exit code of `simctl shutdown`, as when the simulator is busy or simctl times out. */
+  shutdownCode?: number;
 }
 
 function fakeHost(options: FakeHostOptions = {}) {
@@ -110,6 +112,7 @@ function fakeHost(options: FakeHostOptions = {}) {
       commands.push([command, ...args]);
       if (command === "emulator") return { stdout: LIST_AVDS, stderr: "", code: 0 };
       if (args[1] === "list") return { stdout: SIMCTL_FIXTURE, stderr: "", code: options.listCode ?? 0 };
+      if (args[1] === "shutdown") return { stdout: "", stderr: "", code: options.shutdownCode ?? 0 };
       return { stdout: "", stderr: "", code: 0 };
     },
   });
@@ -539,6 +542,22 @@ test("closing a session never shuts the simulator down unless asked", async () =
       assert.equal(service.state().devices.find((device) => device.id === IPHONE)?.booted, false);
     },
     { consent: { streaming: true } },
+  );
+});
+
+test("a simulator that refuses to shut down is reported, not shown as off", async () => {
+  await withService(
+    async ({ service, host }) => {
+      await service.refresh();
+      await service.open({ chatId: "chat-1", deviceId: IPHONE, openedBy: "user" });
+      await assert.rejects(
+        service.close({ chatId: "chat-1", hostId: "local", deviceId: IPHONE, shutdown: true }),
+        /did not shut down/u,
+      );
+      assert.deepEqual(host.commands[host.commands.length - 1], ["xcrun", "simctl", "shutdown", IPHONE]);
+      assert.equal(service.state().devices.find((device) => device.id === IPHONE)?.booted, true);
+    },
+    { consent: { streaming: true }, shutdownCode: 124 },
   );
 });
 

@@ -427,6 +427,9 @@ export class AidenRemoteChatProgressService {
         403,
       );
     }
+    // The response emits "close" once; a client that dropped during the
+    // awaits above would never release a registered slot.
+    if (response.destroyed || response.writableEnded) return;
     if (
       this.subscribers.size >= 64 ||
       [...this.subscribers.values()].filter(

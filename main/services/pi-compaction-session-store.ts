@@ -1306,7 +1306,14 @@ export class PiCompactionSessionStore {
     if (!SAFE_SESSION_ID.test(chatId)) {
       throw new Error("Invalid chat identity for the Pi compaction journal.");
     }
-    this.assertNotQuarantined(chatId);
+    // Deletion does not need a consistent journal. Wait for an in-flight
+    // recovery to settle either way instead of refusing, so a chat removed
+    // right after a Stop-interrupted write is not undeletable until restart.
+    const quarantine = this.quarantined.get(chatId);
+    if (quarantine) {
+      await quarantine.catch(() => undefined);
+      if (this.quarantined.get(chatId) === quarantine) this.quarantined.delete(chatId);
+    }
     await this.opening.get(chatId);
     const { repo, root } = await this.repository();
     const matches = (await repo.list()).filter(

@@ -297,6 +297,8 @@ export function AskUserQuestionComposer({
                     setAnswers(resolved);
                   }}
                   onKeyDown={(event) => {
+                    // An IME confirms its candidate with Enter; that is not a submit.
+                    if (event.nativeEvent.isComposing) return;
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       commitCustom();

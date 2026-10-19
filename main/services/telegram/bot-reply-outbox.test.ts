@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
@@ -114,6 +114,72 @@ test("admission that fails leaves no outbox row, so the update is retried", asyn
     /another Aiden window/u,
   );
   assert.deepEqual(await ingress.rows(), []);
+});
+
+test("an admission whose outbox write fails is retried from what is on disk, so the reply still arrives", async () => {
+  const dir = tempDir();
+  const file = path.join(dir, "outbox.json");
+  let sends = 0;
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: {
+      // The session dedupes by request id, like the real one.
+      send: async () => ({ submissionId: "77", deduped: (sends += 1) > 1 }),
+      awaitReply: async () => ({ kind: "completed", text: "Here you go." }),
+    },
+    deliver: async (reply) => void delivered.push(reply),
+  });
+  const message = { botId: "bot:a", chatId: 7, messageId: 55, ownerUserId: 7, text: "plan dinner" };
+  try {
+    assert.deepEqual(await ingress.rows(), []);
+    // A directory at the outbox path makes the atomic write fail after the session accepted the message.
+    mkdirSync(file);
+    // The failure says the session already accepted the turn, so the update must not be skipped.
+    await assert.rejects(ingress.admit(message), { name: "BotReplyAdmittedUnrecordedError" });
+    rmSync(file, { recursive: true, force: true });
+    assert.deepEqual(await ingress.rows(), [], "the cache does not report a row that never reached disk");
+
+    // Telegram redelivers the update because the offset was kept.
+    await ingress.admit(message);
+    await ingress.idle();
+    assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "Here you go." }]);
+    const durable = JSON.parse(readFileSync(file, "utf8")) as { rows: BotReplyRow[] };
+    assert.deepEqual(durable.rows.map((row) => [row.requestId, row.state]), [[telegramBotRequestId(message), "sent"]]);
+    assert.deepEqual(await ingress.rows(), durable.rows);
+  } finally {
+    ingress.stop();
+  }
+});
+
+test("a deduped admission of a durable row nobody is waiting on starts waiting for its reply", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  const message = { botId: "bot:a", chatId: 7, messageId: 1, ownerUserId: 7, text: "hi" };
+  // The row reached disk, but the process lost track of it (a write that was
+  // published yet reported as failed, for example).
+  seed(file, [{ requestId: telegramBotRequestId(message), state: "awaiting", submissionId: "5" }]);
+  const delivered: TelegramBotReply[] = [];
+  let waits = 0;
+  const ingress = createTelegramBotIngress({
+    file,
+    session: {
+      send: async () => assert.fail("a known row is not resubmitted"),
+      awaitReply: async () => {
+        waits += 1;
+        return { kind: "completed", text: "Hello." };
+      },
+    },
+    deliver: async (reply) => void delivered.push(reply),
+  });
+  try {
+    assert.deepEqual(await ingress.admit(message), { requestId: telegramBotRequestId(message), deduped: true });
+    await ingress.idle();
+    assert.equal(waits, 1);
+    assert.deepEqual(delivered.map((reply) => reply.text), ["Hello."]);
+    assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+  } finally {
+    ingress.stop();
+  }
 });
 
 test("a reply saved before a crash is delivered on restart without regenerating it", async () => {
@@ -455,4 +521,22 @@ test("an interrupted turn delivers nothing", async () => {
   await ingress.recover();
   await ingress.idle();
   assert.deepEqual((await ingress.rows()).map((row) => row.state), ["interrupted"]);
+});
+
+test("a reply that failed reaches the chat once as an error and is settled", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  seed(file, [{ state: "awaiting" }]);
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: {
+      send: async () => assert.fail("no resubmission"),
+      awaitReply: async () => ({ kind: "failed", error: "The Bot stopped before it could answer this." }),
+    },
+    deliver: async (reply) => void delivered.push(reply),
+  });
+  await ingress.recover();
+  await ingress.idle();
+  assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "⚠️ Error: The Bot stopped before it could answer this." }]);
+  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
 });

@@ -55,9 +55,14 @@ import {
   browserLocalServers,
   BrowserActionQueue,
   BROWSER_MAX_TABS,
-  savedLinkOpening,
   sameBrowserPage,
 } from "./core.js";
+import {
+  browserProfileName,
+  parseBrowserPreferences,
+  validBrowserDefaults,
+  validBrowserViewport,
+} from "./preferences.js";
 import { playwrightInjectedSource } from "./playwright-source.generated.js";
 import { browserImportSources, importBrowserCookies } from "./import.js";
 import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReservation, type PreparedBrowserFile } from "./files.js";
@@ -180,11 +185,6 @@ function text(value: unknown, label: string, max = 64_000): string {
   if (typeof value !== "string" || value.length > max) throw new Error(`Invalid ${label}.`);
   return value;
 }
-function profileName(value: unknown): string {
-  const name = text(value, "profile name", 48).trim();
-  if (!name) throw new Error("Enter a profile name.");
-  return name;
-}
 function boundedBounds(value: BrowserBounds): BrowserBounds {
   return {
     x: Math.round(browserBoundedNumber(value.x, -20_000, 20_000, "X")),
@@ -217,33 +217,17 @@ export class BrowserService {
   private load(): void {
     if (this.loaded) return;
     this.loaded = true;
+    let saved: unknown;
     try {
-      const saved = JSON.parse(readFileSync(this.storagePath(), "utf8"));
-      if (Array.isArray(saved.profiles))
-        for (const p of saved.profiles.slice(0, 24)) {
-          if (
-            typeof p.id === "string" &&
-            /^profile-[a-z\d-]+$/i.test(p.id) &&
-            typeof p.name === "string"
-          )
-            this.profiles.push({ id: p.id, name: profileName(p.name), kind: "persistent" });
-        }
-      if (saved.defaults && typeof saved.defaults === "object") {
-        const legacy = saved.defaults as Record<string, unknown>;
-        const { linkTarget: _legacyTarget, ...current } = legacy;
-        this.defaults = this.validDefaults({
-          ...(current as Partial<BrowserDefaults>),
-          linkOpening: savedLinkOpening(legacy),
-        });
-      }
-      if (saved.workspaceAccess && typeof saved.workspaceAccess === "object")
-        for (const [id, access] of Object.entries(saved.workspaceAccess).slice(0, 1000)) {
-          if (id.length > 0 && id.length <= 200 && (access === "allow" || access === "off"))
-            this.workspaceAccess.set(id, access);
-        }
+      saved = JSON.parse(readFileSync(this.storagePath(), "utf8"));
     } catch {
       /* A corrupt or absent browser preference file does not block browsing. */
+      return;
     }
+    const preferences = parseBrowserPreferences(saved);
+    this.profiles.push(...preferences.profiles);
+    this.defaults = preferences.defaults;
+    for (const [id, access] of preferences.workspaceAccess) this.workspaceAccess.set(id, access);
   }
   private save(): void {
     const target = this.storagePath();
@@ -836,9 +820,12 @@ export class BrowserService {
           event.preventDefault();
         }
       });
-      wc.once("destroyed", () => {
+      const destroyPopup = () => {
         if (!window.isDestroyed()) window.destroy();
-      });
+      };
+      wc.once("destroyed", destroyPopup);
+      // A long-lived tab can open many popups; drop each one's parent listener when it closes.
+      window.once("closed", () => wc.removeListener("destroyed", destroyPopup));
     });
     wc.debugger.on("message", (_event, method, params) => {
       if (method === "Network.responseReceived") {
@@ -1454,37 +1441,7 @@ export class BrowserService {
   }
 
   private validDefaults(input: Partial<BrowserDefaults>): BrowserDefaults {
-    const result = { ...this.defaults, ...input };
-    this.profile(result.profileId);
-    if (!["system", "light", "dark"].includes(result.appearance))
-      throw new Error("Invalid browser appearance.");
-    if (!isBrowserLinkOpening(result.linkOpening))
-      throw new Error("Invalid link opening preference.");
-    delete (result as { linkTarget?: unknown }).linkTarget;
-    if (!["off", "allow"].includes(result.agentAccess))
-      throw new Error("Invalid browser agent access.");
-    if (typeof result.autoShow !== "boolean")
-      throw new Error("Invalid browser automatic visibility.");
-    browserBoundedNumber(result.zoom, 0.25, 5, "Zoom");
-    browserBoundedNumber(result.recordingFps, 1, 60, "Recording frame rate");
-    result.viewport = this.validViewport(result.viewport);
-    return result;
-  }
-  private validViewport(viewport: BrowserTab["viewport"]): BrowserTab["viewport"] {
-    if (!viewport || !["fill", "responsive"].includes(viewport.mode))
-      throw new Error("Invalid browser viewport mode.");
-    const width = Math.round(browserBoundedNumber(viewport.width, 240, 3_840, "Viewport width"));
-    const height = Math.round(browserBoundedNumber(viewport.height, 240, 3_840, "Viewport height"));
-    if (width * height > 8_294_400) throw new Error("Browser viewport is too large.");
-    return {
-      mode: viewport.mode,
-      width,
-      height,
-      ...(typeof viewport.deviceName === "string"
-        ? { deviceName: viewport.deviceName.slice(0, 100) }
-        : {}),
-      ...(typeof viewport.ratioLocked === "boolean" ? { ratioLocked: viewport.ratioLocked } : {}),
-    };
+    return validBrowserDefaults(this.defaults, input, (profileId) => this.profile(profileId));
   }
   private activateTab(tab: LiveTab): void {
     const workspace = this.workspace(tab.state.workspaceId);
@@ -2035,7 +1992,7 @@ export class BrowserService {
           throw new Error("The browser profile limit has been reached.");
         this.profiles.push({
           id: `profile-${randomUUID()}`,
-          name: profileName(command.name),
+          name: browserProfileName(command.name),
           kind: "persistent",
         });
         this.save();
@@ -2045,7 +2002,7 @@ export class BrowserService {
         const profile = this.profile(command.profileId);
         if (!profile.id.startsWith("profile-"))
           throw new Error("Built-in profiles cannot be renamed.");
-        profile.name = profileName(command.name);
+        profile.name = browserProfileName(command.name);
         this.save();
         this.emitAll();
         break;
@@ -2226,7 +2183,7 @@ export class BrowserService {
                 await shell.openExternal(browserUrl(wc.getURL()));
                 break;
               case "viewport":
-                tab.state.viewport = this.validViewport(command.viewport);
+                tab.state.viewport = validBrowserViewport(command.viewport);
                 await this.applyEmulation(tab);
                 break;
               case "appearance":

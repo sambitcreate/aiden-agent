@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { scheduledJobs } from "croner";
+import test, { type TestContext } from "node:test";
+import { scheduledJobs, type Cron } from "croner";
 import type {
   BotRoutinePorts,
   BotRoutineSubmissionOutcome,
@@ -148,6 +148,16 @@ function jobFor(taskId: string) {
   return job;
 }
 
+/**
+ * Cron fires a routine only once its next fire time arrives, and an automatic
+ * run never claims a future fire: move the mocked clock to that time, then fire.
+ */
+function fireWhenDue(t: TestContext, job: Cron): Promise<void> {
+  const due = job.nextRun()?.getTime();
+  if (due !== undefined && due > Date.now()) t.mock.timers.enable({ apis: ["Date"], now: due });
+  return job.trigger();
+}
+
 test("a firing routine submits to its Bot with a stable routine request id", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());
@@ -161,7 +171,7 @@ test("a firing routine submits to its Bot with a stable routine request id", asy
   const due = (await h.store.get(routine.id))!.nextRunAt!;
   h.session.replies.push({ kind: "completed", text: "Monday: lentil soup." });
 
-  await jobFor(routine.id).trigger();
+  await fireWhenDue(t, jobFor(routine.id));
 
   assert.deepEqual(h.session.sends, [
     {
@@ -271,7 +281,7 @@ test("a routine that fires while its Bot is paused is skipped without touching t
   h.session.states.set("bot-chef", { kind: "interrupted", submissionId: "sub-paused" });
   await h.scheduler.start();
 
-  await jobFor(routine.id).trigger();
+  await fireWhenDue(t, jobFor(routine.id));
 
   const [run] = await h.store.runs(routine.id);
   assert.equal(run?.result, "skipped");
@@ -305,7 +315,7 @@ test("a one-off routine runs once and then switches itself off", async (t) => {
   await h.scheduler.start();
   const job = jobFor(routine.id);
 
-  await job.trigger();
+  await fireWhenDue(t, job);
 
   const latest = await h.store.get(routine.id);
   assert.equal(latest?.enabled, false);
@@ -315,6 +325,40 @@ test("a one-off routine runs once and then switches itself off", async (t) => {
     scheduledJobs.some((entry) => entry.name === `scheduled:${routine.id}` && entry.isRunning()),
     false,
   );
+});
+
+test("a deferred startup catch-up the Cron already covered never turns the next fire into a duplicate", async (t) => {
+  // Yesterday's 09:00 fire was missed while the app was closed; it restarts locked at 08:59:59.
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.UTC(2026, 0, 5, 8, 59, 59) });
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Morning check",
+    schedule: { kind: "daily", time: "09:00" },
+    prompt: "Anything due today?",
+  });
+  await h.store.updateRuntime(routine.id, { nextRunAt: Date.UTC(2026, 0, 4, 9, 0) });
+  let locked = true;
+  h.scheduler.setCatchUpDeferPolicy(() => locked);
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  await h.scheduler.start();
+
+  t.mock.timers.tick(1_000); // today's 09:00 fire lands while the catch-up waits
+  await settle();
+  locked = false;
+  h.scheduler.reevaluateCatchUp();
+  await settle();
+  t.mock.timers.tick(24 * 60 * 60 * 1_000); // tomorrow's 09:00 fire
+  await settle();
+
+  const runs = await h.store.runs(routine.id);
+  assert.deepEqual(
+    runs.map((run) => [run.result, run.reason]).sort(),
+    [["success", undefined], ["success", undefined]],
+    "both real fires must reach the Bot; neither may be skipped as a duplicate",
+  );
+  assert.equal(h.session.sends.length, 2);
 });
 
 test("routines list per Bot with friendly labels and reject a one-off in the past", async () => {

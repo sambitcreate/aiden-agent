@@ -43,6 +43,11 @@ export class EncryptedPeerHostStorage implements PeerHostStorage {
     return parseStoredPeerHosts(JSON.parse(serialized));
   }
 
+  async assertWritable(): Promise<void> {
+    if (!(await this.cipher.isEncryptionAvailable()))
+      throw new Error("Unlock secure storage before pairing devices.");
+  }
+
   async save(
     hosts: StoredPeerHost[],
     isCurrent: () => boolean = () => true,

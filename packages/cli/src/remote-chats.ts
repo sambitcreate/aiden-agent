@@ -4,7 +4,8 @@ import { rm } from "node:fs/promises";
 import { createChatApplicationService } from "../../../main/services/chat-application-service.js";
 import { AidenRemoteChatService } from "../../../main/services/aiden-remote-chats.js";
 import { AidenRemoteModelService } from "../../../main/services/aiden-remote-models.js";
-import { AidenRemoteStreamService, normalizeAidenRemoteStreamSnapshot, removeRevokedDeviceStreams, type AidenRemoteStreamSnapshot } from "../../../main/services/aiden-remote-streams.js";
+import { AidenRemoteStreamService, aidenRemoteStreamStoreOptions, normalizeAidenRemoteStreamSnapshot, removeRevokedDeviceStreams, type AidenRemoteStreamSnapshot } from "../../../main/services/aiden-remote-streams.js";
+import { DataStore } from "../../../main/services/data-store.js";
 import type { AidenIdempotencyLedger, AidenIdempotencySnapshot } from "../../../main/services/aiden-remote-operation-contract.js";
 import type { AidenRemoteStateRegistry } from "../../../main/services/aiden-remote-state.js";
 import type { createDaemonChats } from "./daemon-chats.ts";
@@ -51,7 +52,9 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     listProviders: () => listCliProviders(agentDir),
     getSettings: async () => { const settings = readJson<{ defaultProvider?: string; defaultModel?: string }>(join(agentDir, "settings.json"), {}); return { lastProviderId: settings.defaultProvider, lastModel: settings.defaultModel }; },
   });
-  const snapshots = new JsonStore<AidenRemoteStreamSnapshot>(join(agentDir, "remote-streams.json"), { version: 1, streams: [] });
+  // Same policy as the desktop journal: an unreadable file is kept aside as a
+  // rescue copy and replaced instead of failing startup and every persist.
+  const snapshots = new DataStore<AidenRemoteStreamSnapshot>("remote-streams.json", { version: 1, streams: [] }, () => agentDir, aidenRemoteStreamStoreOptions());
   const revoked = new Set((await state.snapshot()).devices.filter((device) => device.revokedAt !== undefined).map((device) => device.id));
   const snapshot = removeRevokedDeviceStreams(normalizeAidenRemoteStreamSnapshot(await snapshots.load()), revoked);
   await snapshots.save(snapshot);

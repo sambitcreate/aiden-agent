@@ -155,6 +155,17 @@ function parseFile(raw: string): OutboxFile {
   return { version: 1, rows: value.rows };
 }
 
+/**
+ * The Bot session accepted a turn but its reply row could not be written. The update must be
+ * redelivered until the row exists, however many attempts that takes: skipping it loses the answer.
+ */
+export class BotReplyAdmittedUnrecordedError extends Error {
+  constructor(readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "BotReplyAdmittedUnrecordedError";
+  }
+}
+
 export function createTelegramBotIngress(deps: TelegramBotIngressDeps): TelegramBotIngress {
   const now = deps.now ?? Date.now;
   const stopper = new AbortController();
@@ -177,7 +188,15 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         if (error.code === "ENOENT") return { version: 1 as const, rows: [] };
         throw error;
       });
-      return action(state);
+      try {
+        return await action(state);
+      } catch (error) {
+        // The action may have changed the cached rows before its write failed.
+        // Forget the cache so the next access starts from what is on disk;
+        // otherwise a lost write would still dedupe or deliver from memory.
+        state = undefined;
+        throw error;
+      }
     });
     tail = next.catch(() => undefined);
     return next;
@@ -289,13 +308,18 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     async admit(message) {
       const requestId = telegramBotRequestId(message);
       const known = await locked((file) => file.rows.find((row) => row.requestId === requestId));
-      if (known !== undefined) return { requestId, deduped: true };
+      if (known !== undefined) {
+        // A durable row whose wait was lost (a write published but reported as
+        // failed, for example) is picked up here instead of waiting for a restart.
+        if (known.state === "awaiting") trackOnce({ ...known });
+        return { requestId, deduped: true };
+      }
       const { submissionId, deduped } = await deps.session.send(message.botId, {
         text: message.text,
         requestId,
         ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
       });
-      const row = await locked(async (file) => {
+      const recordRow = () => locked(async (file) => {
         const existing = file.rows.find((candidate) => candidate.requestId === requestId);
         if (existing !== undefined) return undefined;
         const created: BotReplyRow = {
@@ -312,6 +336,13 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         await persist(file);
         return { ...created };
       });
+      let row: BotReplyRow | undefined;
+      try {
+        row = await recordRow();
+      } catch (cause) {
+        // The session holds the turn; only this row can deliver its answer, so redelivery must retry it.
+        throw new BotReplyAdmittedUnrecordedError(cause);
+      }
       if (row !== undefined) trackOnce(row);
       return { requestId, deduped: deduped || row === undefined };
     },

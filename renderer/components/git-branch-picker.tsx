@@ -367,6 +367,8 @@ export function GitBranchPicker({
               value={newName}
               onChange={(event) => setNewName(event.target.value)}
               onKeyDown={(event) => {
+                // An IME confirms its candidate with Enter; that is not a create.
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === "Escape" && !busy) {
                   event.preventDefault();
                   event.stopPropagation();
