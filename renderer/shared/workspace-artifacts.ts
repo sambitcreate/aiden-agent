@@ -196,6 +196,8 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
   // Unquoted [[ … ]] and (( … )), where bash reads words as arithmetic.
   let testBrackets = false;
   let arithmeticParens = 0;
+  // Where the current top-level simple command starts.
+  let clauseStart = 0;
   const checked = new Set<number>();
   for (let index = 0; index < template.length; index += 1) {
     const char = template[index]!;
@@ -232,10 +234,12 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
       const inArithmetic = arithmeticParens > 0 || testBrackets;
       // The words of this placeholder's simple command before it, without the
       // keywords and NAME=value assignments that can precede the command's name.
-      const words = (/(?:^|[;&|(){}\n])([^;&|(){}\n]*)$/u.exec(head)?.[1] ?? "").trim().split(/\s+/u).filter(Boolean);
+      const words = head.slice(clauseStart).trim().split(/\s+/u).filter(Boolean);
       let start = 0;
       while (start < words.length && (COMMAND_PREFIX_WORDS.has(words[start]!) || ASSIGNMENT_WORD.test(words[start]!))) start += 1;
-      const command = words[start];
+      // The shell drops quotes and backslashes from the name: 'eval' and e\val are eval.
+      const command = words[start]?.replace(/["'\\]/gu, "");
+      if (command !== undefined && /[$`]/u.test(command)) return misplaced("an argument to a command chosen when it runs");
       const last = words[words.length - 1] ?? "";
       if (!inArithmetic && command === undefined) return misplaced("the command itself");
       if (command !== undefined && RUNS_ARGUMENT.has(command)) return misplaced(`an argument to ${command}, which runs it`);
@@ -253,6 +257,7 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
       continue;
     }
     if (quote === null && depth === 0) {
+      if (";&|(){}\n".includes(char)) clauseStart = index + 1;
       const wordStart = index === 0 || WORD_BREAK_BEFORE.test(template[index - 1]!);
       if (!testBrackets && wordStart && template.startsWith("[[", index)) {
         testBrackets = true;
