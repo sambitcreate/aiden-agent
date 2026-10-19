@@ -13,6 +13,7 @@ import {
   type CuaDriverSessionLike,
 } from "./controller.js";
 import { normalizeComputerUseArgs } from "./safety.js";
+import { ComputerUseParameters } from "./schema.js";
 import { createComputerUseAgentTool } from "./tool.js";
 import { COMPUTER_USE_SETUP_REASON, authorizeAllowedComputerUseAction } from "./access-gate.js";
 import {
@@ -1647,7 +1648,20 @@ test("the system prompt carries Computer Use guidance only when the tool is offe
     assert.match(guidance, /\bverify\b/u);
     assert.match(guidance, /untrusted/iu);
     assert.match(guidance, /foreground/iu);
+    // cua-driver 0.36 behavior the model must plan around.
+    assert.match(guidance, /changes_only read that reports no_change keeps them/u);
+    assert.match(guidance, /after a diff take a full capture before acting/u);
+    assert.match(guidance, /closed menus do not appear in captures/iu);
+    assert.match(guidance, /never contain line breaks or tabs/iu);
+    assert.match(guidance, /only after a foreground_required error/u);
+    assert.match(guidance, /write_not_applied[^.;]*another route/u);
   }
+  // The parameter schema repeats the rules where the model fills each field.
+  const describe = (field: keyof typeof ComputerUseParameters.properties) =>
+    String((ComputerUseParameters.properties[field] as { description?: string }).description);
+  assert.match(describe("text"), /line breaks or tabs/u);
+  assert.match(describe("delivery_mode"), /only after a foreground_required error/u);
+  assert.match(describe("changes_only"), /never vision/u);
 });
 
 test("element drag refuses an element whose centre lies outside the captured window", async () => {
@@ -1819,7 +1833,7 @@ test("write_not_applied invalidates the capture and asks for another route", asy
   assert.equal(error.code, "write_not_applied");
   assert.match(
     error.message,
-    /^cua-driver read the control back and the value did not change\. Capture the window again and choose another route \(element click, press_key\) instead of repeating set_value\./u,
+    /^cua-driver read the control back and the value did not change\. Capture the window again and choose another route \(an element click or the key action\) instead of repeating set_value\./u,
   );
   assert.equal(controller.lifecycleState, "ready");
   assert.equal(await captureStillUsable(controller), false);

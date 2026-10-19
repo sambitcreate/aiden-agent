@@ -119,7 +119,7 @@ export const ComputerUseParameters = Type.Object(
     changes_only: Type.Optional(
       Type.Boolean({
         description:
-          "Capture only (som or ax): re-read the same window and return just the accessibility rows added, changed or removed since its previous capture, or no_change, without a screenshot. Carries no element numbers; act by number only after a full capture or a no_change result. Falls back to a full capture when there is no previous capture of that window.",
+          "Capture only (som or ax, never vision): the cheap verification read. Re-reads the same window and returns just the accessibility rows added, changed or removed since its previous capture, or no_change, without a screenshot or element numbers. After no_change the previous element numbers stay valid; after a diff take a full capture before acting by number. Falls back to a full capture when there is no previous capture of that window.",
       }),
     ),
     element: Type.Optional(
@@ -147,8 +147,21 @@ export const ComputerUseParameters = Type.Object(
     ),
     amount: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 3 })),
     value: Type.Optional(Type.String({ maxLength: 4_000 })),
-    text: Type.Optional(Type.String({ maxLength: 4_000 })),
-    keys: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    text: Type.Optional(
+      Type.String({
+        maxLength: 4_000,
+        description:
+          "type only: text to insert. It can never contain line breaks or tabs; send Return or Tab with the key action as its own step.",
+      }),
+    ),
+    keys: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "cmd+s".',
+      }),
+    ),
     seconds: Type.Optional(Type.Number({ minimum: 0, maximum: 30, default: 1 })),
     raise_window: Type.Optional(
       Type.Boolean({
@@ -158,7 +171,7 @@ export const ComputerUseParameters = Type.Object(
     delivery_mode: Type.Optional(
       Type.Union([Type.Literal("background"), Type.Literal("foreground")], {
         description:
-          "Background is non-intrusive. Foreground may visibly change focus. Clicks with modifiers are foreground-only on macOS and default to it. drag is background first; retry it in the foreground only when the driver refuses.",
+          "Background is non-intrusive and the default. Foreground may visibly change focus. Clicks with modifiers are foreground-only on macOS and default to it. drag runs in the background first; retry it with foreground only after a foreground_required error, never after any other refusal.",
       }),
     ),
     bring_to_front: Type.Optional(

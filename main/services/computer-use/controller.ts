@@ -986,7 +986,7 @@ export class ComputerUseController {
       if (this.target) this.invalidateTargetSnapshot(this.target);
       return new ComputerUseSafetyError(
         "write_not_applied",
-        `cua-driver read the control back and the value did not change. Capture the window again and choose another route (element click, press_key) instead of repeating set_value. (${detail})`,
+        `cua-driver read the control back and the value did not change. Capture the window again and choose another route (an element click or the key action) instead of repeating set_value. (${detail})`,
       );
     }
     if (error.code && FOCUS_REFUSALS.has(error.code)) {
