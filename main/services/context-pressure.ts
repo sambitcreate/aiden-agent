@@ -15,6 +15,7 @@ import {
   modelRetainsSystemUpdates,
   projectChatContextPressure,
   promptCacheWindow,
+  type PromptCacheRefresh,
   type GenerationContextOptions,
 } from "./generation-context.js";
 import { resolveCompactionModelMetadata } from "./model-runtime.js";
@@ -54,8 +55,16 @@ export function rememberChatContextProfile(
   generationProfiles.set(chatId, createGenerationContextProfile(options, scope));
 }
 
+const promptCacheRefreshes = new Map<string, PromptCacheRefresh>();
+
+/** Cache warming refreshed this chat's cache; ambient reads keep the later expiry. */
+export function rememberPromptCacheRefresh(chatId: string, refresh: PromptCacheRefresh): void {
+  promptCacheRefreshes.set(chatId, refresh);
+}
+
 export function forgetChatContextProfile(chatId: string): void {
   generationProfiles.delete(chatId);
+  promptCacheRefreshes.delete(chatId);
   ambientProfiles.delete(chatId);
   journalSnapshots.delete(chatId);
 }
@@ -294,6 +303,6 @@ export async function chatContextPressure(
       ]
     : messages;
   const pressure = projectChatContextPressure(projected, options);
-  const promptCache = promptCacheWindow(model, messages);
+  const promptCache = promptCacheWindow(model, messages, promptCacheRefreshes.get(chatId));
   return promptCache ? { ...pressure, promptCache } : pressure;
 }

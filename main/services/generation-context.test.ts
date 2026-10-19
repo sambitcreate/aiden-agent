@@ -1371,4 +1371,11 @@ test("the prompt cache window follows the last request that used the cache on th
   assert.equal(promptCacheWindow({ ...model, promptCache: undefined }, messages), undefined);
   assert.equal(promptCacheWindow(model, [user("a"), cached(5_000, 0)]), undefined);
   assert.equal(promptCacheWindow({ ...model, id: "other-model" }, messages), undefined);
+
+  // A warming refresh after a stopped run extends the cache; an older or other-model one does not.
+  const warmed = { provider: model.provider, model: model.id, requestStartedAt: 270_000 };
+  assert.deepEqual(promptCacheWindow(model, messages, warmed), { ttlMs: 300_000, lastRequestAt: 270_000 });
+  assert.deepEqual(promptCacheWindow(model, messages, { ...warmed, requestStartedAt: 500 }), { ttlMs: 300_000, lastRequestAt: 1_000 });
+  assert.deepEqual(promptCacheWindow(model, messages, { ...warmed, model: "other-model" }), { ttlMs: 300_000, lastRequestAt: 1_000 });
+  assert.equal(promptCacheWindow(model, [user("a"), cached(5_000, 0)], warmed), undefined);
 });

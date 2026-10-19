@@ -697,14 +697,23 @@ export function chatContextPressureFromProjection(
   };
 }
 
+/** A cache-warming request that read or wrote the cache without a transcript entry. */
+export interface PromptCacheRefresh {
+  provider: string;
+  model: string;
+  requestStartedAt: number;
+}
+
 /**
  * The cache window left by the latest request from this provider and model
  * that read or wrote the prompt cache. A model switch starts a new cache, so
- * earlier requests from another model never count.
+ * earlier requests from another model never count. A later warming refresh
+ * of a cache the transcript already shows extends it.
  */
 export function promptCacheWindow(
   model: Parameters<typeof promptCacheTtlMs>[0],
   messages: readonly AgentMessage[],
+  refresh?: PromptCacheRefresh,
 ): PromptCacheWindowV1 | undefined {
   const ttlMs = promptCacheTtlMs(model);
   if (ttlMs === 0) return undefined;
@@ -714,7 +723,9 @@ export function promptCacheWindow(
     if (message.provider !== model.provider || message.model !== model.id) return undefined;
     const usage = message.usage;
     if (usage && usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
-      return { ttlMs, lastRequestAt: message.timestamp };
+      const refreshed =
+        refresh?.provider === model.provider && refresh.model === model.id && refresh.requestStartedAt > message.timestamp;
+      return { ttlMs, lastRequestAt: refreshed ? refresh.requestStartedAt : message.timestamp };
     }
   }
   return undefined;

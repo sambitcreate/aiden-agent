@@ -259,6 +259,7 @@ import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 import {
   invalidateChatContextJournal,
   rememberChatContextProfile,
+  rememberPromptCacheRefresh,
 } from "./context-pressure.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
@@ -3264,6 +3265,7 @@ export const llmClient = {
           // A warming read restarts the provider's cache lifetime without a
           // new projection, so the countdown is re-sent from that request.
           onCacheRefreshed: (requestStartedAt) => {
+            rememberPromptCacheRefresh(params.chatId, { provider: model.provider, model: model.id, requestStartedAt });
             const pressure = lastContextPressure;
             if (!pressure?.promptCache) return;
             lastContextPressure = { ...pressure, promptCache: { ...pressure.promptCache, lastRequestAt: requestStartedAt } };
