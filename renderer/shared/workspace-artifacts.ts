@@ -215,8 +215,8 @@ interface CodeArguments {
   code: RegExp;
   valued?: RegExp;
   operand?: "first" | "after-first";
-  /** Code options count only before the first operand, as git's do before its subcommand. */
-  leading?: boolean;
+  /** Code options count only before the subcommand, the first operand this matches (as git's do). */
+  subcommand?: RegExp;
 }
 const SHELL_CODE: CodeArguments = { code: /^-[A-Za-z]*c$/u, valued: /^[-+][oO]$/u, operand: "first" };
 const AWK_CODE: CodeArguments = { code: /^(?:-[feE]|--file|--source|--exec)$/u, valued: /^(?:-[Fv]|--field-separator|--assign)$/u, operand: "first" };
@@ -257,7 +257,11 @@ const CODE_ARGUMENTS: Record<string, CodeArguments> = {
   psql: { code: /^(?:-c|--command|-f|--file)$/u },
   mysql: { code: /^(?:-e|--execute)$/u },
   mariadb: { code: /^(?:-e|--execute)$/u },
-  git: { code: /^(?:-c|--config-env|--exec-path)$/u, valued: /^-C$/u, leading: true },
+  git: {
+    code: /^(?:-c|--config-env|--exec-path)$/u,
+    valued: /^(?:-C|--git-dir|--work-tree|--namespace|--super-prefix|--attr-source)$/u,
+    subcommand: /^[a-z][a-z0-9-]*$/u,
+  },
 };
 /** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
 const NAME_COMMANDS = new Set(["declare", "export", "getopts", "let", "local", "mapfile", "read", "readarray", "readonly", "typeset", "unset"]);
@@ -302,6 +306,7 @@ function placeholderCommandProblem(words: readonly string[], inArithmetic: boole
     const scan = (words: readonly string[]) => {
       let operands = 0;
       let codeGiven = false;
+      let subcommand = false;
       for (let index = 0; index < words.length; index += 1) {
         const arg = words[index]!;
         if (arg === "--") {
@@ -312,11 +317,14 @@ function placeholderCommandProblem(words: readonly string[], inArithmetic: boole
           codeGiven = true;
           index += 1;
         } else if (spec.valued?.test(arg)) index += 1;
-        else if (!arg.startsWith("-") || arg === "-") operands += 1;
+        else if (!arg.startsWith("-") || arg === "-") {
+          operands += 1;
+          subcommand ||= spec.subcommand?.test(arg) === true;
+        }
       }
-      return { operands, codeGiven };
+      return { operands, codeGiven, subcommand };
     };
-    if (spec.code.test(last) && !(spec.leading && scan(args.slice(0, -1)).operands > 0)) return `the code given to ${base} ${last}`;
+    if (spec.code.test(last) && !scan(args.slice(0, -1)).subcommand) return `the code given to ${base} ${last}`;
     const { operands, codeGiven } = scan(args);
     if (spec.operand === "first" && !codeGiven && operands === 0) return `the program ${base} runs`;
     if (spec.operand === "after-first" && operands >= 1) return `the code ${base} runs`;

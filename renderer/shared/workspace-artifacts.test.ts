@@ -180,6 +180,8 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "sqlite3 app.db {{x}}",
     "psql -c {{x}}",
     "git -c {{x}} status",
+    "git --git-dir .git -c {{x}} probe",
+    "git --namespace review -c {{x}} probe",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
   for (const command of [
@@ -240,8 +242,9 @@ test("no template the parser accepts lets a text value run code", () => {
   const script = path.join(dir, "run-me");
   fs.writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
   // Each value runs code if something reads it as shell, a program to start,
-  // an awk program, a sed script or Python.
-  const values = [`a[$(touch ${marker})0]`, script, `BEGIN { system("touch ${marker}") }`, `1e touch ${marker}`, `__import__("os").system("touch ${marker}")`];
+  // an awk program, a sed script, Python or a git alias.
+  const values = [`a[$(touch ${marker})0]`, script, `BEGIN { system("touch ${marker}") }`, `1e touch ${marker}`, `__import__("os").system("touch ${marker}")`, `alias.probe=!touch ${marker}`];
+  spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
   const candidates = [
     "[[ {{x}} -gt 0 ]]",
     "(( {{x}} > 0 ))",
@@ -272,6 +275,8 @@ test("no template the parser accepts lets a text value run code", () => {
     "awk {{x}} </dev/null",
     "sed {{x}} </dev/null",
     "python3 -c {{x}}",
+    "git -c {{x}} probe",
+    "git --git-dir .git -c {{x}} probe",
     "printf '%s' {{x}} # [[ later",
     "[ {{x}} -gt 0 ]",
     "test {{x}} -eq 1",
