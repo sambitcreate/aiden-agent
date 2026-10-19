@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import test from "node:test";
 import { connect } from "node:net";
 import {
@@ -75,6 +75,7 @@ async function fixture(options: {
   platform?: "mac" | "linux" | "windows";
   /** The Bot service serves and accepts Chat activity (contract revision 30). */
   chatActivity?: boolean;
+  speechAvailable?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -911,7 +912,7 @@ async function fixture(options: {
           serverSpkiSha256: `sha256/${Buffer.alloc(32).toString("base64")}`,
         }),
     },
-    speech: {
+    ...(options.speechAvailable === false ? {} : { speech: {
       status: async () => {
         calls.push("speech:status");
         return speechStatus;
@@ -936,7 +937,7 @@ async function fixture(options: {
         calls.push(`speech:transcribe:${typeof body}`);
         return { text: "Hello from the Mac", modelId: "parakeet-v3" };
       },
-    },
+    } }),
     connectionMode: () => "lan",
     now: () => 1_000,
     log: (entry) => logs.push(entry),
@@ -3179,6 +3180,77 @@ test("paired clients can inspect and use bounded Mac transcription without expos
   }
 });
 
+test("speech request gzip is advertised and accepts only one bounded member", async () => {
+  const app = await fixture({ capabilities: ["server:read", "chat:write"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  const body = JSON.stringify({
+    encoding: "pcm_s16le",
+    sampleRate: 16_000,
+    channels: 1,
+    pcmBase64: Buffer.from([0, 0]).toString("base64"),
+    modelId: "parakeet-v3",
+  });
+  const gzip = gzipSync(body);
+  const send = async (payload: Buffer | string, encoding?: string) => {
+    const response = await fetch(`${app.base}/speech/transcriptions`, {
+      method: "POST",
+      headers: { ...headers, ...(encoding === undefined ? {} : { "content-encoding": encoding }) },
+      body: typeof payload === "string" ? payload : new Uint8Array(payload),
+    });
+    return { status: response.status, error: response.ok ? undefined : (await response.json()).error.code };
+  };
+  try {
+    const server = await fetch(`${app.base}/server`, { headers });
+    assert.equal(server.status, 200);
+    assert.equal((await server.json()).features.includes("speech-request-gzip-v1"), true);
+
+    assert.deepEqual(await send(body), { status: 200, error: undefined });
+    assert.deepEqual(await send(body, "identity"), { status: 200, error: undefined });
+    assert.deepEqual(await send(gzip, "gzip"), { status: 200, error: undefined });
+    const admitted = app.calls.filter((call) => call === "speech:transcribe:object").length;
+    assert.equal(admitted, 3);
+
+    const oversizedDecoded = gzipSync(Buffer.alloc(AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES + 1, 0x20));
+    assert.ok(oversizedDecoded.length < AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES);
+    const rejected: Array<[Buffer | string, string, number, string]> = [
+      ["{}", "br", 415, "invalid_request"],
+      [gzip, "gzip, identity", 415, "invalid_request"],
+      [Buffer.from("not gzip"), "gzip", 400, "invalid_request"],
+      [Buffer.concat([gzip, Buffer.from("trailing")]), "gzip", 400, "invalid_request"],
+      [Buffer.concat([gzip, gzipSync("{}")] ), "gzip", 400, "invalid_request"],
+      [Buffer.concat([gzip.subarray(0, -8), Buffer.alloc(8)]), "gzip", 400, "invalid_request"],
+      [oversizedDecoded, "gzip", 413, "payload_too_large"],
+      [Buffer.alloc(AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES + 1, 0x41), "gzip", 413, "payload_too_large"],
+    ];
+    for (const [payload, encoding, status, error] of rejected) {
+      assert.deepEqual(await send(payload, encoding), { status, error }, encoding);
+    }
+    assert.equal(app.calls.filter((call) => call === "speech:transcribe:object").length, admitted);
+  } finally {
+    await app.close();
+  }
+});
+
+test("hosts without speech do not advertise gzip speech requests", async () => {
+  const app = await fixture({ capabilities: ["server:read"], speechAvailable: false });
+  try {
+    const response = await fetch(`${app.base}/server`, {
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).features.includes("speech-request-gzip-v1"), false);
+  } finally {
+    await app.close();
+  }
+});
+
 test("speech transcription authenticates before buffering its larger request body", async () => {
   const app = await fixture({ capabilities: ["chat:write"] });
   try {
@@ -4251,7 +4323,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 33,
+      contractRevision: 34,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });

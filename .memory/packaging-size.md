@@ -43,6 +43,27 @@
   - The limit is 3,520,000 B raw and 1,075,000 B gzip.
   - At introduction the measured size was 3,407,897 B raw and 1,043,384 B gzip.
 
+## Packaged models.dev snapshot (2026-10-18)
+
+- The release refresh continues to write readable `resources/model-capabilities.json`.
+  Desktop package scripts run `npm run package:model-catalog` after the build; it
+  validates and minifies that snapshot into ignored
+  `build/package-resources/model-capabilities.json`. electron-builder maps the
+  generated file into the same `resources/model-capabilities.json` path inside
+  `app.asar`. This is an offline transform and does not change the manual-only
+  network policy or runtime lookup path. The macOS and Linux package verifier
+  requires valid, compact JSON at that path.
+- On the 2026-10-18 snapshot: source 9,109,569 B, compact 5,319,504 B, a
+  3,790,065 B (41.6%, 3.615 MiB) installed-payload saving. gzip level 6:
+  665,444 B to 538,680 B (126,764 B saved); Brotli quality 5: 336,133 B to
+  287,225 B (48,908 B saved). These are per-file compression probes, not
+  measured DMG/ZIP or updater download changes.
+- A macOS arm64 development package built after the FileSet change passed
+  afterSign verification and `npm run package:verify`. Its `app.asar` is
+  91,277,314 B, contains a 5,319,504 B catalog entry and zero `.map` entries;
+  the `.app` contains 499,075,535 B of regular-file payload. These are
+  current-package totals, not before/after installer measurements.
+
 ## Ogg/Opus decoder for on-device Telegram voice notes (2026-10-09, STT engine foundation Task 7)
 
 - Main bundles use `packages: "external"`, so every production dependency ships in app.asar as

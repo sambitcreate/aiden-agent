@@ -1375,8 +1375,20 @@ test("runtime metadata stays offline and only models.dev data is packaged", asyn
 
   const packageJson = JSON.parse(
     await readFile(new URL("../../package.json", import.meta.url), "utf8"),
-  ) as { build?: { files?: string[] }; scripts?: Record<string, string> };
-  assert.ok(packageJson.build?.files?.includes("resources/model-capabilities.json"));
+  ) as {
+    build?: { files?: Array<string | { from: string; to: string; filter: string[] }> };
+    scripts?: Record<string, string>;
+  };
+  assert.ok(
+    packageJson.build?.files?.some(
+      (entry) =>
+        typeof entry !== "string" &&
+        entry.from === "build/package-resources" &&
+        entry.to === "resources" &&
+        entry.filter.includes("model-capabilities.json"),
+    ),
+    "the packaged app should include the offline compact model snapshot",
+  );
   assert.equal(
     packageJson.build?.files?.includes("resources/artificial-analysis-models.json"),
     false,

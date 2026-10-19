@@ -142,7 +142,7 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 33);
+  assert.equal(fixture.contractRevision, 34);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -158,6 +158,7 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
   assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
   assert.equal(fixture.server.features.includes("chat-run-input-v1"), true);
+  assert.equal(fixture.server.features.includes("speech-request-gzip-v1"), true);
   assert.deepEqual(fixture.streamInput.request, { mode: "queue", text: "Also add a regression test." });
   assert.equal(fixture.streamInput.response.status, "admitted");
   assert.equal(fixture.streamInput.response.queue, "follow-up");
