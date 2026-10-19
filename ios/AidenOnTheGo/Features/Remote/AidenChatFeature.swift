@@ -6076,7 +6076,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     }
 }
 
-private struct AidenMessageView: View, Equatable {
+struct AidenMessageView: View, Equatable {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
@@ -8321,6 +8321,10 @@ private struct AidenVisualRowView: View {
         // Hold a typical landscape frame until the image reports its own shape.
         .aspectRatio(imageAspectRatio ?? 16 / 9, contentMode: .fit)
         .frame(maxWidth: visual.layout == .wide ? .infinity : 560, alignment: .leading)
+        // Claim the snapshot's own height. Left flexible, the message stack
+        // squeezes it to nothing when the reply also carries image attachments,
+        // leaving the space it should fill as a gap below them.
+        .fixedSize(horizontal: false, vertical: true)
         .clipShape(RoundedRectangle(cornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
