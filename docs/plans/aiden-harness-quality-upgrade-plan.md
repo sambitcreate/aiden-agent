@@ -1,6 +1,6 @@
 # Aiden harness quality and reliability upgrade
 
-Status: Planned (2026-10-18). Research and plan preparation are complete; implementation has not started. The user requested this plan and its commit after reviewing the sitrep. This document does not record implementation, live evaluation, or release acceptance as completed.
+Status: Active (2026-10-19). Implementation authorized, with fresh-context GPT-6.1 Sol/medium review after each phase. PR and exact-head CI required; do not merge. Live evaluation and release acceptance remain separate gates.
 
 ## Objective and Pi decision
 
@@ -57,7 +57,7 @@ Each row is a reviewable slice, not one large PR. H0 precedes implementation. In
 
 | Slice | Deliverable | Depends on | Status |
 | --- | --- | --- | --- |
-| H0 | Current-main baseline, ownership, and acceptance inventory | None | Planned |
+| H0 | Current-main baseline, ownership, and acceptance inventory | None | Complete; fresh review passed |
 | H1a | Bounded workspace metadata retention and indexing status | H0 | Planned |
 | H1b | Progress-aware attended Assistant recovery | H0 | Planned |
 | H1c | Discovery across admitted namespaces with bounded output | H0 | Planned |
@@ -212,10 +212,24 @@ Evaluate baseline/candidate with lifecycle/compaction replay, provider serializa
 - [x] Source audit, independent verification, and chat sitrep completed.
 - [x] Scope clarified: Aiden harness first; active Pi version fixed initially.
 - [x] Plan, index entry, and project-memory note prepared.
-- [ ] H0 baseline/ownership refreshed for implementation.
+- [x] H0 baseline/ownership refreshed for implementation.
 - [ ] H1 corrective slices implemented and accepted.
 - [ ] H2 evidence/evaluation pipeline implemented; separately scoped live pilot recorded.
 - [ ] H3 CLI durable Bot parity implemented and accepted.
 - [ ] H4 packaged baseline and justified rendering changes accepted.
 - [ ] H5 explicit workflow experiments implemented and accepted.
 - [ ] Applicable native, packaged, physical, and exact-head CI gates recorded; plan archived.
+
+## Implementation baseline — H0 (2026-10-19)
+
+Merged `origin/main` at `99df8a92a53a3bdd016a52f425729ab9eabc26a6`; integration commit `a9bb1876cd0c77aad166b1e252164585c760938d`. Platform: macOS arm64, Node v22.22.3. No packaged build or runtime feature configuration has been exercised yet. Active Pi pins remain 1.3.0 and the legacy alias remains 0.87.1.
+
+Lock SHA-256: root `fbe057e0e1313cb721a6b4827488a0de6108537b5c4638f77de745cb26d8aa5b`; standalone CLI `dec2029c818166ca04ecbbc4cc71cc4b76467ea8a36f5e70784eb85da08e5495`.
+
+Source recheck retains H1a (remaining-capacity admission), H1b (any-error counter), H1c (512 prefix), H1d (CLI unknown-usage no-op and minimal CI receipt), H2 (lifecycle completion is not acceptance), H3 (only bots/botFiles wired), and H4 (all loaded settled rows mounted). These are source findings; new packaged/live measurements are not claimed.
+
+Ownership: H1 owns focused corrections; the existing compaction plan retains its implemented checkpoint/recovery behavior and pending signed/operator acceptance. The CLI plan's original delivery remains historical; H3 owns only durable-session parity. H4 owns measured rendering, coordinating with the long-thread plan's rendering proposal; payload compression and journal coalescing already merged are preserved. The broader performance plan remains unaccepted. Cache-first loading retains ownership of transport/loading state. Diagnostics owns privacy policy, H1d only safe receipt detail. Peer/mobile reliability owns background wake authority, which remains unchanged. H2 extends the frozen six-task research without rewriting its manifest.
+
+Acceptance ledger: deterministic local checks, lifecycle replay, protected task quality, live pilot, packaged performance, native/physical acceptance, and exact-head CI are tracked separately. Live pilot provider/model and cumulative spend are awaiting user configuration; independent implementation proceeds.
+
+H0 focused validation on the merged checkout: Assistant guard, discovery and advisor runtime suites: 36 pass; CI registry and required checks: 23 pass. Memory is being changed in H1a and its post-change acceptance is recorded separately. CLI capability/bundle and packaged/native baselines remain pending their slices; no current acceptance is inferred from historical counts. H0 review identified stale overlapping claims; dated reconciliation notes now exist in CLI and long-thread plans.
