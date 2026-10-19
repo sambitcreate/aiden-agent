@@ -4,7 +4,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 Last refreshed 2026-10-16 against `main` at `5661bae0` (0.57.0 plus later merges). "On main" means merged after 0.57.0 and not yet in a release.
 
-Research addition 2026-10-03 against `main` at `3f86d41af` (0.52.0): [all-PR inventory and improvement audit](aiden-pr-improvement-audit-20261003.md), [implemented Aiden knowledge/actions MVP (PR #312)](https://github.com/sambitcreate/aiden-agent/pull/312), and [json-render research and interactive chat controls specification](aiden-chat-controls-json-render-research.md). The implemented MVP includes desktop, iOS, Android and CLI TUI controls. This adds research and the bounded implementation; older release-status rows have not been globally reconciled. The Pi 1.0 stack (#299–#307) merged through PR #357 (Pi 1.0.3, 0.54.0), and main now pins Pi 1.2.0 (PR #471, 0.57.0); only the frozen legacy journal harness stays on 0.87.1.
+Research addition 2026-10-03 against `main` at `3f86d41af` (0.52.0): [all-PR inventory and improvement audit](aiden-pr-improvement-audit-20261003.md), [implemented Aiden knowledge/actions MVP (PR #312)](https://github.com/sambitcreate/aiden-agent/pull/312), and [json-render research and interactive chat controls specification](aiden-chat-controls-json-render-research.md). The implemented MVP includes desktop, iOS, Android and CLI TUI controls. This adds research and the bounded implementation; older release-status rows have not been globally reconciled. The Pi 1.0 stack (#299–#307) merged through PR #357 (Pi 1.0.3, 0.54.0), main pinned Pi 1.2.0 in 0.57.0 (PR #471) and now pins Pi 1.3.0 (PR #505); only the frozen legacy journal harness stays on 0.87.1.
 
 ## Active and partial
 
