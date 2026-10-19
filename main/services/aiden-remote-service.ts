@@ -490,6 +490,28 @@ export function createAidenRemoteBonjourPublisher(
     : new NodeAidenRemoteBonjourPublisher(log);
 }
 
+/**
+ * Shares one workspace API build per Remote instance across restarts of the
+ * listeners. A rejected build is forgotten, so the next start retries it
+ * instead of replaying a transient or since-repaired failure.
+ */
+export function memoizeAidenRemoteWorkspaceApi<Api>(): (
+  instanceId: string,
+  build: () => Promise<Api>,
+) => Promise<Api> {
+  let current: { instanceId: string; api: Promise<Api> } | undefined;
+  return (instanceId, build) => {
+    if (!current || current.instanceId !== instanceId) {
+      const entry = { instanceId, api: build() };
+      current = entry;
+      entry.api.catch(() => {
+        if (current === entry) current = undefined;
+      });
+    }
+    return current.api;
+  };
+}
+
 export class AidenRemoteService {
   private lanServer: HttpsServer | null = null;
   private tailscaleServer: HttpServer | null = null;

@@ -87,6 +87,7 @@ const FORM_FILL_HELPER_BUNDLE_ID = "com.sambitcreate.aiden-agent.cua-s1-forms-he
 const FORM_FILL_HELPER_EXECUTABLE = "aiden-cua-s1-forms-helper";
 const WORKTREE_FILE_IO_EXECUTABLE = "aiden-worktree-file-io";
 const BOT_INBOX_WRITER_EXECUTABLE = "aiden-bot-inbox-writer";
+const LEASE_FLOCK_EXECUTABLE = "aiden-lease-flock";
 const SUBAGENT_RUN_STORE_EXECUTABLE = "aiden-subagent-run-store";
 const SUBAGENT_FILE_MUTATOR_EXECUTABLE = "aiden-subagent-file-mutator";
 const SUBAGENT_SHELL_RUNNER_EXECUTABLE = "aiden-subagent-shell-runner";
@@ -250,6 +251,9 @@ export async function verifyPackagedModelCatalogResources(appAsar) {
     throw new Error("Packaged models.dev capability snapshot is not valid JSON.");
   }
   validateModelsDevSnapshot(snapshot);
+  if (bytes.toString("utf8") !== JSON.stringify(snapshot)) {
+    throw new Error("Packaged models.dev capability snapshot must be compact JSON.");
+  }
 }
 
 export function assertPackagedSubagentInferenceWorkerEntries(entries) {
@@ -808,6 +812,7 @@ export async function verifyMacPackage(appPath) {
   const worktreeRemover = path.join(paths.app, "Contents", "Helpers", WORKTREE_REMOVER_EXECUTABLE);
   const worktreeFileIo = path.join(paths.app, "Contents", "Helpers", WORKTREE_FILE_IO_EXECUTABLE);
   const botInboxWriter = path.join(paths.app, "Contents", "Helpers", BOT_INBOX_WRITER_EXECUTABLE);
+  const leaseFlock = path.join(paths.app, "Contents", "Helpers", LEASE_FLOCK_EXECUTABLE);
   const subagentRunStore = path.join(
     paths.app,
     "Contents",
@@ -858,6 +863,7 @@ export async function verifyMacPackage(appPath) {
     worktreeRemover,
     worktreeFileIo,
     botInboxWriter,
+    leaseFlock,
     subagentRunStore,
     subagentFileMutator,
     subagentShellRunner,
@@ -883,6 +889,7 @@ export async function verifyMacPackage(appPath) {
   assertComputerUseExecutableMode((await lstat(worktreeRemover)).mode, worktreeRemover);
   assertComputerUseExecutableMode((await lstat(worktreeFileIo)).mode, worktreeFileIo);
   assertComputerUseExecutableMode((await lstat(botInboxWriter)).mode, botInboxWriter);
+  assertComputerUseExecutableMode((await lstat(leaseFlock)).mode, leaseFlock);
   assertComputerUseExecutableMode((await lstat(subagentRunStore)).mode, subagentRunStore);
   assertComputerUseExecutableMode((await lstat(subagentFileMutator)).mode, subagentFileMutator);
   assertComputerUseExecutableMode((await lstat(subagentShellRunner)).mode, subagentShellRunner);
@@ -969,6 +976,10 @@ export async function verifyMacPackage(appPath) {
     identifier: BOT_INBOX_WRITER_EXECUTABLE,
     teamId: AIDEN_SIGNING_TEAM_ID,
   });
+  await verifySignature(leaseFlock, {
+    identifier: LEASE_FLOCK_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
   await verifySignature(subagentRunStore, {
     identifier: SUBAGENT_RUN_STORE_EXECUTABLE,
     teamId: AIDEN_SIGNING_TEAM_ID,
@@ -1007,6 +1018,7 @@ export async function verifyMacPackage(appPath) {
         worktreeRemover,
         worktreeFileIo,
         botInboxWriter,
+        leaseFlock,
         subagentRunStore,
         subagentFileMutator,
         subagentShellRunner,
@@ -1028,6 +1040,7 @@ export async function verifyMacPackage(appPath) {
   await verifyUniversalMacOSHelper(worktreeRemover, "Managed worktree remover");
   await verifyUniversalMacOSHelper(worktreeFileIo, "Managed worktree file I/O");
   await verifyUniversalMacOSHelper(botInboxWriter, "Bot inbox writer");
+  await verifyUniversalMacOSHelper(leaseFlock, "Lease lock helper");
   await verifyUniversalMacOSHelper(subagentRunStore, "Private subagent run store");
   await verifyUniversalMacOSHelper(subagentFileMutator, "Subagent file mutator");
   await verifyUniversalMacOSHelper(subagentShellRunner, "Subagent shell runner");
@@ -1048,6 +1061,7 @@ export async function verifyMacPackage(appPath) {
   assertMinimalComputerUseEntitlements(await readEntitlements(worktreeRemover));
   assertMinimalComputerUseEntitlements(await readEntitlements(worktreeFileIo));
   assertMinimalComputerUseEntitlements(await readEntitlements(botInboxWriter));
+  assertMinimalComputerUseEntitlements(await readEntitlements(leaseFlock));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentRunStore));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentFileMutator));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentShellRunner));

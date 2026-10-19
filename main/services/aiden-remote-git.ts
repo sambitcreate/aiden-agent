@@ -1,10 +1,12 @@
 import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
+import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
   AidenOperationContractError,
+  AidenOperationNotExecutedError,
   assertRevision,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
@@ -30,6 +32,7 @@ const MAX_SNAPSHOTS = 4_096;
 const MAX_FILES = 4_000;
 const MAX_DIFF_CHARACTERS = 2_000_000;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
+const HIDDEN_CHANGES_REASON = "Some changed file names cannot be shown on this device. Commit them on the Mac.";
 
 type GitFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
 
@@ -64,6 +67,8 @@ interface SnapshotBase {
   workspaceId: string;
   expiresAt: number;
   files: Map<string, string>;
+  /** Some changed files could not be projected, so the device never saw them. */
+  omittedFiles: boolean;
 }
 
 type Snapshot = SnapshotBase & (
@@ -101,17 +106,19 @@ function operationId(): string {
   return `op_${randomBytes(24).toString("base64url")}`;
 }
 
-function safeDisplayPath(value: string): string {
-  if (
-    !value ||
-    value.length > 4_096 ||
-    path.isAbsolute(value) ||
-    value.split("/").some((part) => part === "..") ||
-    [...value].some((character) => {
+function isSafeDisplayPath(value: string): boolean {
+  return Boolean(value) &&
+    value.length <= 4_096 &&
+    !path.isAbsolute(value) &&
+    !value.split("/").some((part) => part === "..") &&
+    ![...value].some((character) => {
       const code = character.codePointAt(0) ?? 0;
       return code <= 0x1f || code === 0x7f;
-    })
-  ) {
+    });
+}
+
+function safeDisplayPath(value: string): string {
+  if (!isSafeDisplayPath(value)) {
     throw new AidenRemoteServiceError("workspace_unavailable", "A Git path could not be projected safely.", 409);
   }
   return value;
@@ -165,6 +172,9 @@ function requireConfirmation(record: Record<string, unknown>): void {
 
 function mapGitError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
+  if (error instanceof ManagedWorktreeProcessActiveError) {
+    throw new AidenRemoteServiceError("git_capability_denied", error.message, 409);
+  }
   if (error instanceof InsufficientDiskSpaceError || error instanceof WorktreeCapacityUnavailableError) {
     throw new AidenRemoteServiceError("git_capability_denied",
       error instanceof InsufficientDiskSpaceError
@@ -223,6 +233,7 @@ export class AidenRemoteGitService {
   private issueSnapshot(value: SnapshotInput, files: GitReviewFile[] = []): {
     snapshotId: string;
     projectedFiles: AidenRemoteGitFile[];
+    omittedFiles: boolean;
   } {
     this.prune();
     if (this.snapshots.size >= MAX_SNAPSHOTS) {
@@ -230,12 +241,16 @@ export class AidenRemoteGitService {
     }
     const snapshotId = `snap_${randomBytes(32).toString("base64url")}`;
     const mapped = new Map<string, string>();
-    const projectedFiles = files.slice(0, MAX_FILES).map((file) => {
+    // A name that cannot be projected (control characters, over-long) is
+    // omitted and gets no file handle, rather than failing the whole snapshot.
+    const projectable = files.filter((file) => isSafeDisplayPath(file.path));
+    const omittedFiles = projectable.length < files.length;
+    const projectedFiles = projectable.slice(0, MAX_FILES).map((file) => {
       const token = `file_${randomBytes(32).toString("base64url")}`;
       mapped.set(digest(token), file.path);
       return {
         id: token,
-        displayPath: safeDisplayPath(file.path),
+        displayPath: file.path,
         status: status(file.status),
         staged: file.staged,
         ...(file.additions === undefined ? {} : { additions: Math.max(0, file.additions) }),
@@ -246,8 +261,9 @@ export class AidenRemoteGitService {
       ...value,
       expiresAt: this.now() + SNAPSHOT_TTL_MS,
       files: mapped,
+      omittedFiles,
     } as Snapshot);
-    return { snapshotId, projectedFiles };
+    return { snapshotId, projectedFiles, omittedFiles };
   }
 
   private snapshot(
@@ -344,10 +360,12 @@ export class AidenRemoteGitService {
         operationId: operationId(),
         status: "snapshot",
         snapshotId: issued.snapshotId,
-        capability: {
-          allowed: review.commit.allowed,
-          ...(review.commit.reason ? { reason: safeString(review.commit.reason, 500) } : {}),
-        },
+        capability: !review.commit.allowed || !issued.omittedFiles
+          ? {
+              allowed: review.commit.allowed,
+              ...(review.commit.reason ? { reason: safeString(review.commit.reason, 500) } : {}),
+            }
+          : { allowed: false, reason: HIDDEN_CHANGES_REASON },
         result: {
           kind: "review",
           branch: safeString(review.branch ?? "HEAD", 500),
@@ -488,6 +506,7 @@ export class AidenRemoteGitService {
     if (snapshot.kind !== "review" || !snapshot.expectedSnapshot) {
       throw new AidenRemoteServiceError("git_capability_denied", "Commit is unavailable for this review.", 409);
     }
+    if (snapshot.omittedFiles) throw new AidenRemoteServiceError("git_capability_denied", HIDDEN_CHANGES_REASON, 409);
     return this.executeIdempotent(
       { deviceId, route: "POST /git/commit", resourceId: workspaceId, key },
       record,
@@ -776,7 +795,16 @@ export class AidenRemoteGitService {
               workspaceId,
             },
           };
-        } catch (error) { mapGitError(error); }
+        } catch (error) {
+          if (error instanceof ManagedWorktreeProcessActiveError) {
+            // The terminal drain refused before Git or workspace metadata changed.
+            // Forget this admission so the same key can retry after process exit.
+            throw new AidenOperationNotExecutedError(
+              new AidenRemoteServiceError("git_capability_denied", error.message, 409),
+            );
+          }
+          mapGitError(error);
+        }
       },
     );
   }

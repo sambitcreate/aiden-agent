@@ -7,7 +7,7 @@ import java.net.URI
 
 /**
  * One message the visual viewer page sends through `window.AidenVisualBridge.postMessage`
- * (contract revision 34). The set is closed: anything else is ignored.
+ * (contract revision 35). The set is closed: anything else is ignored.
  */
 sealed interface AidenVisualBridgeMessage {
     /** The visual has drawn; the loading indicator can go. */

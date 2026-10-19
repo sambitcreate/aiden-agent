@@ -1,6 +1,6 @@
 # Cua driver 0.34.1 upgrade
 
-Status: implemented on branch `feature/computer-use-engine-update-83d93d` (2026-10-09); `npm run test:computer-use` green (416 TS, 41 native). Owner-only packaged TCC acceptance pending.
+Status: merged in PR #431 (2026-10-09) and shipped in 0.56.0; `npm run test:computer-use` green (416 TS, 41 native). Owner-only packaged TCC acceptance pending.
 
 Moves Aiden's macOS Computer Use engine from the pinned `cua-driver-rs-v0.8.3` to `cua-driver-rs-v0.34.1` (published 2026-10-09, still flagged pre-release upstream like every cua-driver-rs release). The integration architecture in [`docs/computer-use-integration.md`](../computer-use-integration.md) is unchanged: one Hermes-shaped `computer_use` tool, the authenticated Rust broker/bridge, the embedded stdio MCP driver, and reviewed exact pins. Aiden is pre-1.0, so the adapter moves to the 0.34 contract outright with no 0.8.3 compatibility path.
 

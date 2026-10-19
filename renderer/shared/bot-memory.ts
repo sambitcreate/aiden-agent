@@ -5,9 +5,11 @@ export type BotMemoryTarget = "memory" | "user";
 /**
  * `maxEntries` is per store and matches the Remote/native contract
  * (`AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES`), so every view a host can
- * load is one a phone can show.
+ * load is one a phone can show. The character budgets are twice Hermes
+ * Agent's defaults; each view carries its own `limitChars`, so phones follow
+ * whatever the host sets.
  */
-export const BOT_MEMORY_LIMITS = { memoryChars: 2_200, userChars: 1_375, entryChars: 500, maxEntries: 64 } as const;
+export const BOT_MEMORY_LIMITS = { memoryChars: 4_400, userChars: 2_750, entryChars: 500, maxEntries: 64 } as const;
 export const BOT_MEMORY_ENTRY_DELIMITER = "\n§\n";
 /** Conversation entry written by background review / compaction flush. */
 export const BOT_MEMORY_REVIEW_ENTRY_KIND = "aiden.memory-review";

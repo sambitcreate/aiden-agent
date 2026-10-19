@@ -1,9 +1,13 @@
 import Bonjour from "bonjour-service";
 import { app, ipcMain } from "../platform.js";
-import { createSystemTailscaleCommandRunner } from "./aiden-remote-tailscale.js";
 import { getAidenRemoteRuntime } from "./aiden-remote-service-main.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { createPeerBootstrapTransport } from "./peer-bootstrap-transport.js";
-import { PeerDiscovery, type PeerBonjourBrowse } from "./peer-discovery.js";
+import {
+  PeerDiscovery,
+  createPeerDiscoveryTailscaleRunner,
+  type PeerBonjourBrowse,
+} from "./peer-discovery.js";
 import { getPeerHostRegistry } from "./peer-host-service-main.js";
 
 let discovery: PeerDiscovery | undefined;
@@ -27,7 +31,7 @@ export function getPeerDiscovery(): PeerDiscovery {
   if (discovery) return discovery;
   const registry = getPeerHostRegistry();
   const current = new PeerDiscovery({
-    tailscale: () => createSystemTailscaleCommandRunner(),
+    tailscale: () => createPeerDiscoveryTailscaleRunner(),
     bootstrap: createPeerBootstrapTransport,
     browse: browseBonjour,
     localInstanceId: async () =>
@@ -38,6 +42,15 @@ export function getPeerDiscovery(): PeerDiscovery {
     // Unreadable storage only means no address is kept.
     lanAddress: (id, address, spki) =>
       void registry.rememberLanAddress(id, address, spki).catch(() => undefined),
+    tailscaleUnavailable: (category) => {
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "remote",
+        event: "tailscale-status-read-unavailable",
+        outcome: "unavailable",
+        fields: { tailscalePhase: "node", failureCategory: category, attempts: 1 },
+      });
+    },
   });
   discovery = current;
   app.once("before-quit", () => current.stop(false));

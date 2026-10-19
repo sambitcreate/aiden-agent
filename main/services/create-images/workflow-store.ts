@@ -99,23 +99,26 @@ export class ImageWorkflowStore {
       .filter((name) => name.endsWith(".json"))
       .map((name) => name.slice(0, -".json".length))
       .filter((id) => IMAGE_WORKFLOW_ID_PATTERN.test(id));
-    const cached = await this.readIndex();
-    const matches =
-      cached !== null &&
-      cached.length === ids.length &&
-      cached.every((entry) => ids.includes(entry.id));
-    if (matches) {
-      this.index = new Map(cached.map((entry) => [entry.id, entry]));
-      return;
-    }
-    // Rebuilding indexes every well-formed document, graph-invalid ones included,
-    // so a broken workflow stays visible and deletable; opening it is what is refused.
+    // The summaries always come from the documents: a cached index.json can be
+    // stale when its write failed after a document landed, and the file names
+    // alone cannot tell. Every well-formed document is indexed, graph-invalid
+    // ones included, so a broken workflow stays visible and deletable; opening
+    // it is what is refused.
     this.index = new Map();
     for (const id of ids) {
       const doc = await this.readDocument(id);
       if (doc) this.index.set(id, summary(doc));
     }
-    await this.writeIndex();
+    const cached = await this.readIndex();
+    const current = this.list();
+    const matches =
+      cached !== null &&
+      cached.length === current.length &&
+      cached.every((entry) => {
+        const fresh = this.index.get(entry.id);
+        return fresh !== undefined && fresh.title === entry.title && fresh.revision === entry.revision && fresh.updatedAt === entry.updatedAt;
+      });
+    if (!matches) await this.writeIndex();
   }
 
   list(): WorkflowSummary[] {
@@ -279,7 +282,17 @@ export class ImageWorkflowStore {
 
   /** The document write is the commit point; the index is only a cache of it. */
   private async publish(doc: WorkflowDocV1): Promise<void> {
-    await this.writeJson(this.file(doc.id), doc, JSON_FILE);
+    try {
+      await this.writeJson(this.file(doc.id), doc, JSON_FILE);
+    } catch (error) {
+      // The atomic write can fail after the document was renamed into place
+      // (the directory flush). The document then exists and is what readers
+      // see, so it counts as committed: dropping it from the index (or its
+      // holds) would desync the library from the files.
+      const stored = await this.readDocument(doc.id);
+      if (stored === null || stored.revision !== doc.revision || stored.updatedAt !== doc.updatedAt) throw error;
+      this.reportIssue(`Workflow ${doc.id} was written but could not be flushed to disk.`, error);
+    }
     this.index.set(doc.id, summary(doc));
     await this.writeIndex();
   }

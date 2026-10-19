@@ -24,7 +24,7 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE } from "./profile-lock.js";
+import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE, BOT_PROFILE_GUARD_FILE } from "./profile-lock.js";
 
 export const BOT_SESSION_FILE = "session.sqlite";
 export const DEFAULT_BOT_IDLE_CLOSE_MS = 600_000;
@@ -184,12 +184,23 @@ export async function createBotHarnessHost(
   const ctx: Context = BACKGROUND_CONTEXT;
   const idleCloseMs = opts.idleCloseMs ?? DEFAULT_BOT_IDLE_CLOSE_MS;
   const now = opts.now ?? Date.now;
-  const opening = new Map<string, Promise<OpenEntry>>();
   const open = new Map<string, OpenEntry>();
+  /** Keep failed teardowns out of the reusable-entry path. */
+  const closing = new Set<string>();
   const deleted = new Set<string>();
   /** Per-Bot serialization of open/close/destroy. */
   const lifecycle = new Map<string, Promise<unknown>>();
+  const admittedOperations = new Set<Promise<unknown>>();
   let shutDown = false;
+  let shutdownPromise: Promise<void> | null = null;
+
+  function admit<T>(action: () => Promise<T>): Promise<T> {
+    if (shutDown) return Promise.reject(new BotHarnessHostClosedError());
+    const operation = action();
+    admittedOperations.add(operation);
+    void operation.finally(() => admittedOperations.delete(operation)).catch(() => undefined);
+    return operation;
+  }
 
   const botDir = (botId: string) => path.join(botsDir, botDirectoryName(botId));
   const sessionFile = (botId: string) => path.join(botDir(botId), BOT_SESSION_FILE);
@@ -248,12 +259,13 @@ export async function createBotHarnessHost(
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
-      void closeIfIdle(botId, entry);
+      void admit(() => closeIfIdle(botId, entry)).catch(() => undefined);
     }, idleCloseMs);
     entry.idleTimer.unref?.();
   }
 
   async function closeIfIdle(botId: string, entry: OpenEntry): Promise<void> {
+    if (shutDown) return;
     if (open.get(botId) !== entry) return;
     try {
       const inspection = await entry.harness.inspect(ctx);
@@ -264,25 +276,26 @@ export async function createBotHarnessHost(
     } catch {
       // A harness that cannot be inspected is closed below.
     }
-    await host.close(botId).catch(() => undefined);
+    if (!shutDown) {
+      await serialize(botId, () => open.get(botId) === entry ? closeEntry(botId) : Promise.resolve()).catch(() => undefined);
+    }
   }
 
   async function ensureOpen(botId: string): Promise<OpenEntry> {
     assertBotId(botId);
     if (shutDown) throw new BotHarnessHostClosedError();
     if (deleted.has(botId)) throw new BotDeletedError(botId);
-    const existing = open.get(botId);
-    if (existing !== undefined) {
-      scheduleIdle(botId, existing);
-      return existing;
-    }
-    const pending = opening.get(botId);
-    if (pending !== undefined) return pending;
-    const promise = serialize(botId, async () => {
+    return serialize(botId, async () => {
       if (shutDown) throw new BotHarnessHostClosedError();
       if (deleted.has(botId)) throw new BotDeletedError(botId);
       const already = open.get(botId);
-      if (already !== undefined) return already;
+      if (already !== undefined) {
+        if (closing.has(botId)) await closeEntry(botId);
+        else {
+          scheduleIdle(botId, already);
+          return already;
+        }
+      }
       await fs.mkdir(botDir(botId), { recursive: true, mode: 0o700 });
       let opened: { harness: Harness; conversation: Conversation };
       let notice: string | undefined;
@@ -295,6 +308,7 @@ export async function createBotHarnessHost(
       }
       const entry: OpenEntry = { ...opened, idleTimer: null, ...(notice === undefined ? {} : { pendingNotice: notice }) };
       open.set(botId, entry);
+      closing.delete(botId);
       scheduleIdle(botId, entry);
       // pi-durable 1.2 closes a Session for good when any Storage call fails;
       // drop it so the next open reopens and recovers from what was committed.
@@ -306,20 +320,19 @@ export async function createBotHarnessHost(
       });
       return entry;
     });
-    opening.set(botId, promise);
-    try {
-      return await promise;
-    } finally {
-      if (opening.get(botId) === promise) opening.delete(botId);
-    }
   }
 
   async function closeEntry(botId: string): Promise<void> {
     const entry = open.get(botId);
-    if (entry === undefined) return;
-    open.delete(botId);
+    if (entry === undefined) {
+      closing.delete(botId);
+      return;
+    }
+    closing.add(botId);
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
     await entry.harness.close(ctx);
+    if (open.get(botId) === entry) open.delete(botId);
+    closing.delete(botId);
   }
 
   async function listBotDirectories(): Promise<string[]> {
@@ -332,7 +345,7 @@ export async function createBotHarnessHost(
     }
     const result: string[] = [];
     for (const name of names) {
-      if (name === BOT_PROFILE_LOCK_FILE || name.startsWith(".")) continue;
+      if (name === BOT_PROFILE_LOCK_FILE || name === BOT_PROFILE_GUARD_FILE || name.startsWith(".")) continue;
       const stat = await fs.lstat(path.join(botsDir, name)).catch(() => null);
       if (stat?.isDirectory()) result.push(name);
     }
@@ -340,7 +353,7 @@ export async function createBotHarnessHost(
   }
 
   const host: BotHarnessHost = {
-    async open(botId) {
+    open(botId) { return admit(async () => {
       const entry = await ensureOpen(botId);
       const notice = entry.pendingNotice;
       delete entry.pendingNotice;
@@ -349,19 +362,20 @@ export async function createBotHarnessHost(
         conversation: entry.conversation,
         ...(notice === undefined ? {} : { recoveredCorruptFile: notice }),
       };
-    },
+    }); },
 
     touch(botId) {
+      if (shutDown) throw new BotHarnessHostClosedError();
       const entry = open.get(botId);
       if (entry !== undefined) scheduleIdle(botId, entry);
     },
 
-    async inspect(botId) {
+    inspect(botId) { return admit(async () => {
       const entry = await ensureOpen(botId);
       return entry.harness.inspect(ctx);
-    },
+    }); },
 
-    async interruptedBots() {
+    interruptedBots() { return admit(async () => {
       const result: BotInterruption[] = [];
       for (const name of await listBotDirectories()) {
         const botId = botIdFromDirectoryName(name);
@@ -378,21 +392,19 @@ export async function createBotHarnessHost(
           result.push({ botId, submissionId: String(unfinished.id) });
         } else if (inspection.tasks.length === 0 && inspection.submissions.length === 0) {
           // Nothing to recover: do not keep this Bot's database open.
-          await host.close(botId);
+          await serialize(botId, () => closeEntry(botId));
         }
       }
       return result;
-    },
+    }); },
 
     close(botId) {
-      return serialize(botId, () => closeEntry(botId));
+      return admit(() => serialize(botId, () => closeEntry(botId)));
     },
 
-    async destroy(botId) {
+    destroy(botId) { return admit(async () => {
       assertBotId(botId);
       deleted.add(botId);
-      const pending = opening.get(botId);
-      if (pending !== undefined) await pending.catch(() => undefined);
       await serialize(botId, async () => {
         const entry = open.get(botId);
         if (entry !== undefined) {
@@ -411,9 +423,9 @@ export async function createBotHarnessHost(
         }
         await fs.rm(botDir(botId), { recursive: true, force: true });
       });
-    },
+    }); },
 
-    async sweepOrphans(knownBotIds) {
+    sweepOrphans(knownBotIds) { return admit(async () => {
       const removed: string[] = [];
       for (const name of await listBotDirectories()) {
         const botId = botIdFromDirectoryName(name);
@@ -425,18 +437,25 @@ export async function createBotHarnessHost(
         removed.push(name);
       }
       return removed;
-    },
+    }); },
 
     isOpen(botId) {
       return open.has(botId);
     },
 
     async shutdown() {
-      if (shutDown) return;
-      shutDown = true;
-      await Promise.allSettled([...opening.values()]);
-      await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
-      await lock.release();
+      if (shutdownPromise === null) {
+        shutDown = true;
+        shutdownPromise = (async () => {
+          await Promise.allSettled([...admittedOperations]);
+          const closes = await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
+          const failed = closes.find((result): result is PromiseRejectedResult => result.status === "rejected");
+          if (failed) throw failed.reason;
+          await Promise.all([...lifecycle.values()]);
+          await lock.release();
+        })();
+      }
+      return shutdownPromise;
     },
   };
   return host;

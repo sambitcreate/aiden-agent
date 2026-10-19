@@ -13,8 +13,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { main, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createAidenInlineExtensions } from "./extensions/index.ts";
-import { desktopSkillInjectionPaths } from "./skill-paths.ts";
 import { dispatchCommand } from "./commands.ts";
+import { exitAfterFlush } from "./exit-after-flush.ts";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { migrateAidenMcpConfigOnce } from "./mcp.ts";
@@ -66,14 +66,6 @@ function tuiSettingsPaths(appDir: string): string[] {
 	return paths;
 }
 
-/**
- * Desktop-shared Agent Skills injection (see src/skill-paths.ts for the
- * priority/dedup rules that keep pi's native discovery conflict-free).
- */
-function desktopSkillPaths(): string[] {
-	return desktopSkillInjectionPaths(homedir(), process.cwd());
-}
-
 export async function runCli(argv: string[], appDir: string): Promise<void> {
 	try {
 		migrateCliAzureConfig(getAgentDir());
@@ -88,16 +80,13 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 			await main(["mcp", ...argv.slice(1)]);
 			return;
 		}
-		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) process.exit(0);
+		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(0);
 	} catch (error) {
-		console.error(error instanceof Error ? error.message : String(error)); process.exit(1);
+		console.error(error instanceof Error ? error.message : String(error)); await exitAfterFlush(1);
 	}
 	if (argv.includes("--help")) process.stdout.write(CLI_COMMAND_HELP + "\n");
 	for (const themePath of bundledThemePaths(appDir)) {
 		argv.push("--theme", themePath);
-	}
-	for (const skillPath of desktopSkillPaths()) {
-		argv.push("--skill", skillPath);
 	}
 	if (shouldDefaultToFullscreenTui(argv, tuiSettingsPaths(appDir))) {
 		argv.push("--tui-mode", "fullscreen");

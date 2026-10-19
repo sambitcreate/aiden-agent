@@ -45,6 +45,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPOutputStream
 import java.net.URLEncoder
 import javax.crypto.Cipher
 import javax.crypto.Mac
@@ -81,6 +82,7 @@ class AidenRemoteClient(
 
     private data class ConditionalResponse(val etag: String, val bytes: ByteArray)
     private val conditionalResponses = linkedMapOf<String, ConditionalResponse>()
+    @Volatile private var speechRequestGzipSupported = false
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -387,6 +389,7 @@ class AidenRemoteClient(
         path: String,
         method: String = "GET",
         bodyJson: String? = null,
+        bodyBytes: ByteArray? = null,
         idempotencyKey: UUID? = null,
         ifMatchRevision: String? = null,
         headers: Map<String, String> = emptyMap(),
@@ -427,7 +430,8 @@ class AidenRemoteClient(
         }
 
         cached?.let { requestBuilder.header("If-None-Match", it.etag) }
-        val requestBody = bodyJson?.toRequestBody("application/json".toMediaType())
+        val requestBody = bodyBytes?.toRequestBody("application/json".toMediaType())
+            ?: bodyJson?.toRequestBody("application/json".toMediaType())
         when (method.uppercase()) {
             "GET" -> requestBuilder.get()
             "POST" -> requestBuilder.post(requestBody ?: ByteArray(0).toRequestBody("application/json".toMediaType()))
@@ -507,6 +511,7 @@ class AidenRemoteClient(
         if (s.protocolVersion != AidenRemoteProtocol.VERSION) {
             throw AidenRemoteContractException.InvalidProtocolVersion
         }
+        speechRequestGzipSupported = s.features.contains(AidenRemoteProtocol.SPEECH_REQUEST_GZIP_FEATURE)
         s
     }
 
@@ -1029,7 +1034,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * The self-contained viewer page for one inline visual (contract revision 34,
+     * The self-contained viewer page for one inline visual (contract revision 35,
      * `chat-visual-viewer-v1`), drawn in [scheme] and the [theme] preset. The body
      * is `text/html; charset=utf-8`, at most [AidenVisualDocumentRequest.MAXIMUM_BYTES]
      * once OkHttp has transparently undone any gzip encoding.
@@ -2187,13 +2192,23 @@ class AidenRemoteClient(
     ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
 
     suspend fun transcribeSpeech(pcmBase64: String, modelId: String): AidenSpeechTranscription {
-        val body = withContext(Dispatchers.Default) {
-            json.encodeToString(AidenSpeechTranscriptionRequest(pcmBase64 = pcmBase64, modelId = modelId))
+        val (body, compressed) = withContext(Dispatchers.Default) {
+            val body = json.encodeToString(AidenSpeechTranscriptionRequest(pcmBase64 = pcmBase64, modelId = modelId))
+            val bodyBytes = body.toByteArray(Charsets.UTF_8)
+            val gzip = if (speechRequestGzipSupported) {
+                ByteArrayOutputStream().use { output ->
+                    GZIPOutputStream(output).use { it.write(bodyBytes) }
+                    output.toByteArray()
+                }
+            } else null
+            body to gzip?.takeIf { it.size < bodyBytes.size }
         }
         return executeRequest(
             "/speech/transcriptions",
             method = "POST",
-            bodyJson = body,
+            bodyJson = if (compressed == null) body else null,
+            bodyBytes = compressed,
+            headers = if (compressed != null) mapOf("Content-Encoding" to "gzip") else emptyMap(),
             requestTimeoutSeconds = 120
         ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
     }

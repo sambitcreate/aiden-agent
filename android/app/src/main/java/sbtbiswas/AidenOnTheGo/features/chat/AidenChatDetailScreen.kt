@@ -568,9 +568,12 @@ fun AidenChatDetailScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    // MainActivity uses adjustNothing, so this is the one IME owner.
-                    // Insets consumption contributes only the IME delta beyond the
-                    // navigation bar and keeps the whole composer above the keyboard.
+                    // MainActivity is edge-to-edge, so adjustResize only delivers IME
+                    // insets (Android 8-10 need it to report them at all) and never
+                    // resizes the window: this is the one IME owner. The padding follows
+                    // the live insets, so a return from another app with the keyboard
+                    // restored lifts the composer again. Insets consumption contributes
+                    // only the IME delta beyond the navigation bar.
                     .imePadding()
                     .aidenReadableWidth()
                     .zIndex(1f)
@@ -907,7 +910,7 @@ fun AidenChatDetailScreen(
         val onAskAboutMessage: ((String) -> Unit)? = if (viewModel.isReadOnlyPresentation) null else
             remember(viewModel) { { text: String -> viewModel.askAbout(text); Unit } }
         val onSelectMessageText = remember { { text: String -> selectTextFor = text } }
-        // Revision 34: a tapped snapshot opens the interactive viewer when the Mac serves it.
+        // Revision 35: a tapped snapshot opens the interactive viewer when the Mac serves it.
         val canOpenInteractiveVisuals = remember(serverInfo, viewModel) { viewModel.canOpenInteractiveVisuals }
         val openVisualViewer = remember { { request: AidenVisualViewerRequest -> visualViewerRequest = request } }
         val onOpenVisual: ((AidenVisualViewerRequest) -> Unit)? =
@@ -1648,7 +1651,7 @@ internal fun AidenVisualRow(
     loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     modifier: Modifier = Modifier,
-    /** Set when the Mac serves interactive visuals (revision 34); tapping the snapshot opens it. */
+    /** Set when the Mac serves interactive visuals (revision 35); tapping the snapshot opens it. */
     onOpenInteractive: ((AidenVisualViewerRequest) -> Unit)? = null
 ) {
     val display = remember(visual, attachments) { aidenVisualDisplay(visual, attachments) }

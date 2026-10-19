@@ -260,7 +260,7 @@ internal object AidenVisualSnapshotFrame {
 /**
  * A visual's snapshot, described by the visual's [title] rather than the
  * attachment's file name. Tapping opens the same full-screen viewer as photos,
- * or, when the Mac serves interactive visuals ([onOpenInteractive], revision 34),
+ * or, when the Mac serves interactive visuals ([onOpenInteractive], revision 35),
  * the interactive viewer; the image viewer then stays one accessibility action away.
  */
 @Composable

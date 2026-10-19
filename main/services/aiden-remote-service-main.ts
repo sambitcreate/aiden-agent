@@ -32,6 +32,7 @@ import {
 import {
   AidenRemoteService,
   createAidenRemoteBonjourPublisher,
+  memoizeAidenRemoteWorkspaceApi,
   type AidenRemoteServiceLogEntry,
 } from "./aiden-remote-service.js";
 import {
@@ -58,9 +59,9 @@ import { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import {
   AidenIdempotencyLedger,
-  MAX_DURABLE_LEDGER_SNAPSHOT_BYTES,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
+import { aidenRemoteOperationStoreOptions, openAidenRemoteOperationLedger } from "./aiden-remote-operation-store.js";
 import {
   AidenRemoteChatService,
   type AidenRemoteRetainedBotChatAuthorizationRequest,
@@ -68,7 +69,7 @@ import {
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
-  MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES,
+  aidenRemoteStreamStoreOptions,
   normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
   type AidenRemotePendingApproval,
@@ -208,19 +209,6 @@ async function computerDisplayName(): Promise<string> {
     return stdout;
   } catch {
     return os.hostname();
-  }
-}
-
-function normalizeIdempotency(value: unknown): AidenIdempotencySnapshot {
-  return new AidenIdempotencyLedger(value as AidenIdempotencySnapshot).snapshot();
-}
-
-function safeIdempotency(value: unknown): boolean {
-  try {
-    normalizeIdempotency(value);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -371,36 +359,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     OPERATIONS_FILE,
     new AidenIdempotencyLedger().snapshot(),
     () => userData,
-    {
-      maxBytes: MAX_DURABLE_LEDGER_SNAPSHOT_BYTES,
-      fileMode: 0o600,
-      normalize: normalizeIdempotency,
-      isSafe: safeIdempotency,
-      rejectCorruptWrite: true,
-      rejectUnsafeWrite: true,
-    },
+    aidenRemoteOperationStoreOptions(),
   );
   const streamStore = new DataStore<AidenRemoteStreamSnapshot>(
     STREAMS_FILE,
     { version: 1, streams: [] },
     () => userData,
-    {
-      // The journal budgets its compact JSON; allow the trailing newline.
-      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES + 1,
-      fileMode: 0o600,
-      compact: true,
-      normalize: normalizeAidenRemoteStreamSnapshot,
-      isSafe: (value) => {
-        try {
-          normalizeAidenRemoteStreamSnapshot(value);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      rejectCorruptWrite: true,
-      rejectUnsafeWrite: true,
-    },
+    aidenRemoteStreamStoreOptions(),
   );
   const tailscale = new AidenRemoteTailscaleController(
     await createSystemTailscaleCommandRunner(),
@@ -427,30 +392,27 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       },
     },
   );
-  let workspaceApi:
-    | Promise<{
-        instanceId: string;
-        workspaces: AidenRemoteWorkspaceService;
-        workspaceBrowser: AidenRemoteWorkspaceBrowserService;
-        chats: AidenRemoteChatService;
-        chatProgress: AidenRemoteChatProgressService;
-        models: AidenRemoteModelService;
-        streams: AidenRemoteStreamService;
-        files: AidenRemoteFileService;
-        botFiles?: AidenRemoteBotFileService;
-        git: AidenRemoteGitService;
-        schedules: AidenRemoteScheduleService;
-        appControls: typeof remoteAppControls;
-        providers: AidenRemoteProviderService;
-        memorySettings: AidenRemoteMemorySettingsService;
-        usage: typeof usageStore;
-        speech: AidenRemoteSpeechService;
-        readAloud: AidenRemoteTtsService;
-        bots?: AidenRemoteBotService;
-        botSessions?: AidenRemoteBotSessionService;
-      }>
-    | undefined;
-  let workspaceApiInstanceId: string | undefined;
+  const workspaceApis = memoizeAidenRemoteWorkspaceApi<{
+    instanceId: string;
+    workspaces: AidenRemoteWorkspaceService;
+    workspaceBrowser: AidenRemoteWorkspaceBrowserService;
+    chats: AidenRemoteChatService;
+    chatProgress: AidenRemoteChatProgressService;
+    models: AidenRemoteModelService;
+    streams: AidenRemoteStreamService;
+    files: AidenRemoteFileService;
+    botFiles?: AidenRemoteBotFileService;
+    git: AidenRemoteGitService;
+    schedules: AidenRemoteScheduleService;
+    appControls: typeof remoteAppControls;
+    providers: AidenRemoteProviderService;
+    memorySettings: AidenRemoteMemorySettingsService;
+    usage: typeof usageStore;
+    speech: AidenRemoteSpeechService;
+    readAloud: AidenRemoteTtsService;
+    bots?: AidenRemoteBotService;
+    botSessions?: AidenRemoteBotSessionService;
+  }>();
   let activeReadAloud: AidenRemoteTtsService | undefined;
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
@@ -497,13 +459,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     simulators: simulatorShareRelay,
     hostPlatform: aidenRemoteHostPlatform(process.platform),
     workspaceApi: async (instanceId) => {
-      if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
-        workspaceApiInstanceId = instanceId;
-        workspaceApi = (async () => {
-          const idempotency = new AidenIdempotencyLedger(
-            await operationStore.load(),
-          );
-          await operationStore.save(idempotency.snapshot());
+      // A failed build is retried by the next start rather than replayed.
+      const api = await workspaceApis(
+        instanceId,
+        async () => {
+          const idempotency = await openAidenRemoteOperationLedger(operationStore);
           const workspaceBrowser = new AidenRemoteWorkspaceBrowserService({
             instanceId,
             state,
@@ -596,7 +556,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               : {}),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
-            // Revision 34: phones open visuals full screen when this build ships the viewer.
+            // Revision 35: phones open visuals full screen when this build ships the viewer.
             ...(visualViewerInstalled()
               ? {
                   visualViewer: {
@@ -1084,9 +1044,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
             }),
           };
-        })();
-      }
-      const api = await workspaceApi;
+        },
+      );
       api.readAloud.resume();
       return api;
     },

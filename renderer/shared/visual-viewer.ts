@@ -1,5 +1,5 @@
 /**
- * The phone visual viewer (Remote contract revision 34, `chat-visual-viewer-v1`).
+ * The phone visual viewer (Remote contract revision 35, `chat-visual-viewer-v1`).
  *
  * The Mac serves one self-contained HTML document per visual; iOS and Android
  * load it into a locked-down web view. The document carries its payload as

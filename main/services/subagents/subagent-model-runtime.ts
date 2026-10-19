@@ -12,6 +12,7 @@ import { resolveGenerationThinkingLevel } from "../generation-runtime.js";
 import { GOOGLE_PROVIDER_ID } from "../google-provider.js";
 import { isNonChatModel } from "../../../renderer/shared/model-eligibility.js";
 import type { AppSettings, Provider } from "../types.js";
+import { canDispatchSubagentModel } from "./eligibility.js";
 import {
   finalizeSubagentModel,
   planSubagentModel,
@@ -77,6 +78,7 @@ function eligibleProviderCandidate(
   provider: Pick<Provider, "id" | "label" | "models" | "defaultModel" | "modelMetadata">,
   modelId: string,
 ): SubagentModelCandidate | undefined {
+  if (!canDispatchSubagentModel(provider.id)) return undefined;
   const candidate = {
     providerId: provider.id,
     providerLabel: provider.label.trim() || provider.id,
@@ -193,6 +195,9 @@ export function createSubagentChildModelResolver<Runtime extends SubagentModelRu
       : undefined;
     const planned = planSubagentModel(input.policy, request, inherited);
     if (!planned.ok) throw new Error(planned.error);
+    if (!canDispatchSubagentModel(planned.value.candidate.providerId)) {
+      throw new Error("Subagents are not available for agent-backed providers.");
+    }
     const key = subagentModelKey(planned.value.candidate);
     if (inheritFrom && inherited && key === subagentModelKey(inherited)) {
       const facts = subagentModelRuntimeFacts(
@@ -218,6 +223,9 @@ export function createSubagentChildModelResolver<Runtime extends SubagentModelRu
     }
     const runtime = await pending;
     signal.throwIfAborted();
+    if (!canDispatchSubagentModel(runtime.provider.id)) {
+      throw new Error("Subagents are not available for agent-backed providers.");
+    }
     const facts =
       key === parentKey
         ? parentFacts

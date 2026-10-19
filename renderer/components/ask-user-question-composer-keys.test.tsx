@@ -132,3 +132,19 @@ test("closing a custom answer with Esc hands focus back to the options", async (
   fireEvent.keyDown(document.activeElement!, { key: "2" });
   assert.equal(screen.getByRole("button", { name: /Database B/u }).getAttribute("aria-pressed"), "true");
 });
+
+test("Enter that confirms an IME composition leaves the custom answer unsent", () => {
+  const { responses } = mount([question("Database")]);
+  fireEvent.click(screen.getByRole("button", { name: /Type your own answer/u }));
+  const textarea = screen.getByRole("textbox", { name: /Custom answer/u });
+  fireEvent.change(textarea, { target: { value: "にほんご" } });
+  // The IME's candidate confirmation arrives as Enter while still composing.
+  fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
+  assert.equal(responses.length, 0, "a composing Enter submitted the questionnaire");
+  assert.ok(screen.queryByRole("textbox", { name: /Custom answer/u }) !== null, "the custom answer stays open");
+
+  fireEvent.keyDown(textarea, { key: "Enter" });
+  assert.deepEqual(responses.map((response) => response.answers), [
+    [{ questionIndex: 0, kind: "custom", answer: "にほんご" }],
+  ]);
+});

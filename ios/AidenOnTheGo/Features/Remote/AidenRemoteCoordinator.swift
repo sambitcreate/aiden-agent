@@ -361,6 +361,7 @@ final class AidenRemoteCoordinator {
         connectionState = .connecting
         connectionIssue = nil
         presentedError = nil
+        await seedSavedWorkspaces(installationId: installation.id, generation: generation)
         do {
             guard let credential = try installationStore.credential(for: installation),
                   !credential.isEmpty else {
@@ -554,6 +555,7 @@ final class AidenRemoteCoordinator {
         }
         workspaces.removeAll { $0.id == workspace.id }
         updateIntentCatalog(for: installationId)
+        persistWorkspaces()
         do {
             try await client.removeWorkspace(id: workspace.id, revision: workspace.revision)
             guard isCurrentContext(installationId: installationId, generation: generation) else { return .stale }
@@ -612,6 +614,7 @@ final class AidenRemoteCoordinator {
         pendingManagedWorktreeDeletionKeys[scope] = key
         workspaces.removeAll { $0.id == workspace.id }
         updateIntentCatalog(for: activeInstanceId)
+        persistWorkspaces()
         do {
             _ = try await client.deleteManagedGitWorktree(
                 workspaceId: workspace.id,
@@ -960,6 +963,28 @@ final class AidenRemoteCoordinator {
         )
         workspaceSnapshotRevision &+= 1
         updateIntentCatalog(for: instanceId)
+        persistWorkspaces()
+    }
+
+    /// Shows the last saved workspace list while the connection comes up, so
+    /// Home can project saved Recents instead of an empty state. A live answer
+    /// that arrived first always wins.
+    private func seedSavedWorkspaces(installationId: String, generation: Int) async {
+        guard workspaces.isEmpty,
+              let saved = await chatCache.loadWorkspaces(instanceId: installationId),
+              isCurrentContext(installationId: installationId, generation: generation),
+              workspaces.isEmpty else { return }
+        // Not a live snapshot, so `workspaceSnapshotRevision` stays put and
+        // archive pruning waits for the Mac's own answer.
+        workspaces = saved
+    }
+
+    private func persistWorkspaces() {
+        guard let instanceId = activeInstanceId else { return }
+        let snapshot = workspaces
+        let writeToken = chatCache.reserveChatWrite()
+        let cache = chatCache
+        Task { await cache.saveWorkspaces(snapshot, instanceId: instanceId, writeToken: writeToken) }
     }
 
     private func isCurrentContext(installationId: String, generation: Int) -> Bool {
@@ -971,6 +996,7 @@ final class AidenRemoteCoordinator {
         workspaces.append(workspace)
         workspaces.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         updateIntentCatalog(for: activeInstanceId)
+        persistWorkspaces()
     }
 
     private func handleConnectionError(_ error: Error, installationId: String?) async {

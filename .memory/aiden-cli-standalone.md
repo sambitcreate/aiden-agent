@@ -1,7 +1,11 @@
 # Aiden CLI standalone (PR #121, target 0.50.0)
 
-- `packages/cli` is its own npm package. It is not included in the desktop
-  electron-builder `files` (`build/**` only), so desktop packaging is unaffected.
+## Lease ownership (issues #405 and #392, 2026-10-15)
+
+CLI `acquireLease` holds an OS `flock` on a permanent `<resource>.lease.lock` file until release. A short native helper locks a duplicate of the parent's descriptor, then exits; the parent keeps the lock through async work, and process death releases it. A raw read of the guard cannot cancel the lock. The former `<resource>.lock/owner.json` is diagnostic metadata, published and removed only under the guard; malformed values including JSON `null` are stale. Serve recovery, including foreground startup, and stop cleanup acquire that same guard, recheck the owner, and remove stale metadata and socket only while holding it. New metadata carries `protocol: "flock-v1"`, so a recycled live PID cannot wedge recovery after the guard is free; legacy live metadata remains protected unless its PID is verifiably foreign. The daemon child removes a stale socket after it acquires the serve lease. Never unlink, rename, or copy over guard files. Stop older CLI processes and daemons before upgrading a shared agent directory; mixed-version writers do not share this protocol.
+
+- `packages/cli` is its own npm package. The shared lease helper is copied into
+  `dist/app/native/` for CLI bundles and `Helpers/` by desktop electron-builder.
 - Several desktop services are split into portable `*-core.ts` modules
   (schedule-store, subagent-supervisor, vision-analysis-tool, local-speech-downloads,
   aiden-remote-speech, subagent-mcp-mutation-host). When main changes one of
@@ -36,6 +40,7 @@
 - The native shell runner passes `-f` only to zsh (macOS). On Linux `/bin/sh -f` is noglob; a glob regression test in subagent-shell-runner-io.test.ts covers this.
 - Merging #71 (Linux desktop) took main's native C ports and `native-c-build-core.mjs` build scripts. The PR's OpenSSL/renameat2 shims were dropped because `native/shared/aiden-platform.h` carries its own SHA-256. `nativeHelperSourceHash` now also hashes `native/shared/*.h`, so a shared-header edit marks prebuilts stale. The PR's speech core carries main's "desktop" wording.
 - Merging #246 (root pi 0.87.1) bumped the CLI to `@earendil-works/pi-coding-agent` 0.87.1 and added a direct `@earendil-works/chord` 0.87.1 dependency. btw wraps its context in `normalizeContext`, and the child beforeTool context drops `systemPrompt`. The re-vendored advisor uses `normalizeContext`. The build's external check falls back to ESM resolution for chord's import-only subpaths and allowlists the optional `kerberos`. Session import accepts both `v: 4` (storage v1) and `version: 4` (0.84.4) journal headers.
+- Since #471 (Pi 1.2.0), the CLI pins pi-coding-agent, pi-ai, pi-agent-core, pi-codemode and pi-mcp at exactly 1.2.0 and no longer depends on chord directly.
 - Merging #251 (main's Remote contract revision 14) renumbered this PR's `GET /scheduled-tasks/notifications` addition to contract revision 15. The shared fixture and the Android copy are byte-identical at 15. The TS, iOS and Android fixture assertions expect 15, and the iOS fixture CodingKeys keep both main's streamInput/question/chatSkills and this PR's scheduleRunNotification.
 
 - 2026-09-27 review: plan index now describes Phase 6 as implemented; physical iPhone acceptance remains pending.

@@ -28,7 +28,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
-/** `GET /chats/{chatId}/visuals/{visualId}/document` and its feature gate (contract revision 34). */
+/** `GET /chats/{chatId}/visuals/{visualId}/document` and its feature gate (contract revision 35). */
 class AidenVisualDocumentClientTest {
     private lateinit var server: MockWebServer
     private lateinit var client: AidenRemoteClient

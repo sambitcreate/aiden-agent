@@ -2,7 +2,20 @@ import { isIP } from "node:net";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
 
 export interface AidenTailscaleHandler { Proxy: string }
-export interface AidenTailscaleStatus { TCP?: Record<string, { HTTPS?: boolean }>; Web?: Record<string, { Handlers?: Record<string, AidenTailscaleHandler>; Funnel?: boolean }> }
+export interface AidenTailscaleStatus {
+  TCP?: Record<string, { HTTPS?: boolean }>;
+  Web?: Record<string, { Handlers?: Record<string, AidenTailscaleHandler>; Funnel?: boolean }>;
+  /** Where Tailscale actually records public Funnel exposure, keyed by "host:port". */
+  AllowFunnel?: Record<string, boolean>;
+}
+
+/** Funnel exposes the HTTPS 443 listener publicly, by either way `serve status --json` reports it. */
+function funnelOn443(status: AidenTailscaleStatus): boolean {
+  return Object.entries(status.AllowFunnel ?? {}).some(([authority, allowed]) => {
+    const parsed = parseTailscaleAuthority(authority);
+    return allowed === true && parsed?.port === 443;
+  });
+}
 
 // The public Serve prefix is the canonical API base. Tailscale strips this
 // prefix before proxying to the loopback listener, while the client retains
@@ -78,7 +91,7 @@ function httpsEndpoint(status: AidenTailscaleStatus): { handlers: Record<string,
   if (entries.length > 1) throw new Error("tailscale_route_conflict");
   return {
     handlers: entries[0]?.[1].Handlers ?? {},
-    funnel: entries[0]?.[1].Funnel === true,
+    funnel: entries[0]?.[1].Funnel === true || funnelOn443(status),
   };
 }
 
@@ -179,7 +192,7 @@ export function classifyAidenTailscaleRoute(
   try {
     endpoint = httpsEndpoint(status);
   } catch {
-    if (canonicalListeners.some(([, listener]) => listener.Funnel === true)) {
+    if (canonicalListeners.some(([, listener]) => listener.Funnel === true) || funnelOn443(status)) {
       return { kind: "funnel_conflict" };
     }
     return { kind: "unrelated_conflict" };

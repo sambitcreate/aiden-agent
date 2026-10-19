@@ -1,7 +1,6 @@
 # Computer Use on request (remove the composer toggle)
 
-Status: implemented on `feature/remove-computer-use-button-48b6ae` (2026-10-12),
-PR pending. Revised after owner review and after the first code review (the
+Status: merged in PR #442 (2026-10-13) and shipped in 0.56.0. Revised after owner review and after the first code review (the
 "Review revisions" section at the end records what changed).
 
 ## Goal

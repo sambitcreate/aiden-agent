@@ -18,6 +18,7 @@ object AidenRemoteProtocol {
     const val MAX_CHAT_SUMMARY_PAGE_SIZE = 200
     const val MAX_CHAT_SUMMARY_CURSOR_LENGTH = 512
     const val CHAT_SUMMARIES_FEATURE = "chat-summaries-v1"
+    const val SPEECH_REQUEST_GZIP_FEATURE = "speech-request-gzip-v1"
     val CHAT_SUMMARY_REVISION_PATTERN = Regex("^rev_[A-Za-z0-9_-]{43}$")
     val CHAT_SUMMARY_CURSOR_PATTERN = Regex("^cur_[A-Za-z0-9_-]{1,384}\\.[A-Za-z0-9_-]{43}$")
     const val MAX_BOT_IDENTIFIER_LENGTH = 160
@@ -77,7 +78,7 @@ object AidenRemoteProtocol {
     /** Contract revision 32: assistant messages may carry native `appPanels`, read and
      * answered behind the `app-controls:read` and `app-controls:respond` grants. */
     const val CHAT_UI_PANELS_FEATURE = "chat-ui-panels-enabled-v1"
-    /** Contract revision 34: `GET /chats/{chatId}/visuals/{visualId}/document`, the
+    /** Contract revision 35: `GET /chats/{chatId}/visuals/{visualId}/document`, the
      * self-contained page a phone opens full screen when a visual's snapshot is tapped. */
     const val CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1"
     const val MAX_QUESTION_COUNT = 4

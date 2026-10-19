@@ -21,7 +21,7 @@ data class AidenVisualDocumentKey(
 
 /**
  * The last viewer document per [AidenVisualDocumentKey], shown when the Mac is
- * unreachable (contract revision 34, "Offline"). Plain JVM code over [directory]
+ * unreachable (contract revision 35, "Offline"). Plain JVM code over [directory]
  * (the app's caches directory in production). At most [maximumEntries] files and
  * [maximumTotalBytes] in all are kept; the least recently used go first. Reads
  * and writes mark a file used. Cache failures never block the live document.

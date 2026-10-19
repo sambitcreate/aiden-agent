@@ -7,10 +7,13 @@ import {
   type PeerBootstrapOptions,
   type PeerBootstrapRequest,
 } from "./peer-bootstrap-transport.js";
+import type { AidenTailscaleCommandRunner } from "./aiden-remote-tailscale.js";
 import {
   PEER_PROBE_CONCURRENCY,
   PEER_PROBE_TIMEOUT_MS,
+  PEER_TAILSCALE_STATUS_MAX_BYTES,
   PeerDiscovery,
+  createPeerDiscoveryTailscaleRunner,
   parseTailscalePeerNames,
   type PeerBonjourService,
   type PeerDiscoveryOptions,
@@ -78,10 +81,76 @@ test("only online desktop peers from tailscale status become candidates", () => 
   assert.deepEqual(parseTailscalePeerNames("not json"), []);
   assert.deepEqual(parseTailscalePeerNames(JSON.stringify({ Peer: [] })), []);
   assert.deepEqual(
-    parseTailscalePeerNames(" ".repeat(300 * 1_024)),
+    parseTailscalePeerNames(" ".repeat(PEER_TAILSCALE_STATUS_MAX_BYTES + 1)),
     [],
     "an oversized status is ignored rather than parsed",
   );
+});
+
+test("a busy tailnet's full status still yields its desktop candidates", () => {
+  const offline = Array.from({ length: 1_000 }, (_, index) => ({
+    DNSName: `laptop-${index}.tail0.ts.net.`,
+    OS: "macOS",
+    Online: false,
+    Tags: [`tag:${"x".repeat(400)}`],
+  }));
+  const serialized = tailscaleStatus([
+    ...offline,
+    { DNSName: "studio.tail0.ts.net.", OS: "macOS", Online: true },
+  ]);
+  assert.ok(Buffer.byteLength(serialized) > 256 * 1_024);
+  assert.deepEqual(parseTailscalePeerNames(serialized), ["studio.tail0.ts.net"]);
+});
+
+test("the discovery runner reads a peer inventory past the Serve status bound and stays bounded", async () => {
+  const runner = await createPeerDiscoveryTailscaleRunner({
+    resolveBinary: async () => process.execPath,
+    environment: {},
+  });
+  assert.ok(runner);
+  const write = (bytes: number) => ["-e", `process.stdout.write("x".repeat(${bytes}))`];
+  assert.equal((await runner.run(write(1_024 * 1_024))).length, 1_024 * 1_024);
+  await assert.rejects(
+    runner.run(write(PEER_TAILSCALE_STATUS_MAX_BYTES + 1)),
+    (error: NodeJS.ErrnoException) => error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+  );
+});
+
+test("an oversized or unreadable tailnet status is reported rather than silently empty", async () => {
+  const cases: [AidenTailscaleCommandRunner | null, string[]][] = [
+    [{
+      run: async () => {
+        throw Object.assign(new RangeError("stdout maxBuffer length exceeded"), {
+          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+          killed: true,
+        });
+      },
+    }, ["invalid-response"]],
+    [{ run: async () => " ".repeat(PEER_TAILSCALE_STATUS_MAX_BYTES + 1) }, ["invalid-response"]],
+    [{
+      run: async () => {
+        throw Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" });
+      },
+    }, ["timed-out"]],
+    // Tailscale is not installed: nothing to report.
+    [null, []],
+  ];
+  for (const [runner, expected] of cases) {
+    const seen = publications();
+    const reported: string[] = [];
+    const subject = discovery({
+      tailscale: async () => runner,
+      bootstrap: () => {
+        throw new Error("no probe expected");
+      },
+      publish: seen.publish,
+      tailscaleUnavailable: (category) => reported.push(category),
+    });
+    subject.start();
+    assert.deepEqual(await seen.until(settled), { scanning: false, devices: [] });
+    assert.deepEqual(reported, expected);
+    subject.stop();
+  }
 });
 
 test("a desktop reachable over Tailscale and the LAN is listed once, by Tailscale", async (t) => {

@@ -1132,7 +1132,7 @@ export class AidenRemoteChatService {
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
-       * Revision 34 (`chat-visual-viewer-v1`): builds the document a phone
+       * Revision 35 (`chat-visual-viewer-v1`): builds the document a phone
        * opens for one visual. Absent on hosts without the viewer bundle.
        */
       visualViewer?: {

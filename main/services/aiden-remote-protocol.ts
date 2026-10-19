@@ -45,8 +45,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * generation timeline may carry a display-only `questionnaire` recap of the
  * questions and what the owner chose; older clients ignore it.
  *
- * Contract revision 30 (provisional; re-claim the next revision after `main`'s
- * at merge): Bot chat activity on phones (`bot-activity-v1`, `bot:activity`).
+ * Contract revision 30: Bot chat activity on phones (`bot-activity-v1`, `bot:activity`).
  *
  * Contract revision 31: connection reliability. Desktop-only `peer-routes-v1`
  * route advertisements with route-specific trust, and the `android` pairing
@@ -58,17 +57,19 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * behind the `app-controls:read`/`app-controls:respond` progress capabilities,
  * the `app_controls_changed` progress event and the `builtin` skill source.
  *
- * Contract revision 33 (provisional; re-claim the next revision after `main`'s
- * at merge): Bot message attachments (`bot-attachments-v1`). Phones stage
+ * Contract revision 33: Bot message attachments (`bot-attachments-v1`). Phones stage
  * images and text files with `POST /bots/{botId}/attachments` and send them
  * with `attachmentIds` on `POST /bots/{botId}/messages`.
  *
- * Contract revision 34 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 34: `speech-request-gzip-v1` advertises support for one bounded gzip
+ * member on `POST /speech/transcriptions`; identity JSON remains supported.
+ *
+ * Contract revision 35 (provisional; re-claim the next revision after `main`'s
  * at merge): the phone visual viewer (`chat-visual-viewer-v1`).
  * `GET /chats/{chatId}/visuals/{visualId}/document` returns one self-contained
  * HTML document for a visual the chat projects, which phones open full screen.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 34 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 35 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -77,6 +78,7 @@ export const AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT = 100;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT = 200;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH = 512;
 export const AIDEN_REMOTE_CHAT_SUMMARY_FEATURE = "chat-summaries-v1" as const;
+export const AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE = "speech-request-gzip-v1" as const;
 /**
  * Server feature token for shared read markers (`POST /chats/{chatId}/read`).
  * Advertised only while the host wires a durable read-marker store; without it
@@ -377,7 +379,7 @@ export const AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1" as 
  */
 export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
 /**
- * Server feature token for the phone visual viewer (contract revision 34):
+ * Server feature token for the phone visual viewer (contract revision 35):
  * `GET /chats/{chatId}/visuals/{visualId}/document` serves any visual a
  * message projects as one self-contained HTML document. Announced only when
  * the host ships its viewer bundle; visual entries gain no new key.
@@ -5972,6 +5974,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_READ_STATE_FEATURE)) {
     throw new Error("Fixture server must advertise chat read state.");
+  }
+  if (contractRevision >= 34 && !serverFeatures.includes(AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE)) {
+    throw new Error("Fixture server must advertise gzip speech requests.");
   }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {

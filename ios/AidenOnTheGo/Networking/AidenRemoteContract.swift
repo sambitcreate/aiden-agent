@@ -5,9 +5,9 @@ enum AidenRemoteProtocol {
     static let basePath = "/api/aiden/v1"
     static let maxIdentifierLength = 128
     static let maxBotIdentifierLength = 160
-    /// Revision 34: visual ids are listed on messages with up to 256 scalars.
+    /// Revision 35: visual ids are listed on messages with up to 256 scalars.
     static let maxVisualIdentifierLength = 256
-    /// Revision 34: an uncompressed visual viewer document is at most 12 MiB.
+    /// Revision 35: an uncompressed visual viewer document is at most 12 MiB.
     static let maxVisualDocumentBytes = 12 * 1_048_576
     static let maxEndpointLength = 2_048
     static let maxEndpointPort = 65_535

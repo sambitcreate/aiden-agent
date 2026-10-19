@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import AidenOnTheGo
 
-/// Revision 34 (`chat-visual-viewer-v1`): the viewer's message channel, its
+/// Revision 35 (`chat-visual-viewer-v1`): the viewer's message channel, its
 /// navigation lock, the offline copy and the host feature gate.
 final class AidenVisualViewerTests: XCTestCase {
     private var root: URL!

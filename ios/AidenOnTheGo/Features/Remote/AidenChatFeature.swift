@@ -1215,6 +1215,7 @@ final class AidenChatViewModel {
                     replaceLiveText("")
                     reasoning = ""
                     tools = []
+                    activityTimeline = nil
                 }
             }
         }
@@ -1865,6 +1866,17 @@ final class AidenChatViewModel {
             isChatForegrounded: isAmbientSurfaceQuiet
         ) else { return }
         await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: state)
+    }
+
+    /// Loads once any earlier load has unwound. A newer load epoch cancels
+    /// the old task, but cancellation is cooperative, so a plain `load` would
+    /// see `isLoading` and drop the refresh the new epoch asked for.
+    func reload(observeProgress: Bool = true) async {
+        while isLoading {
+            try? await Task.sleep(for: .milliseconds(50))
+            if Task.isCancelled { return }
+        }
+        await load(observeProgress: observeProgress)
     }
 
     func load(observeProgress: Bool = true) async {
@@ -3328,7 +3340,7 @@ final class AidenChatViewModel {
         }
     }
 
-    // MARK: - Visual viewer (contract revision 34)
+    // MARK: - Visual viewer (contract revision 35)
 
     /// The paired Mac announces `chat-visual-viewer-v1`, so a visual opens
     /// full screen and interactive instead of in the image viewer.
@@ -5298,7 +5310,12 @@ struct AidenChatDetailView: View {
             // Loads on appear and after each return from the background. A
             // newer epoch cancels an older load still in flight.
             guard scenePhase != .background else { return }
-            await model.load(observeProgress: true)
+            await model.reload(observeProgress: true)
+        }
+        .onChange(of: coordinator?.connectionState) { old, new in
+            // A chat opened from its saved copy while connecting reloads once
+            // the Mac answers, so the transcript and read state reconcile.
+            if new == .connected, old != .connected { chatLoadEpoch &+= 1 }
         }
         .task(id: coordinator?.server?.serverTime) {
             guard scenePhase == .active else { return }
@@ -5939,7 +5956,7 @@ func aidenChatIsScrolledAwayFromLatest(
     return contentBottom - viewportBottom > threshold
 }
 
-private struct AidenChatJumpToLatestButton: View {
+struct AidenChatJumpToLatestButton: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
 
@@ -6041,7 +6058,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// Value snapshots for the fork summary card's actions.
     var canSettleForkSummary = false
     var isSettlingForkSummary = false
-    /// The Mac announces `chat-visual-viewer-v1` (revision 34).
+    /// The Mac announces `chat-visual-viewer-v1` (revision 35).
     var visualViewerAvailable = false
     /// Adds a follow-up confirmed in the visual viewer to the composer.
     var onVisualPrompt: ((String) -> Void)? = nil
@@ -6139,7 +6156,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     }
 }
 
-private struct AidenMessageView: View, Equatable {
+struct AidenMessageView: View, Equatable {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
@@ -6157,7 +6174,7 @@ private struct AidenMessageView: View, Equatable {
     var appControlsCache: AidenAppControlCache? = nil
     var loadAppControls: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)? = nil
     var applyAppControl: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)? = nil
-    /// Present while the Mac announces `chat-visual-viewer-v1` (revision 34).
+    /// Present while the Mac announces `chat-visual-viewer-v1` (revision 35).
     var loadVisualDocument: ((String, AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad)? = nil
     var onVisualPrompt: ((String) -> Void)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
@@ -8346,7 +8363,7 @@ private struct AidenTrailingFractionLayout: Layout {
 /// One inline visual in a committed reply: the Mac's snapshot image when the
 /// message carries it, then the visual's text description; the description
 /// alone without a snapshot; and the title alone when there is neither.
-/// When the Mac announces `chat-visual-viewer-v1` (revision 34), tapping the
+/// When the Mac announces `chat-visual-viewer-v1` (revision 35), tapping the
 /// snapshot opens the visual full screen and interactive; the image viewer
 /// stays one step away from there.
 private struct AidenVisualRowView: View {
@@ -8449,6 +8466,10 @@ private struct AidenVisualRowView: View {
         // Hold a typical landscape frame until the image reports its own shape.
         .aspectRatio(imageAspectRatio ?? 16 / 9, contentMode: .fit)
         .frame(maxWidth: visual.layout == .wide ? .infinity : 560, alignment: .leading)
+        // Claim the snapshot's own height. Left flexible, the message stack
+        // squeezes it to nothing when the reply also carries image attachments,
+        // leaving the space it should fill as a gap below them.
+        .fixedSize(horizontal: false, vertical: true)
         .clipShape(RoundedRectangle(cornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { openSnapshot(attachment) }
@@ -9744,7 +9765,7 @@ extension AidenChatViewModel {
         // The retained replay lands at once: text it holds before a tool,
         // approval or other structural state shows before that state.
         let carriesStructure = !projection.tools.isEmpty || !projection.reasoning.isEmpty
-            || projection.pendingApproval != nil || projection.pendingQuestion != nil
+            || projection.pendingApproval != nil || projection.pendingQuestion != nil || projection.timeline != nil
         publishForeignRun(context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
@@ -9767,6 +9788,12 @@ extension AidenChatViewModel {
         if flushingText { flushPendingStreamingContent() }
         reasoning = projection.reasoning
         tools = projection.tools
+        activityTimeline = projection.timeline
+        if let timeline = projection.timeline {
+            imageArrivalRevealGenerationIDs = AidenImageGenerationPlaceholderState.armedArrivalReveals(
+                imageArrivalRevealGenerationIDs, after: timeline
+            )
+        }
         if streamState != projection.state { streamState = projection.state }
         let approval = projection.pendingApproval.map { foreignPendingApproval($0, context: context) }
         if pendingApproval != approval { pendingApproval = approval }
@@ -9925,6 +9952,7 @@ extension AidenChatViewModel {
         replaceLiveText("")
         reasoning = ""
         tools = []
+        activityTimeline = nil
     }
 
     private func scheduleForeignRunReconciliation(context: AidenRemoteRequestContext) {

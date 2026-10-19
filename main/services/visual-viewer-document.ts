@@ -11,7 +11,7 @@ import { inlineGenerativeUiHostLibraries, wrapGenerativeUiHtml } from "./generat
 
 /**
  * Builds the self-contained document phones open for one visual (Remote
- * contract revision 34, `chat-visual-viewer-v1`). Electron-free: the viewer
+ * contract revision 35, `chat-visual-viewer-v1`). Electron-free: the viewer
  * bundle and host libraries are passed in.
  */
 

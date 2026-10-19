@@ -1179,7 +1179,7 @@ class AidenChatViewModel(
     }
 
     /**
-     * The Mac announced `chat-visual-viewer-v1` (revision 34), so a tapped visual
+     * The Mac announced `chat-visual-viewer-v1` (revision 35), so a tapped visual
      * snapshot opens the interactive viewer instead of the image viewer.
      */
     val canOpenInteractiveVisuals: Boolean
@@ -1194,7 +1194,7 @@ class AidenChatViewModel(
     val visualDocumentHostIdentity: String
         get() = "$instanceId\u001f$deviceId"
 
-    /** The viewer page for [visualId] from the bound Mac (revision 34). */
+    /** The viewer page for [visualId] from the bound Mac (revision 35). */
     suspend fun visualDocument(
         visualId: String,
         scheme: AidenVisualDocumentScheme,
@@ -2639,6 +2639,12 @@ class AidenChatViewModel(
         val capabilities = approvalCapabilities()
         _streamState.value = projection.state
         _tools.value = projection.tools
+        _activityTimeline.value = projection.timeline
+        projection.timeline?.let { timeline ->
+            _imageArrivalRevealGenerationIds.update {
+                AidenImageGenerationPlaceholderState.armedArrivalReveals(it, timeline)
+            }
+        }
         _pendingApproval.value = projection.pendingApproval?.let { approval ->
             val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
             val hasWrite = !isAutomation || capabilities.canWriteSchedules
@@ -2704,6 +2710,7 @@ class AidenChatViewModel(
         liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
+        _activityTimeline.value = null
     }
 
     private fun scheduleForeignRunReconciliation(client: AidenRemoteClient) {

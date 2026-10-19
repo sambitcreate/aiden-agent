@@ -110,7 +110,7 @@ private const val AIDEN_VISUAL_BRIDGE_NAME = "AidenVisualBridge"
 private const val READY_FALLBACK_MILLIS = 10_000L
 
 /**
- * A visual opened full screen (contract revision 34). The Mac's self-contained
+ * A visual opened full screen (contract revision 35). The Mac's self-contained
  * viewer page runs in a locked-down [WebView]: JavaScript on, no file, content,
  * storage, window or navigation access, and one message channel, which only ever
  * asks native to confirm a follow-up or a link. When the Mac cannot be reached the

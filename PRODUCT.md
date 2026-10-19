@@ -8,7 +8,7 @@ adaptive
 
 ## Users
 
-Aiden Agent is for people who work with code and local project files on a Mac and want an AI collaborator that can chat, inspect a chosen workspace, and take explicitly permitted actions. They may use hosted or local models and need to understand which workspace, model, and access level are active without leaving the conversation.
+Aiden Agent is for people who work with code and local project files on a Mac or Linux desktop and want an AI collaborator that can chat, inspect a chosen workspace, and take explicitly permitted actions. They may use hosted or local models and need to understand which workspace, model, and access level are active without leaving the conversation.
 
 ## Product Purpose
 
@@ -16,17 +16,17 @@ Aiden Agent provides a private, native-feeling workspace for model conversations
 
 ## Positioning
 
-Aiden combines a native-feeling desktop workspace with Pi-based agent extensibility, user-selected local or hosted models, and explicit workspace and permission boundaries. The paired native iOS and Android clients extend the Mac-owned workspace rather than creating separate sources of authority.
+Aiden combines a native-feeling desktop workspace with Pi-based agent extensibility, user-selected local or hosted models, and explicit workspace and permission boundaries. The paired native iOS and Android clients extend the desktop-owned workspace rather than creating separate sources of authority.
 
 ## Operating Context
 
-The primary application is an Electron desktop app for macOS. People work in folder-backed workspaces, use chats and Bots, review files and Git changes, run tools with explicit permissions, and may connect native iOS or Android clients to a paired Mac for remote access.
+The primary application is an Electron desktop app for macOS and Linux. People work in folder-backed workspaces, use chats and Bots, review files and Git changes, run tools with explicit permissions, and may connect native iOS or Android clients to a paired desktop for remote access.
 
 ## Capabilities and Constraints
 
 - Supports local and hosted model providers without making one provider the product authority.
 - Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.
-- Treats the Mac as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
+- Treats the desktop host as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
 - Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
 
 ## Brand Commitments

@@ -19,6 +19,9 @@ protocol AidenNetworkPathSource: AnyObject {
 @MainActor
 final class AidenNetworkAvailability: AidenNetworkPathSource {
     private(set) var isNetworkAvailable: Bool
+    /// Low Data Mode: optional background reads such as transcript prefetch
+    /// stay off while the system asks apps to save data.
+    private(set) var isConstrained = false
     private var waiters: [UUID: (available: Bool, continuation: CheckedContinuation<Void, Error>)] = [:]
 
     init(isNetworkAvailable: Bool = true) {
@@ -34,6 +37,10 @@ final class AidenNetworkAvailability: AidenNetworkPathSource {
             waiters[id] = nil
             waiter.continuation.resume()
         }
+    }
+
+    func setConstrained(_ constrained: Bool) {
+        isConstrained = constrained
     }
 
     func waitUntil(available: Bool) async throws {
@@ -77,7 +84,11 @@ final class AidenNetworkPathMonitor {
         // stale "unsatisfied" could land after a newer "satisfied".
         monitor.pathUpdateHandler = { [weak self] path in
             let available = path.status != .unsatisfied
-            MainActor.assumeIsolated { self?.availability.setAvailable(available) }
+            let constrained = path.isConstrained
+            MainActor.assumeIsolated {
+                self?.availability.setAvailable(available)
+                self?.availability.setConstrained(constrained)
+            }
         }
         monitor.start(queue: .main)
     }

@@ -1330,17 +1330,28 @@ export function ScrollArea({
         </div>
       </div>
       {showScrollToBottomButton && offerJump ? (
-        <Button
-          iconOnly
-          size="medium"
-          variant="filled"
-          onClick={() => scrollToBottom()}
-          aria-label="Scroll to bottom"
-          className="absolute left-1/2 z-20 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
-          style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
+        // The button floats over the scrollport like the footer, but is centred
+        // on the same chat column as the composer, so it follows the column
+        // when Quick View insets it (and through that transition) and when a
+        // classic scrollbar takes a gutter.
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+          style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
         >
-          <ArrowDownToLine />
-        </Button>
+          <div className="aiden-dock-inset chat-content-column relative">
+            <Button
+              iconOnly
+              size="medium"
+              variant="filled"
+              onClick={() => scrollToBottom()}
+              aria-label="Scroll to bottom"
+              className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
+              style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
+            >
+              <ArrowDownToLine />
+            </Button>
+          </div>
+        </div>
       ) : null}
       {footer ? (
         <div

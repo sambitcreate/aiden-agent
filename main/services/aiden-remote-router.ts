@@ -64,6 +64,7 @@ import {
   AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE,
   AIDEN_REMOTE_RUN_CONTROL_FEATURE,
   AIDEN_REMOTE_RUN_STREAMS_FEATURE,
+  AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
@@ -116,7 +117,7 @@ import {
   type AidenRemoteSimulatorRelay,
 } from "./aiden-remote-simulators.js";
 import { refuseUpgrade } from "./devices/device-hub-proxy.js";
-import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
+import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES, decodeAidenRemoteSpeechGzip } from "./aiden-remote-speech-codec.js";
 import {
 } from "../../renderer/shared/bot-capabilities.js";
 const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -719,7 +720,7 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
 }
 
 /**
- * The phone viewer document (revision 34). Never cached by the transport, but
+ * The phone viewer document (revision 35). Never cached by the transport, but
  * revalidatable by its strong ETag and gzip-compressed when the client asks,
  * since a document inlines its whole viewer.
  */
@@ -782,6 +783,7 @@ function writeError(
 async function readJsonBody(
   request: IncomingMessage,
   maximumBytes = MAX_REQUEST_BODY_BYTES,
+  encoding: "identity" | "gzip" = "identity",
 ): Promise<unknown> {
   const contentType = request.headers["content-type"];
   if (
@@ -827,8 +829,10 @@ async function readJsonBody(
     );
   }
   let serialized: string;
+  const body = Buffer.concat(chunks);
+  const decoded = encoding === "gzip" ? await decodeAidenRemoteSpeechGzip(body) : body;
   try {
-    serialized = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+    serialized = new TextDecoder("utf-8", { fatal: true }).decode(decoded);
   } catch {
     throw new AidenRemoteServiceError(
       "invalid_request",
@@ -845,6 +849,15 @@ async function readJsonBody(
       400,
     );
   }
+}
+
+function speechRequestEncoding(request: IncomingMessage): "identity" | "gzip" {
+  const encoding = request.headers["content-encoding"];
+  if (encoding === undefined || encoding === "identity") return "identity";
+  if (encoding === "gzip") return "gzip";
+  throw new AidenRemoteServiceError(
+    "invalid_request", "Speech transcription supports only identity or gzip Content-Encoding.", 415,
+  );
 }
 
 function bearerCredential(request: IncomingMessage): string | null {
@@ -1885,6 +1898,7 @@ export function createAidenRemoteRequestHandler(
             ...(peerRoutes === undefined ? [] : ["peer-routes-v1"]),
             ...(dependencies.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
             ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
+            ...(dependencies.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
               : []),
@@ -3225,7 +3239,8 @@ export function createAidenRemoteRequestHandler(
         // Re-authenticate through the mutation fence after parsing so revocation
         // that races the upload still prevents application-service admission.
         await authenticateCredential(request, dependencies.devices, "chat:write");
-        const body = await readJsonBody(request, AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES);
+        const encoding = speechRequestEncoding(request);
+        const body = await readJsonBody(request, AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES, encoding);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);

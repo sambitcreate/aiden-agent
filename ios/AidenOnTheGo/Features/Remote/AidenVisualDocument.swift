@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import SwiftUI
 
-// MARK: - Contract (revision 34, `chat-visual-viewer-v1`)
+// MARK: - Contract (revision 35, `chat-visual-viewer-v1`)
 
 /// The light or dark page the Mac draws for the viewer.
 enum AidenVisualViewerScheme: String, Hashable, Sendable {

@@ -9,7 +9,7 @@ A chart or widget in a reply on iOS or Android behaves like it does on the Mac w
 - `render_ui` (native catalog tree, the model's default) is drawn by the same React `AidenUiBlock` the desktop uses.
 - `render_artifact` (sandboxed HTML) runs in the same opaque-origin `sandbox="allow-scripts"` iframe and CSP as desktop, with the host libraries it uses inlined.
 
-## Contract (Remote revision 34, `chat-visual-viewer-v1`)
+## Contract (Remote revision 35, `chat-visual-viewer-v1`)
 
 Provisional: re-claim the next revision after `main`'s at merge.
 
@@ -35,7 +35,7 @@ Provisional: re-claim the next revision after `main`'s at merge.
 2. `vite.visual-viewer.config.ts`: a library build (one IIFE script plus one stylesheet, assets inlined) into `build/renderer/visual-viewer/`, run after the main renderer build, so it ships in `app.asar` with the renderer.
 3. `main/services/visual-viewer-document.ts`: Electron-free builder. Escapes the payload, inlines only the host libraries an HTML visual references, and wraps everything under the viewer CSP.
 4. `AidenRemoteChatService.visualDocument(chatId, visualId, options)` finds the visual on the authoritative chat, loads HTML from the artifact store or the tree and its images from the message, and builds the document.
-5. Router route `chatVisualDocument`, feature token, revision 34, OpenAPI, docs and the contract fixture.
+5. Router route `chatVisualDocument`, feature token, revision 35, OpenAPI, docs and the contract fixture.
 
 ## Phones
 

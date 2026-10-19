@@ -1,6 +1,6 @@
 # Bots rework: UI, copy, feature tokens and follow-ups (2026-10-07)
 
-Status: implemented on PR #377 (`feature/bot-ui-durable-sessions-2f4474`). Physical-device acceptance is pending. Spec: `docs/superpowers/specs/2026-10-07-bots-rework-design.md`. Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Runtime: `.memory/bot-durable-runtime.md`.
+Status: merged in PR #377 (2026-10-08), shipped in 0.55.0. Physical-device acceptance is pending. Spec: `docs/superpowers/specs/2026-10-07-bots-rework-design.md`. Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Runtime: `.memory/bot-durable-runtime.md`.
 
 See `.memory/bot-chat-activity.md` for the status line, Chat activity and recaps.
 

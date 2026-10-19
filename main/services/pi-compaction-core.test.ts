@@ -1491,6 +1491,46 @@ test("durable journals are private and delete with their chat", async (t) => {
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
 });
 
+test("deleteChat waits for an in-flight quarantine instead of refusing, even when its recovery failed", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-quarantined-delete-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const store = new PiCompactionSessionStore({ root: async () => root });
+
+  const pending = await store.openChat("chat-quarantined-pending");
+  await pending.appendMessage(user("interrupted"));
+  const pendingPath = (await pending.getMetadata()).path;
+  let settleRecovery!: () => void;
+  store.quarantineChatUntilRecovered(
+    "chat-quarantined-pending",
+    new Promise<void>((resolve) => {
+      settleRecovery = resolve;
+    }),
+  );
+  let deleted = false;
+  const deletion = store.deleteChat("chat-quarantined-pending").then(() => {
+    deleted = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(deleted, false, "deletion waits for the recovery to settle");
+  settleRecovery();
+  await deletion;
+  await assert.rejects(stat(pendingPath), { code: "ENOENT" });
+  assert.equal(await store.hasChatHistory("chat-quarantined-pending"), false);
+
+  const failed = await store.openChat("chat-quarantined-failed");
+  await failed.appendMessage(user("unrecoverable"));
+  const failedPath = (await failed.getMetadata()).path;
+  store.quarantineChatUntilRecovered(
+    "chat-quarantined-failed",
+    Promise.reject(new Error("recovery failed")),
+  );
+  await store.deleteChat("chat-quarantined-failed");
+  await assert.rejects(stat(failedPath), { code: "ENOENT" });
+  assert.equal(await store.hasChatHistory("chat-quarantined-failed"), false);
+});
+
 test("private history inspection preserves indexed, current, legacy, and quarantined journals without opening sessions", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -1933,7 +1973,7 @@ test("retry exhaustion reconciles a visible partial before persisting its marker
   assert.equal(context.messages.length, 3);
 });
 
-test("journal quarantine blocks reuse and deletion until recovery settles", async (t) => {
+test("journal quarantine blocks reuse until recovery settles", async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-quarantine-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
   const root = path.join(temporary, "sessions");
@@ -1947,7 +1987,6 @@ test("journal quarantine blocks reuse and deletion until recovery settles", asyn
   store.quarantineChatUntilRecovered("chat-quarantine", recovery);
 
   await assert.rejects(store.openChat("chat-quarantine"), /indeterminate write/u);
-  await assert.rejects(store.deleteChat("chat-quarantine"), /indeterminate write/u);
   releaseRecovery();
   await recovery;
   await new Promise<void>((resolve) => setImmediate(resolve));

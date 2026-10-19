@@ -4,6 +4,8 @@ export const daemonSocket = (agentDir: string) => join(agentDir, "serve.sock");
 export async function remoteDaemonCommand(agentDir: string, command: string, args: string[]): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(daemonSocket(agentDir));
+    // Decode across chunk boundaries so a multi-byte character split by the kernel is not mangled.
+    socket.setEncoding("utf8");
     let buffer = "";
     socket.setTimeout(610_000, () => socket.destroy(new Error("Daemon response timed out.")));
     socket.on("connect", () => socket.write(JSON.stringify({ command, args }) + "\n"));

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { createServer as createNetServer, createConnection } from "node:net";
+import { once } from "node:events";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { request as httpsRequest } from "node:https";
 import * as api from "../dist/parity-test-api.js";
@@ -31,6 +33,93 @@ test("atomic stores serialize mutations, protect credentials, and reject cross-p
   assert.equal(readFileSync(file, "utf8"), "broken");
   assert.deepEqual(api.splitArgs('save "two words.json" \'a b\''), ["save", "two words.json", "a b"]);
   assert.throws(() => api.splitArgs('"unfinished'), /Unfinished/);
+});
+
+test("a stale CLI lease cannot be reclaimed by two processes", async (t) => {
+  const dir = temporary(t), file = join(dir, "shared.json");
+  const fixture = join(pkg, "tests", "fixtures", "lease-child.mjs");
+  const gate = join(dir, "resume"), marker = join(dir, "paused");
+  const staleResult = join(dir, "stale-result"), firstResult = join(dir, "first-result"), secondResult = join(dir, "second-result");
+  const children = [];
+  const launch = (mode, result) => {
+    const child = spawn(process.execPath, [fixture, mode, file, gate, marker, result], { stdio: "ignore" });
+    children.push(child);
+    return child;
+  };
+  const waitForFile = async (name) => {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const value = existsSync(name) ? readFileSync(name, "utf8") : "";
+      if (value) return value;
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${name}`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+  };
+  const kill = async (child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = once(child, "exit");
+    child.kill("SIGKILL");
+    await exited;
+  };
+  try {
+    const stale = launch("plain", staleResult);
+    assert.match(await waitForFile(staleResult), /^owned:/);
+    await kill(stale);
+    launch("pause-reclaim", firstResult);
+    await waitForFile(marker);
+    launch("plain", secondResult);
+    assert.match(await waitForFile(secondResult), /^contended:/);
+    writeFileSync(gate, "resume");
+    assert.match(await waitForFile(firstResult), /^owned:/);
+  } finally {
+    writeFileSync(gate, "resume");
+    await Promise.all(children.map(kill));
+  }
+});
+
+test("a failed same-process reacquire keeps the cross-process guard held", async (t) => {
+  const dir = temporary(t), file = join(dir, "held.json"), result = join(dir, "result");
+  const release = api.acquireLease(file);
+  const child = spawn(process.execPath, [join(pkg, "tests", "fixtures", "lease-child.mjs"), "plain", file, "", "", result], { stdio: "ignore" });
+  try {
+    assert.throws(() => api.acquireLease(file), /Another Aiden process owns/);
+    readFileSync(api.leaseGuardPath(file));
+    const deadline = Date.now() + 20_000;
+    let outcome = "";
+    while (!outcome) {
+      if (existsSync(result)) outcome = readFileSync(result, "utf8");
+      if (Date.now() > deadline) throw new Error("The competing process did not finish acquisition");
+      if (!outcome) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    assert.match(outcome, /^contended:/);
+  } finally {
+    release();
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+    }
+  }
+});
+
+test("CLI new-protocol metadata with a recycled live pid is reclaimable", (t) => {
+  const dir = temporary(t), file = join(dir, "writer.json"), lock = `${file}.lock`;
+  mkdirSync(lock);
+  api.atomicJson(join(lock, "owner.json"), { pid: process.pid, startedAt: 1 });
+  assert.throws(() => api.acquireLease(file), /Another Aiden process owns/);
+  api.atomicJson(join(lock, "owner.json"), { protocol: "flock-v1", pid: process.pid, startedAt: 1 });
+  const release = api.acquireLease(file);
+  release();
+});
+
+test("CLI lease reclaims null owner metadata under a free guard", (t) => {
+  const dir = temporary(t), file = join(dir, "writer.json"), lock = `${file}.lock`;
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner.json"), "null");
+  const release = api.acquireLease(file);
+  try {
+    assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).protocol, "flock-v1");
+  } finally { release(); }
 });
 
 test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
@@ -64,6 +153,64 @@ test("portable export and context projection include only the active branch", as
   assert.equal(result.chat.title, "Test title");
   assert.deepEqual(result.chat.messages.map((message) => message.content), ["Keep this", "Active branch"]);
   assert.deepEqual(api.liveMessages({ sessionManager: manager }).map((message) => message.content), ["Keep this", "Active branch"]);
+});
+
+test("headless command output survives a pipe when it exceeds the kernel pipe buffer", async (t) => {
+  const dir = temporary(t), cwd = join(dir, "project"); mkdirSync(cwd);
+  const manager = api.SessionManager.create(cwd, join(dir, "sessions"));
+  const preview = "needle " + "x".repeat(1_500_000);
+  manager.appendMessage({ role: "user", content: preview, timestamp: 100 });
+  const result = spawnSync(process.execPath, [join(pkg, "dist", "app", "cli.js"), "search", "needle"], {
+    encoding: "utf8", stdio: "pipe", maxBuffer: 64 * 1024 * 1024, timeout: 60_000,
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: dir, PI_OFFLINE: "1" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(Buffer.byteLength(result.stdout) > 1_500_000, `received ${Buffer.byteLength(result.stdout)} bytes`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.length, 1); assert.equal(parsed[0].preview, preview);
+});
+
+test("CLI display_image limits are per agent run and per session journal", async (t) => {
+  const dir = temporary(t); mkdirSync(join(dir, "workspace")); const workspaceRoot = realpathSync(join(dir, "workspace"));
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  writeFileSync(join(workspaceRoot, "dot.png"), png);
+  const handlers = []; let tool;
+  let session = api.SessionManager.inMemory(dir);
+  api.createDisplayImageInlineExtension({ agentDir: join(dir, "agent"), workspaceRoot }).factory({
+    registerTool: (candidate) => { tool = candidate; },
+    on: (event, handler) => { if (event === "before_agent_start") handlers.push(handler); },
+    appendEntry: (customType, data) => { session.appendCustomEntry(customType, data); },
+  });
+  const startRun = async () => { for (const handler of handlers) await handler({ type: "before_agent_start", systemPrompt: "" }, { sessionManager: session }); };
+  // Like pi, persist each tool result into the session journal.
+  const display = async () => {
+    const toolCallId = `call-${Math.random()}`;
+    const result = await tool.execute(toolCallId, { path: "dot.png" }, new AbortController().signal);
+    session.appendMessage({ role: "toolResult", toolCallId, toolName: "display_image", content: result.content, isError: false, timestamp: Date.now() });
+    return result;
+  };
+  // One image per answer for more than 20 answers: the per-response cap must not accumulate.
+  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await display()).content.some((part) => part.type === "image"), `run ${run}`); }
+  // The per-chat ceiling still counts every image already in this session.
+  await startRun();
+  await assert.rejects(display(), /100-image/);
+  // A different session starts from its own (empty) history.
+  session = api.SessionManager.inMemory(dir); await startRun();
+  assert.ok((await display()).content.some((part) => part.type === "image"));
+
+  // Through codemode or ctx.executeTool, pi journals only the outer tool's result, with the
+  // display_image call in its nestedCalls; those images count toward the same session ceiling.
+  session = api.SessionManager.inMemory(dir);
+  const nested = async () => {
+    const outerId = `outer-${Math.random()}`, innerId = `inner-${Math.random()}`;
+    const inner = await tool.execute(innerId, { path: "dot.png" }, new AbortController().signal);
+    session.appendMessage({ role: "toolResult", toolCallId: outerId, toolName: "codemode", content: inner.content, isError: false, timestamp: Date.now(),
+      nestedCalls: { calls: [{ id: innerId, name: "display_image", isError: false }], complete: true } });
+    return inner;
+  };
+  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await nested()).content.some((part) => part.type === "image"), `nested run ${run}`); }
+  await startRun();
+  await assert.rejects(nested(), /100-image/);
 });
 
 test("title generation preserves manual renames and seeds offline sessions", async (t) => {
@@ -162,6 +309,82 @@ test("serve routes concurrent CLI commands and releases its lease on shutdown", 
   const release = api.acquireLease(join(dir, "serve")); release();
 });
 
+test("daemon control socket decodes multi-byte UTF-8 split across chunks on both sides", async (t) => {
+  // Client side: a fake daemon streams a 2-byte-character reply in odd-sized chunks.
+  const fake = temporary(t);
+  const text = "é".repeat(300_000);
+  const server = createNetServer((socket) => {
+    socket.on("data", () => {
+      const bytes = Buffer.from(JSON.stringify({ result: { text } }) + "\n", "utf8");
+      let offset = 0;
+      const step = () => {
+        if (offset >= bytes.length) { socket.end(); return; }
+        const next = Math.min(bytes.length, offset + 65_537);
+        socket.write(bytes.subarray(offset, next), step);
+        offset = next;
+      };
+      step();
+    });
+  });
+  await new Promise((resolve) => server.listen(api.daemonSocket(fake), resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const received = await api.remoteDaemonCommand(fake, "schedule", ["list"]);
+  assert.equal(received.text.includes("\uFFFD"), false);
+  assert.equal(received.text, text);
+
+  // Server side: a request whose non-ASCII argument straddles two socket writes.
+  const dir = temporary(t), controller = new AbortController();
+  const promise = api.serve(dir, controller.signal);
+  t.after(async () => { controller.abort(); await promise; });
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { if (statSync(api.daemonSocket(dir)).isSocket()) break; } catch { /* starting */ }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const folder = join(dir, "wörkspace-☕"); mkdirSync(folder);
+  const request = Buffer.from(JSON.stringify({ command: "workspace", args: ["add", folder] }) + "\n", "utf8");
+  const cut = request.indexOf(Buffer.from("☕", "utf8")) + 1; // inside the 3-byte coffee cup
+  const reply = await new Promise((resolve, reject) => {
+    const socket = createConnection(api.daemonSocket(dir));
+    const chunks = [];
+    socket.on("error", reject);
+    socket.on("data", (chunk) => chunks.push(chunk));
+    socket.on("end", () => resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
+    socket.on("connect", () => socket.write(request.subarray(0, cut), () => setTimeout(() => socket.write(request.subarray(cut)), 20)));
+  });
+  assert.equal(reply.error, undefined, JSON.stringify(reply));
+  const listed = await api.remoteDaemonCommand(dir, "workspace", ["list"]);
+  assert.ok(listed.some((workspace) => workspace.folderPath.endsWith("wörkspace-☕")), JSON.stringify(listed));
+});
+
+test("foreground serve recovers a legacy stale lease naming a recycled foreign pid", async (t) => {
+  const dir = temporary(t), lock = join(dir, "serve.lock");
+  const foreign = spawn("sleep", ["30"]);
+  t.after(() => { try { foreign.kill("SIGKILL"); } catch { /* already gone */ } });
+  await once(foreign, "spawn");
+  mkdirSync(lock);
+  api.atomicJson(join(lock, "owner.json"), { pid: foreign.pid, startedAt: 1 });
+  writeFileSync(api.daemonSocket(dir), "stale socket");
+  const controller = new AbortController();
+  const serving = api.serve(dir, controller.signal);
+  let failure;
+  void serving.catch((error) => { failure = error; });
+  try {
+    let listening = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (failure) throw failure;
+      try { listening = statSync(api.daemonSocket(dir)).isSocket(); } catch { /* starting */ }
+      if (listening) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(listening, true, "foreground serve should replace the stale socket");
+    assert.equal(api.pidAlive(foreign.pid), true, "recovery must not signal the foreign process");
+    assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).pid, process.pid);
+  } finally {
+    controller.abort();
+    await serving.catch(() => undefined);
+  }
+});
+
 test("serve lifecycle recovers stale leases and never signals a recycled PID", async (t) => {
   const dir = temporary(t);
   assert.equal(api.daemonStatus(dir).running, false);
@@ -192,7 +415,7 @@ test("serve lifecycle recovers stale leases and never signals a recycled PID", a
   await new Promise((resolve) => foreign.once("spawn", resolve));
   mkdirSync(join(dir, "serve.lock"), { recursive: true });
   api.atomicJson(join(dir, "serve.lock", "owner.json"), { pid: foreign.pid, startedAt: Date.now() });
-  await assert.rejects(api.stopDaemon(dir), /stale lock/);
+  await assert.rejects(api.stopDaemon(dir), /not running/);
   assert.equal(existsSync(join(dir, "serve.lock")), false);
   assert.equal(api.pidAlive(foreign.pid), true);
 
@@ -209,6 +432,48 @@ test("serve lifecycle recovers stale leases and never signals a recycled PID", a
   utimesSync(join(dir, "serve.lock"), past, past);
   assert.equal(api.recoverStaleServeLease(dir), true);
   assert.equal(api.pidAlive(process.pid), true);
+});
+
+test("serve cleanup cannot remove a replacement owner or socket", async (t) => {
+  const dir = temporary(t), resource = join(dir, "serve");
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  mkdirSync(`${resource}.lock`, { recursive: true });
+  api.atomicJson(join(`${resource}.lock`, "owner.json"), { pid: dead, startedAt: 1 });
+  writeFileSync(api.daemonSocket(dir), "stale socket");
+  const nodeFs = createRequire(import.meta.url)("node:fs");
+  const originalRemove = nodeFs.rmSync;
+  let attempted = false;
+  nodeFs.rmSync = (target, ...args) => {
+    if (target === `${resource}.lock`) {
+      attempted = true;
+      assert.throws(() => api.acquireLease(resource), /Another Aiden process owns/);
+    }
+    return originalRemove(target, ...args);
+  };
+  syncBuiltinESMExports();
+  try { assert.equal(api.recoverStaleServeLease(dir), true); }
+  finally {
+    nodeFs.rmSync = originalRemove;
+    syncBuiltinESMExports();
+  }
+  assert.equal(attempted, true);
+  const release = api.acquireLease(resource);
+  writeFileSync(api.daemonSocket(dir), "replacement socket");
+  try {
+    assert.equal(api.recoverStaleServeLease(dir), false);
+    assert.equal(readFileSync(api.daemonSocket(dir), "utf8"), "replacement socket");
+    assert.equal(JSON.parse(readFileSync(join(`${resource}.lock`, "owner.json"), "utf8")).pid, process.pid);
+  } finally { release(); }
+});
+
+test("serve status clears retired new-protocol metadata despite a recycled live pid", (t) => {
+  const dir = temporary(t), lock = join(dir, "serve.lock");
+  mkdirSync(lock);
+  api.atomicJson(join(lock, "owner.json"), { protocol: "flock-v1", pid: process.pid, startedAt: 1, token: "retired" });
+  writeFileSync(api.daemonSocket(dir), "retired socket");
+  assert.equal(api.daemonStatus(dir).running, false);
+  assert.equal(existsSync(lock), false);
+  assert.equal(existsSync(api.daemonSocket(dir)), false);
 });
 
 test("serve lifecycle identifies a live daemon by its recorded argv", async (t) => {
@@ -363,6 +628,46 @@ test("portable chat import persists user-only conversations and never changes it
   assert.deepEqual(readFileSync(source), before);
 });
 
+test("portable chat import keeps assistant attachments through a CLI export round trip", async (t) => {
+  const dir = temporary(t), source = join(dir, "source.aiden-chat.json"), target = join(dir, "again.aiden-chat.json");
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const image = { id: "generated-dot", kind: "image", name: "Generated image.png", mimeType: "image/png", size: Buffer.from(data, "base64").length, data };
+  api.atomicJson(source, { schema: "aiden.chat.export", version: 1, chat: { title: "Images", messages: [
+    { id: "one", role: "user", content: "Draw a dot", createdAt: 100 },
+    { id: "two", role: "assistant", content: "Here it is", createdAt: 200, attachments: [image] },
+    { id: "three", role: "user", content: "Thanks", createdAt: 300 },
+  ] } });
+  const result = await api.importSession(join(dir, "agent"), dir, source);
+  assert.equal(result.messages, 3);
+  const imported = api.SessionManager.open(result.path);
+  assert.deepEqual(imported.buildSessionContext().messages.map((message) => [message.role, api.messageText(message.content)]),
+    [["user", "Draw a dot"], ["assistant", "Here it is"], ["user", "Thanks"]]);
+  await api.exportSession(imported, target);
+  const messages = JSON.parse(readFileSync(target, "utf8")).chat.messages;
+  assert.deepEqual(messages.map((message) => [message.role, message.content]), [["user", "Draw a dot"], ["assistant", "Here it is"], ["user", "Thanks"]]);
+  assert.deepEqual(messages[1].attachments, [image]);
+
+  // Re-importing the CLI journal keeps the assistant's attachment, still outside model context.
+  const journalBefore = readFileSync(result.path);
+  const again = await api.importSession(join(dir, "agent"), dir, result.path);
+  assert.deepEqual(readFileSync(result.path), journalBefore, "the source journal is unchanged");
+  const reimported = api.SessionManager.open(again.path);
+  assert.equal(reimported.buildSessionContext().messages.some((message) => Array.isArray(message.content) && message.content.some((part) => part.type === "image")), false);
+  const second = join(dir, "second.aiden-chat.json");
+  await api.exportSession(reimported, second);
+  assert.deepEqual(JSON.parse(readFileSync(second, "utf8")).chat.messages[1].attachments, [image]);
+
+  // Branching at the assistant keeps its attachment; the abandoned continuation is gone.
+  const assistantEntry = imported.getBranch().find((entry) => entry.type === "message" && entry.message.role === "assistant");
+  imported.branch(assistantEntry.id);
+  imported.appendMessage({ role: "user", content: "Make it bigger", timestamp: 400 });
+  const branched = join(dir, "branched.aiden-chat.json");
+  await api.exportSession(imported, branched);
+  const branchedMessages = JSON.parse(readFileSync(branched, "utf8")).chat.messages;
+  assert.deepEqual(branchedMessages.map((message) => message.content), ["Draw a dot", "Here it is", "Make it bigger"]);
+  assert.deepEqual(branchedMessages[1].attachments, [image]);
+});
+
 test("desktop v4 import reads through the repository port into an independent CLI journal", async (t) => {
   const dir = temporary(t), repository = api.createCurrentPiSessionRepository(join(dir, "desktop"));
   const session = await repository.create({ id: "desktop-chat", cwd: dir, metadata: { title: "Desktop chat" } });
@@ -437,6 +742,27 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   assert.equal((await request(`/chats/${created.data.id}`)).data.messages.length, 2);
   assert.equal((await remote.command(["revoke", issued.device.id])).revoked, true);
   assert.equal((await request("/workspaces")).status, 403);
+});
+
+test("Remote starts and keeps persisting after loading a stream journal this build cannot read", async (t) => {
+  const dir = temporary(t), journal = join(dir, "remote-streams.json");
+  // Well-formed JSON from a build whose event vocabulary this one rejects.
+  const unreadable = JSON.stringify({ version: 1, streams: [{ streamId: "old", chatId: "chat-old", turnId: "turn-old", deviceId: "device-old", state: "done", updatedAt: 1,
+    events: [{ protocolVersion: 1, streamId: "old", sequence: 1, timestamp: "2026-01-01T00:00:00.000Z", type: "finished_v2", terminal: true, payload: {} }] }] });
+  writeFileSync(journal, unreadable);
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); });
+  await remote.start();
+  assert.equal((await remote.service.status()).running, true);
+  const issued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test" });
+  assert.equal((await remote.command(["revoke", issued.device.id])).revoked, true);
+  const rescues = readdirSync(dir).filter((name) => name.startsWith("remote-streams.json.invalid-"));
+  assert.equal(rescues.length, 1);
+  assert.equal(readFileSync(join(dir, rescues[0]), "utf8"), unreadable);
+  assert.deepEqual(JSON.parse(readFileSync(journal, "utf8")).streams, []);
 });
 
 test("Bots retain one-shot notice, exact Custom tools, revocation and independent rollback anchors", async (t) => {

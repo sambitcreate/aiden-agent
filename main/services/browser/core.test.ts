@@ -23,6 +23,10 @@ test("navigation normalizes public and loopback hosts but refuses privileged sch
   assert.equal(browserUrl("example.com/path"), "https://example.com/path");
   assert.equal(browserUrl("localhost:5173"), "http://localhost:5173/");
   assert.equal(browserUrl("[::1]:4000/path"), "http://[::1]:4000/path");
+  assert.equal(browserUrl("localhost:3000?tab=1"), "http://localhost:3000/?tab=1");
+  assert.equal(browserUrl("localhost:5173#section"), "http://localhost:5173/#section");
+  assert.equal(browserUrl("127.0.0.1:8080?x=1"), "http://127.0.0.1:8080/?x=1");
+  assert.equal(browserUrl("example.com:8443?q=1"), "https://example.com:8443/?q=1");
   assert.equal(browserUrl("about:blank"), "about:blank");
   for (const url of [
     "javascript:alert(1)",

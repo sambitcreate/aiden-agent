@@ -68,10 +68,13 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     const rootPage = await service.children("device-1", workspace.id);
     assert.deepEqual(rootPage.entries.map(entry => entry.displayPath), ["Sources"]);
     assert.equal(rootPage.directoryPath, "");
+    // A replacement root lists afresh, but handles issued under the old root stay refused.
     await fs.rename(root, originalRoot);
-    await fs.mkdir(root);
+    await fs.mkdir(path.join(root, "Sources"), { recursive: true });
     await fs.writeFile(path.join(root, "replacement.txt"), "outside replacement");
-    await assert.rejects(() => service.children("device-1", workspace.id),
+    assert.deepEqual((await service.children("device-1", workspace.id)).entries.map(entry => entry.displayPath),
+      ["Sources", "replacement.txt"]);
+    await assert.rejects(() => service.children("device-1", workspace.id, rootPage.entries[0]!.id),
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
     await fs.rm(root, { recursive: true });
     await fs.rename(originalRoot, root);
@@ -169,6 +172,61 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     });
     assert.equal(saved.content, "let value = 3\n");
     assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
+    // A save installs a new inode. The returned handle and the listed entry must
+    // keep reading and saving the file without reopening Files.
+    const reread = await service.read("device-1", workspace.id, saved.id);
+    assert.equal(reread.content, "let value = 3\n");
+    const resaved = await service.write("device-1", workspace.id, saved.id, {
+      content: "let value = 4\n",
+      expectedVersion: reread.version,
+    });
+    assert.equal((await service.read("device-1", workspace.id, file.id)).content, "let value = 4\n");
+    await service.write("device-1", workspace.id, resaved.id, {
+      content: "let value = 3\n",
+      expectedVersion: resaved.version,
+    });
+    assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
+
+    // Another app replaces the file after the writer verified its save: the handle
+    // must not adopt the replacement, only the inode the save installed.
+    const swapPath = path.join(root, "Sources", "App.swift");
+    const swapping = (await service.list("device-1", workspace.id)).entries
+      .find((entry) => entry.displayPath === "Sources/App.swift")!;
+    const beforeSwap = await service.read("device-1", workspace.id, swapping.id);
+    // This test later shadows the module-level import, so take it from the module here.
+    const syncExports = (await import("node:module")).syncBuiltinESMExports;
+    const originalRm = fsPromises.rm;
+    let swapped = false;
+    fsPromises.rm = (async (...args: Parameters<typeof fsPromises.rm>) => {
+      await originalRm(...args);
+      if (!swapped && String(args[0]).endsWith(".tmp")) {
+        swapped = true;
+        await fsPromises.rename(swapPath, path.join(root, "Sources", "App.swift.aside"));
+        await fsPromises.writeFile(swapPath, "let replaced = true\n", "utf8");
+      }
+    }) as typeof fsPromises.rm;
+    syncExports();
+    try {
+      await service.write("device-1", workspace.id, swapping.id, {
+        content: "let value = 5\n",
+        expectedVersion: beforeSwap.version,
+      });
+    } finally {
+      fsPromises.rm = originalRm;
+      syncExports();
+    }
+    assert.equal(swapped, true);
+    // The refused rebind ends the handle outright: whether or not the replacement reuses the
+    // freed pre-save inode, the old id authorizes nothing and the phone re-lists.
+    assert.throws(() => handles.claimsFor(swapping.id, "file"), /handle_invalid/u);
+    await assert.rejects(
+      () => service.read("device-1", workspace.id, swapping.id),
+      (error: unknown) => error instanceof AidenRemoteServiceError,
+      "the old handle refuses the replacement",
+    );
+    await fs.rm(swapPath);
+    await fs.rename(path.join(root, "Sources", "App.swift.aside"), swapPath);
+    await fs.writeFile(swapPath, "let value = 3\n", "utf8");
 
     // Snapshot handles also refuse multiply-linked files: another name for the
     // inode may live outside the workspace.
@@ -281,6 +339,71 @@ test("lazy save reserves capacity before mutation and renews the returned handle
   const saved = await service.write("device", workspace.id, file.id, { content: "new", expectedVersion: opened.version });
   now += 2;
   assert.equal((await service.read("device", workspace.id, saved.id)).content, "new");
+});
+
+function lazyFixture(root: string) {
+  const workspace: Workspace = { id: "lazy", name: "Lazy", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
+  const service = new AidenRemoteFileService({ instanceId: "instance", handles: new AidenOpaqueHandleStore(),
+    owners: new AidenRemoteWorkspaceOwnerRegistry(),
+    application: createWorkspaceEnvironmentApplicationService({
+      configStore: { getWorkspace: async () => workspace }, workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(), assertManagedWorktreeAdmission: async () => undefined,
+      realpath: fs.realpath, stat: fs.stat,
+    }),
+  });
+  return { workspace, service };
+}
+
+const identityChanged = (error: unknown) =>
+  error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed";
+
+test("a workspace folder re-created at the same path lists again without a restart", { skip: process.platform !== "darwin" }, async (t) => {
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-recreated-root-")));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "workspace");
+  const populate = async (content: string) => {
+    await fs.mkdir(path.join(root, "Sources"), { recursive: true });
+    await fs.writeFile(path.join(root, "Sources", "App.swift"), content);
+  };
+  await populate("let value = 1\n");
+  const { workspace, service } = lazyFixture(root);
+  const sources = (await service.children("device", workspace.id)).entries[0]!;
+  const file = (await service.children("device", workspace.id, sources.id)).entries[0]!;
+  assert.equal((await service.read("device", workspace.id, file.id)).content, "let value = 1\n");
+
+  // Deleting and re-cloning the project: the same path and layout, with new inodes.
+  await fs.rm(root, { recursive: true });
+  await populate("let value = 2\n");
+  await assert.rejects(service.children("device", workspace.id, sources.id), identityChanged);
+  await assert.rejects(service.read("device", workspace.id, file.id), identityChanged);
+
+  const recreated = await service.children("device", workspace.id);
+  assert.deepEqual(recreated.entries.map(entry => entry.displayPath), ["Sources"]);
+  const recreatedFile = (await service.children("device", workspace.id, recreated.entries[0]!.id)).entries[0]!;
+  assert.equal((await service.read("device", workspace.id, recreatedFile.id)).content, "let value = 2\n");
+});
+
+test("a lazy page fails closed when the root is replaced while the page is prepared", { skip: process.platform !== "darwin" }, async (t) => {
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-swapped-root-")));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "workspace");
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "a.txt"), "a");
+  const { workspace, service } = lazyFixture(root);
+  const original = fsPromises.lstat;
+  let rootChecks = 0;
+  fsPromises.lstat = (async (...args: Parameters<typeof fsPromises.lstat>) => {
+    // The second root check runs after the page's handles are issued.
+    if (String(args[0]) === root && ++rootChecks === 2) {
+      await fs.rename(root, path.join(temporary, "original"));
+      await fs.mkdir(root);
+    }
+    return original(...args);
+  }) as typeof fsPromises.lstat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.lstat = original; syncBuiltinESMExports(); });
+  await assert.rejects(service.children("device", workspace.id), identityChanged);
+  assert.equal(rootChecks, 2);
 });
 
 async function legacyFixture(t: test.TestContext, count: number, capacity = 10_000) {
@@ -399,4 +522,24 @@ test("overlapping Remote and desktop listings share one four-operation metadata 
   assert.ok(peak > 1 && peak <= 4, `aggregate metadata concurrency: ${peak}`);
   assert.equal(active, 0);
   await assert.rejects(service.read("second-device", "workspace", remote.entries[0]!.id));
+});
+
+test("re-listing reclaims a superseded listing's unopened handles instead of locking Files", async (t) => {
+  // Room for one listing per device plus one more handle.
+  const { service } = await legacyFixture(t, 2, 5);
+  const first = await service.list("device-1", "workspace");
+  const other = await service.list("device-2", "workspace");
+  const opened = first.entries[0]!;
+  assert.equal((await service.read("device-1", "workspace", opened.id)).content, "data");
+
+  const second = await service.list("device-1", "workspace");
+  assert.equal(second.entries.length, 2);
+  assert.equal((await service.list("device-1", "workspace")).entries.length, 2);
+  // The document the device opened and the other device's listing keep working.
+  assert.equal((await service.read("device-1", "workspace", opened.id)).content, "data");
+  for (const entry of other.entries) {
+    assert.equal((await service.read("device-2", "workspace", entry.id)).content, "data");
+  }
+  await assert.rejects(service.read("device-1", "workspace", first.entries[1]!.id), (error: unknown) =>
+    error instanceof AidenRemoteServiceError && error.code === "handle_invalid");
 });

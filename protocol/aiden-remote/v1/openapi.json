@@ -1521,7 +1521,7 @@
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "x-aiden-feature": "chat-visual-viewer-v1",
-        "description": "Contract revision 34. One self-contained HTML document that draws a visual a message in this chat projects, for phones to open full screen in a locked-down web view. Announced by `chat-visual-viewer-v1`; visual entries gain no new key. The document has no subresources and talks to its host only through the native message channel (iOS `aidenVisual` handler, Android `AidenVisualBridge`) with `ready`, `prompt` and `openUrl` messages. Served `no-store` with a strong ETag (a matching `If-None-Match` gets 304) and gzip when accepted.",
+        "description": "Contract revision 35. One self-contained HTML document that draws a visual a message in this chat projects, for phones to open full screen in a locked-down web view. Announced by `chat-visual-viewer-v1`; visual entries gain no new key. The document has no subresources and talks to its host only through the native message channel (iOS `aidenVisual` handler, Android `AidenVisualBridge`) with `ready`, `prompt` and `openUrl` messages. Served `no-store` with a strong ETag (a matching `If-None-Match` gets 304) and gzip when accepted.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ChatId"
@@ -3709,7 +3709,16 @@
       "post": {
         "operationId": "transcribeSpeech",
         "x-aiden-capability": "chat:write",
-        "description": "Transcribes one explicit, bounded recording locally on the paired Mac. Audio is not retained and the current Parakeet model returns a final result only.",
+        "description": "Transcribes one explicit, bounded recording locally on the paired Mac. Audio is not retained and the current Parakeet model returns a final result only. Since contract revision 34, hosts advertising speech-request-gzip-v1 in GET /server.features accept one gzip-compressed JSON request body; clients without that feature send identity JSON. Encoded and expanded bodies are each limited to 2561024 bytes; trailing bytes and concatenated gzip members are rejected.",
+        "parameters": [
+          {
+            "name": "Content-Encoding",
+            "in": "header",
+            "required": false,
+            "description": "Optional identity or gzip for this route only. Send gzip only when GET /server.features contains speech-request-gzip-v1.",
+            "schema": { "type": "string", "enum": ["identity", "gzip"] }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {

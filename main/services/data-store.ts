@@ -65,6 +65,8 @@ export interface DataStoreOptions<T> {
   afterProtectedPublish?: () => Promise<void>;
   /** Test seam for holding a disk read before it becomes the active snapshot. */
   beforeLoadCommit?: () => Promise<void>;
+  /** Test seam replacing the directory fsync that follows every publication. */
+  syncDirectory?: (directory: string) => Promise<void>;
   /**
    * Synchronous authority fence immediately before an externally reloaded
    * value replaces the in-memory cache. It is never called for app writes.
@@ -271,6 +273,7 @@ export class DataStore<T> {
   }
 
   private async syncDirectory(directory: string): Promise<void> {
+    if (this.options.syncDirectory) return this.options.syncDirectory(directory);
     const handle = await fs.open(directory, "r");
     try {
       await handle.sync();
@@ -381,11 +384,13 @@ export class DataStore<T> {
     staged: string,
     destination: string,
     isCurrent: () => boolean,
+    onPublished: () => void,
     receipt?: DataStorePublicationReceipt,
   ): Promise<void> {
     if (this.diskSnapshot === undefined) {
       throw new Error("Cannot overwrite a JSON file before loading its current contents.");
     }
+    const hadPrevious = this.diskSnapshot !== null;
     const expectedHash =
       this.diskSnapshot === null ? "absent" : this.contentHash(this.diskSnapshot);
     const held = path.join(
@@ -439,6 +444,7 @@ export class DataStore<T> {
       await fs.link(staged, destination);
       if (receipt) receipt.state = "published";
       destinationPublished = true;
+      onPublished();
       await this.syncDirectory(path.dirname(destination));
       // A writer that already held the old inode can still modify it after the
       // pre-publication comparison. Publication is already committed at this
@@ -451,7 +457,7 @@ export class DataStore<T> {
       }
       throw error;
     } finally {
-      if (this.diskSnapshot !== null) {
+      if (hadPrevious) {
         if (destinationHeld && !destinationPublished) {
           try {
             this.liveHeldFiles.delete(held);
@@ -525,23 +531,29 @@ export class DataStore<T> {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       const previous = this.cache === null ? null : structuredClone(this.cache);
       this.options.beforeWritePublish?.(previous, data);
+      // Publish the in-memory view in the same synchronous turn as the durable
+      // replacement, before the post-publication authority fence. Work admitted
+      // immediately after that fence must never acquire a current lease while
+      // still observing the predecessor from a warm cache. It runs before the
+      // directory fsync: a failing fsync does not undo the rename, so a cache
+      // left on the predecessor would let the next read-modify-write silently
+      // revert the published file (or fail every later protected write).
+      const commitPublished = () => {
+        this.cache = data;
+        this.diskSnapshot = Buffer.from(serialized, "utf-8");
+        this.corrupt = false;
+        this.unsafe = false;
+      };
       if (this.options.rejectExternalChanges) {
-        await this.publishProtected(staged, destination, isCurrent, receipt);
+        await this.publishProtected(staged, destination, isCurrent, commitPublished, receipt);
       } else {
         if (!isCurrent()) throw new Error("The renderer document is no longer active.");
         if (receipt) receipt.state = "uncertain";
         await fs.rename(staged, destination);
         if (receipt) receipt.state = "published";
+        commitPublished();
         await this.syncDirectory(path.dirname(destination));
       }
-      // Publish the in-memory view in the same synchronous turn as the durable
-      // replacement, before the post-publication authority fence. Work admitted
-      // immediately after that fence must never acquire a current lease while
-      // still observing the predecessor from a warm cache.
-      this.cache = data;
-      this.diskSnapshot = Buffer.from(serialized, "utf-8");
-      this.corrupt = false;
-      this.unsafe = false;
       this.options.afterWritePublish?.(previous, data);
     } finally {
       await fs.rm(staged, { force: true }).catch(() => undefined);

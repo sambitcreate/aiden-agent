@@ -148,7 +148,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 34)
+        XCTAssertEqual(fixture.contractRevision, 35)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)
@@ -1332,6 +1332,22 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertTrue(projection.isEnded)
         XCTAssertEqual(projection.state, .done)
         XCTAssertEqual(projection.apply(events[12]), [], "An ended run accepts nothing further.")
+    }
+
+    func testForeignTimelineReplayCannotRollbackAndGapClearsIt() throws {
+        func frame(_ sequence: Int, _ type: String, _ payload: String) throws -> AidenRemoteRunEvent {
+            let json = "{\"protocolVersion\":1,\"streamId\":\"run-1\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}"
+            return try XCTUnwrap(AidenRunSSEParser().consumeAll(["id: \(sequence)", "event: \(type)", "data: \(json)", ""]).first)
+        }
+        var projection = AidenForeignRunProjection(runId: "run-1")
+        let first = try frame(2, "timeline", #"{"timeline":{"version":3,"generationId":"g","status":"running","startedAt":1000,"steps":[]}}"#)
+        _ = projection.apply(first)
+        XCTAssertEqual(projection.timeline?.status, .running)
+        _ = projection.apply(try frame(3, "timeline", #"{"timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[]}}"#))
+        _ = projection.apply(first)
+        XCTAssertEqual(projection.timeline?.status, .completed)
+        _ = projection.apply(try frame(0, "snapshot", #"{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"#))
+        XCTAssertNil(projection.timeline)
     }
 
     func testRunStreamGapSnapshotAtSequenceZeroRestatesPendingPrompts() throws {

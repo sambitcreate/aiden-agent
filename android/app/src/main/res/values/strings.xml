@@ -857,7 +857,7 @@
     <string name="chat_visual_show_more">Show more</string>
     <string name="chat_visual_show_less">Show less</string>
 
-    <!-- Chat: interactive visual viewer (contract revision 34) -->
+    <!-- Chat: interactive visual viewer (contract revision 35) -->
     <string name="chat_visual_open_interactive">Open interactive</string>
     <string name="chat_visual_viewer_close">Close visual</string>
     <string name="chat_visual_viewer_show_image">Show snapshot image</string>

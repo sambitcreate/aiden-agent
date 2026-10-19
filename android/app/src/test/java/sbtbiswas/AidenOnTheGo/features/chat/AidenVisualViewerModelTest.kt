@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The viewer page's message channel (contract revision 34) and what a confirmed prompt does. */
+/** The viewer page's message channel (contract revision 35) and what a confirmed prompt does. */
 class AidenVisualViewerModelTest {
     @Test
     fun parsesTheClosedMessageSet() {

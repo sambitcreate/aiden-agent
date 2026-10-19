@@ -270,6 +270,7 @@ function collectDirectTestFiles(segment, scriptName) {
       "node scripts/build-subagent-shell-runner.mjs",
       "node scripts/build-subagent-shell-runner.mjs --test",
       "node scripts/build-bot-inbox-writer.mjs",
+      "node scripts/build-lease-flock.mjs",
       "node scripts/build-bot-inbox-writer.mjs --test",
       // Linux-only helpers built by test:linux-native, which a workflow runs.
       "node scripts/build-global-shortcuts-portal.mjs",

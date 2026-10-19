@@ -3,7 +3,7 @@ package sbtbiswas.AidenOnTheGo.models
 import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 
-/** The light or dark scheme a visual viewer document is drawn in (contract revision 34). */
+/** The light or dark scheme a visual viewer document is drawn in (contract revision 35). */
 enum class AidenVisualDocumentScheme(val wire: String) {
     LIGHT("light"),
     DARK("dark");
@@ -14,7 +14,7 @@ enum class AidenVisualDocumentScheme(val wire: String) {
 }
 
 /**
- * Request bounds for `GET /chats/{chatId}/visuals/{visualId}/document` (revision 34).
+ * Request bounds for `GET /chats/{chatId}/visuals/{visualId}/document` (revision 35).
  * Ids are sent as plain path segments, so only the unreserved characters ids carry
  * on the wire are accepted, and dot segments are refused so a URL never resolves
  * to another route.

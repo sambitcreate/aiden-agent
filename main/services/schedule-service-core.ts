@@ -35,13 +35,25 @@ interface RunningTask {
 }
 
 type DispatchOptions = { runId?: string; expectedUpdatedAt?: number } & (
-  | { automatic: true; isCurrent: () => boolean }
+  /** `missedAt`: the overdue fire a startup catch-up claims, captured when it was queued. */
+  | { automatic: true; isCurrent: () => boolean; missedAt?: number }
   | { automatic: false; catchUp?: Extract<ScheduledRunTrigger, { kind: "catch_up" }> }
 );
 
 type DispatchResult =
   | { kind: "skipped"; reason: "already-running" }
   | { kind: "dispatched"; completion: Promise<ScheduledRun> };
+
+/**
+ * An automatic dispatch with no fire left to claim: its missed fire was
+ * already claimed by the Cron, or its fire time has not arrived yet. Running
+ * it would execute early under a future fire's idempotency key.
+ */
+class UnclaimableScheduledFire extends Error {}
+
+const ignoreUnclaimableFire = (error: unknown): void => {
+  if (!(error instanceof UnclaimableScheduledFire)) throw error;
+};
 
 export interface CatchUpQueueOptions {
   /** Missed runs allowed to execute at once. */
@@ -299,6 +311,14 @@ export function createScheduleServiceCore(
         }
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
+        const fireTime = options.automatic
+          ? options.missedAt ?? task.nextRunAt ?? Date.now()
+          : undefined;
+        const missedFireClaimed =
+          options.automatic && options.missedAt !== undefined && task.nextRunAt !== options.missedAt;
+        if (missedFireClaimed || (fireTime !== undefined && fireTime > Date.now())) {
+          throw new UnclaimableScheduledFire(`Scheduled task ${taskId} has no due fire to claim.`);
+        }
         const claimed = options.automatic ? await advanceBeforeRun(task, isCurrent) : task;
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
@@ -308,7 +328,7 @@ export function createScheduleServiceCore(
         }
         state.executionStarted = true;
         const trigger: ScheduledRunTrigger = options.automatic
-          ? { kind: "automatic", fireTime: task.nextRunAt ?? Date.now() }
+          ? { kind: "automatic", fireTime: fireTime! }
           : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
         return execution.run(claimed, options.runId, trigger);
       } finally {
@@ -389,7 +409,7 @@ export function createScheduleServiceCore(
       },
       async () => {
         const result = dispatch(task.id, { automatic: true, isCurrent: ownsJob });
-        if (result.kind === "dispatched") await result.completion;
+        if (result.kind === "dispatched") await result.completion.catch(ignoreUnclaimableFire);
       },
     );
     const ownsJob = () =>
@@ -474,11 +494,16 @@ export function createScheduleServiceCore(
             const job = jobs.get(latest.id);
             if (!job) continue;
             const ownsCatchup = () => isCurrent() && jobs.get(latest.id) === job;
+            // Claim exactly the fire that was missed: if the Cron claims it first
+            // while this entry waits (deferred or staggered), there is nothing to run.
+            const missedAt = latest.nextRunAt;
             catchUp.enqueue(() => {
-              const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup });
+              const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup, missedAt });
               if (result.kind !== "dispatched") return undefined;
               return result.completion.catch((error) =>
-                recordUnexpectedFailure(latest, error, ownsCatchup),
+                error instanceof UnclaimableScheduledFire
+                  ? undefined
+                  : recordUnexpectedFailure(latest, error, ownsCatchup),
               );
             }, ownsCatchup);
           }
