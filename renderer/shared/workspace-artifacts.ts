@@ -160,7 +160,7 @@ const WORD_BREAK_AFTER = /[\s;&|)]/u;
 /** Where a word starts a command, so a value there would run as the program. */
 const COMMAND_START = /(?:^|[;&|(){}\n!]|(?:^|\s)(?:do|elif|else|if|then|until|while))[ \t]*$/u;
 /** Commands that run their argument as code or as another program. */
-const RUNS_ARGUMENT = new Set([".", "-c", "builtin", "command", "env", "eval", "exec", "nohup", "source", "sudo", "time", "xargs"]);
+const RUNS_ARGUMENT = new Set([".", "builtin", "command", "doas", "env", "eval", "exec", "nice", "nohup", "source", "ssh", "su", "sudo", "time", "timeout", "watch", "xargs"]);
 /** Commands whose arguments bash may evaluate as arithmetic, which can run code. */
 const ARITHMETIC_COMMANDS = new Set(["declare", "let", "local", "typeset"]);
 
@@ -185,8 +185,10 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
   if (!PLACEHOLDER_TEST.test(template)) return {};
   if (template.includes("AIDEN_ARG_")) return misplaced("next to AIDEN_ARG_ variables, which are reserved");
   if (/<<(?!<)/u.test(template)) return misplaced("inside a heredoc");
-  let quote: "'" | '"' | "`" | "$'" | null = null;
-  let depth = 0;
+  type Quote = "'" | '"' | "`" | "$'" | null;
+  let quote: Quote = null;
+  // Open $(…), ${…} and $[…] expansions, each with the quoting it started in.
+  const expansions: { close: string; quote: Quote }[] = [];
   // Unquoted [[ … ]] and (( … )), where bash reads words as arithmetic.
   let testBrackets = false;
   let arithmeticParens = 0;
@@ -202,6 +204,7 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
       index += 1;
       continue;
     }
+    const depth = expansions.length;
     if (quote === null && depth === 0 && char === "#" && (index === 0 || WORD_BREAK_BEFORE.test(template[index - 1]!))) {
       // A comment runs to the end of its line; quotes inside it mean nothing.
       const newline = template.indexOf("\n", index);
@@ -224,8 +227,13 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
       const head = template.slice(0, index);
       const inArithmetic = arithmeticParens > 0 || testBrackets;
       if (!inArithmetic && COMMAND_START.test(head)) return misplaced("the command itself");
-      const previous = /(\S+)[ \t]+$/u.exec(head)?.[1];
-      if (previous && RUNS_ARGUMENT.has(previous)) return misplaced(`an argument to ${previous}, which runs it`);
+      // Every word of this placeholder's command so far, so `eval echo {{x}}` counts as eval's.
+      const clause = (/(?:^|[;&|(){}\n!])([^;&|(){}\n]*)$/u.exec(head)?.[1] ?? "").trim().split(/\s+/u);
+      // `sh -c {{x}}` runs the value as a script; `sh -c '…' sh {{x}}` only passes it in.
+      const last = clause[clause.length - 1] ?? "";
+      const script = /^-[A-Za-z]*c$/u.test(last) ? last : undefined;
+      const runner = script ?? clause.find((word) => RUNS_ARGUMENT.has(word) || word === "-exec" || word === "-execdir");
+      if (runner) return misplaced(`an argument to ${runner}, which runs it`);
       const commandWord = /(?:^|[;&|(){}\n!])[ \t]*([^\s;&|(){}]+)[^;&|(){}\n]*$/u.exec(head)?.[1];
       if ((inArithmetic || (commandWord && ARITHMETIC_COMMANDS.has(commandWord))) && isText(match[1]!)) {
         return { arithmetic: match[1]! };
@@ -260,12 +268,14 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
       index += 1;
     } else if (quote === null && (char === "'" || char === '"' || char === "`")) quote = char;
     else if (quote !== null && char === quote) quote = null;
-    else if (char === "$" && (template[index + 1] === "(" || template[index + 1] === "{" || template[index + 1] === "[")) {
-      depth += 1;
+    else if ((quote === null || quote === '"') && char === "$" && "({[".includes(template[index + 1] ?? " ")) {
+      expansions.push({ close: { "(": ")", "{": "}", "[": "]" }[template[index + 1] as "(" | "{" | "["], quote });
+      quote = null;
       index += 1;
-    } else if (depth > 0 && (char === ")" || char === "}" || char === "]")) depth -= 1;
+    } else if (quote === null && depth > 0 && char === "(") expansions.push({ close: ")", quote: null });
+    else if (quote === null && depth > 0 && char === expansions[depth - 1]!.close) quote = expansions.pop()!.quote;
   }
-  if (quote !== null || depth !== 0) return misplaced("after an unclosed quote or expansion");
+  if (quote !== null || expansions.length !== 0) return misplaced("after an unclosed quote or expansion");
   // A placeholder the scan stepped over (say, right after a backslash) was never checked.
   for (const match of template.matchAll(PLACEHOLDER)) if (!checked.has(match.index)) return misplaced("after a backslash or other escape");
   return {};

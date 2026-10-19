@@ -132,6 +132,12 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "sh -c {{x}}",
     "xargs {{x}}",
     "if {{x}}; then echo ok; fi",
+    "eval echo {{x}}",
+    "bash -lc {{x}}",
+    "sudo -u me {{x}}",
+    "find . -exec {{x}} ;",
+    // A ")" inside quotes does not close the $(…) around the placeholder.
+    'echo $(printf ")" {{x}})',
     "{ {{x}}; }",
     "printf '%s' \\{{x}}",
     // A quote in a comment must not change what the next line counts as quoted.
@@ -154,6 +160,8 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "[[ -d .git ]] && git checkout {{x}}",
     "f() { local result=ok; printf %s {{x}}; }; f",
     "echo '((' {{x}}",
+    'echo "$(git rev-parse HEAD)" {{x}}',
+    "sh -c 'printf %s \"$1\"' sh {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
