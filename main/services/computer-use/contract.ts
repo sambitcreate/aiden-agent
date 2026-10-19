@@ -126,6 +126,9 @@ export function buildCuaDriverEnvironment(
     CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
     CUA_TELEMETRY_ENABLED: "0",
     CUA_DRIVER_RS_UPDATE_CHECK: "false",
+    // 0.35 turns run_script on by default; Aiden never forwards it, so the
+    // driver should not offer it either (matches the broker's driver.rs).
+    CUA_DRIVER_DISABLE_RUN_SCRIPT: "1",
     // Upstream's cross-tool opt-out; it overrides every other telemetry switch.
     DO_NOT_TRACK: "1",
     NO_COLOR: "1",

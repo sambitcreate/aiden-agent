@@ -1139,6 +1139,8 @@ export class ComputerUseController {
     // 0.34 ignores the deprecated capture_mode; the two include_* switches
     // select the work. Vision skips the AX walk entirely (its snapshot still
     // anchors pixel actions); ax and text-only models skip the screenshot.
+    // Since 0.35 the read is lean: the structured `elements` rows Aiden numbers
+    // arrive only with tree_format "elements", so som/ax ask for exactly that.
     const driverArgs: Record<string, unknown> =
       effectiveMode === "vision"
         ? {
@@ -1146,12 +1148,14 @@ export class ComputerUseController {
             window_id: window.windowId,
             include_accessibility_tree: false,
             include_screenshot: true,
+            tree_format: "markdown",
           }
         : {
             pid: window.pid,
             window_id: window.windowId,
             include_screenshot: includeScreenshot,
             max_elements: axWalkBudget(maximumElements),
+            tree_format: "elements",
           };
     if (maxImageDimension !== undefined && driverArgs.include_screenshot === true) {
       driverArgs.max_image_dimension = maxImageDimension;

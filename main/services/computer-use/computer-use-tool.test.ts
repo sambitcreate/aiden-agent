@@ -640,6 +640,7 @@ test("maps capture modes to Pi images only for positively vision-capable models"
     window_id: 7,
     include_screenshot: true,
     max_elements: 500,
+    tree_format: "elements",
   });
   assert.equal(som.details.elementCount, 2);
   const pixels = await capture(vision.controller, "vision");
@@ -650,6 +651,7 @@ test("maps capture modes to Pi images only for positively vision-capable models"
     window_id: 7,
     include_accessibility_tree: false,
     include_screenshot: true,
+    tree_format: "markdown",
   });
   // The screenshot-only snapshot still anchors pixel actions.
   await approved(vision.controller, "vision-click", { action: "click", coordinate: [10, 10] });
@@ -666,9 +668,76 @@ test("maps capture modes to Pi images only for positively vision-capable models"
     window_id: 7,
     include_screenshot: false,
     max_elements: 500,
+    tree_format: "elements",
   });
   assert.equal(JSON.stringify(degraded).includes(SCREENSHOT_SENTINEL), false);
   await textOnly.controller.close();
+});
+
+function capturedElements(result: { content: unknown[] }): Array<Record<string, unknown>> {
+  const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+    elements: Array<Record<string, unknown>>;
+  };
+  return payload.elements;
+}
+
+test("som capture requests the elements tree_format and still mints tokens", async () => {
+  const { controller, session } = harness(true);
+  const result = await capture(controller, "som");
+  const captureCall = session.calls.find((call) => call.name === "get_window_state")!;
+  assert.equal(captureCall.args.tree_format, "elements");
+  const elements = capturedElements(result);
+  assert.ok(elements.length > 0);
+  assert.deepEqual(
+    elements.map((element) => element.label),
+    ["First", "Second"],
+  );
+  // The numbered rows are actionable: element 1 resolves to its driver token.
+  await approved(controller, "lean-click", { action: "click", element: 1 });
+  const click = session.calls[session.calls.length - 1];
+  assert.equal(click.name, "click");
+  assert.equal(click.args.element_token, session.latestToken(1));
+  await controller.close();
+});
+
+test("capture with an open menu lists its items; a closed menu lists only titles", async () => {
+  const menuBar = [
+    { role: "AXMenuBarItem", label: "File", frame: { x: 110, y: 52, w: 30, h: 16 }, depth: 1 },
+    { role: "AXMenuBarItem", label: "Edit", frame: { x: 145, y: 52, w: 30, h: 16 }, depth: 1 },
+  ];
+  const openFileMenu = [
+    menuBar[0],
+    { role: "AXMenu", label: "File", frame: { x: 110, y: 68, w: 120, h: 60 }, depth: 2 },
+    { role: "AXMenuItem", label: "New Window", frame: { x: 112, y: 70, w: 116, h: 18 }, depth: 3 },
+    { role: "AXMenuItem", label: "Close Window", frame: { x: 112, y: 90, w: 116, h: 18 }, depth: 3 },
+    menuBar[1],
+  ];
+  const labelsAndRoles = (elements: Array<Record<string, unknown>>) =>
+    elements.map((element) => `${element.role}:${element.label}`);
+
+  const open = harness(false);
+  open.session.driver.elements = () => openFileMenu;
+  const openCapture = capturedElements(await capture(open.controller, "ax"));
+  assert.deepEqual(labelsAndRoles(openCapture), [
+    "AXMenuBarItem:File",
+    "AXMenu:File",
+    "AXMenuItem:New Window",
+    "AXMenuItem:Close Window",
+    "AXMenuBarItem:Edit",
+  ]);
+  // An open menu's item is addressable by the number the capture reported.
+  await approved(open.controller, "menu-item", { action: "click", element: 2 });
+  assert.equal(
+    open.session.calls[open.session.calls.length - 1].args.element_token,
+    open.session.latestToken(2),
+  );
+  await open.controller.close();
+
+  const closed = harness(false);
+  closed.session.driver.elements = () => menuBar;
+  const closedCapture = capturedElements(await capture(closed.controller, "ax"));
+  assert.deepEqual(labelsAndRoles(closedCapture), ["AXMenuBarItem:File", "AXMenuBarItem:Edit"]);
+  await closed.controller.close();
 });
 
 test("desktop capture resolves an actionable shell window without persistent driver config", async () => {

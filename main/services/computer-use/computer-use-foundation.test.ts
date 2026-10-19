@@ -251,6 +251,7 @@ test("buildCuaDriverEnvironment strips secrets and disables telemetry and update
   assert.equal(env.CUA_DRIVER_RS_TELEMETRY_ENABLED, "0");
   assert.equal(env.CUA_TELEMETRY_ENABLED, "0");
   assert.equal(env.CUA_DRIVER_RS_UPDATE_CHECK, "false");
+  assert.equal(env.CUA_DRIVER_DISABLE_RUN_SCRIPT, "1");
   assert.equal(env.DO_NOT_TRACK, "1");
   assert.equal(env.OPENAI_API_KEY, undefined);
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
@@ -472,6 +473,7 @@ test("each session owns an authenticated broker bridge and preserves MCP multimo
       pid: 42,
       window_id: 7,
       include_screenshot: true,
+      tree_format: "elements",
     })) as {
       content?: Array<{ type?: string; data?: string; mimeType?: string }>;
       structuredContent?: { screenshot_width?: number; elements?: unknown[] };

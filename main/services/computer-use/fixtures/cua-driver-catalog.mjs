@@ -549,7 +549,7 @@ export const TOOL_DEFINITIONS = {
  * with CUA_DRIVER_DISABLE_RUN_SCRIPT=1, so a live driver omits run_script.
  * `run_actions` is run_steps' hidden alias and is never listed.
  */
-export const UNFORWARDED_TOOLS = new Set(["run_steps", "run_script"]);
+export const UNFORWARDED_TOOLS = new Set(["run_steps", "run_actions", "run_script"]);
 
 const ACTION_RESULT_OUTPUT_SCHEMA = {
   type: "object",
@@ -849,9 +849,10 @@ export const DEFAULT_ELEMENTS = [
  * Stateful 0.36.0 driver behaviour for Aiden's allowlisted tools: closed
  * argument schemas, per-window snapshot tokens that the next capture stales,
  * same-session screenshot context for pixels, background-drag refusal, and
- * the closed ActionResult on success. Its get_window_state still returns the
- * structured `elements` array by default, as 0.34 did; 0.35's lean default
- * (markdown only unless `tree_format` asks for elements) is not modelled yet.
+ * the closed ActionResult on success. Its get_window_state is lean by default
+ * like 0.35+: only `tree_markdown`, with the structured `elements` array only
+ * when `tree_format` is "elements" or "both" or `full_output` is true. The
+ * broker's unforwarded batch/script tools are refused, never dispatched.
  */
 export class FakeCuaDriver {
   constructor({
@@ -875,6 +876,11 @@ export class FakeCuaDriver {
   }
 
   call(name, args = {}) {
+    // The broker drops these before the driver (`jsonrpc.rs`), so an in-memory
+    // caller sees the same refusal a live session would.
+    if (UNFORWARDED_TOOLS.has(name)) {
+      return refusalResult("tool_not_allowed", `${name} is not allowed`);
+    }
     const refused = argumentRefusal(name, args);
     if (refused) return refused;
     switch (name) {
@@ -1020,6 +1026,14 @@ export class FakeCuaDriver {
       type: "text",
       text: `window_id=${window.window_id} pid=${window.pid} elements=${elements.length}`,
     });
+    // window_state_view.rs: the structured rows are opt-in since 0.35.
+    const withElements =
+      args.tree_format === "elements" || args.tree_format === "both" || args.full_output === true;
+    const treeMarkdown = elements
+      .map((row) =>
+        `${"  ".repeat(row.depth ?? 0)}- [${row.element_index}] ${row.role} ${row.label ?? ""}`.trimEnd(),
+      )
+      .join("\n");
     return {
       content,
       structuredContent: {
@@ -1029,8 +1043,8 @@ export class FakeCuaDriver {
         total_element_count: elements.length,
         returned_element_count: elements.length,
         elements_complete: false,
-        tree_markdown: "",
-        elements,
+        tree_markdown: treeMarkdown,
+        ...(withElements ? { elements } : {}),
         snapshot_id: `s${id.toString(16).padStart(8, "0")}`,
         ...(invalidated.length ? { invalidated_snapshot_ids: invalidated } : {}),
         ...(withScreenshot
