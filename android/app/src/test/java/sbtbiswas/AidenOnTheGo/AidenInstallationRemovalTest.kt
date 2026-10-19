@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenReadSnapshotKeys
+import sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentKey
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
 
@@ -108,8 +109,14 @@ class AidenInstallationRemovalTest {
             )
         )
 
+        val visualKey = AidenVisualDocumentKey(
+            "${installation.instanceId}\u001f${installation.deviceId}", "chat-one", "visual-one", "dark", "aiden"
+        )
+        assertTrue(coordinator.visualDocumentCache.store(visualKey, "<html>private visual</html>"))
+
         coordinator.removeInstallation(installation.id)
 
+        assertNull(coordinator.visualDocumentCache.load(visualKey))
         assertTrue(installationStore.installations.value.isEmpty())
         assertNull(secureStore.getCredential(installation.credentialScope))
         assertNull(chatCache.loadChats(installation.instanceId, "workspace-one"))

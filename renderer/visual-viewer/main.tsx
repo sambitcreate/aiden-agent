@@ -194,5 +194,8 @@ if (payload && (payload.kind === "ui" || payload.kind === "html")) {
   document.body.style.margin = "0";
   document.body.style.background = "var(--theme-canvas)";
   const container = document.getElementById("root") ?? document.body.appendChild(document.createElement("div"));
+  // The desktop stylesheet pins html, body and #root to the viewport with
+  // overflow hidden. The viewer scrolls inside its own full-viewport surface.
+  Object.assign(container.style, { position: "fixed", inset: "0", overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain" });
   createRoot(container).render(<Viewer payload={payload} />);
 }

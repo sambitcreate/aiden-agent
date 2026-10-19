@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.persistence
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,7 +115,7 @@ class AidenVisualDocumentCacheTest {
     fun theLoaderCachesFreshDocumentsAndFallsBackWhenTheMacIsUnreachable() = runBlocking {
         val cache = cache()
         var answer: () -> String = { "<html>v1</html>" }
-        val loader = AidenVisualDocumentLoader(cache, fetch = { answer() }, isNotFound = ::isNotFound)
+        val loader = AidenVisualDocumentLoader(cache, fetch = { answer() })
 
         assertEquals(AidenVisualDocumentLoad.Fresh("<html>v1</html>"), loader.load(key("a")))
         answer = { throw IOException("offline") }
@@ -136,14 +138,58 @@ class AidenVisualDocumentCacheTest {
                     404,
                     AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.NOT_FOUND, "Visual not found.", "req_1", false)
                 )
-            },
-            isNotFound = ::isNotFound
+            }
         )
 
         assertEquals(AidenVisualDocumentLoad.Failed(unavailable = true), loader.load(key("a")))
         assertNull(cache.load(key("a")))
     }
+
+    @Test
+    fun aRevokedOrRefusingMacNeverServesTheSavedCopyAndDropsIt() = runBlocking {
+        val refusals = listOf(
+            serverError(401, AidenRemoteErrorCode.CREDENTIAL_REVOKED),
+            serverError(403, AidenRemoteErrorCode.CREDENTIAL_REVOKED),
+            serverError(400, AidenRemoteErrorCode.NOT_FOUND),
+            AidenRemoteClientException.InvalidResponse()
+        )
+        for (refusal in refusals) {
+            val cache = cache()
+            cache.store(key("a"), "<html>private</html>")
+            val loader = AidenVisualDocumentLoader(cache, fetch = { throw refusal })
+
+            assertEquals("$refusal", AidenVisualDocumentLoad.Failed(unavailable = false), loader.load(key("a")))
+            assertNull("$refusal", cache.load(key("a")))
+        }
+    }
+
+    @Test
+    fun aTransientServerFailureStillFallsBackToTheSavedCopy() = runBlocking {
+        val cache = cache()
+        cache.store(key("a"), "<html>saved</html>")
+        val loader = AidenVisualDocumentLoader(cache, fetch = { throw serverError(503, AidenRemoteErrorCode.NOT_FOUND) })
+
+        assertEquals(AidenVisualDocumentLoad.Cached("<html>saved</html>"), loader.load(key("a")))
+    }
+
+    @Test
+    fun aPurgeDuringALoadKeepsTheDocumentFromBeingSavedAgain() = runBlocking {
+        val cache = cache()
+        cache.store(key("a"), "<html>old</html>")
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<String>()
+        val loader = AidenVisualDocumentLoader(cache, fetch = { started.complete(Unit); release.await() })
+
+        val load = async { loader.load(key("a")) }
+        started.await()
+        cache.purgeAll()
+        release.complete("<html>after removal</html>")
+
+        assertEquals(AidenVisualDocumentLoad.Fresh("<html>after removal</html>"), load.await())
+        assertNull(cache.load(key("a")))
+        assertTrue(tempFolder.root.listFiles { file -> file.extension == "html" }!!.isEmpty())
+    }
 }
 
-private fun isNotFound(error: Throwable): Boolean =
-    error is AidenRemoteClientException.Server && error.statusCode == 404
+private fun serverError(status: Int, code: AidenRemoteErrorCode) =
+    AidenRemoteClientException.Server(status, AidenRemoteErrorEnvelope.Body(code, "Refused.", "req_1", false))

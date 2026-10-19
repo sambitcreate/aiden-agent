@@ -16,6 +16,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
@@ -115,8 +116,12 @@ class AidenRemoteCoordinator(
     /** Where unsent Bot messages wait on disk; the app passes `noBackupFilesDir` so they never reach a backup. */
     botOutboxDir: File = storageDir,
     /** Runs the Bot outbox's disk work in order; null uses its own thread. Tests hold it to order a read against a switch. */
-    botOutboxIo: java.util.concurrent.Executor? = null
+    botOutboxIo: java.util.concurrent.Executor? = null,
+    /** Saved visual viewer documents; the app passes a directory under `cacheDir`. */
+    visualDocumentDir: File = File(storageDir, "visual_documents")
 ) {
+    /** Visual viewer documents (revision 35), purged whenever a pairing is removed or revoked. */
+    val visualDocumentCache = AidenVisualDocumentCache(visualDocumentDir)
     val archiveStore = AidenWorkspaceArchiveStore(storageDir)
     val workspaceCache = AidenWorkspaceEnvironmentCache(File(storageDir, "workspace_cache"))
     val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
@@ -487,6 +492,7 @@ class AidenRemoteCoordinator(
         draftStore.purge(installation.instanceId)
         modelPreferenceStore.purge(installation.instanceId)
         navigationStore.purge(installation.instanceId)
+        visualDocumentCache.purgeAll()
         installationStore.removeInstallation(id)
         if (!wasActive) refreshIntentCatalog()
     }

@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.persistence
 
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.io.File
 import java.security.MessageDigest
 
@@ -25,6 +26,8 @@ data class AidenVisualDocumentKey(
  * (the app's caches directory in production). At most [maximumEntries] files and
  * [maximumTotalBytes] in all are kept; the least recently used go first. Reads
  * and writes mark a file used. Cache failures never block the live document.
+ * [purgeAll] runs when any pairing is removed or revoked; a load that started
+ * before it cannot write its document back afterwards.
  */
 class AidenVisualDocumentCache(
     private val directory: File,
@@ -34,6 +37,11 @@ class AidenVisualDocumentCache(
     private val clock: () -> Long = System::currentTimeMillis
 ) {
     private var lastStamp = 0L
+
+    /** Bumped by [purgeAll]; a store for an older generation is refused. */
+    @Volatile
+    var generation = 0L
+        private set
     private var stampInitialized = false
 
     init {
@@ -56,12 +64,17 @@ class AidenVisualDocumentCache(
         null
     }
 
-    /** Returns false when the document was too large to keep or the write failed. */
+    /**
+     * Returns false when the document was too large to keep, the write failed, or
+     * the cache was purged since [expectedGeneration] was read.
+     */
     @Synchronized
-    fun store(key: AidenVisualDocumentKey, html: String): Boolean = try {
+    fun store(key: AidenVisualDocumentKey, html: String, expectedGeneration: Long = generation): Boolean = try {
         val target = file(key)
         val bytes = html.toByteArray(Charsets.UTF_8)
-        if (bytes.isEmpty() || bytes.size > maximumEntryBytes || bytes.size > maximumTotalBytes) {
+        if (expectedGeneration != generation) {
+            false
+        } else if (bytes.isEmpty() || bytes.size > maximumEntryBytes || bytes.size > maximumTotalBytes) {
             // A stale copy must not outlive a newer document that could not be kept.
             target.delete()
             false
@@ -86,6 +99,16 @@ class AidenVisualDocumentCache(
     @Synchronized
     fun remove(key: AidenVisualDocumentKey) {
         file(key).delete()
+    }
+
+    /** Drops every saved document; called when a pairing is removed or revoked. */
+    @Synchronized
+    fun purgeAll() {
+        generation++
+        try {
+            directory.listFiles()?.forEach { if (it.isFile) it.delete() }
+        } catch (_: Exception) {
+        }
     }
 
     private fun evictOverflow() {
@@ -138,30 +161,67 @@ sealed interface AidenVisualDocumentLoad {
     data class Failed(val unavailable: Boolean) : AidenVisualDocumentLoad
 }
 
+/** Why a viewer document fetch failed, which decides whether the cached copy may be shown. */
+enum class AidenVisualDocumentFailure {
+    /** The Mac's `404`: the chat, the visual or the viewer is gone. */
+    NOT_FOUND,
+
+    /** The Mac answered and refused (auth, revocation, a bad request) or broke the contract. */
+    DENIED,
+
+    /** The Mac could not be reached or failed transiently; the cached copy may be shown. */
+    UNREACHABLE;
+
+    companion object {
+        fun classify(error: Throwable): AidenVisualDocumentFailure = when (error) {
+            is AidenRemoteClientException.Server -> when {
+                error.statusCode == 404 -> NOT_FOUND
+                error.statusCode == 408 || error.statusCode == 429 || error.statusCode >= 500 -> UNREACHABLE
+                else -> DENIED
+            }
+            is AidenRemoteClientException.UnexpectedStatus ->
+                if (error.statusCode == 408 || error.statusCode == 429 || error.statusCode >= 500) UNREACHABLE else DENIED
+            is AidenRemoteClientException.InvalidResponse,
+            AidenRemoteClientException.MissingCredential,
+            AidenRemoteClientException.MissingTrustConfiguration,
+            AidenRemoteClientException.InvalidEndpoint -> DENIED
+            else -> UNREACHABLE
+        }
+    }
+}
+
 /**
  * Fetches a viewer document and keeps the cache in step: a fresh document replaces
- * the cached copy; a failed fetch falls back to it; a `404` drops it, since the
- * chat or visual no longer exists on the Mac.
+ * the cached copy; only an unreachable Mac falls back to it. A `404` or a refusal
+ * drops the copy, so a revoked pairing never shows its saved documents.
  */
 class AidenVisualDocumentLoader(
     private val cache: AidenVisualDocumentCache,
     private val fetch: suspend () -> String,
-    private val isNotFound: (Throwable) -> Boolean
+    private val classify: (Throwable) -> AidenVisualDocumentFailure = AidenVisualDocumentFailure::classify
 ) {
     suspend fun load(key: AidenVisualDocumentKey): AidenVisualDocumentLoad {
+        val generation = cache.generation
         val html = try {
             fetch()
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (isNotFound(error)) {
-                cache.remove(key)
-                return AidenVisualDocumentLoad.Failed(unavailable = true)
+            return when (classify(error)) {
+                AidenVisualDocumentFailure.NOT_FOUND -> {
+                    cache.remove(key)
+                    AidenVisualDocumentLoad.Failed(unavailable = true)
+                }
+                AidenVisualDocumentFailure.DENIED -> {
+                    cache.remove(key)
+                    AidenVisualDocumentLoad.Failed(unavailable = false)
+                }
+                AidenVisualDocumentFailure.UNREACHABLE ->
+                    cache.load(key)?.let { AidenVisualDocumentLoad.Cached(it) }
+                        ?: AidenVisualDocumentLoad.Failed(unavailable = false)
             }
-            return cache.load(key)?.let { AidenVisualDocumentLoad.Cached(it) }
-                ?: AidenVisualDocumentLoad.Failed(unavailable = false)
         }
-        cache.store(key, html)
+        cache.store(key, html, generation)
         return AidenVisualDocumentLoad.Fresh(html)
     }
 }

@@ -81,14 +81,12 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentKey
 import sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentLoad
 import sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentLoader
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import java.io.ByteArrayInputStream
-import java.io.File
 
 /** A visual the user tapped, with the snapshot the viewer can fall back to. */
 @Immutable
@@ -121,6 +119,7 @@ internal fun AidenVisualViewerScreen(
     request: AidenVisualViewerRequest,
     chatId: String,
     hostIdentity: String,
+    cache: AidenVisualDocumentCache,
     fetch: suspend (visualId: String, scheme: AidenVisualDocumentScheme, theme: String) -> String,
     onShowImage: (() -> Unit)?,
     /** Appends a confirmed follow-up to the composer and closes; null ignores prompts (read-only). */
@@ -131,7 +130,6 @@ internal fun AidenVisualViewerScreen(
     val scheme = AidenVisualDocumentScheme.forDarkTheme(palette.isDark)
     val theme = AidenVisualDocumentRequest.themeId(AidenTheme.config.preset)
     val context = LocalContext.current
-    val cache = remember(context) { AidenVisualDocumentCacheStore.get(context) }
     val currentFetch by rememberUpdatedState(fetch)
     val visualId = request.visual.id
 
@@ -151,8 +149,7 @@ internal fun AidenVisualViewerScreen(
         val key = AidenVisualDocumentKey(hostIdentity, chatId, visualId, scheme.wire, theme)
         val loader = AidenVisualDocumentLoader(
             cache = cache,
-            fetch = { currentFetch(visualId, scheme, theme) },
-            isNotFound = { error -> error is AidenRemoteClientException.Server && error.statusCode == 404 }
+            fetch = { currentFetch(visualId, scheme, theme) }
         )
         content = when (val result = withContext(Dispatchers.IO) { loader.load(key) }) {
             is AidenVisualDocumentLoad.Fresh -> AidenVisualViewerContent.Document(result.html, stale = false)
@@ -539,15 +536,5 @@ private fun openAidenVisualLink(context: Context, url: String) {
         )
     } catch (_: Exception) {
         // No browser; the link stays unopened.
-    }
-}
-
-/** One cache per process over the app's caches directory. */
-private object AidenVisualDocumentCacheStore {
-    @Volatile private var cache: AidenVisualDocumentCache? = null
-
-    fun get(context: Context): AidenVisualDocumentCache = cache ?: synchronized(this) {
-        cache ?: AidenVisualDocumentCache(File(context.applicationContext.cacheDir, "visual_documents"))
-            .also { cache = it }
     }
 }

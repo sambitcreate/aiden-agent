@@ -251,6 +251,15 @@ actor AidenVisualDocumentCache {
         return html
     }
 
+    /// Whether any document from this paired Mac is saved.
+    func hasDocuments(instanceId: String) -> Bool {
+        let files = (try? fileManager.contentsOfDirectory(
+            at: instanceDirectory(instanceId),
+            includingPropertiesForKeys: nil
+        )) ?? []
+        return files.contains { $0.pathExtension == "html" }
+    }
+
     /// Forgets every document from one paired Mac.
     func purge(instanceId: String) {
         try? fileManager.removeItem(at: instanceDirectory(instanceId))

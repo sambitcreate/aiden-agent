@@ -1196,6 +1196,7 @@ fun AidenChatDetailScreen(
             request = request,
             chatId = chatId,
             hostIdentity = viewModel.visualDocumentHostIdentity,
+            cache = viewModel.visualDocumentCache,
             fetch = viewModel::visualDocument,
             onShowImage = request.snapshot?.let { snapshot ->
                 {

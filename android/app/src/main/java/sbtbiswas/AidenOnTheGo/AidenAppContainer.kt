@@ -49,7 +49,8 @@ class AidenAppContainer(context: Context) {
         navigationStore = navigationStore,
         intentCatalogStore = intentCatalogStore,
         scope = scope,
-        botOutboxDir = appContext.noBackupFilesDir
+        botOutboxDir = appContext.noBackupFilesDir,
+        visualDocumentDir = File(appContext.cacheDir, "visual_documents")
     )
     private val settingsCache = AidenSettingsCache(File(filesDir, "settings_cache"))
     val settingsStore = AidenSettingsStore(settingsCache, scope)

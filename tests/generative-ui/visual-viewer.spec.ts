@@ -139,3 +139,35 @@ test("an HTML visual runs sandboxed with its inlined library, takes the phone's 
   expect(prompts).toEqual([{ type: "prompt", text: "Explain bar b" }]);
   expect(loaded.requests).toEqual([]);
 });
+
+test("tall visuals scroll on a phone-sized screen so below-the-fold actions stay reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 600 });
+  const bundle = await viewerBundle();
+  const scrolled = () => page.evaluate(() => document.querySelector("main")!.parentElement!.scrollTop);
+
+  const visual = uiVisual(`<Visual title="Tall">
+  <Chart kind="bar" data={$data.rows} x="k" y="v" height={900} label="Tall chart" />
+  <Button action={sendPrompt("From the bottom")}>Bottom action</Button>
+  <Data name="data">{"rows": [{"k": "a", "v": 1}, {"k": "b", "v": 2}]}</Data>
+</Visual>`);
+  const native = await openDocument(page, buildVisualViewerDocument({ kind: "ui", title: "Tall", visual, attachments: [] }, { scheme: "light", preset: "aiden" }, bundle, {}));
+  await expect.poll(native.messages).toContainEqual({ type: "ready" });
+  await page.mouse.move(195, 300);
+  await page.mouse.wheel(0, 2000);
+  await expect.poll(scrolled).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: "Bottom action" })).toBeInViewport();
+  await page.getByRole("button", { name: "Bottom action" }).click();
+  await expect.poll(native.messages).toContainEqual({ type: "prompt", text: "From the bottom" });
+
+  await page.unrouteAll();
+  const html = `<div style="height: 1600px"></div><button id="b" onclick="aiden.sendPrompt('Guest bottom')">Guest bottom</button>`;
+  const guest = await openDocument(page, buildVisualViewerDocument({ kind: "html", title: "Tall guest", html }, { scheme: "light", preset: "aiden" }, bundle, {}));
+  await expect.poll(guest.messages).toContainEqual({ type: "ready" });
+  await page.mouse.move(195, 300);
+  await page.mouse.wheel(0, 3000);
+  await expect.poll(scrolled).toBeGreaterThan(0);
+  const button = page.frameLocator("iframe").locator("#b");
+  await expect(button).toBeInViewport();
+  await button.click();
+  await expect.poll(guest.messages).toContainEqual({ type: "prompt", text: "Guest bottom" });
+});

@@ -1468,6 +1468,7 @@ final class AidenChatTests: XCTestCase {
         extraCapabilities: [AidenRemoteCapability] = [],
         networkPath: AidenNetworkPathSource? = nil,
         streamingRevealTick: (@Sendable () async throws -> Void)? = nil,
+        expectsConnection: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         let cache = cache ?? testCache!
@@ -1514,7 +1515,7 @@ final class AidenChatTests: XCTestCase {
             }
         )
         await coordinator.start()
-        XCTAssertEqual(coordinator.connectionState, .connected)
+        if expectsConnection { XCTAssertEqual(coordinator.connectionState, .connected) }
         onCoordinator?(coordinator)
 
         let chat: AidenChat
@@ -1699,6 +1700,54 @@ final class AidenChatTests: XCTestCase {
             mac.lock.withLock { mac.queries },
             ["scheme=dark&theme=dusk", "scheme=dark&theme=dusk", "scheme=light&theme=dusk"]
         )
+    }
+
+    @MainActor
+    func testSavedVisualStaysOpenableAfterAColdStartWithoutTheMac() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-visual-cold-start-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documents = AidenVisualDocumentCache(root: root)
+        let html = "<!doctype html><title>Revenue</title><p>Saved before relaunch</p>"
+        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-visuals-v1","chat-visual-viewer-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+        let documentPath = "/api/aiden/v1/chats/chat-progress-lifecycle/visuals/visual-revenue/document"
+        let dusk = AidenVisualViewerAppearance(scheme: .dark, theme: .dusk)
+
+        let first = try await makeProgressLifecycleModel(
+            mode: .denied,
+            visualDocumentCache: documents,
+            responseOverride: { request in
+                switch request.url?.path {
+                case "/api/aiden/v1/server": return (200, "application/json", Data(serverJSON.utf8))
+                case documentPath: return (200, "text/html; charset=utf-8", Data(html.utf8))
+                default: return nil
+                }
+            }
+        )
+        guard case .live = await first.visualDocument(visualId: "visual-revenue", appearance: dusk) else {
+            return XCTFail("The Mac's document should load and be saved.")
+        }
+
+        // A fresh launch while the Mac can't be reached: no live /server answer arrives.
+        let relaunched = try await makeProgressLifecycleModel(
+            mode: .denied,
+            visualDocumentCache: documents,
+            responseOverride: { request in
+                switch request.url?.path {
+                case "/api/aiden/v1/server", documentPath:
+                    return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                default:
+                    return nil
+                }
+            },
+            expectsConnection: false
+        )
+        await relaunched.refreshSavedVisualDocuments()
+        XCTAssertTrue(relaunched.supportsVisualViewer, "A pairing with saved documents keeps the viewer offline.")
+        guard case .cached(let cached) = await relaunched.visualDocument(visualId: "visual-revenue", appearance: dusk) else {
+            return XCTFail("The saved document should open after an offline relaunch.")
+        }
+        XCTAssertEqual(cached, html)
     }
 
     @MainActor

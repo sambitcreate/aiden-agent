@@ -1883,6 +1883,8 @@ final class AidenChatViewModel {
         guard !isReadOnlyFixture else { return }
         guard !isRemoved else { return }
         guard !instanceId.isEmpty, !isLoading, !isStarting else { return }
+        // Off the load path, so restoring the transcript never waits on it.
+        Task { [weak self] in await self?.refreshSavedVisualDocuments() }
         guard let context = try? coordinator.requestContext(for: instanceId) else {
             clearProgressState()
             return
@@ -3343,11 +3345,26 @@ final class AidenChatViewModel {
     // MARK: - Visual viewer (contract revision 35)
 
     /// The paired Mac announces `chat-visual-viewer-v1`, so a visual opens
-    /// full screen and interactive instead of in the image viewer.
+    /// full screen and interactive instead of in the image viewer. Before any
+    /// live `/server` answer (a cold start without the Mac), a pairing with
+    /// saved documents keeps them openable; a live answer always decides.
     var supportsVisualViewer: Bool {
         guard !isReadOnlyFixture, !isRemoved,
               coordinator.activeInstanceId == instanceId else { return false }
-        return coordinator.server?.supportsChatVisualViewer == true
+        if let server = coordinator.server { return server.supportsChatVisualViewer }
+        return hasSavedVisualDocuments
+    }
+
+    /// This pairing has saved viewer documents on disk.
+    private(set) var hasSavedVisualDocuments = false
+
+    /// Reads whether this pairing has saved viewer documents.
+    func refreshSavedVisualDocuments() async {
+        guard !isReadOnlyFixture, !instanceId.isEmpty else { return }
+        let instanceId = instanceId
+        let saved = await visualDocumentCache.hasDocuments(instanceId: instanceId)
+        guard !isRemoved, self.instanceId == instanceId else { return }
+        hasSavedVisualDocuments = saved
     }
 
     /// The viewer page for one visual in the phone's scheme and theme. A
@@ -3377,7 +3394,7 @@ final class AidenChatViewModel {
                 theme: appearance.theme.rawValue
             )
             guard !isRemoved, coordinator.isCurrent(context) else { return unavailable }
-            await visualDocumentCache.store(html, for: key)
+            if await visualDocumentCache.store(html, for: key) { hasSavedVisualDocuments = true }
             return .live(html)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return unavailable }

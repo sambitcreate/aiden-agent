@@ -1190,6 +1190,10 @@ class AidenChatViewModel(
                 ?.serverFeatures
         )
 
+    /** Saved viewer documents; the coordinator purges them with any pairing. */
+    val visualDocumentCache: sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentCache
+        get() = coordinator.visualDocumentCache
+
     /** Names this pairing in visual document cache keys. */
     val visualDocumentHostIdentity: String
         get() = "$instanceId\u001f$deviceId"
@@ -1201,7 +1205,16 @@ class AidenChatViewModel(
         theme: String
     ): String {
         val client = activeClient() ?: throw AidenRemoteClientException.Disconnected()
-        val html = client.visualDocument(chatId, visualId, scheme, theme)
+        val html = try {
+            client.visualDocument(chatId, visualId, scheme, theme)
+        } catch (error: AidenRemoteClientException.Server) {
+            // A revoked credential removes the pairing, and with it every saved document.
+            if (error.isCredentialRevoked && activeClient() === client &&
+                coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+                coordinator.removeInstallation(instanceId)
+            }
+            throw error
+        }
         if (activeClient() !== client) throw AidenRemoteClientException.Disconnected()
         return html
     }
