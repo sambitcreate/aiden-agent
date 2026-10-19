@@ -529,20 +529,23 @@ test("successful mutations invalidate element and screenshot snapshots", async (
   await controller.close();
 });
 
-test("element drag resolves screenshot-frame centres and always delivers in the foreground", async () => {
+test("drag sends delivery_mode background by default and needs only the chat grant", async () => {
   const { controller, session } = harness(true);
   await capture(controller, "som");
   const args = { action: "drag", from_element: 0, to_element: 1 } as const;
   const approval = await controller.approvalFor(args);
   assert.ok(approval);
-  assert.match(approval.summary, /VISIBLE FOREGROUND/u);
+  // A background drag is an ordinary action under the chat grant, not a
+  // visible-foreground approval.
+  assert.doesNotMatch(approval.summary, /VISIBLE FOREGROUND/u);
   controller.authorize("drag-elements", args, approval);
   const result = await controller.execute("drag-elements", args);
   const drag = session.calls.find((call) => call.name === "drag");
   assert.ok(drag);
   // Safari's elements sit at screen points (110,60) and (250,100), 20pt
   // square, in a window at (100,50) captured at 2x: their screenshot-pixel
-  // centres are (40,40) and (320,120).
+  // centres are (40,40) and (320,120). No delivery_mode means the driver's
+  // background default.
   assert.deepEqual(drag.args, {
     target: SAFARI_TARGET,
     from_x: 40,
@@ -550,9 +553,21 @@ test("element drag resolves screenshot-frame centres and always delivers in the 
     to_x: 320,
     to_y: 120,
     button: "left",
-    delivery_mode: "foreground",
   });
-  assert.equal(result.details.deliveryMode, "foreground");
+  assert.equal(result.details.deliveryMode, "background");
+
+  // An explicit foreground drag is still its own visible-foreground approval.
+  await capture(controller, "som");
+  const foregroundArgs = { ...args, delivery_mode: "foreground" } as const;
+  const foregroundApproval = await controller.approvalFor(foregroundArgs);
+  assert.ok(foregroundApproval);
+  assert.match(foregroundApproval.summary, /VISIBLE FOREGROUND/u);
+  controller.authorize("drag-foreground", foregroundArgs, foregroundApproval);
+  const foreground = await controller.execute("drag-foreground", foregroundArgs);
+  const drags = session.calls.filter((call) => call.name === "drag");
+  assert.equal(drags.length, 2);
+  assert.equal(drags[1].args.delivery_mode, "foreground");
+  assert.equal(foreground.details.deliveryMode, "foreground");
   await controller.close();
 });
 
@@ -570,14 +585,16 @@ test("element drag without a screenshot frame is refused before approval", async
   await controller.close();
 });
 
-test("a driver refusing background drag asks for an approved foreground retry", async () => {
+test("drag refused with background_unavailable offers a foreground retry and does not resend", async () => {
   const { controller, session } = harness(true);
   await capture(controller, "som");
-  // A drag the driver still refuses (e.g. a policy that strips foreground).
+  // 0.36 drags in the background unless macOS starts a native drag-and-drop
+  // session; the driver then releases at once and names the foreground retry.
   session.handler = (call) =>
     call.name === "drag"
-      ? codedRefusal("background_unavailable", "Background drag is unavailable on macOS.", {
-          escalation: { recommended: "foreground", reason: "no background drag route" },
+      ? codedRefusal("background_unavailable", "This drag started a drag-and-drop session.", {
+          suggestion: 'Retry this action with delivery_mode:"foreground".',
+          escalation: { recommended: "foreground", reason: "drag-and-drop session" },
         })
       : fakeResponse(call, session.driver);
   await assert.rejects(
@@ -585,7 +602,11 @@ test("a driver refusing background drag asks for an approved foreground retry", 
     (error: Error & { code?: string }) =>
       error.code === "foreground_required" && /delivery_mode "foreground"/u.test(error.message),
   );
+  const drags = session.calls.filter((call) => call.name === "drag");
+  assert.equal(drags.length, 1);
+  assert.equal(drags[0].args.delivery_mode, undefined);
   assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), true);
   await controller.close();
 });
 
@@ -1777,5 +1798,6 @@ test("electron_main_process_unavailable asks for an approved foreground retry", 
   assert.equal(error.code, "foreground_required");
   assert.match(error.message, /delivery_mode "foreground"/u);
   assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), true);
   await controller.close();
 });

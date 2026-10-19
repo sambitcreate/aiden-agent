@@ -1452,7 +1452,8 @@ export class ComputerUseController {
         break;
       }
       case "drag": {
-        // macOS 0.34 drag has no element endpoints and is foreground-only.
+        // cua-driver drag has no element endpoints, so elements resolve to
+        // screenshot-frame centres. It defaults to background delivery.
         tool = "drag";
         const from =
           args.from_element !== undefined

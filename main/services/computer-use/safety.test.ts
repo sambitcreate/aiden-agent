@@ -361,7 +361,7 @@ test("normalizeComputerUseArgs delivery mode + bring_to_front", () => {
 test("normalizeComputerUseArgs drag branch requires one source and one target", () => {
   assert.deepEqual(
     normalizeComputerUseArgs({ action: "drag", from_element: 1, to_element: 2 } as never),
-    { action: "drag", from_element: 1, to_element: 2, button: "left", delivery_mode: "foreground" },
+    { action: "drag", from_element: 1, to_element: 2, button: "left", delivery_mode: "background" },
   );
   assert.deepEqual(
     normalizeComputerUseArgs({
@@ -374,20 +374,22 @@ test("normalizeComputerUseArgs drag branch requires one source and one target", 
       from_coordinate: [0, 0],
       to_coordinate: [5, 5],
       button: "left",
-      delivery_mode: "foreground",
+      delivery_mode: "background",
     },
   );
-  // macOS has no background drag route; the approval shows the foreground.
-  assertSafetyError("foreground_required", () =>
-    normalizeComputerUseArgs({
+  // Drag defaults to the background; only an explicit foreground request
+  // shows the visible-foreground approval.
+  assert.doesNotMatch(
+    summarizeComputerUseApproval({ action: "drag", from_element: 1, to_element: 2 } as never),
+    /VISIBLE FOREGROUND/u,
+  );
+  assert.match(
+    summarizeComputerUseApproval({
       action: "drag",
       from_element: 1,
       to_element: 2,
-      delivery_mode: "background",
+      delivery_mode: "foreground",
     } as never),
-  );
-  assert.match(
-    summarizeComputerUseApproval({ action: "drag", from_element: 1, to_element: 2 } as never),
     /VISIBLE FOREGROUND/u,
   );
   // Missing one side.

@@ -743,17 +743,6 @@ export class FakeSnapshotStore {
   /** Returns a refusal result, or null when the call may proceed. */
   admit(name, args) {
     const { pid, windowId } = actionWindow(args);
-    // drag.rs refuses background delivery before resolving any coordinate.
-    if (name === "drag" && args.delivery_mode !== "foreground") {
-      return codedRefusal(
-        "background_unavailable",
-        "Background drag is unavailable on macOS: a drag is delivered as real pointer events to the frontmost window.",
-        {
-          suggestion: 'Retry this action with delivery_mode:"foreground".',
-          escalation: { recommended: "foreground", reason: "background drag unavailable" },
-        },
-      );
-    }
     if (typeof args.element_token === "string") {
       const [snapshot] = args.element_token.split(":");
       const live = [...this.windows.entries()].some(
@@ -848,7 +837,7 @@ export const DEFAULT_ELEMENTS = [
 /**
  * Stateful 0.36.0 driver behaviour for Aiden's allowlisted tools: closed
  * argument schemas, per-window snapshot tokens that the next capture stales,
- * same-session screenshot context for pixels, background-drag refusal, and
+ * same-session screenshot context for pixels, background drag, and
  * the closed ActionResult on success. Its get_window_state is lean by default
  * like 0.35+: only `tree_markdown`, with the structured `elements` array only
  * when `tree_format` is "elements" or "both" or `full_output` is true. The

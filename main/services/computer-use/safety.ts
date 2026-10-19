@@ -584,8 +584,10 @@ export function normalizeComputerUseArgs(input: ComputerUseArgs): ComputerUseArg
       result.button = button;
       const modifiers = canonicalModifiers(source.modifiers);
       if (modifiers?.length) result.modifiers = modifiers;
-      // cua-driver drag.rs: macOS has no background drag route.
-      applyDelivery(source, result, "drag needs foreground delivery on macOS.");
+      // cua-driver 0.36 drags window targets in the background; it refuses
+      // with background_unavailable only when macOS starts a native
+      // drag-and-drop session, and the model then retries in the foreground.
+      applyDelivery(source, result);
       copyCaptureAfter(source, result);
       break;
     }
