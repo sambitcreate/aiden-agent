@@ -234,6 +234,7 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "git grep -c {{x}}",
     "git log -c {{x}}",
     "git --no-pager -C repo log -c {{x}}",
+    "git --no-literal-pathspecs log -c {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }

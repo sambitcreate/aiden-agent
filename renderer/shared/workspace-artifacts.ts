@@ -267,7 +267,7 @@ const CODE_ARGUMENTS: Record<string, CodeArguments> = {
     code: /^(?:-c|--config-env|--exec-path)$/u,
     valued: /^-C$/u,
     subcommand: /^[a-z][a-z0-9-]*$/u,
-    flags: /^(?:-[pPv]|--(?:paginate|no-pager|bare|version|help|no-replace-objects|no-lazy-fetch|no-optional-locks|no-advice|(?:no|literal|glob|noglob|icase)-pathspecs|(?:html|man|info)-path))$/u,
+    flags: /^(?:-[pPv]|--(?:paginate|no-pager|bare|version|help|no-replace-objects|no-lazy-fetch|no-optional-locks|no-advice|(?:no-)?(?:literal|glob|noglob|icase)-pathspecs|(?:html|man|info)-path))$/u,
   },
 };
 /** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
