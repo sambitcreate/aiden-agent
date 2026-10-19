@@ -172,3 +172,7 @@ Keyboard shortcuts. If an AppImage does not start, prefer the native distro
 package or use the extraction command above. When reporting a Linux issue,
 include the distribution, architecture, desktop environment, X11/Wayland
 session type, package format, and the exact error shown by Aiden.
+
+### Headless CLI durable Bots
+
+The standalone CLI supports an explicit `aiden bots enable-durable` migration followed by a daemon restart. It preserves legacy chats and journals, requires the existing profile/credential authority, and exposes only the supported Remote capabilities. See [migration, recovery and capability limits](cli-durable-bots.md).

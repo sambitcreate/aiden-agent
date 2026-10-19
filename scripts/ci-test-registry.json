@@ -183,6 +183,8 @@
         "main/services/local-speech-worker-core.test.ts",
         "main/services/pi-agent-runtime-harness.test.ts",
         "main/services/pi-verification-store.test.ts",
+        "main/services/task-quality-adapter.test.ts",
+        "main/services/workflow-evidence-store.test.ts",
         "main/services/pi-agent-runtime-harness-finish-turn.test.ts",
         "main/services/pi-codemode.test.ts",
         "main/services/context-pressure-tools.test.ts",

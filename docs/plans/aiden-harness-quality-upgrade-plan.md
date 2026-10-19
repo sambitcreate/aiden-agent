@@ -63,12 +63,12 @@ Each row is a reviewable slice, not one large PR. H0 precedes implementation. In
 | H1c | Discovery across admitted namespaces with bounded output | H0 | Implemented; fresh review findings addressed |
 | H1d | Failed CLI advisor accounting and useful CI receipts | H0 | Implemented; fresh review passed |
 | H2a | Versioned, host-owned verification/evidence receipts | H0 | Private command/lifecycle foundation accepted; predicates/consumer H2b |
-| H2b | Protected six-task evaluation adapter and offline falsification | H2a | Planned |
+| H2b | Protected six-task evaluation adapter and offline falsification | H2a | Implemented; fresh review passed on macOS |
 | H2c | One bounded baseline/candidate live pilot | H2b and resolved pilot budget/configuration | Planned; no trial started |
 | H3 | Portable durable Bot-session parity for CLI/native consumers | H0; portability decision below | Implemented; fresh review passed, physical pairing pending |
 | H4a | Packaged long-chat and idle performance baselines | H0 | Planned |
 | H4b | Measured transcript rendering improvement | H4a | Planned |
-| H5a | Versioned workflow evidence and lesson candidates | H2a, H2b | Planned |
+| H5a | Versioned workflow evidence and lesson candidates | H2a, H2b | Implemented private foundation; fresh review passed |
 | H5b | Explicit workflow experiment and adoption UI | H5a, completed H2c with usable measurement pipeline | Planned; off by default |
 
 ### H0 — Freeze the baseline and reconcile ownership
@@ -213,7 +213,7 @@ Evaluate baseline/candidate with lifecycle/compaction replay, provider serializa
 - [x] Scope clarified: Aiden harness first; active Pi version fixed initially.
 - [x] Plan, index entry, and project-memory note prepared.
 - [x] H0 baseline/ownership refreshed for implementation.
-- [ ] H1 corrective slices implemented and accepted.
+- [x] H1 corrective slices implemented and accepted.
 - [ ] H2 evidence/evaluation pipeline implemented; separately scoped live pilot recorded.
 - [ ] H3 CLI durable Bot parity implemented and accepted.
 - [ ] H4 packaged baseline and justified rendering changes accepted.
@@ -245,3 +245,11 @@ H1c: global ranked corpus bounded at 4,096 tools, metadata validation at 16,384 
 H1d: attempt-keyed CLI accounting preserves unknown tokens/cost and cancellation, with atomic idempotency markers and failed-persistence retry semantics. Safe Playwright failure receipts contain hashed repository test identity and bounded categories/timing, never assertion content or local paths. Fresh final review passed; 17 advisor, 3 reporter, 66 CI-policy and both 120-test CLI suites pass.
 
 H3: explicit preserving migration opts the CLI into the shared durable Bot-session core; current authority and durable SQLite context are reloaded at tool dispatch. Unsupported capabilities remain withheld. Fresh final review passed after correcting stale subagent/image context. macOS/Linux CLI 120/120 each, desktop Bot runtime216/216 and Remote sessions/routines78/78; focused iOS simulator and Android unit BotSession/RemoteClient suites passed. Physical pairing/background acceptance is pending. Pi additions match1.3.0; no upgrade of active pins.
+
+H2b: protected OS-isolated verifier and production tool/session adapter preserve all 7 positive/22 negative controls. Fresh review found and corrected module reset, protocol tampering and cross-call argument aliasing; persistent constrained-Python execution and bounded object-graph identity now preserve frozen-oracle observations. Unsupported Python is inconclusive. Seven adapter and eleven workflow tests pass; Linux execution remains unverified. No live inference ran.
+
+H5a: private workflow evidence captures actual host receipt digests; bounded, expiring lesson drafts support no lesson, conflicting evidence, withdrawal and immutable rollback lineage. Chat deletion/reconciliation owns cleanup. Fresh review passed38 focused tests and registration was added. H5b remains gated on H2c; there is no adoption UI or prompt/skill injection.
+
+H2a child follow-up: a real-harness cap-three reproduction previously dispatched four model requests/three effects without a report. The final existing-budget turn is now text-only, producing at most three requests/two effects and an explicitly failed/incomplete/unverified partial report. Stale tool calls cannot execute. 139 focused tests, types/lint and fresh review pass. No deadline or mutation authority increase.
+
+Integration refreshed through origin/main4eb306584 (merge d1ff95802); only documentation/comment changes arrived. Root test-chain union is preserved, no Remote revision change is required. Broader local gates: compaction545, MCP290, Assistant automations239 passed.

@@ -1,4 +1,5 @@
 import { PiVerificationStore, verificationIdentity, verificationSnapshot } from "./pi-verification-store.js";
+import { WorkflowEvidenceStore } from "./workflow-evidence-store.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { DataStore } from "./data-store.js";
 import {
@@ -128,6 +129,7 @@ function makeDataStore(
  */
 export class PiRuntimeEffectStore {
   readonly verification: PiVerificationStore;
+  readonly workflowEvidence: WorkflowEvidenceStore;
   private readonly now: () => number;
   private readonly data: DataStore<DurablePiRuntimeEffectDatabase>;
   private readonly localUnknown = new Map<string, DurablePiRuntimeEffect>();
@@ -137,6 +139,7 @@ export class PiRuntimeEffectStore {
   constructor(options: PiRuntimeEffectStoreOptions) {
     this.now = options.now ?? Date.now;
     this.verification = new PiVerificationStore(options.root, this.now);
+    this.workflowEvidence = new WorkflowEvidenceStore(this.verification, options.root, this.now);
     this.data = options.dataStore ?? makeDataStore(options);
   }
 
@@ -674,6 +677,7 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (effect.chatId === chatId) this.localUnknown.delete(effectId);
     }
+    await this.workflowEvidence.deleteByChat(chatId);
     await this.verification.deleteByChat(chatId);
   }
 
@@ -699,6 +703,7 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (!valid.has(effect.chatId)) this.localUnknown.delete(effectId);
     }
+    await this.workflowEvidence.reconcileChats(validChatIds);
     await this.verification.reconcileChats(validChatIds);
   }
 }
