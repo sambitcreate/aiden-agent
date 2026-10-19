@@ -206,23 +206,23 @@ test("provider-counted tokens beyond the local itemization get their own segment
     const legend = screen.getByRole("list", { name: "Context by category" });
     const row = within(legend)
       .getAllByRole("listitem")
-      .find((item) => item.querySelector("[data-legend-label]")?.textContent === "Provider-counted, not itemized");
+      .find((item) => item.querySelector("[data-legend-label]")?.textContent === "Not itemized");
     assert.ok(row, "missing the provider-counted row");
     assert.ok(within(row).getByText(formatContextTokenCount(excess)));
-    assert.equal(legendLabels()[0], "Provider-counted, not itemized");
+    assert.equal(legendLabels()[0], "Not itemized");
     assert.ok(within(legend).getByText("Messages"));
     const label = screen.getByRole("img").getAttribute("aria-label") ?? "";
-    assert.ok(label.includes(`Provider-counted, not itemized ${formatContextTokenCount(excess)}`), label);
+    assert.ok(label.includes(`Not itemized ${formatContextTokenCount(excess)}`), label);
     const tiles = Array.from(screen.getByRole("img").querySelectorAll("[data-tile]"));
     assert.equal(tiles.length, CONTEXT_TILE_COUNT);
-    assert.ok(tiles.some((tile) => tile.getAttribute("title") === "Provider-counted, not itemized"));
+    assert.ok(tiles.some((tile) => tile.getAttribute("title") === "Not itemized"));
     cleanup();
   }
 });
 
 test("no provider-counted row when the itemization covers the whole projection", () => {
   render(<ContextBreakdown pressure={pressure()} />);
-  assert.ok(!legendLabels().includes("Provider-counted, not itemized"));
+  assert.ok(!legendLabels().includes("Not itemized"));
 });
 
 test("the grid lays the window out as 100 tiles: used first, then free, then the reserve", () => {
@@ -286,4 +286,47 @@ test("the composer popover warns as soon as its meter does, before compaction is
 test("a reserve under half a tile still gets one tile", () => {
   const kinds = contextTiles(pressure({ reservedTokens: 4_000, inputBudgetTokens: 996_000 })).map((tile) => tile.kind);
   assert.equal(kinds.filter((kind) => kind === "reserved").length, 1);
+});
+
+test("a window too small for Aiden's own prompt says so instead of promising compaction", () => {
+  // A 2K local model: 2,047 tokens are reserved, leaving a 1-token budget.
+  render(
+    <ContextBreakdown
+      pressure={pressure({
+        contextWindow: 2_048,
+        reservedTokens: 2_047,
+        inputBudgetTokens: 1,
+        contextTokens: 9_000,
+        messageTokens: 400,
+        staticTokens: 8_600,
+        percentOfUsableInput: 900_000,
+        shouldCompact: true,
+        breakdown: undefined,
+      })}
+    />,
+  );
+  assert.ok(screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === ">999% used"));
+  const note = screen.getByRole("note").textContent ?? "";
+  assert.match(note, /context window is too small/u);
+  assert.doesNotMatch(note, /will compact/u);
+  assert.equal(tileKinds().every((kind) => kind === "used"), true);
+});
+
+test("a category that rounds to nothing in a huge window still reads as present", () => {
+  render(<ContextBreakdown pressure={pressure({ contextWindow: 2_000_000 })} />);
+  const legend = screen.getByRole("list", { name: "Context by category" });
+  const memory = within(legend)
+    .getAllByRole("listitem")
+    .find((item) => item.querySelector("[data-legend-label]")?.textContent === "Memory");
+  assert.ok(memory);
+  assert.ok(within(memory).getByText("<0.1%"));
+});
+
+test("a little context in a huge window reads as under 1%, not 0%", () => {
+  render(
+    <ContextBreakdown
+      pressure={pressure({ contextWindow: 2_000_000, inputBudgetTokens: 1_883_600, contextTokens: 8_600, percentOfUsableInput: 0.4 })}
+    />,
+  );
+  assert.ok(screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === "<1% used"));
 });

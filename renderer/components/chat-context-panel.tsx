@@ -52,6 +52,13 @@ export function recordedChatUsage(chat: Pick<Chat, "messages">) {
   };
 }
 
+/** Like formatContextTokenCount, with billions for long sessions' cumulative totals. */
+function formatUsageTokens(value: number): string {
+  return value >= 999_950_000
+    ? `${(value / 1_000_000_000).toFixed(1).replace(/\.0$/u, "")}B`
+    : formatContextTokenCount(value);
+}
+
 function Chip({ children }: React.PropsWithChildren) {
   return (
     <span className="inline-flex max-w-full items-center rounded-control bg-control px-2.5 py-0.5 text-small text-secondary">
@@ -69,7 +76,7 @@ const USAGE_PARTS = [
 
 function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }) {
   const reported = usage.turns > 0;
-  const token = (value: number) => (reported ? value.toLocaleString() : "Unavailable");
+  const token = (value: number) => value.toLocaleString();
   const cacheable = usage.cacheRead + usage.cacheWrite + usage.input;
   const cachePercent = reported && usage.cacheRead > 0 && cacheable > 0 ? Math.round((usage.cacheRead / cacheable) * 100) : null;
   const barTotal = USAGE_PARTS.reduce((sum, part) => sum + usage[part.key], 0);
@@ -86,7 +93,7 @@ function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }
       {reported ? (
         <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span className="text-heading1 font-semibold tracking-tight tabular-nums">
-            {formatContextTokenCount(usage.total)}
+            {formatUsageTokens(usage.total)}
           </span>
           <span className="text-regular text-secondary">tokens</span>
           {cachePercent !== null ? (
@@ -111,32 +118,42 @@ function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }
           ))}
         </div>
       ) : null}
-      <dl className="mt-3 space-y-1.5 text-small">
-        {USAGE_PARTS.map((part) => (
-          <div className="flex items-center justify-between gap-4" key={part.key}>
-            <dt className="flex items-center gap-2 text-secondary">
-              <span aria-hidden="true" className="size-2 rounded-full" style={{ background: part.fill }} />
-              {part.label}
-            </dt>
-            <dd className="tabular-nums">{token(usage[part.key])}</dd>
+      {!reported ? (
+        <p className="mt-2 text-small text-secondary">
+          {usage.assistantMessages > 0
+            ? "This provider hasn't reported token usage for this chat."
+            : "Usage appears after the first reply."}
+        </p>
+      ) : (
+        <dl className="mt-3 space-y-1.5 text-small">
+          {USAGE_PARTS.map((part) => (
+            <div className="flex items-center justify-between gap-4" key={part.key}>
+              <dt className="flex items-center gap-2 text-secondary">
+                <span aria-hidden="true" className="size-2 rounded-full" style={{ background: part.fill }} />
+                {part.label}
+              </dt>
+              <dd className="tabular-nums">{token(usage[part.key])}</dd>
+            </div>
+          ))}
+          <div className="flex justify-between gap-4">
+            <dt className="pl-4 text-secondary">Total reported tokens</dt>
+            <dd className="tabular-nums">{token(usage.total)}</dd>
           </div>
-        ))}
-        <div className="flex justify-between gap-4">
-          <dt className="pl-4 text-secondary">Total reported tokens</dt>
-          <dd className="tabular-nums">{token(usage.total)}</dd>
-        </div>
-        <div className="flex justify-between gap-4 text-tertiary">
-          <dt className="pl-4">Reasoning tokens</dt>
-          <dd>Unavailable</dd>
-        </div>
-        <div className="flex justify-between gap-4 text-tertiary">
-          <dt className="pl-4">Total cost</dt>
-          <dd>Unavailable</dd>
-        </div>
-      </dl>
-      <p className="mt-3 text-mini text-tertiary">
-        {`Reported by ${usage.turns} of ${usage.assistantMessages} saved assistant turns. Repeated requests count each time; live work and subagents are not included.`}
-      </p>
+          <div className="flex justify-between gap-4 text-tertiary">
+            <dt className="pl-4">Reasoning tokens</dt>
+            <dd>Unavailable</dd>
+          </div>
+          <div className="flex justify-between gap-4 text-tertiary">
+            <dt className="pl-4">Total cost</dt>
+            <dd>Unavailable</dd>
+          </div>
+        </dl>
+      )}
+      {reported ? (
+        <p className="mt-3 text-mini text-tertiary">
+          {`Reported by ${usage.turns} of ${usage.assistantMessages} saved assistant turns. Repeated requests count each time; live work and subagents are not included.`}
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -164,7 +181,7 @@ export function ChatContextPanel({
       className="@container h-full overflow-y-auto p-5"
       aria-label="Chat context details"
     >
-      <div className="grid gap-4 @min-[760px]:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+      <div className="grid items-start gap-4 @min-[760px]:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
         <section className="rounded-card bg-well p-4">
           <div className="mb-4 flex items-baseline justify-between gap-3">
             <h2 className="text-large-strong">Next request</h2>

@@ -4,8 +4,8 @@
 
 import * as React from "react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "./ui";
-import { ContextStatus } from "./context-breakdown";
-import { ContextPips, ContextTiles } from "./context-tiles";
+import { ContextStatus, compactionNote, contextWindowTooSmall } from "./context-breakdown";
+import { ContextPips, ContextTiles, contextPercentLabel } from "./context-tiles";
 import { cn } from "../lib/ui-utils";
 import {
   contextPressurePercent,
@@ -52,7 +52,9 @@ export function ContextMeter({
   const phase = contextMeterPhase(pressure, compacting, recentlyCompacted);
   const emphasized = phase === "compaction-pending" || phase === "compacting";
   const stateText =
-    phase === "compaction-pending"
+    phase !== "compacting" && contextWindowTooSmall(pressure)
+      ? compactionNote(pressure, true, false)
+      : phase === "compaction-pending"
       ? "Aiden will compact context before the next request."
       : phase === "compacting"
         ? "Compacting context…"
@@ -79,8 +81,8 @@ export function ContextMeter({
           aria-label={`Context usage, ${percent} percent${emphasized ? ", will compact before the next request" : ""}`}
           title="Projected context for the next request"
         >
-          <ContextPips percent={percent} warning={warning} />
-          <span className="context-meter-percent text-mini tabular-nums">{percent}%</span>
+          <ContextPips percent={percent} warning={warning} used={pressure.contextTokens > 0} />
+          <span className="context-meter-percent text-mini tabular-nums">{contextPercentLabel(percent, pressure.contextTokens)}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -137,7 +139,7 @@ export function ContextMeterDetails({
               emphasized ? "text-support-warning" : "text-primary",
             )}
           >
-            {percent}%
+            {contextPercentLabel(percent, pressure.contextTokens)}
           </span>
           <span className="mt-0.5 block text-small text-secondary tabular-nums">
             {`${tokenLabel(pressure, pressure.contextTokens)} of ${formatContextTokenCount(pressure.inputBudgetTokens)} usable`}

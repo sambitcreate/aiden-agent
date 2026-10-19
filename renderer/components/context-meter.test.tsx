@@ -101,3 +101,20 @@ test("context details aggregate durable turn totals once without inventing unava
   assert.match(text, /78% from cache/u);
 });
 
+
+test("cumulative usage past a billion tokens reads in billions", async () => {
+  const { ChatContextPanel } = await import("./chat-context-panel.js");
+  const usage = { input: 90_000_000, output: 10_000_000, cacheRead: 1_100_000_000, cacheWrite: 0, total: 1_200_000_000, requests: 900 };
+  const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage } };
+  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Long", createdAt: 1, updatedAt: 20, messages: [turn] }, pressure: null, compacting: false, providerLabel: "Local", modelLabel: "Model" }} />);
+  assert.match(html, />1\.2B</u);
+  assert.match(html, /92% from cache/u);
+});
+
+test("a chat whose provider never reported usage says so once instead of a column of Unavailable", async () => {
+  const { ChatContextPanel } = await import("./chat-context-panel.js");
+  const messages = [{ id: "old", role: "assistant" as const, content: "local reply", createdAt: 1 }];
+  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages }, pressure: pressure(), compacting: false, providerLabel: "Ollama", modelLabel: "llama3.2" }} />);
+  assert.match(html, /hasn(?:'|&#x27;)t reported token usage/u);
+  assert.doesNotMatch(html, /Unavailable/u);
+});

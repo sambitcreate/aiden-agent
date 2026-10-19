@@ -64,7 +64,7 @@ export function contextSegments(pressure: ChatContextPressureV1): ContextSegment
   // usage anchors the projection; show that excess instead of hiding it in Free.
   const unitemized: ContextSegment = {
     key: "unitemized",
-    label: "Provider-counted, not itemized",
+    label: "Not itemized",
     tokens: Math.max(0, pressure.contextTokens - pressure.messageTokens - pressure.staticTokens),
     fill: UNITEMIZED_COLOR,
   };
@@ -165,9 +165,22 @@ export function ContextTiles({
   );
 }
 
+/** "42%"; "<1%" when some context is used but rounds to zero; ">999%" when a model's window is far too small. */
+export function contextPercentLabel(percent: number, usedTokens = 0): string {
+  if (percent === 0 && usedTokens > 0) return "<1%";
+  return percent > 999 ? ">999%" : `${percent}%`;
+}
+
+/** Share of the window with one decimal; a nonzero share never reads as 0.0%. */
+export function percentOfWindowLabel(tokens: number, contextWindow: number): string {
+  if (contextWindow <= 0) return "—";
+  const percent = (tokens / contextWindow) * 100;
+  return tokens > 0 && percent < 0.05 ? "<0.1%" : `${percent.toFixed(1)}%`;
+}
+
 /** Ten pips, one per 10% of usable context; any usage lights the first. */
-export function ContextPips({ percent, warning }: { percent: number; warning: boolean }) {
-  const lit = percent > 0 ? Math.min(10, Math.max(1, Math.round(percent / 10))) : 0;
+export function ContextPips({ percent, warning, used = percent > 0 }: { percent: number; warning: boolean; used?: boolean }) {
+  const lit = used ? Math.min(10, Math.max(1, Math.round(percent / 10))) : 0;
   return (
     <span aria-hidden="true" data-lit={lit} className="inline-flex shrink-0 items-center gap-[2px]">
       {Array.from({ length: 10 }, (_, index) => (

@@ -16,24 +16,30 @@ import {
   ContextTiles,
   FREE_COLOR,
   RESERVED_FILL,
+  contextPercentLabel,
   contextSegments,
   freeContextTokens,
+  percentOfWindowLabel,
 } from "./context-tiles";
 
 const DEFERRED_LABELS: Record<DeferredContextCategory["id"], { row: string; fold: string }> = {
   "mcp-tools": { row: "MCP tools (deferred)", fold: "MCP tools by server" },
 };
 
-function percentOfWindow(tokens: number, contextWindow: number): string {
-  return contextWindow > 0 ? `${((tokens / contextWindow) * 100).toFixed(1)}%` : "—";
-}
-
 function pluralMessages(count: number): string {
   return `${count} earlier ${count === 1 ? "message" : "messages"}`;
 }
 
+/** Aiden's own prompt and tools no longer fit, so compaction cannot help and requests will fail. */
+export function contextWindowTooSmall(pressure: ChatContextPressureV1): boolean {
+  return pressure.staticTokens > pressure.inputBudgetTokens;
+}
+
 export function compactionNote(pressure: ChatContextPressureV1, approaching: boolean, compacting: boolean): string {
   if (compacting) return "Compacting context…";
+  if (contextWindowTooSmall(pressure)) {
+    return "This model's context window is too small for Aiden's prompt and tools. Choose a larger-context model or turn off integrations that add tools.";
+  }
   if (pressure.shouldCompact) return "Aiden will compact context before the next request.";
   const count = pressure.compressibleHistoryMessages;
   if (count === 0) return "Healthy. No earlier messages to compact yet.";
@@ -201,7 +207,7 @@ export function ContextBreakdown({
           approaching ? "text-support-warning" : "text-primary",
         )}
       >
-        {`${percent}%`}{" "}
+        {contextPercentLabel(percent, pressure.contextTokens)}{" "}
         <span className="text-regular font-normal tracking-normal text-secondary">used</span>
       </span>
       <span className="text-small text-tertiary tabular-nums">
@@ -217,7 +223,7 @@ export function ContextBreakdown({
           key={segment.key}
           label={segment.label}
           tokens={segment.tokens}
-          ofWindow={percentOfWindow(segment.tokens, pressure.contextWindow)}
+          ofWindow={percentOfWindowLabel(segment.tokens, pressure.contextWindow)}
           fill={segment.fill}
           share={largest > 0 ? segment.tokens / largest : 0}
         />

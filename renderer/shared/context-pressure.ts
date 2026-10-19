@@ -253,14 +253,10 @@ export function parseChatContextPressureNotification(
 export function formatContextTokenCount(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "0";
   const rounded = Math.round(value);
-  if (rounded >= 1_000_000) {
-    const millions = rounded / 1_000_000;
-    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
-  }
-  if (rounded >= 1_000) {
-    const thousands = rounded / 1_000;
-    return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`;
-  }
+  // One decimal, dropping a trailing ".0"; 999,950 rounds up to "1M", never "1000.0K".
+  const scaled = (amount: number, unit: string) => `${amount.toFixed(1).replace(/\.0$/u, "")}${unit}`;
+  if (rounded >= 999_950) return scaled(rounded / 1_000_000, "M");
+  if (rounded >= 1_000) return scaled(rounded / 1_000, "K");
   return String(rounded);
 }
 

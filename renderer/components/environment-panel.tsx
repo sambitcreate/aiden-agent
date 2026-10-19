@@ -29,7 +29,7 @@ import {
   useShowWorkspaceFolder,
 } from "./environment-overview";
 import { ContextBreakdown, contextApproaching } from "./context-breakdown";
-import { ContextPips } from "./context-tiles";
+import { ContextPips, contextPercentLabel } from "./context-tiles";
 import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
 import { SubagentStatusGroups } from "./subagent-status-groups";
 import {
@@ -1586,8 +1586,8 @@ function ContextSummaryMeter({
   const approaching = contextApproaching(pressure, compacting);
   return (
     <>
-      <span>{`${percent}%`}</span>
-      <ContextPips percent={percent} warning={approaching} />
+      <span>{contextPercentLabel(percent, pressure.contextTokens)}</span>
+      <ContextPips percent={percent} warning={approaching} used={pressure.contextTokens > 0} />
     </>
   );
 }

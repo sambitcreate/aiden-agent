@@ -90,6 +90,10 @@ test("token formatting stays compact and approximate", () => {
   assert.equal(formatContextTokenCount(1_000_000), "1M");
   assert.equal(formatContextTokenCount(1_572_000), "1.6M");
   assert.equal(formatContextTokenCount(-4), "0");
+  // Rounding never produces "1000.0K" or a trailing ".0".
+  assert.equal(formatContextTokenCount(999_950), "1M");
+  assert.equal(formatContextTokenCount(99_960), "100K");
+  assert.equal(formatContextTokenCount(1_040), "1K");
 });
 
 test("the meter reads usable-input pressure, not raw window occupancy", () => {
