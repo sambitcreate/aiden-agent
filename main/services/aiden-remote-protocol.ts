@@ -61,11 +61,15 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * images and text files with `POST /bots/{botId}/attachments` and send them
  * with `attachmentIds` on `POST /bots/{botId}/messages`.
  *
- * Contract revision 34 (provisional; re-claim the next revision after `main`'s
- * at merge): `speech-request-gzip-v1` advertises support for one bounded gzip
+ * Contract revision 34: `speech-request-gzip-v1` advertises support for one bounded gzip
  * member on `POST /speech/transcriptions`; identity JSON remains supported.
+ *
+ * Contract revision 35 (provisional; re-claim the next revision after `main`'s
+ * at merge): the phone visual viewer (`chat-visual-viewer-v1`).
+ * `GET /chats/{chatId}/visuals/{visualId}/document` returns one self-contained
+ * HTML document for a visual the chat projects, which phones open full screen.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 34 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 35 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -374,6 +378,13 @@ export const AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1" as 
  * fallback text for clients that cannot draw the visual itself.
  */
 export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
+/**
+ * Server feature token for the phone visual viewer (contract revision 35):
+ * `GET /chats/{chatId}/visuals/{visualId}/document` serves any visual a
+ * message projects as one self-contained HTML document. Announced only when
+ * the host ships its viewer bundle; visual entries gain no new key.
+ */
+export const AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1" as const;
 
 /** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
 export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;

@@ -78,6 +78,9 @@ object AidenRemoteProtocol {
     /** Contract revision 32: assistant messages may carry native `appPanels`, read and
      * answered behind the `app-controls:read` and `app-controls:respond` grants. */
     const val CHAT_UI_PANELS_FEATURE = "chat-ui-panels-enabled-v1"
+    /** Contract revision 35: `GET /chats/{chatId}/visuals/{visualId}/document`, the
+     * self-contained page a phone opens full screen when a visual's snapshot is tapped. */
+    const val CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 5

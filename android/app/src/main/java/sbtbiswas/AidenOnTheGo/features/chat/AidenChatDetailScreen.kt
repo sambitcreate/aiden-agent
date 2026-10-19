@@ -248,6 +248,8 @@ fun AidenChatDetailScreen(
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
     var selectTextFor by remember { mutableStateOf<String?>(null) }
+    var visualViewerRequest by remember(chatId) { mutableStateOf<AidenVisualViewerRequest?>(null) }
+    var visualSnapshotGallery by remember(chatId) { mutableStateOf<AidenMessageAttachment?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
@@ -908,6 +910,11 @@ fun AidenChatDetailScreen(
         val onAskAboutMessage: ((String) -> Unit)? = if (viewModel.isReadOnlyPresentation) null else
             remember(viewModel) { { text: String -> viewModel.askAbout(text); Unit } }
         val onSelectMessageText = remember { { text: String -> selectTextFor = text } }
+        // Revision 35: a tapped snapshot opens the interactive viewer when the Mac serves it.
+        val canOpenInteractiveVisuals = remember(serverInfo, viewModel) { viewModel.canOpenInteractiveVisuals }
+        val openVisualViewer = remember { { request: AidenVisualViewerRequest -> visualViewerRequest = request } }
+        val onOpenVisual: ((AidenVisualViewerRequest) -> Unit)? =
+            if (canOpenInteractiveVisuals) openVisualViewer else null
         val canForkMessages = viewModel.canFork && !isForking
         val canForkMessagesWithSummary = canForkMessages && viewModel.canForkWithSummary
         val forkLineage = chat?.forkedFrom
@@ -1069,7 +1076,8 @@ fun AidenChatDetailScreen(
                             isPinnedToStreamingEdge = isPinnedToStreamingEdge,
                             imageArrivalRevealGenerationId = message.timeline?.generationId
                                 ?.takeIf { it in imageArrivalRevealIds },
-                            onImageArrivalRevealed = viewModel::finishImageArrivalReveal
+                            onImageArrivalRevealed = viewModel::finishImageArrivalReveal,
+                            onOpenVisual = onOpenVisual
                         )
                     }
                     // The summary stands where the copied conversation ends.
@@ -1180,6 +1188,36 @@ fun AidenChatDetailScreen(
             palette = palette,
             onAskAbout = if (viewModel.isReadOnlyPresentation) null else { selection -> viewModel.askAbout(selection) },
             onDismiss = { selectTextFor = null }
+        )
+    }
+
+    visualViewerRequest?.let { request ->
+        AidenVisualViewerScreen(
+            request = request,
+            chatId = chatId,
+            hostIdentity = viewModel.visualDocumentHostIdentity,
+            cache = viewModel.visualDocumentCache,
+            fetch = viewModel::visualDocument,
+            onShowImage = request.snapshot?.let { snapshot ->
+                {
+                    visualViewerRequest = null
+                    visualSnapshotGallery = snapshot
+                }
+            },
+            onAddToMessage = if (viewModel.isReadOnlyPresentation) null else ({ text: String ->
+                visualViewerRequest = null
+                viewModel.addVisualPrompt(text)
+                Unit
+            }),
+            onDismiss = { visualViewerRequest = null }
+        )
+    }
+    visualSnapshotGallery?.let { snapshot ->
+        AidenAttachmentGallery(
+            attachments = listOf(snapshot),
+            initialPage = 0,
+            loadData = viewModel::attachmentImageData,
+            onDismiss = { visualSnapshotGallery = null }
         )
     }
 
@@ -1346,7 +1384,9 @@ private fun AssistantMessageRow(
     isPinnedToStreamingEdge: () -> Boolean = { false },
     /** Set while this message's generated image should play the one-shot arrival reveal. */
     imageArrivalRevealGenerationId: String? = null,
-    onImageArrivalRevealed: (String) -> Unit = {}
+    onImageArrivalRevealed: (String) -> Unit = {},
+    /** Opens a visual in the interactive viewer; null keeps snapshot taps on the image viewer. */
+    onOpenVisual: ((AidenVisualViewerRequest) -> Unit)? = null
 ) {
     val projection = if (isBotChat) {
         AidenBotReplyProjection.resolve(message.text, message.timeline, isActive = false)
@@ -1369,7 +1409,8 @@ private fun AssistantMessageRow(
             visual = visual,
             attachments = message.attachments.orEmpty(),
             loadAttachmentImage = loadAttachmentImage,
-            palette = palette
+            palette = palette,
+            onOpenInteractive = onOpenVisual
         )
     }
 
@@ -1610,7 +1651,9 @@ internal fun AidenVisualRow(
     attachments: List<AidenMessageAttachment>,
     loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Set when the Mac serves interactive visuals (revision 35); tapping the snapshot opens it. */
+    onOpenInteractive: ((AidenVisualViewerRequest) -> Unit)? = null
 ) {
     val display = remember(visual, attachments) { aidenVisualDisplay(visual, attachments) }
     val snapshot = display.snapshot
@@ -1620,7 +1663,10 @@ internal fun AidenVisualRow(
                 attachment = snapshot,
                 title = visual.title,
                 wide = visual.layout == AidenChatVisual.LAYOUT_WIDE,
-                loadData = loadAttachmentImage
+                loadData = loadAttachmentImage,
+                onOpenInteractive = onOpenInteractive?.let { open ->
+                    { open(AidenVisualViewerRequest(visual = visual, snapshot = snapshot)) }
+                }
             )
             display.text?.let { AidenVisualFallbackText(text = it, visualId = visual.id, palette = palette) }
         }

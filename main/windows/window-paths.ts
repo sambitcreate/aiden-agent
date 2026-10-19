@@ -17,3 +17,8 @@ export function getWindowUrl(htmlFileName: string): string {
   if (devServer) return `${devServer.replace(/\/$/, "")}/${htmlFileName}`;
   return pathToFileURL(path.join(buildRoot, "renderer", htmlFileName)).toString();
 }
+
+/** A file the renderer build ships beside its pages (for example the phone visual viewer). */
+export function getRendererBuildPath(...segments: string[]): string {
+  return path.join(buildRoot, "renderer", ...segments);
+}

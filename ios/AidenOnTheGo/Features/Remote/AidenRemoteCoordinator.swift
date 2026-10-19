@@ -1058,6 +1058,7 @@ final class AidenRemoteCoordinator {
         AidenChatForkPrefillHandoff.purge(instanceId: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
+        await AidenVisualDocumentCache.shared.purge(instanceId: installationId)
         AidenBotSessionCache.shared.purge(instanceId: installationId)
         await AidenBotOutboxStore.shared.purge(instanceId: installationId)
         AidenModelPreferenceStore.shared.purge(instanceID: installationId)

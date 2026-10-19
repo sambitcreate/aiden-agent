@@ -96,6 +96,11 @@ export interface AidenUiBlockProps {
   hideCaption?: boolean;
   /** A reply is running: confirming a follow-up adds it to the draft instead. */
   followUpBusy?: boolean;
+  /**
+   * Hosts that confirm follow-ups in their own UI (the phone viewer) get the
+   * requested text here instead of the inline Send chip.
+   */
+  onFollowUp?: (text: string) => void;
 }
 
 /**
@@ -126,6 +131,7 @@ function AidenUiVisualBody({
   attachments,
   hideCaption = false,
   followUpBusy = false,
+  onFollowUp,
 }: AidenUiBlockProps) {
   const { openLink } = useLinkOpener();
   const [state, setLocalState] = React.useState<Record<string, unknown>>(() => initialState(visual));
@@ -149,10 +155,12 @@ function AidenUiVisualBody({
   const data = React.useMemo(() => parseData(visual.dataJson), [visual.dataJson]);
   const onActionRef = React.useRef(onAction);
   const onStateChangeRef = React.useRef(onStateChange);
+  const onFollowUpRef = React.useRef(onFollowUp);
   React.useLayoutEffect(() => {
     onActionRef.current = onAction;
     onStateChangeRef.current = onStateChange;
-  }, [onAction, onStateChange]);
+    onFollowUpRef.current = onFollowUp;
+  }, [onAction, onStateChange, onFollowUp]);
 
   const setState = React.useCallback(
     (key: string, value: unknown) => {
@@ -186,7 +194,9 @@ function AidenUiVisualBody({
           // Like HTML visuals, a follow-up never sends by itself: Aiden shows
           // the exact text and only the user's confirmation sends it.
           const text = asString(evaluate(action.text, scope)).trim();
-          if (text && text.length <= MAX_GUEST_PROMPT_CHARS) setPendingFollowUp(text);
+          if (!text || text.length > MAX_GUEST_PROMPT_CHARS) return;
+          if (onFollowUpRef.current) onFollowUpRef.current(text);
+          else setPendingFollowUp(text);
           return;
         }
         case "copy": {

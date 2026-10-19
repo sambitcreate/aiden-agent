@@ -1178,6 +1178,59 @@ class AidenChatViewModel(
         return true
     }
 
+    /**
+     * The Mac announced `chat-visual-viewer-v1` (revision 35), so a tapped visual
+     * snapshot opens the interactive viewer instead of the image viewer.
+     */
+    val canOpenInteractiveVisuals: Boolean
+        get() = instanceId.isNotEmpty() && AidenVisualViewerGate.isAvailable(
+            coordinator.serverInfo.value?.features,
+            coordinator.installationStore.activeInstallation
+                ?.takeIf { it.instanceId == instanceId && it.deviceId == deviceId }
+                ?.serverFeatures
+        )
+
+    /** Saved viewer documents; the coordinator purges them with any pairing. */
+    val visualDocumentCache: sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentCache
+        get() = coordinator.visualDocumentCache
+
+    /** Names this pairing in visual document cache keys. */
+    val visualDocumentHostIdentity: String
+        get() = "$instanceId\u001f$deviceId"
+
+    /** The viewer page for [visualId] from the bound Mac (revision 35). */
+    suspend fun visualDocument(
+        visualId: String,
+        scheme: AidenVisualDocumentScheme,
+        theme: String
+    ): String {
+        val client = activeClient() ?: throw AidenRemoteClientException.Disconnected()
+        val html = try {
+            client.visualDocument(chatId, visualId, scheme, theme)
+        } catch (error: AidenRemoteClientException.Server) {
+            // A revoked credential removes the pairing, and with it every saved document.
+            if (error.isCredentialRevoked && activeClient() === client &&
+                coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+                coordinator.removeInstallation(instanceId)
+            }
+            throw error
+        }
+        if (activeClient() !== client) throw AidenRemoteClientException.Disconnected()
+        return html
+    }
+
+    /**
+     * Appends a follow-up a visual asked for, after the user confirmed it, to the
+     * composer draft. It is never sent from here. Returns false when the chat is
+     * read-only or the text is blank.
+     */
+    fun addVisualPrompt(text: String): Boolean {
+        if (isReadOnlyPresentation) return false
+        val next = AidenVisualPromptDraft.appended(_draft.value, text) ?: return false
+        updateDraft(next)
+        return true
+    }
+
     fun updateDraft(text: String) {
         _draft.value = text
         draftWriter?.schedule(text)

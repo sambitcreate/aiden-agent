@@ -19,6 +19,8 @@ import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { visualSnapshotImages } from "./visual-snapshot-core.js";
+import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   parseChatForkLineageV1,
@@ -1130,6 +1132,14 @@ export class AidenRemoteChatService {
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
+       * Revision 35 (`chat-visual-viewer-v1`): builds the document a phone
+       * opens for one visual. Absent on hosts without the viewer bundle.
+       */
+      visualViewer?: {
+        htmlFor(chatId: string, mediaId: string): Promise<string | undefined>;
+        render(source: VisualViewerSource, appearance: VisualViewerAppearance): Promise<string>;
+      };
+      /**
        * Device-declared `skills:invoke` grant lookup. A turn carrying `skill`
        * is rejected with `capability_denied` unless the device negotiated the
        * grant; omission of this option fails closed the same way.
@@ -1750,6 +1760,50 @@ export class AidenRemoteChatService {
     } catch (error) {
       return this.mapOperationError(error);
     }
+  }
+
+  /** Whether this host serves visuals to the phone viewer (`chat-visual-viewer-v1`). */
+  get supportsVisualViewer(): boolean {
+    return this.options.visualViewer !== undefined;
+  }
+
+  /**
+   * The phone viewer document for one visual a message projects. Only visuals
+   * the chat projection lists can be opened, with the same images the desktop
+   * draws them with; anything else is `not_found`.
+   */
+  async visualDocument(chatId: string, visualId: string, appearance: VisualViewerAppearance): Promise<string> {
+    const viewer = this.options.visualViewer;
+    if (!viewer) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    if (!VISUAL_ID.test(visualId)) {
+      throw new AidenRemoteServiceError("invalid_request", "The visual identifier is invalid.", 400);
+    }
+    const chat = await this.chat(chatId);
+    const unavailable = () => new AidenRemoteServiceError("not_found", "This visual is unavailable.", 404);
+    for (const message of chat.messages) {
+      const projected = projectMessageVisuals(message, projectMessageAttachments(message.attachments))
+        .find((visual) => visual.id === visualId);
+      if (!projected) continue;
+      let source: VisualViewerSource;
+      if (projected.kind === "html") {
+        const html = await viewer.htmlFor(chat.id, visualId);
+        if (!html) throw unavailable();
+        source = { kind: "html", title: projected.title, html, ...(projected.layout ? { layout: projected.layout } : {}) };
+      } else {
+        const visual = parseChatUiVisuals(message.uiVisuals)?.find((candidate) => candidate.id === visualId);
+        if (!visual) throw unavailable();
+        const attachments = visualSnapshotImages(visual, safeStoredAttachments(message.attachments) ?? [])
+          .flatMap((attachment) => (attachment.data ? [{ id: attachment.id, mimeType: attachment.mimeType, data: attachment.data }] : []));
+        source = { kind: "ui", title: projected.title, visual, attachments, ...(projected.layout ? { layout: projected.layout } : {}) };
+      }
+      try {
+        return await viewer.render(source, appearance);
+      } catch (error) {
+        if (error instanceof AidenRemoteServiceError) throw error;
+        throw unavailable();
+      }
+    }
+    throw unavailable();
   }
 
   /** Whether this host can fork chats (`chat-fork-v1`). */

@@ -32,6 +32,7 @@ import { ChatForkError, ForkSummaryStateError } from "./chat-fork-error.js";
 import { createChatForkService, type ChatForkRequest } from "./chat-fork-service.js";
 import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
+import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -78,6 +79,7 @@ function fixture(
     resolveSkillInvocation?: (workspaceId: string, invocationId: string) => Promise<RegisteredSkill>;
     forks?: ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"];
     inlineVisuals?: ConstructorParameters<typeof AidenRemoteChatService>[0]["inlineVisuals"];
+    visualViewer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["visualViewer"];
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -276,6 +278,7 @@ function fixture(
       : {}),
     ...(fixtureOptions.forks ? { forks: fixtureOptions.forks } : {}),
     ...(fixtureOptions.inlineVisuals ? { inlineVisuals: fixtureOptions.inlineVisuals } : {}),
+    ...(fixtureOptions.visualViewer ? { visualViewer: fixtureOptions.visualViewer } : {}),
   });
   return {
     service,
@@ -1150,6 +1153,77 @@ test("chat projection drops a damaged visual but keeps its message and neighbour
   const message = projection.messages[0]!;
   assert.equal(message.text, "Here are your numbers.");
   assert.deepEqual(message.visuals?.map((visual) => [visual.id, visual.snapshotAttachmentId]), [["html-1", undefined]]);
+});
+
+function viewerRecorder(html: Record<string, string> = { "html-1": "<p>Weekly</p>" }) {
+  const rendered: Array<{ source: VisualViewerSource; appearance: VisualViewerAppearance }> = [];
+  const htmlReads: Array<[string, string]> = [];
+  return {
+    rendered,
+    htmlReads,
+    viewer: {
+      htmlFor: async (chatId: string, mediaId: string) => {
+        htmlReads.push([chatId, mediaId]);
+        return html[mediaId];
+      },
+      render: async (source: VisualViewerSource, appearance: VisualViewerAppearance) => {
+        rendered.push({ source, appearance });
+        return `<!DOCTYPE html><title>${source.title}</title>`;
+      },
+    },
+  };
+}
+
+test("visual documents open the projected HTML and native visuals with the images they show", async () => {
+  const photo = { id: "photo-1", name: "team.png", mimeType: "image/png", kind: "image" as const, size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG };
+  const stored = visualsMessage();
+  const message = visualsMessage({
+    attachments: [...(stored.attachments ?? []), photo],
+    uiVisuals: [{
+      ...stored.uiVisuals![0]!,
+      tree: { t: "Visual", k: "0", c: [{ t: "Image", k: "0.0", p: { attachment: { op: "lit", v: "photo-1" } } }] },
+    }],
+  });
+  const recorder = viewerRecorder();
+  const { service } = fixture(chat({ messages: [message] }), { visualViewer: recorder.viewer });
+  assert.equal(service.supportsVisualViewer, true);
+  const dark = { scheme: "dark" as const, preset: "moss" as const };
+
+  assert.equal(await service.visualDocument("chat-1", "html-1", dark), "<!DOCTYPE html><title>Weekly total</title>");
+  assert.deepEqual(recorder.htmlReads, [["chat-1", "html-1"]]);
+  assert.deepEqual(recorder.rendered[0], {
+    source: { kind: "html", title: "Weekly total", html: "<p>Weekly</p>", layout: "wide" },
+    appearance: dark,
+  });
+
+  await service.visualDocument("chat-1", "ui-1", dark);
+  const ui = recorder.rendered[1]!.source;
+  assert.equal(ui.kind, "ui");
+  assert.equal(ui.kind === "ui" && ui.visual.id, "ui-1");
+  // Only the picture the visual names travels, never its own snapshot.
+  assert.deepEqual(ui.kind === "ui" && ui.attachments, [{ id: "photo-1", mimeType: "image/png", data: ONE_PIXEL_PNG }]);
+});
+
+test("visual documents refuse visuals the chat does not project and hosts without a viewer", async () => {
+  const recorder = viewerRecorder({});
+  const { service } = fixture(chat({ messages: [visualsMessage()] }), { visualViewer: recorder.viewer });
+  const light = { scheme: "light" as const, preset: "aiden" as const };
+  // The snapshot attachment and a user-supplied id are not visuals.
+  await assert.rejects(service.visualDocument("chat-1", `visual-snapshot_${"a".repeat(64)}`, light), hasCode("not_found", 404));
+  await assert.rejects(service.visualDocument("chat-1", "missing", light), hasCode("not_found", 404));
+  await assert.rejects(service.visualDocument("chat-1", "../etc", light), hasCode("invalid_request", 400));
+  // The HTML is gone from the artifact store.
+  await assert.rejects(service.visualDocument("chat-1", "html-1", light), hasCode("not_found", 404));
+  assert.equal(recorder.rendered.length, 0);
+
+  const failing = fixture(chat({ messages: [visualsMessage()] }), {
+    visualViewer: { htmlFor: async () => "<p>x</p>", render: async () => { throw new Error("This visual is too large to open on a phone."); } },
+  });
+  await assert.rejects(failing.service.visualDocument("chat-1", "html-1", light), hasCode("not_found", 404));
+
+  const without = fixture(chat({ messages: [visualsMessage()] }));
+  assert.equal(without.service.supportsVisualViewer, false);
+  await assert.rejects(without.service.visualDocument("chat-1", "html-1", light), hasCode("not_found", 404));
 });
 
 test("chat projection omits visuals for a message without any", () => {

@@ -48,6 +48,28 @@ export function useLinkOpener(): Omit<LinkOpener, "registerSurface" | "registerB
   return React.useContext(LinkOpenerContext);
 }
 
+/**
+ * Hands every link to `openExternal` instead of the app's routing. For pages
+ * with no preload, such as the phone visual viewer, where the host app (not
+ * Electron) decides how a link opens.
+ */
+export function ExternalLinkOpenerProvider({
+  openExternal,
+  children,
+}: React.PropsWithChildren<{ openExternal: (url: string) => boolean }>) {
+  const value = React.useMemo<LinkOpener>(
+    () => ({
+      openLink: (href) => openExternal(href),
+      canOpen: (href) => /^https:\/\//iu.test(href),
+      preference: "external",
+      registerSurface: () => () => undefined,
+      registerBlocker: () => () => undefined,
+    }),
+    [openExternal],
+  );
+  return <LinkOpenerContext.Provider value={value}>{children}</LinkOpenerContext.Provider>;
+}
+
 /** Mount while the browser panel can actually be shown on this route. */
 export function useBrowserSurface(active: boolean): void {
   const { registerSurface } = React.useContext(LinkOpenerContext);

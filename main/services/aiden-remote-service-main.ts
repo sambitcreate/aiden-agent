@@ -10,6 +10,9 @@ import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
+import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import { buildVisualViewerDocument, type VisualViewerAppearance, type VisualViewerSource } from "./visual-viewer-document.js";
+import { loadVisualViewerBundle, loadVisualViewerLibraries, visualViewerInstalled } from "./visual-viewer-main.js";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -555,6 +558,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               : {}),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            // Revision 35: phones open visuals full screen when this build ships the viewer.
+            ...(visualViewerInstalled()
+              ? {
+                  visualViewer: {
+                    htmlFor: (chatId: string, mediaId: string) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
+                    render: async (source: VisualViewerSource, appearance: VisualViewerAppearance) =>
+                      buildVisualViewerDocument(source, appearance, await loadVisualViewerBundle(), await loadVisualViewerLibraries()),
+                  },
+                }
+              : {}),
             // Paired devices see visuals as snapshots, so turns follow Appearance.
             inlineVisuals: async () =>
               normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
