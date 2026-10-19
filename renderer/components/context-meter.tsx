@@ -3,8 +3,9 @@
 // trips exactly when Aiden would compact; estimated figures carry a ~ prefix.
 
 import * as React from "react";
-import { CircleGauge } from "lucide-react";
-import { Button, Popover, PopoverContent, PopoverTrigger, Text } from "./ui";
+import { Button, Popover, PopoverContent, PopoverTrigger } from "./ui";
+import { ContextStatus } from "./context-breakdown";
+import { ContextPips, ContextTiles } from "./context-tiles";
 import { cn } from "../lib/ui-utils";
 import {
   contextPressurePercent,
@@ -75,12 +76,12 @@ export function ContextMeter({
           aria-label={`Context usage, ${percent} percent${emphasized ? ", will compact before the next request" : ""}`}
           title="Projected context for the next request"
         >
-          <CircleGauge aria-hidden="true" />
+          <ContextPips percent={percent} warning={emphasized || phase === "approaching"} />
           <span className="context-meter-percent text-mini tabular-nums">{percent}%</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-64 p-3"
+        className="w-72 p-3.5"
         align="end"
         side="top"
         aria-label="Context usage"
@@ -92,13 +93,13 @@ export function ContextMeter({
           emphasized={emphasized}
           stateText={stateText}
         />
-        {onViewDetails ? <Button variant="transparent" size="small" className="mt-3 w-full" onClick={() => { detailsRequested.current = true; setOpen(false); onViewDetails(); }}>View context details</Button> : null}
+        {onViewDetails ? <Button variant="muted" size="small" className="mt-3 w-full" onClick={() => { detailsRequested.current = true; setOpen(false); onViewDetails(); }}>View context details</Button> : null}
       </PopoverContent>
     </Popover>
   );
 }
 
-/** Popover body: labelled terms (dt) with their token values (dd). */
+/** Popover body: the tile grid beside the headline, then labelled terms (dt) with their token values (dd). */
 export function ContextMeterDetails({
   pressure,
   percent,
@@ -110,68 +111,43 @@ export function ContextMeterDetails({
   emphasized: boolean;
   stateText: string;
 }) {
+  const rows: Array<[string, string]> = [
+    ["conversation", `~${formatContextTokenCount(pressure.messageTokens)}`],
+    ["system + tools", `~${formatContextTokenCount(pressure.staticTokens)}`],
+  ];
+  if (pressure.addedAfterUsageAnchorTokens !== undefined) {
+    rows.push(["recent work", `~${formatContextTokenCount(pressure.addedAfterUsageAnchorTokens)}`]);
+  }
+  rows.push(["reserved", `~${formatContextTokenCount(pressure.reservedTokens)}`]);
   return (
     <>
-      <Text variant="small-strong" className="block text-primary">
-        Context
-      </Text>
-      <Text variant="small" color="secondary" className="mt-1 block">
-        {percent}% of usable context
-      </Text>
-      <dl className="mt-2 space-y-1 text-small">
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="text-tertiary">projected tokens</dt>
-          <dd className="text-secondary tabular-nums">
-            {tokenLabel(pressure, pressure.contextTokens)}
-          </dd>
+      <div className="flex items-start gap-3.5">
+        <ContextTiles pressure={pressure} columns={10} className="w-20 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <span
+            className={cn(
+              "block text-heading1 font-semibold tracking-tight tabular-nums",
+              emphasized ? "text-support-warning" : "text-primary",
+            )}
+          >
+            {percent}%
+          </span>
+          <span className="mt-0.5 block text-small text-secondary tabular-nums">
+            {`${tokenLabel(pressure, pressure.contextTokens)} of ${formatContextTokenCount(pressure.inputBudgetTokens)} usable`}
+          </span>
+          <dl className="mt-2.5 space-y-1 text-small">
+            {rows.map(([term, value]) => (
+              <div key={term} className="flex items-baseline justify-between gap-3">
+                <dt className="whitespace-nowrap text-tertiary">{term}</dt>
+                <dd className="text-secondary tabular-nums">{value}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="text-tertiary">model context</dt>
-          <dd className="text-secondary tabular-nums">
-            {formatContextTokenCount(pressure.contextWindow)}
-          </dd>
-        </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="text-tertiary">reserved for response + safety</dt>
-          <dd className="text-secondary tabular-nums">
-            ~{formatContextTokenCount(pressure.reservedTokens)}
-          </dd>
-        </div>
-      </dl>
-      <Text variant="small" color="tertiary" className="mt-3 block">
-        Estimated breakdown
-      </Text>
-      <dl className="mt-1 space-y-1 text-small">
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="text-tertiary">conversation</dt>
-          <dd className="text-secondary tabular-nums">
-            ~{formatContextTokenCount(pressure.messageTokens)}
-          </dd>
-        </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="text-tertiary">system + tools</dt>
-          <dd className="text-secondary tabular-nums">
-            ~{formatContextTokenCount(pressure.staticTokens)}
-          </dd>
-        </div>
-        {pressure.addedAfterUsageAnchorTokens !== undefined ? (
-          <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-tertiary">recent work</dt>
-            <dd className="text-secondary tabular-nums">
-              ~{formatContextTokenCount(pressure.addedAfterUsageAnchorTokens)}
-            </dd>
-          </div>
-        ) : null}
-      </dl>
-      <Text
-        variant="small"
-        className={cn(
-          "mt-3 block",
-          emphasized ? "text-support-warning" : "text-secondary",
-        )}
-      >
+      </div>
+      <ContextStatus warning={emphasized} className="mt-3">
         {stateText}
-      </Text>
+      </ContextStatus>
     </>
   );
 }

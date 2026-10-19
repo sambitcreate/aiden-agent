@@ -29,6 +29,7 @@ import {
   useShowWorkspaceFolder,
 } from "./environment-overview";
 import { ContextBreakdown } from "./context-breakdown";
+import { ContextPips } from "./context-tiles";
 import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
 import { SubagentStatusGroups } from "./subagent-status-groups";
 import {
@@ -1587,15 +1588,7 @@ function ContextSummaryMeter({
   return (
     <>
       <span>{`${percent}%`}</span>
-      <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-control">
-        <span
-          className={cn(
-            "block h-full rounded-full transition-[width] duration-(--motion-large-duration) ease-standard motion-reduce:transition-none",
-            approaching ? "bg-support-warning" : "bg-accent",
-          )}
-          style={{ width: `${Math.min(100, percent)}%` }}
-        />
-      </span>
+      <ContextPips percent={percent} warning={approaching} />
     </>
   );
 }

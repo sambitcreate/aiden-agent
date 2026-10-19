@@ -58,12 +58,10 @@ test("the breakdown announces each label as the term and its token count as the 
   assert.deepEqual(
     pairs.map(([term]) => term),
     [
-      "projected tokens",
-      "model context",
-      "reserved for response + safety",
       "conversation",
       "system + tools",
       "recent work",
+      "reserved",
     ],
   );
   for (const [, value] of pairs) assert.match(value, /\d/u);
@@ -92,8 +90,9 @@ test("context details aggregate durable turn totals once without inventing unava
   const messages = [turn, turn, { id: "old", role: "assistant" as const, content: "legacy", createdAt: 1 }];
   assert.deepEqual(recordedChatUsage({ messages }), { input: 100, output: 20, cacheRead: 500, cacheWrite: 40, total: 660, requests: 3, turns: 1, assistantMessages: 2, userMessages: 0 });
   const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages }, pressure: pressure(), compacting: false, providerLabel: "Local", modelLabel: "Model" }} />);
-  assert.match(html, /Reported usage from 1 of 2 saved assistant turns/);
+  assert.match(html, /Reported by 1 of 2 saved assistant turns/);
   assert.match(html, /Total cost<.*Unavailable/);
   assert.doesNotMatch(html, /\$0\.00/);
-  assert.match(html, /42% of usable context/);
+  assert.match(html, /42% <span[^>]*>used<\/span>/);
+  assert.match(html, /~40K of 96K usable/);
 });
