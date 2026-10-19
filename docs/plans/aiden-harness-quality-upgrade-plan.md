@@ -60,7 +60,7 @@ Each row is a reviewable slice, not one large PR. H0 precedes implementation. In
 | H0 | Current-main baseline, ownership, and acceptance inventory | None | Complete; fresh review passed |
 | H1a | Bounded workspace metadata retention and indexing status | H0 | Implemented; fresh review passed |
 | H1b | Progress-aware attended Assistant recovery | H0 | Implemented; fresh review findings addressed |
-| H1c | Discovery across admitted namespaces with bounded output | H0 | Planned |
+| H1c | Discovery across admitted namespaces with bounded output | H0 | Implemented; fresh review findings addressed |
 | H1d | Failed CLI advisor accounting and useful CI receipts | H0 | Planned; separate commits |
 | H2a | Versioned, host-owned verification/evidence receipts | H0 | Private command/lifecycle foundation accepted; predicates/consumer H2b |
 | H2b | Protected six-task evaluation adapter and offline falsification | H2a | Planned |
@@ -239,3 +239,5 @@ H1a: metadata retention uses source age bounded by first admission (including cl
 H1b: bounded digest state at the validated tool boundary; independent failures do not stop at two, repeated failures survive unrelated successes, total ceiling eight, host denial/cancellation triggers text-only recovery. Fresh review corrected actual refusal strings, unhashable inputs and normalized argument identity. Nine guard tests and 70 coding-tool tests pass.
 
 H2a: private versioned receipt store, branded command observations and production effect lifecycle integration. Commands establish only command success, never task acceptance. Fresh review found/fixed queued deletion resurrection, durable outbox recovery and legacy identity compatibility. 122 focused receipt/effect/output/harness tests pass. No UI/wire addition. Protected task/artifact producers and consumption remain H2b, not claimed here.
+
+H1c: global ranked corpus bounded at 4,096 tools, metadata validation at 16,384 admitted entries/8 MiB (over-budget fails explicitly); namespace filtering precedes ranking cap, and paged namespace directory exposes late services. Existing schema/result limits remain. Fresh review corrected byte-boundary cursor loss, directory offsets and complete envelope accounting. 42 discovery/codemode tests pass. Exploratory 15-search median timings for ~2KB descriptions: 64 tools 2.3ms, 512 tools 17.4ms, 1,536 tools 50.4ms (max60ms); these are local microbenchmarks, not packaged response latency. No authority or per-server MCP limit change.
