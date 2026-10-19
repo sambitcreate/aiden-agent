@@ -113,7 +113,7 @@ test("the approval card lists every command, once per new set, and deleting alwa
   const first = await workspaceArtifactCallApproval(create, options);
   assert.equal(first.required, true);
   assert.match(first.summary!, /gh pr list --json number,title/u);
-  assert.match(first.summary!, /Merge pull request \(button\): gh pr merge \{\{number\}\}/u);
+  assert.match(first.summary!, /Button “Merge pull request”: gh pr merge \{\{number\}\}/u);
 
   await allow("c1", create);
   await call("c1", create);

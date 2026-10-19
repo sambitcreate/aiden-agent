@@ -125,6 +125,17 @@ function assertSourcesRunnable(
   }
 }
 
+/** The sources and actions the call would save: the stored ones where it said nothing. */
+function commandsFor(
+  input: ArtifactToolInput,
+  previous: WorkspaceArtifactV1 | undefined,
+): Pick<WorkspaceArtifactV1, "sources" | "actions"> {
+  return {
+    sources: input.sources === undefined && previous ? previous.sources : parseWorkspaceArtifactSources(input.sources),
+    actions: input.actions === undefined && previous ? previous.actions : parseWorkspaceArtifactActions(input.actions),
+  };
+}
+
 /** Every value the model may have changed, or the stored one where it said nothing. */
 function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | undefined): {
   content: WorkspaceArtifactContent;
@@ -133,16 +144,15 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
   const title = input.title === undefined && previous ? previous.visual.title : titleOf(input.title);
   const description =
     input.description === undefined ? previous?.description : parseWorkspaceArtifactDescription(input.description);
-  const sources = input.sources === undefined && previous ? previous.sources : parseWorkspaceArtifactSources(input.sources);
-  const actions = input.actions === undefined && previous ? previous.actions : parseWorkspaceArtifactActions(input.actions);
+  const { sources, actions } = commandsFor(input, previous);
   const refresh = input.refresh === undefined && previous ? previous.refresh : parseWorkspaceArtifactRefresh(input.refresh);
   let visual: ChatUiVisualV1;
   let diagnostics: AidenUiDiagnostic[] = [];
   if (input.markup === undefined && previous) {
-    const layout = input.layout === undefined ? previous.visual.layout : input.layout === "wide" ? "wide" : undefined;
     if (input.layout !== undefined && input.layout !== "column" && input.layout !== "wide") {
       throw new Error('layout must be "column" or "wide".');
     }
+    const layout = input.layout === undefined ? previous.visual.layout : input.layout === "wide" ? "wide" : undefined;
     const { layout: _previousLayout, ...rest } = previous.visual;
     visual = { ...rest, ...(layout === "wide" ? { layout } : {}) };
   } else {
@@ -195,8 +205,7 @@ export async function workspaceArtifactCallApproval(
   let sources: WorkspaceArtifactV1["sources"];
   let actions: WorkspaceArtifactV1["actions"];
   try {
-    sources = input.sources === undefined && previous ? previous.sources : parseWorkspaceArtifactSources(input.sources);
-    actions = input.actions === undefined && previous ? previous.actions : parseWorkspaceArtifactActions(input.actions);
+    ({ sources, actions } = commandsFor(input, previous));
   } catch {
     // Invalid input fails in execute with the reason; there is nothing to approve.
     return { required: false };
@@ -269,8 +278,8 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       parameters: Type.Object({
         operation: Type.Union([Type.Literal("create"), Type.Literal("update"), Type.Literal("list"), Type.Literal("delete")]),
         id: Type.Optional(Type.String({ description: "The artifact id from list; required for update and delete." })),
-        title: Type.Optional(Type.String({ description: "Short visible name; required for create.", maxLength: 80 })),
-        description: Type.Optional(Type.String({ description: "One line on what the page is for.", maxLength: 200 })),
+        title: Type.Optional(Type.String({ description: "Short visible name; required for create.", maxLength: WORKSPACE_ARTIFACT_LIMITS.titleChars })),
+        description: Type.Optional(Type.String({ description: "One line on what the page is for.", maxLength: WORKSPACE_ARTIFACT_LIMITS.descriptionChars })),
         markup: Type.Optional(
           Type.String({
             description:
@@ -295,7 +304,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
             Type.Object({
               name: Type.String({ description: "Identifier buttons call as run(\"name\", …)." }),
               label: Type.String({ description: "What the button does, shown when the person confirms it." }),
-              command: Type.String({ description: "Shell template; {{param}} is replaced with the quoted value." }),
+              command: Type.String({ description: "Shell template; each {{param}}, a standalone unquoted word, becomes the value as one literal argument." }),
               params: Type.Optional(
                 Type.Array(
                   Type.Object({

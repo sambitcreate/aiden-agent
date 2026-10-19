@@ -23,7 +23,7 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
     "",
     "Buttons:",
     '- sendPrompt("…") asks Aiden in the chat beside the page; compose("…") puts text in the composer for the person to edit and send; openUrl, copy and setState work as in render_ui.',
-    `- run("actionName", value…) runs one of the page's declared actions. An action's command is a shell template where each {{param}} is a standalone, unquoted word (for example \`gh pr merge {{number}} --squash\`); Aiden quotes the value. Values may not start with "-". Up to ${WORKSPACE_ARTIFACT_LIMITS.actions} actions.`,
+    `- run("actionName", value…) runs one of the page's declared actions. An action's command is a shell template where each {{param}} is a standalone, unquoted argument (for example \`gh pr merge {{number}} --squash\`); Aiden quotes the value. A {{param}} cannot be the command itself or follow eval, sh -c or xargs, and a text param cannot sit inside [[ ]], (( )) or let (give it type "number", or use [ … ]). Values may not start with "-". Up to ${WORKSPACE_ARTIFACT_LIMITS.actions} actions.`,
     "- Label actions with what they do. The person confirms a command before it runs unless the workspace has Full access.",
     "",
     "Refresh: pages re-read their sources when shown unless refresh.onOpen is false. Set refresh.intervalSeconds only for data that changes on its own, and never below 60.",

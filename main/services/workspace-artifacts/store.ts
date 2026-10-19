@@ -42,6 +42,7 @@ export interface WorkspaceArtifactSnapshotsDocument {
 
 const ARTIFACTS_MAX_BYTES = 12 * 1024 * 1024;
 const UNREADABLE_LIMIT = WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2;
+const TITLE_RULE = `The artifact title must be 1–${WORKSPACE_ARTIFACT_LIMITS.titleChars} characters on one line.`;
 const SNAPSHOTS_MAX_BYTES = 16 * 1024 * 1024;
 
 function emptyArtifacts(): WorkspaceArtifactsDocument {
@@ -203,7 +204,7 @@ export class WorkspaceArtifactStore {
     content: WorkspaceArtifactContent,
     options: WorkspaceArtifactWriteOptions = {},
   ): Promise<WorkspaceArtifactV1> {
-    if (!isWorkspaceArtifactTitle(content.title)) throw new Error("The artifact title must be 1–80 characters on one line.");
+    if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
     return this.artifacts(workspaceId).update((draft) => {
       if (draft.artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
         throw new Error(
@@ -245,7 +246,7 @@ export class WorkspaceArtifactStore {
     options: WorkspaceArtifactWriteOptions = {},
   ): Promise<WorkspaceArtifactV1> {
     const id = requireArtifactId(artifactId);
-    if (!isWorkspaceArtifactTitle(content.title)) throw new Error("The artifact title must be 1–80 characters on one line.");
+    if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
     return this.artifacts(workspaceId).update((draft) => {
       const index = draft.artifacts.findIndex((artifact) => artifact.id === id);
       if (index < 0) notFound();
@@ -280,7 +281,7 @@ export class WorkspaceArtifactStore {
   async rename(workspaceId: string, artifactId: string, title: string): Promise<WorkspaceArtifactV1> {
     const id = requireArtifactId(artifactId);
     const trimmed = title.trim();
-    if (!isWorkspaceArtifactTitle(trimmed)) throw new Error("The artifact title must be 1–80 characters on one line.");
+    if (!isWorkspaceArtifactTitle(trimmed)) throw new Error(TITLE_RULE);
     return this.artifacts(workspaceId).update((draft) => {
       const artifact = draft.artifacts.find((entry) => entry.id === id) ?? notFound();
       if (draft.artifacts.some((entry) => entry.id !== id && entry.visual.title === trimmed)) {

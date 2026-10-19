@@ -100,8 +100,10 @@ test("a template cannot run with a different value from the one its confirmation
     "f() { local AIDEN_ARG_1=actual-target; printf '%s' {{target}}; }; f",
     "unset AIDEN_ARG_1; printf '%s' {{target}}",
   ]) {
-    const parsed = parseWorkspaceArtifactActions([action(template)])[0]!;
-    const { command, preview } = resolveWorkspaceArtifactCommand(parsed, ["shown-target"]);
+    // Saving refuses templates that name the reserved variables; the binding holds even so.
+    if (template.includes("AIDEN_ARG_")) assert.throws(() => parseWorkspaceArtifactActions([action(template)]), /reserved/u);
+    else parseWorkspaceArtifactActions([action(template)]);
+    const { command, preview } = resolveWorkspaceArtifactCommand(action(template), ["shown-target"]);
     assert.equal(spawnSync("/bin/sh", ["-c", preview], { encoding: "utf8" }).stdout, "shown-target", template);
     const ran = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
     // Either it uses what the person confirmed, or the shell refuses; never the other target.
@@ -117,6 +119,31 @@ test("a placeholder must be its own unquoted word", () => {
   }
   for (const command of ["gh pr merge {{x}} --squash", "echo {{x}}; echo done", "(cd sub && make {{x}})", `echo "fixed" {{x}}`]) {
     assert.equal(parseWorkspaceArtifactActions(action(command)).length, 1, command);
+  }
+});
+
+test("a placeholder cannot be run as a command, hidden from the check, or read as bash arithmetic", () => {
+  const actions = (command: string, type: "string" | "number" = "string") => [{ name: "a", label: "A", command, params: [{ name: "x", type }] }];
+  const refused = [
+    "{{x}} --version",
+    "echo ok; {{x}}",
+    "echo ok | {{x}}",
+    "eval {{x}}",
+    "sh -c {{x}}",
+    "xargs {{x}}",
+    "printf '%s' \\{{x}}",
+    // A quote in a comment must not change what the next line counts as quoted.
+    '# say "hi\necho "{{x}}"',
+    "echo {{x}} '",
+    "echo $AIDEN_ARG_1 {{x}}",
+  ];
+  for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
+  for (const command of ["[[ {{x}} -gt 0 ]] && echo big", "(( {{x}} > 0 )) && echo big", "let {{x}}"]) {
+    assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /arithmetic/u, command);
+    assert.equal(parseWorkspaceArtifactActions(actions(command, "number")).length, 1, command);
+  }
+  for (const command of ["[ {{x}} -gt 0 ] && echo big", "gh pr view {{x}} # the number", "printf '%s\\n' {{x}} | sort"]) {
+    assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
 });
 

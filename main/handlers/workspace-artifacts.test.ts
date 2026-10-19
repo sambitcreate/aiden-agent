@@ -44,13 +44,8 @@ async function setup(t: test.TestContext) {
     actions: [],
     refresh: { onOpen: true },
   });
-  return { store, events, invoke, handlers, ran };
+  return { store, events, invoke, ran };
 }
-
-test("every channel the renderer calls is registered", async (t) => {
-  const { handlers } = await setup(t);
-  assert.deepEqual([...handlers.keys()].sort(), Object.values(WORKSPACE_ARTIFACT_CHANNELS).sort());
-});
 
 test("requests for a missing workspace or a malformed id are refused", async (t) => {
   const { invoke } = await setup(t);

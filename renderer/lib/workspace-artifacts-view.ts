@@ -1,5 +1,6 @@
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import {
+  workspaceArtifactCommandAccess,
   workspaceArtifactDataJson,
   workspaceArtifactSourceAccess,
   type WorkspaceArtifactSourceAccess,
@@ -15,26 +16,29 @@ export function workspaceArtifactPage(view: WorkspaceArtifactView): ChatUiVisual
   return dataJson ? { ...visual, dataJson } : visual;
 }
 
+type ArtifactWorkspace = { permission: WorkspacePermission; folderPath?: string } | null;
+
+function accessInputs(view: WorkspaceArtifactView, workspace: ArtifactWorkspace) {
+  return {
+    permission: workspace?.permission ?? "none",
+    hasFolder: Boolean(workspace?.folderPath),
+    approved: view.artifact.approvedDigest === view.digest,
+  };
+}
+
 /**
  * What the page may run right now, from the workspace's access and whether
  * the person approved these exact commands. Null when it runs nothing.
  */
 export function workspaceArtifactPageAccess(
   view: WorkspaceArtifactView,
-  workspace: { permission: WorkspacePermission; folderPath?: string } | null,
+  workspace: ArtifactWorkspace,
 ): WorkspaceArtifactSourceAccess | null {
-  const { sources, actions, approvedDigest } = view.artifact;
+  const { sources, actions } = view.artifact;
   if (sources.length === 0 && actions.length === 0) return null;
-  const approved = approvedDigest === view.digest;
-  const permission = workspace?.permission ?? "none";
-  const hasFolder = Boolean(workspace?.folderPath);
+  const { permission, hasFolder, approved } = accessInputs(view, workspace);
   const states = sources.map((source) => workspaceArtifactSourceAccess(permission, hasFolder, source, approved));
-  if (actions.length > 0) {
-    // Buttons run shell commands, so they follow the same rule as shell sources.
-    states.push(
-      workspaceArtifactSourceAccess(permission, hasFolder, { name: "action", kind: "shell", command: "", parse: "text" }, approved),
-    );
-  }
+  if (actions.length > 0) states.push(workspaceArtifactCommandAccess(permission, hasFolder, approved));
   if (states.includes("blocked")) return "blocked";
   if (states.includes("needs-approval")) return "needs-approval";
   return "run";
@@ -45,13 +49,8 @@ export function workspaceArtifactPageAccess(
  * before the page's commands are approved, so a page can refresh while its
  * buttons still wait.
  */
-export function workspaceArtifactCanRefresh(
-  view: WorkspaceArtifactView,
-  workspace: { permission: WorkspacePermission; folderPath?: string } | null,
-): boolean {
-  const approved = view.artifact.approvedDigest === view.digest;
-  const permission = workspace?.permission ?? "none";
-  const hasFolder = Boolean(workspace?.folderPath);
+export function workspaceArtifactCanRefresh(view: WorkspaceArtifactView, workspace: ArtifactWorkspace): boolean {
+  const { permission, hasFolder, approved } = accessInputs(view, workspace);
   return view.artifact.sources.some((source) => workspaceArtifactSourceAccess(permission, hasFolder, source, approved) === "run");
 }
 

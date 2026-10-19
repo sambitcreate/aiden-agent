@@ -146,6 +146,25 @@ test("delete asks first, then removes the page", async () => {
   assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:delete")!.args, [WORKSPACE.id, "art1"]);
 });
 
+test("a delete dialog open on a page that goes away never offers to delete the page shown next", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:delete": () => ({ removed: true }) });
+  const panel = (views: WorkspaceArtifactView[]) => (
+    <TooltipProvider>
+      <ArtifactsPanel workspace={WORKSPACE} active selectedId="art1" onSelect={() => undefined} onAskAiden={() => undefined} artifacts={state(views)} />
+    </TooltipProvider>
+  );
+  const release = view("art2", "Release", { approved: true });
+  const { rerender } = render(panel([view("art1", "Open PRs", { approved: true }), release]));
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Delete/u }));
+  await screen.findByRole("alertdialog");
+  // Another window deletes "Open PRs", so the tab falls back to "Release".
+  rerender(panel([release]));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
+  screen.getByRole("button", { name: "Actions for Release" });
+  assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:delete"), false);
+});
+
 test("Ask Aiden to change this hands the page to the chat", async () => {
   installBotTestIpc();
   const asked: string[] = [];

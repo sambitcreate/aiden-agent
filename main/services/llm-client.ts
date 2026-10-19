@@ -1990,8 +1990,7 @@ async function prepareGeneration(
     generationExtensions.push(generativeUiRuntime.extension);
   }
   if (offerWorkspaceArtifacts && workspace) {
-    // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone and
-    // Telegram turns never get the tool.
+    // Gated by offerWorkspaceArtifacts above.
     generationExtensions.push({
       id: "aiden.workspace-artifacts",
       tools: [

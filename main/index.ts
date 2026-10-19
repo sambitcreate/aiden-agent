@@ -164,7 +164,7 @@ import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from ".
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
-import { workspaceArtifactStore } from "./services/workspace-artifacts/main.js";
+import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
 if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
   process.stdout.write(`${app.getVersion()}\n`);
@@ -2120,9 +2120,7 @@ if (!ownsSingleInstanceLock) {
         },
         removeWorkspaceRecord: async (workspaceId) => {
           await configStore.removeWorkspace(workspaceId);
-          await workspaceArtifactStore.removeWorkspace(workspaceId).catch((error: unknown) => {
-            logger.error("workspace", "Could not remove the workspace's artifacts.", error);
-          });
+          await removeWorkspaceArtifacts(workspaceId);
         },
         finalizeDeletion: async (workspace) => {
           const managed = workspace.managedWorktree!;

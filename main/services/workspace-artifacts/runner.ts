@@ -3,15 +3,15 @@ import {
   parseWorkspaceArtifactOutput,
   resolveWorkspaceArtifactCommand,
   WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactCommandAccess,
   workspaceArtifactSourceAccess,
   type WorkspaceArtifactPermission,
   type WorkspaceArtifactSourceResultV1,
   type WorkspaceArtifactSourceV1,
-  type WorkspaceArtifactV1,
   type WorkspaceArtifactsChangedEvent,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import type { BoundedShellCommandOptions, BoundedShellCommandResult } from "../bounded-shell-command.js";
-import { workspaceArtifactDigest, type WorkspaceArtifactStore } from "./store.js";
+import type { WorkspaceArtifactStore } from "./store.js";
 
 /**
  * Runs workspace artifact sources and buttons in the workspace folder, under
@@ -179,13 +179,13 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
 
   /** Runs every source of one artifact once; results are not saved. */
   async function runSources(
-    artifact: Pick<WorkspaceArtifactV1, "sources" | "actions" | "approvedDigest">,
+    sources: readonly WorkspaceArtifactSourceV1[],
+    approved: boolean,
     context: WorkspaceArtifactRunContext,
     signal: AbortSignal | undefined,
   ): Promise<SourceResults> {
-    const approved = artifact.approvedDigest === workspaceArtifactDigest(artifact.sources, artifact.actions);
     const entries = await Promise.all(
-      artifact.sources.map(async (source) => [source.name, await runSource(source, approved, context, signal)] as const),
+      sources.map(async (source) => [source.name, await runSource(source, approved, context, signal)] as const),
     );
     return Object.fromEntries(entries);
   }
@@ -231,7 +231,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
           const at = Date.now();
           results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: folderError } as const]));
         } else {
-          results = await runSources(view.artifact, { ...context, folderPath }, controller.signal);
+          results = await runSources(view.artifact.sources, approved, { ...context, folderPath }, controller.signal);
         }
         if (!shouldSave(id, entry)) return results;
         // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
@@ -292,24 +292,19 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     actionName: string,
     args: readonly unknown[],
     context: WorkspaceArtifactRunContext,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
     /** The page's command digest when the person pressed the button; a page changed since then does not run. */
-    expectedDigest?: string,
+    expectedDigest: string,
   ): Promise<WorkspaceArtifactActionResult> {
     const view = await dependencies.store.get(workspaceId, artifactId);
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
-    if (expectedDigest !== undefined && expectedDigest !== view.digest) {
+    if (expectedDigest !== view.digest) {
       throw new Error("This page changed after you pressed the button. Try it again.");
     }
     const action = view.artifact.actions.find((entry) => entry.name === actionName);
     if (!action) throw new Error(`This page has no button named "${actionName}".`);
     const approved = view.artifact.approvedDigest === view.digest;
-    const access = workspaceArtifactSourceAccess(
-      context.permission,
-      Boolean(context.folderPath),
-      { name: action.name, kind: "shell", command: action.command, parse: "text" },
-      approved,
-    );
+    const access = workspaceArtifactCommandAccess(context.permission, Boolean(context.folderPath), approved);
     if (access === "blocked") throw new Error("Workspace access is off, so this page’s buttons can’t run.");
     if (access === "needs-approval") throw new Error("Allow this page’s commands first.");
     const { command } = resolveWorkspaceArtifactCommand(action, args);
@@ -328,7 +323,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     return { ok, output: ok ? output : failure(result) };
   }
 
-  return { runSources, refresh, runAction };
+  return { refresh, runAction };
 }
 
 export type WorkspaceArtifactRunner = ReturnType<typeof createWorkspaceArtifactRunner>;

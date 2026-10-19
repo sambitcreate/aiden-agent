@@ -34,12 +34,13 @@ import {
   workspaceArtifactProblems,
 } from "../lib/workspace-artifacts-view";
 import {
+  WORKSPACE_ARTIFACT_LIMITS,
   resolveWorkspaceArtifactCommand,
   workspaceArtifactCommandList,
   type WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
 
-/** Page state is saved this long after the last change, like an inline visual's. */
+/** Page state is saved this long after the last change. */
 const STATE_SAVE_DELAY_MS = 400;
 /** A page refreshed this recently (say, by the chat that just made it) is not re-read on open. */
 const FRESH_ENOUGH_MS = 15_000;
@@ -390,8 +391,10 @@ function ArtifactsHeader({
   onSelect: (artifactId: string) => void;
   onAskAiden: (view: WorkspaceArtifactView) => void;
 }) {
-  const [renaming, setRenaming] = React.useState(false);
-  const [deleting, setDeleting] = React.useState(false);
+  // Each dialog belongs to the page it was opened on, and closes if another page takes its place.
+  const [renaming, setRenaming] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState<string | null>(null);
+  const artifactId = view.artifact.id;
   const menuTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const title = view.artifact.visual.title;
   const refreshedAt = view.snapshot?.refreshedAt;
@@ -451,25 +454,30 @@ function ArtifactsHeader({
             <MessageSquarePlus aria-hidden="true" />
             Ask Aiden to change this
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setRenaming(true)}>
+          <DropdownMenuItem onSelect={() => setRenaming(artifactId)}>
             <Pencil aria-hidden="true" />
             Rename…
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem color="red" onSelect={() => setDeleting(true)}>
+          <DropdownMenuItem color="red" onSelect={() => setDeleting(artifactId)}>
             <Trash2 aria-hidden="true" />
             Delete…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <RenameArtifactDialog
-        open={renaming}
-        onOpenChange={setRenaming}
+        open={renaming === artifactId}
+        onOpenChange={(open) => setRenaming(open ? artifactId : null)}
         workspaceId={workspaceId}
         view={view}
         returnFocus={() => menuTriggerRef.current}
       />
-      <DeleteArtifactDialog open={deleting} onOpenChange={setDeleting} workspaceId={workspaceId} view={view} />
+      <DeleteArtifactDialog
+        open={deleting === artifactId}
+        onOpenChange={(open) => setDeleting(open ? artifactId : null)}
+        workspaceId={workspaceId}
+        view={view}
+      />
     </div>
   );
 }
@@ -518,13 +526,13 @@ function RenameArtifactDialog({
       onOpenChange={onOpenChange}
       title="Rename artifact"
       confirmLabel="Rename"
-      confirmDisabled={!trimmed || trimmed.length > 80}
+      confirmDisabled={!trimmed || trimmed.length > WORKSPACE_ARTIFACT_LIMITS.titleChars}
       busy={busy}
       onConfirm={save}
       submitOnEnter
       returnFocus={returnFocus}
     >
-      <Input aria-label="Artifact name" value={title} maxLength={80} onChange={(event) => setTitle(event.target.value)} autoFocus />
+      <Input aria-label="Artifact name" value={title} maxLength={WORKSPACE_ARTIFACT_LIMITS.titleChars} onChange={(event) => setTitle(event.target.value)} autoFocus />
       {error ? (
         <p role="alert" className="mt-2 text-small text-status-red">
           {error}

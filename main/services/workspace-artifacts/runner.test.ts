@@ -55,7 +55,9 @@ async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifact
     { approved: options.approved ?? false },
   );
   const context = (permission: WorkspaceArtifactPermission) => ({ folderPath: folder, permission });
-  return { folder, store, events, commands, runner, context };
+  // What the tab sends with a button press: the page's digest as it was shown.
+  const digest = async () => (await store.get("ws1", "art1"))!.digest;
+  return { folder, store, events, commands, runner, context, digest };
 }
 
 test("a refresh runs commands in the workspace folder, reads files, and saves what it found", async (t) => {
@@ -122,29 +124,29 @@ test("refreshes of the same page at once share one run", async (t) => {
 });
 
 test("a button runs its saved command with the page's value as one literal argument", async (t) => {
-  const { runner, folder, context } = await setup(t);
+  const { runner, folder, context, digest } = await setup(t);
   const value = "$(touch hacked); `id` 'quoted'";
-  const result = await runner.runAction("ws1", "art1", "note", [value], context("full"));
+  const result = await runner.runAction("ws1", "art1", "note", [value], context("full"), undefined, await digest());
   assert.equal(result.ok, true);
   assert.equal(await fs.readFile(path.join(folder, "note.txt"), "utf8"), value);
   await assert.rejects(fs.stat(path.join(folder, "hacked")));
 });
 
 test("a button cancelled before its command starts runs nothing", async (t) => {
-  const { runner, folder, context } = await setup(t);
+  const { runner, folder, context, digest } = await setup(t);
   // Access changed while the press was still being checked.
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), controller.signal), /Cancelled/u);
+  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), controller.signal, await digest()), /Cancelled/u);
   await assert.rejects(fs.stat(path.join(folder, "note.txt")));
 });
 
 test("buttons follow the workspace's access and only exist if the page declared them", async (t) => {
-  const { runner, context } = await setup(t);
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("ask")), /Allow this page/u);
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("none")), /access is off/u);
-  await assert.rejects(runner.runAction("ws1", "art1", "rm", [], context("full")), /no button named "rm"/u);
-  const failed = await runner.runAction("ws1", "art1", "note", ["-rf"], context("full")).catch((error: Error) => error);
+  const { runner, context, digest } = await setup(t);
+  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("ask"), undefined, await digest()), /Allow this page/u);
+  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("none"), undefined, await digest()), /access is off/u);
+  await assert.rejects(runner.runAction("ws1", "art1", "rm", [], context("full"), undefined, await digest()), /no button named "rm"/u);
+  const failed = await runner.runAction("ws1", "art1", "note", ["-rf"], context("full"), undefined, await digest()).catch((error: Error) => error);
   assert.match(String(failed), /cannot start with "-"/u);
 });
 
@@ -209,11 +211,11 @@ test("one caller cancelling leaves a shared refresh running for the others; the 
 });
 
 test("a folder that is gone runs nothing and says so", async (t) => {
-  const { runner, folder, commands, context } = await setup(t);
+  const { runner, folder, commands, context, digest } = await setup(t);
   await fs.rm(folder, { recursive: true });
   const results = await runner.refresh("ws1", "art1", context("full"));
   assert.deepEqual([results.pulls!.error, results.todo!.error], ["The workspace folder is unavailable.", "The workspace folder is unavailable."]);
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full")), /unavailable/u);
+  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), undefined, await digest()), /unavailable/u);
   assert.deepEqual(commands, []);
 });
 

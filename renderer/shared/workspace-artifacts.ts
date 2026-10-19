@@ -157,49 +157,79 @@ function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
 
 const WORD_BREAK_BEFORE = /[\s;&|()]/u;
 const WORD_BREAK_AFTER = /[\s;&|)]/u;
+/** Where a word starts a command, so a value there would run as the program. */
+const COMMAND_START = /(?:^|[;&|(\n!])[ \t]*$/u;
+/** Commands that run their argument as code or as another program. */
+const RUNS_ARGUMENT = new Set([".", "-c", "builtin", "command", "env", "eval", "exec", "nohup", "source", "sudo", "time", "xargs"]);
+/** Bash evaluates a quoted text value as arithmetic here, which can run code. */
+const ARITHMETIC_CONTEXT = /\[\[|\(\(|\$\[|(?:^|[\s;&|(])(?:let|declare|typeset|local)[ \t]/u;
 
 /**
- * Each placeholder must stand alone as an unquoted shell word (`gh pr merge
- * {{number}}`), never inside quotes, backticks, `$(…)`, `${…}`, a heredoc or
- * a longer word. Values never become shell code either way (see
- * `resolveWorkspaceArtifactCommand`); this keeps each value one argument.
+ * Each placeholder must stand alone as an unquoted argument (`gh pr merge
+ * {{number}}`): never inside quotes, backticks, `$(…)`, `${…}`, a heredoc,
+ * a comment or a longer word, never the command itself, and never an
+ * argument a command runs as code (`eval`, `sh -c`). Returns where a
+ * placeholder sits wrongly, or undefined. The value itself never becomes
+ * shell code (see `resolveWorkspaceArtifactCommand`); this keeps each value
+ * one plain argument, as the person's confirmation shows it.
  */
 function placeholderOutsideWord(template: string): string | undefined {
-  if (/<<(?!<)/u.test(template) && PLACEHOLDER_TEST.test(template)) return "a heredoc";
-  let quote: "'" | '"' | "`" | null = null;
+  if (!PLACEHOLDER_TEST.test(template)) return undefined;
+  if (template.includes("AIDEN_ARG_")) return "next to AIDEN_ARG_ variables, which are reserved";
+  if (/<<(?!<)/u.test(template)) return "inside a heredoc";
+  let quote: "'" | '"' | "`" | "$'" | null = null;
   let depth = 0;
+  const checked = new Set<number>();
   for (let index = 0; index < template.length; index += 1) {
     const char = template[index]!;
-    if (quote === "'") {
-      if (char === "'") quote = null;
-      else if (template.startsWith("{{", index)) return "single quotes";
+    if (quote === "'" || quote === "$'") {
+      if (quote === "$'" && char === "\\") index += 1;
+      else if (char === "'") quote = null;
       continue;
     }
     if (char === "\\") {
       index += 1;
       continue;
     }
+    if (quote === null && depth === 0 && char === "#" && (index === 0 || WORD_BREAK_BEFORE.test(template[index - 1]!))) {
+      // A comment runs to the end of its line; quotes inside it mean nothing.
+      const newline = template.indexOf("\n", index);
+      if (newline < 0) break;
+      index = newline;
+      continue;
+    }
     if (template.startsWith("{{", index)) {
       PLACEHOLDER_AT.lastIndex = index;
       const match = PLACEHOLDER_AT.exec(template);
       if (!match) continue;
-      if (quote === '"') return "double quotes";
-      if (quote === "`") return "backticks";
-      if (depth > 0) return "a $(…) or ${…} expansion";
+      checked.add(index);
+      if (quote === '"') return "inside double quotes";
+      if (quote === "`") return "inside backticks";
+      if (depth > 0) return "inside a $(…) or ${…} expansion";
       const before = index === 0 ? " " : template[index - 1]!;
       const end = index + match[0].length;
       const after = end >= template.length ? " " : template[end]!;
-      if (!WORD_BREAK_BEFORE.test(before) || !WORD_BREAK_AFTER.test(after)) return "a longer word";
+      if (!WORD_BREAK_BEFORE.test(before) || !WORD_BREAK_AFTER.test(after)) return "part of a longer word";
+      const head = template.slice(0, index);
+      if (COMMAND_START.test(head) && !/\(\([ \t]*$/u.test(head)) return "the command itself";
+      const previous = /(\S+)[ \t]+$/u.exec(head)?.[1];
+      if (previous && RUNS_ARGUMENT.has(previous)) return `an argument to ${previous}, which runs it`;
       index = end - 1;
       continue;
     }
-    if (quote === null && (char === "'" || char === '"' || char === "`")) quote = char;
+    if (quote === null && char === "$" && template[index + 1] === "'") {
+      quote = "$'";
+      index += 1;
+    } else if (quote === null && (char === "'" || char === '"' || char === "`")) quote = char;
     else if (quote !== null && char === quote) quote = null;
     else if (char === "$" && (template[index + 1] === "(" || template[index + 1] === "{")) {
       depth += 1;
       index += 1;
     } else if (depth > 0 && (char === ")" || char === "}")) depth -= 1;
   }
+  if (quote !== null || depth !== 0) return "after an unclosed quote or expansion";
+  // A placeholder the scan stepped over (say, right after a backslash) was never checked.
+  for (const match of template.matchAll(PLACEHOLDER)) if (!checked.has(match.index)) return "after a backslash or other escape";
   return undefined;
 }
 
@@ -322,7 +352,15 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
     }
     const misplaced = placeholderOutsideWord(template);
     if (misplaced) {
-      return invalid(`${where}: each {{param}} must be its own unquoted word, not inside ${misplaced}. Write gh pr comment {{number}} --body {{body}}.`);
+      return invalid(`${where}: each {{param}} must be its own unquoted word, not ${misplaced}. Write gh pr comment {{number}} --body {{body}}.`);
+    }
+    if (ARITHMETIC_CONTEXT.test(template)) {
+      const text = params.find((param) => param.type === "string" && new RegExp(`\\{\\{\\s*${param.name}\\s*\\}\\}`, "u").test(template));
+      if (text) {
+        return invalid(
+          `${where}: {{${text.name}}} is text, and bash runs text inside [[ ]], (( )), $[ ] or let as arithmetic. Give it type "number", or compare with [ … ].`,
+        );
+      }
     }
     return { name: entry.name, label, command: template, params };
   });
@@ -499,7 +537,7 @@ export function parseWorkspaceArtifactOutput(
 }
 
 /** POSIX single-quoting: the value is always one literal word. */
-export function shellQuote(value: string): string {
+function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
@@ -570,8 +608,18 @@ export function workspaceArtifactSourceAccess(
   source: WorkspaceArtifactSourceV1,
   approved: boolean,
 ): WorkspaceArtifactSourceAccess {
+  if (source.kind === "file") return permission === "none" || !hasFolder ? "blocked" : "run";
+  return workspaceArtifactCommandAccess(permission, hasFolder, approved);
+}
+
+/** Shell commands, from sources or buttons: Full runs them, Ask once approved, Off never. */
+export function workspaceArtifactCommandAccess(
+  permission: WorkspaceArtifactPermission,
+  hasFolder: boolean,
+  approved: boolean,
+): WorkspaceArtifactSourceAccess {
   if (permission === "none" || !hasFolder) return "blocked";
-  if (permission === "full" || source.kind === "file") return "run";
+  if (permission === "full") return "run";
   return approved ? "run" : "needs-approval";
 }
 
@@ -591,10 +639,9 @@ export function describeWorkspaceArtifactCommands(
   sources: readonly WorkspaceArtifactSourceV1[],
   actions: readonly WorkspaceArtifactActionV1[],
 ): string {
-  const lines: string[] = [];
-  for (const source of sources) if (source.kind === "shell") lines.push(`• ${source.name}: ${source.command}`);
-  for (const action of actions) lines.push(`• ${action.label} (button): ${action.command}`);
-  return lines.join("\n");
+  return workspaceArtifactCommandList(sources, actions)
+    .map((entry) => `• ${entry.label}: ${entry.command}`)
+    .join("\n");
 }
 
 export function workspaceArtifactHasCommands(
