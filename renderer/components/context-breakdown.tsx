@@ -178,7 +178,7 @@ export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWind
         <span
           className={cn("ml-auto tabular-nums", lapsed ? "text-tertiary" : low ? "text-support-warning" : "text-primary")}
         >
-          {lapsed ? "Expired" : `${cacheTimeLeft(remaining)} left`}
+          {lapsed ? "Likely expired" : `${cacheTimeLeft(remaining)} left`}
         </span>
       </div>
       <span aria-hidden="true" className="h-1 overflow-hidden rounded-full bg-control">

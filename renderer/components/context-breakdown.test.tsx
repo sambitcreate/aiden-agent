@@ -342,7 +342,7 @@ test("the prompt cache countdown runs from the last cached request and says when
 
   render(<ContextBreakdown pressure={pressure({ promptCache })} now={lastRequestAt + 301_000} />);
   const lapsed = screen.getByRole("group", { name: "Prompt cache" });
-  assert.ok(within(lapsed).getByText("Expired"));
+  assert.ok(within(lapsed).getByText("Likely expired"));
 });
 
 test("day-long caches count down in hours", () => {
