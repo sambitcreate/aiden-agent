@@ -42,6 +42,8 @@ export function workspaceArtifactPageAccess(
 
 export interface WorkspaceArtifactProblem {
   name: string;
+  /** "blocked" waits on access or approval, which the access notice explains. */
+  status: "error" | "blocked";
   message: string;
 }
 
@@ -51,7 +53,7 @@ export function workspaceArtifactProblems(view: WorkspaceArtifactView): Workspac
   return view.artifact.sources.flatMap((source) => {
     const result = results[source.name];
     if (!result || result.status === "ok") return [];
-    return [{ name: source.name, message: result.error ?? (result.status === "blocked" ? "Not run." : "Failed.") }];
+    return [{ name: source.name, status: result.status, message: result.error ?? (result.status === "blocked" ? "Not run." : "Failed.") }];
   });
 }
 

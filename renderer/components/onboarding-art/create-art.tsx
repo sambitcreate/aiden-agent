@@ -500,9 +500,9 @@ export function InlineVisualsArt() {
 }
 
 const ARTIFACT_PULLS = [
-  { number: "#554", width: "72%", draft: false },
-  { number: "#551", width: "54%", draft: false },
-  { number: "#548", width: "64%", draft: true },
+  { number: "#554", width: 58, draft: false },
+  { number: "#551", width: 44, draft: false },
+  { number: "#548", width: 52, draft: true },
 ] as const;
 
 export function WorkspaceArtifactsArt() {

@@ -241,3 +241,29 @@ test("a run that started with more access never overwrites what a later, narrowe
   const saved = (await store.get("ws1", "art1"))!.snapshot!.sources.v!;
   assert.deepEqual([saved.status, saved.dataJson], ["blocked", undefined]);
 });
+
+test("a newer refresh that is cancelled leaves the earlier one to save", async (t) => {
+  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.3; printf 1", parse: "json" };
+  const { runner, store, commands, context } = await setup(t, { sources: [slow], approved: true });
+  const fromTab = runner.refresh("ws1", "art1", context("full"));
+  await until(() => commands.length === 1);
+  const turn = new AbortController();
+  const fromTurn = runner.refresh("ws1", "art1", context("ask"), turn.signal);
+  await until(() => commands.length === 2);
+  turn.abort();
+  assert.equal((await fromTurn).v!.error, "Cancelled.");
+  assert.equal((await fromTab).v!.dataJson, "1");
+  assert.equal((await store.get("ws1", "art1"))!.snapshot?.sources.v?.dataJson, "1");
+});
+
+test("the same folder reached through a link shares one refresh", async (t) => {
+  const { runner, folder, commands, context } = await setup(t, { sources: [SHELL] });
+  const link = `${folder}-link`;
+  await fs.symlink(folder, link);
+  t.after(() => fs.rm(link, { force: true }));
+  await Promise.all([
+    runner.refresh("ws1", "art1", context("full")),
+    runner.refresh("ws1", "art1", { folderPath: link, permission: "full" }),
+  ]);
+  assert.equal(commands.length, 1);
+});

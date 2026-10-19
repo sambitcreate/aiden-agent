@@ -213,6 +213,7 @@ function ArtifactView({
             </div>
           </Callout>
         ) : null}
+        <ArtifactSourceErrors view={view} />
         {view.artifact.description ? (
           <Text variant="small" color="secondary" as="p" className="mb-3">
             {view.artifact.description}
@@ -223,6 +224,25 @@ function ArtifactView({
         {buttons.dialog}
       </div>
     </div>
+  );
+}
+
+/** Why each failed source didn't load, in its own words (for example "gh: not logged in"). */
+function ArtifactSourceErrors({ view }: { view: WorkspaceArtifactView }) {
+  const failed = workspaceArtifactProblems(view).filter((problem) => problem.status === "error");
+  if (failed.length === 0) return null;
+  return (
+    <Callout color="warning" className="mb-3">
+      <ul className="m-0 flex list-none flex-col gap-1 p-0" aria-label="Sources that didn’t load">
+        {failed.map((problem) => (
+          <li key={problem.name}>
+            <Text variant="small" className="break-words">
+              <span className="font-semibold">{problem.name}</span>: {problem.message}
+            </Text>
+          </li>
+        ))}
+      </ul>
+    </Callout>
   );
 }
 

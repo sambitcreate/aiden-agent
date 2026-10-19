@@ -227,7 +227,7 @@
 .oa-artifacts-page { display: grid; gap: 6px; margin: 2px 9px 0; padding: 8px; border-radius: 9px; background: var(--oa-surface); }
 .oa-artifacts-row { display: flex; align-items: center; gap: 4px; height: 18px; padding: 0 5px; border-radius: 6px; background: var(--oa-fill); }
 .oa-artifacts-row .oa-icon { width: 8px; height: 8px; color: var(--status-green); }
-.oa-artifacts-row .oa-bar { height: 3.5px; }
+.oa-artifacts-row .oa-bar { flex: 0 1 auto; min-width: 0; height: 3.5px; }
 .oa-artifacts-row .oa-button { height: 12px; padding: 0 5px; font-size: 7px; }
 .oa-artifacts-number { font: 600 7.5px/1 var(--font-code-family); color: var(--text-primary); }
 .oa-artifacts-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); }

@@ -122,7 +122,9 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   removeWorkspace: async (workspaceId) => {
     await configStore.removeWorkspace(workspaceId);
     // The record is gone either way; leftover artifact files are only clutter.
-    await workspaceArtifactStore.removeWorkspace(workspaceId).catch(() => undefined);
+    await workspaceArtifactStore.removeWorkspace(workspaceId).catch((error: unknown) => {
+      logger.error("workspace", "Could not remove the workspace's artifacts.", error);
+    });
   },
   beginWorkspaceMutation: (workspaceId) => workspaceMutationGate.begin(workspaceId),
   workspaceIsChanging: (workspaceId) => workspaceMutationGate.isChanging(workspaceId),

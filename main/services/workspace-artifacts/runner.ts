@@ -61,13 +61,13 @@ type SourceResults = Record<string, WorkspaceArtifactSourceResultV1>;
 
 /** One refresh run, shared by every caller that asked for the same commands under the same access. */
 interface SharedRefresh {
-  /** Digest, permission and folder the run was started with. */
+  /** Digest, approval, permission and resolved folder the run was started with. */
   key: string;
   promise: Promise<SourceResults>;
   /** Aborts the run once every caller has left. */
   controller: AbortController;
   callers: number;
-  /** Only the newest run for a page saves what it read. */
+  /** Order of starting; the newest live run for a page is the one that saves. */
   generation: number;
 }
 
@@ -111,6 +111,23 @@ function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): Source
 export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRunnerDependencies) {
   const inFlight = new Map<string, SharedRefresh>();
   const generations = new Map<string, number>();
+  /** Runs still going, per page. */
+  const live = new Map<string, Set<SharedRefresh>>();
+  /** The generation whose results each page last saved. */
+  const savedGeneration = new Map<string, number>();
+
+  /**
+   * A run saves only when nothing newer has saved and no newer run is still
+   * going, so data read under older commands, approval or access never
+   * overwrites a newer read, and a cancelled newer run does not strand the page.
+   */
+  function shouldSave(id: string, entry: SharedRefresh): boolean {
+    if (entry.controller.signal.aborted || entry.generation <= (savedGeneration.get(id) ?? 0)) return false;
+    for (const other of live.get(id) ?? []) {
+      if (other.generation > entry.generation && !other.controller.signal.aborted) return false;
+    }
+    return true;
+  }
 
   async function runSource(
     source: WorkspaceArtifactSourceV1,
@@ -190,7 +207,18 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     if (signal?.aborted) return cancelledResults(view.artifact.sources);
     const id = `${workspaceId}:${artifactId}`;
     const approved = view.artifact.approvedDigest === view.digest;
-    const key = `${view.digest}\0${approved}\0${context.permission}\0${context.folderPath ?? ""}`;
+    // Resolved first, so the same folder reached through a link shares one run.
+    let folderPath = context.folderPath;
+    let folderError: string | undefined;
+    if (folderPath !== undefined) {
+      try {
+        folderPath = await verifiedFolder(folderPath);
+      } catch (error) {
+        folderError = error instanceof Error ? error.message : FOLDER_UNAVAILABLE;
+      }
+    }
+    if (signal?.aborted) return cancelledResults(view.artifact.sources);
+    const key = `${view.digest}\0${approved}\0${context.permission}\0${folderPath ?? ""}`;
     let shared = inFlight.get(id);
     if (!shared || shared.key !== key || shared.controller.signal.aborted) {
       const controller = new AbortController();
@@ -199,26 +227,28 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
       const entry: SharedRefresh = { key, controller, callers: 0, generation, promise: Promise.resolve({}) };
       entry.promise = (async () => {
         let results: SourceResults;
-        try {
-          const folderPath = context.folderPath === undefined ? undefined : await verifiedFolder(context.folderPath);
-          results = await runSources(view.artifact, { ...context, folderPath }, controller.signal);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : FOLDER_UNAVAILABLE;
+        if (folderError !== undefined) {
           const at = Date.now();
-          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: message } as const]));
+          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: folderError } as const]));
+        } else {
+          results = await runSources(view.artifact, { ...context, folderPath }, controller.signal);
         }
-        // A newer run (other commands, approval or access) owns the saved data now.
-        if (controller.signal.aborted || generations.get(id) !== generation) return results;
+        if (!shouldSave(id, entry)) return results;
         // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
         const current = await dependencies.store.get(workspaceId, artifactId);
-        if (!current || current.digest !== view.digest) return results;
+        if (!current || current.digest !== view.digest || !shouldSave(id, entry)) return results;
+        savedGeneration.set(id, generation);
         await dependencies.store.saveSnapshot(workspaceId, current.artifact, results);
         dependencies.notify({ workspaceId, artifactId, reason: "refreshed" });
         return results;
       })().finally(() => {
         if (inFlight.get(id) === entry) inFlight.delete(id);
+        const running = live.get(id);
+        running?.delete(entry);
+        if (running?.size === 0) live.delete(id);
       });
       inFlight.set(id, entry);
+      live.set(id, (live.get(id) ?? new Set()).add(entry));
       shared = entry;
     }
     return join(shared, view.artifact.sources, signal);

@@ -13,7 +13,7 @@ Invariants to keep:
 - Under Ask, shell commands run only when `approvedDigest === workspaceArtifactDigest(sources, actions)`. File sources run under Ask without approval. None runs nothing.
 - The tool's approval card records the digest per stream, and the tool consumes it.
 - Action placeholders are standalone unquoted words. Values go through `set --` with `"${N}"`. No leading `-`, no negative numbers, and no control or invisible characters.
-- A shared refresh is keyed by digest, permission and folder. A caller cancelling leaves the run going; the run aborts when the last caller leaves. Results are never saved when the digest changed mid-run.
+- A shared refresh is keyed by digest, approval, permission and the resolved folder. A caller cancelling leaves the run going; the run aborts when the last caller leaves. Only the newest live run for a page saves, and results are never saved when the digest changed mid-run.
 - The folder is re-verified with realpath before anything runs.
 - The `aiden-artifacts` skill is a builtin in `main/services/workspace-artifacts/skill.ts`, not in `resources/aiden-help`, because the CLI copies that folder.
 - Removing a workspace, including through the worktree path, removes its artifact files.

@@ -435,3 +435,22 @@ test("a button's confirmation notices when the page changes underneath it and do
   fireEvent.click(within(dialog).getByRole("button", { name: "Run" }));
   assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:run"), false);
 });
+
+test("a source that failed says why, while one waiting for approval is left to the access notice", () => {
+  installBotTestIpc();
+  const base = view("art1", "Open PRs", { sources: [PULLS, { name: "todo", kind: "file", file: "TODO.md", parse: "lines" }] });
+  const failed: WorkspaceArtifactView = {
+    ...base,
+    snapshot: {
+      revision: 1,
+      refreshedAt: Date.now(),
+      sources: {
+        pulls: { status: "blocked", at: 1, error: "Waiting for you to allow this page’s commands." },
+        todo: { status: "error", at: 1, error: "There is no file at TODO.md." },
+      },
+    },
+  };
+  renderPanel({ artifacts: state([failed]) });
+  const list = screen.getByRole("list", { name: "Sources that didn’t load" });
+  assert.deepEqual(within(list).getAllByRole("listitem").map((item) => item.textContent), ["todo: There is no file at TODO.md."]);
+});
