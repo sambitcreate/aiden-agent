@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Status: proposed, 2026-10-19. Nothing here is implemented.
+Status: implemented on this branch, 2026-10-19 (Tasks 1–6, 8 and 9). Task 7 (optional hover) was skipped. Routing `permission_required` refusals back to the readiness checklist mid-chat is deferred: Aiden returns the setup text instead. The catalog fixture was hand-updated from the 0.36.0 sources (manifest and tool schemas) rather than captured from a live `tools/list`. Phase 4 owner-only packaged acceptance is pending. Proposed 2026-10-19.
 
 **Goal:** Move Aiden's macOS Computer Use pin from `cua-driver-rs-v0.34.1` to `cua-driver-rs-v0.36.0`, adopt the upstream behavior changes that fit Aiden's approval model, and record which newer upstream capabilities are deferred or declined.
 
@@ -104,14 +104,14 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 **Interfaces:**
 - Produces: `CUA_DRIVER_VERSION === "0.36.0"`; a catalog fixture whose `tools` array is the exact 0.36.0 `tools/list` result.
 
-- [ ] **Step 1: Write the failing broker test**: extend `allowlist_is_exact_and_has_no_cursor_or_persistence_surface` in `jsonrpc.rs` so the forbidden list includes `"run_steps"`, `"run_actions"`, `"run_script"`, `"get_guide"`, `"move_cursor"`, `"launch_app"`, `"kill_app"`; extend `driver_environment_is_an_explicit_secret_free_allowlist` to require `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`.
-- [ ] **Step 2: Run** `npm run test:computer-use:native`. Expected: the environment test fails on the missing variable.
-- [ ] **Step 3: Add** `"CUA_DRIVER_DISABLE_RUN_SCRIPT=1"` to the driver environment in `driver.rs` beside `CUA_DRIVER_RS_UPDATE_CHECK=false`.
-- [ ] **Step 4: Update the artifact JSON**: `tag`, `sourceCommit` (`6d6c734c127025fb39ad5d585a10382808b39dc1`), `version`, `asset`, `url`, then run `npm run computer-use:vendor -- --verify-sigstore` once with the old hashes to obtain the real archive and binary SHA-256 from its mismatch report, write them, and rerun until it passes. Record both CDHashes with `codesign -dvvv --arch arm64|x86_64` into `computer-use-signing-pins.mjs`.
-- [ ] **Step 5: Regenerate the launch requirement**: `node scripts/generate-cua-launch-requirement.mjs --write`, then update the DER length and SHA-256 pinned in `driver.rs`; `--check` must pass.
-- [ ] **Step 6: Regenerate the catalog fixture** by running the vendored driver's `tools/list` through the existing bridge in a dev build (the fake-bridge harness in `host.testing.ts` documents the call) and writing the result to `fixtures/cua-driver-catalog.mjs`; bump the fake driver's `serverInfo.version` to `0.36.0` and its tool shapes to the 0.36 schemas (lean `get_window_state`, `target` object, `run_steps`/`run_script` present).
-- [ ] **Step 7: Run** `npm run test:computer-use` and `npm run typecheck`. Expected: foundation tests pass with the new catalog; the required-tools check still finds all 20 allowlisted tools; `run_*` are filtered out.
-- [ ] **Step 8: Commit** `chore(computer-use): pin cua-driver 0.36.0`.
+- [x] **Step 1: Write the failing broker test**: extend `allowlist_is_exact_and_has_no_cursor_or_persistence_surface` in `jsonrpc.rs` so the forbidden list includes `"run_steps"`, `"run_actions"`, `"run_script"`, `"get_guide"`, `"move_cursor"`, `"launch_app"`, `"kill_app"`; extend `driver_environment_is_an_explicit_secret_free_allowlist` to require `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`.
+- [x] **Step 2: Run** `npm run test:computer-use:native`. Expected: the environment test fails on the missing variable.
+- [x] **Step 3: Add** `"CUA_DRIVER_DISABLE_RUN_SCRIPT=1"` to the driver environment in `driver.rs` beside `CUA_DRIVER_RS_UPDATE_CHECK=false`.
+- [x] **Step 4: Update the artifact JSON**: `tag`, `sourceCommit` (`6d6c734c127025fb39ad5d585a10382808b39dc1`), `version`, `asset`, `url`, then run `npm run computer-use:vendor -- --verify-sigstore` once with the old hashes to obtain the real archive and binary SHA-256 from its mismatch report, write them, and rerun until it passes. Record both CDHashes with `codesign -dvvv --arch arm64|x86_64` into `computer-use-signing-pins.mjs`.
+- [x] **Step 5: Regenerate the launch requirement**: `node scripts/generate-cua-launch-requirement.mjs --write`, then update the DER length and SHA-256 pinned in `driver.rs`; `--check` must pass.
+- [x] **Step 6: Regenerate the catalog fixture** by running the vendored driver's `tools/list` through the existing bridge in a dev build (the fake-bridge harness in `host.testing.ts` documents the call) and writing the result to `fixtures/cua-driver-catalog.mjs`; bump the fake driver's `serverInfo.version` to `0.36.0` and its tool shapes to the 0.36 schemas (lean `get_window_state`, `target` object, `run_steps`/`run_script` present).
+- [x] **Step 7: Run** `npm run test:computer-use` and `npm run typecheck`. Expected: foundation tests pass with the new catalog; the required-tools check still finds all 20 allowlisted tools; `run_*` are filtered out.
+- [x] **Step 8: Commit** `chore(computer-use): pin cua-driver 0.36.0`.
 
 ### Task 2: lean `get_window_state`
 
@@ -122,11 +122,11 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 **Interfaces:**
 - Produces: `som`/`ax` captures send `{ tree_format: "elements", max_elements, include_screenshot, ... }`; `vision` captures send `{ tree_format: "markdown", include_accessibility_tree: false, ... }` (`tree_format` enum in the 0.36 manifest: `markdown` default, `elements`, `both`).
 
-- [ ] **Step 1: Write the failing test** `som capture requests the elements tree_format and still mints tokens` asserting the driver received `tree_format: "elements"` and the result lists `elements.length > 0` from the fake driver's lean default (the fake returns no `elements` unless asked).
-- [ ] **Step 2: Write the failing test** `capture with an open menu lists its items; a closed menu lists only titles` using two fake-driver fixtures.
-- [ ] **Step 3: Run** `npx tsx --test main/services/computer-use/computer-use-tool.test.ts`. Expected: FAIL, zero elements.
-- [ ] **Step 4: Implement** the `tree_format` argument in the capture branch of `controller.ts`; leave `vision` lean.
-- [ ] **Step 5: Run the tests**; expected PASS. Commit `fix(computer-use): request the elements tree from cua-driver 0.36`.
+- [x] **Step 1: Write the failing test** `som capture requests the elements tree_format and still mints tokens` asserting the driver received `tree_format: "elements"` and the result lists `elements.length > 0` from the fake driver's lean default (the fake returns no `elements` unless asked).
+- [x] **Step 2: Write the failing test** `capture with an open menu lists its items; a closed menu lists only titles` using two fake-driver fixtures.
+- [x] **Step 3: Run** `npx tsx --test main/services/computer-use/computer-use-tool.test.ts`. Expected: FAIL, zero elements.
+- [x] **Step 4: Implement** the `tree_format` argument in the capture branch of `controller.ts`; leave `vision` lean.
+- [x] **Step 5: Run the tests**; expected PASS. Commit `fix(computer-use): request the elements tree from cua-driver 0.36`.
 
 ### Task 3: newline-safe `type`
 
@@ -137,10 +137,10 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 **Interfaces:**
 - Produces: `evaluateTypeText(text)` (existing entry point in `safety.ts`) fails with code `"blocked_text"` and message `Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then press_key Return or Tab as its own action.` when `text` contains `\n`, `\r` or `\t`.
 
-- [ ] **Step 1: Write failing tests**: `rejects trailing newline`, `rejects embedded tab`, `accepts text with no control characters`.
-- [ ] **Step 2: Run** them; expected FAIL (currently accepted).
-- [ ] **Step 3: Implement** the check before the shell-token scan.
-- [ ] **Step 4: Run** `npm run test:computer-use`; expected PASS. Commit `fix(computer-use): refuse line breaks in typed text`.
+- [x] **Step 1: Write failing tests**: `rejects trailing newline`, `rejects embedded tab`, `accepts text with no control characters`.
+- [x] **Step 2: Run** them; expected FAIL (currently accepted).
+- [x] **Step 3: Implement** the check before the shell-token scan.
+- [x] **Step 4: Run** `npm run test:computer-use`; expected PASS. Commit `fix(computer-use): refuse line breaks in typed text`.
 
 ### Task 4: new refusal codes
 
@@ -157,9 +157,9 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
   - `foreground_partial_unknown`: treated as `execution_unknown`.
   - `electron_main_process_unavailable`: joins the `background_unavailable` branch (foreground retry offered).
 
-- [ ] **Step 1: Write one failing test per code** asserting the message and whether the capture was invalidated.
-- [ ] **Step 2: Run**; expected FAIL with the generic refusal text.
-- [ ] **Step 3: Implement** the mapping. **Step 4: Run** `npm run test:computer-use`; PASS. Commit `feat(computer-use): map cua-driver 0.36 refusal codes`.
+- [x] **Step 1: Write one failing test per code** asserting the message and whether the capture was invalidated.
+- [x] **Step 2: Run**; expected FAIL with the generic refusal text.
+- [x] **Step 3: Implement** the mapping. **Step 4: Run** `npm run test:computer-use`; PASS. Commit `feat(computer-use): map cua-driver 0.36 refusal codes`.
 
 ## Phase 2: behavior adoption
 
@@ -169,10 +169,10 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 - Modify: `main/services/computer-use/controller.ts:1410-1430` (drag branch), `controller.ts:1491` (foreground gating), `main/services/computer-use/schema.ts` (drag description), `main/services/computer-use/tool.ts` (description and guidance no longer list drag as always foreground)
 - Test: `main/services/computer-use/computer-use-tool.test.ts`, `main/services/tool-approval.test.ts` if drag approval text is asserted there
 
-- [ ] **Step 1: Write failing tests**: `drag sends delivery_mode background by default and needs only the chat grant`; `drag refused with background_unavailable offers a foreground retry and does not resend`.
-- [ ] **Step 2: Run**; expected FAIL (drag forces foreground).
-- [ ] **Step 3: Implement**: remove the forced `delivery_mode:"foreground"`; the generic `background_unavailable` branch already produces the `foreground_required` message.
-- [ ] **Step 4: Run** `npm run test:computer-use`; PASS. Commit `feat(computer-use): background drag with cua-driver 0.36`.
+- [x] **Step 1: Write failing tests**: `drag sends delivery_mode background by default and needs only the chat grant`; `drag refused with background_unavailable offers a foreground retry and does not resend`.
+- [x] **Step 2: Run**; expected FAIL (drag forces foreground).
+- [x] **Step 3: Implement**: remove the forced `delivery_mode:"foreground"`; the generic `background_unavailable` branch already produces the `foreground_required` message.
+- [x] **Step 4: Run** `npm run test:computer-use`; PASS. Commit `feat(computer-use): background drag with cua-driver 0.36`.
 
 ### Task 6: cheaper captures
 
@@ -183,8 +183,8 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 **Interfaces:**
 - Produces: capture by `app` calls `list_windows({ app })` instead of the host-wide list; a new optional capture field `changes_only: boolean` sends `since: <previous snapshot_id of the same window>` and returns the driver's diff rows plus `no_change: true` when the driver reports no change. Tokens are still minted only from a full capture, so `changes_only` results never carry element numbers; the result says so.
 
-- [ ] **Step 1: Write failing tests**: `capture by app filters list_windows host-side`; `changes_only capture sends since and reports no_change`.
-- [ ] **Step 2: Run**; FAIL. **Step 3: Implement.** **Step 4: Run**; PASS. Commit `feat(computer-use): app-filtered discovery and snapshot diffs`.
+- [x] **Step 1: Write failing tests**: `capture by app filters list_windows host-side`; `changes_only capture sends since and reports no_change`.
+- [x] **Step 2: Run**; FAIL. **Step 3: Implement.** **Step 4: Run**; PASS. Commit `feat(computer-use): app-filtered discovery and snapshot diffs`.
 
 ### Task 7 (optional): `hover` action
 
@@ -208,16 +208,16 @@ Skip this task if the owner prefers not to widen the broker allowlist in this re
 - Modify: `main/services/computer-use/tool.ts` (`COMPUTER_USE_TOOL_DESCRIPTION`, `COMPUTER_USE_AGENT_GUIDANCE`), `schema.ts` descriptions
 - Test: `main/services/assistant/system-prompt.test.ts` if it asserts guidance fragments
 
-- [ ] **Step 1:** Rewrite from upstream's 0.36.0 `libs/cua/skills/cua-driver/{WORKFLOW,MACOS}.md` and the trimmed tool descriptions (#4742): closed menus are not in captures, use `menu` with a path; typed text never contains line breaks, submit with `press_key`; drag is background first; `changes_only` for verification loops; hover reveals hover-only controls; `write_not_applied` means choose another route.
-- [ ] **Step 2:** Run `npm run test:computer-use` and the system-prompt suite; PASS. Commit `docs(computer-use): refresh model guidance for cua-driver 0.36`.
+- [x] **Step 1:** Rewrite from upstream's 0.36.0 `libs/cua/skills/cua-driver/{WORKFLOW,MACOS}.md` and the trimmed tool descriptions (#4742): closed menus are not in captures, use `menu` with a path; typed text never contains line breaks, submit with `press_key`; drag is background first; `changes_only` for verification loops; hover reveals hover-only controls; `write_not_applied` means choose another route.
+- [x] **Step 2:** Run `npm run test:computer-use` and the system-prompt suite; PASS. Commit `docs(computer-use): refresh model guidance for cua-driver 0.36`.
 
 ### Task 9: documentation
 
 **Files:**
 - Modify: `docs/computer-use-integration.md` (pin paragraph: 0.36.0, tag, commit, upgrade date; "Process boundary" item 1 mention of the consent probe on the prompting call; drag sentence in the safety rules; screenshot default 1366 px), `docs/plans/README.md` (this plan's row: Proposed → Implemented), `docs/plans/form-fill-specialist-plan.md` (status line), `docs/plans/linux-cua-driver-gap-audit.md` (0.36 addendum from section E), `.memory/upgrade-form-fill-specialist.md`, `docs/plans/cua-driver-0-34-upgrade-plan.md` (one line: superseded by this plan)
 
-- [ ] **Step 1:** `grep -rn "0\.34\.1" README.md PRODUCT.md docs .memory` and fix every claim that describes the current pin (history entries stay).
-- [ ] **Step 2:** Commit `docs: cua-driver 0.36 pin`.
+- [x] **Step 1:** `grep -rn "0\.34\.1" README.md PRODUCT.md docs .memory` and fix every claim that describes the current pin (history entries stay).
+- [x] **Step 2:** Commit `docs: cua-driver 0.36 pin`.
 
 ## Phase 4: acceptance (owner-only)
 

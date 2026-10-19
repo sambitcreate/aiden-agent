@@ -38,8 +38,31 @@ checks are disabled in every child process, including upstream's
 configuration. The broker also starts the driver with
 `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`, so 0.36's on-by-default `run_script`
 (sandboxed JavaScript that drives the driver's own tools) is not offered; it
-and the `run_steps` batch tool are also outside the broker's tool allowlist.
+and the `run_steps` batch tool (with its `run_actions` alias) and `get_guide`
+are also denied by the broker and filtered from the catalog the model sees.
 The MIT notice ships beside the helper.
+
+Since 0.36 the driver caps screenshots at 1366 px on the long edge by default
+(0.34 used 1568); Aiden passes `max_image_dimension` only when the model asks
+for a different cap. Captures request `tree_format: "elements"` for `som` and
+`ax` (0.36 returns a lean markdown tree otherwise) and `"markdown"` for
+`vision`; items of a closed menu are not in a capture, so the model opens menu
+items with the `menu` action and a path. `type` refuses text that contains a
+line break or tab, because 0.36 sends those as Return and Tab; the model sends
+Return or Tab with the `key` action as its own step. Capture by app sends
+`list_windows({app})`, which the driver filters by app-name substring or exact
+bundle identifier. An optional `changes_only` capture (not with `vision`) sends
+`since` with the window's previous snapshot and returns the driver's diff rows
+or `no_change` without element numbers; `no_change` keeps the previous numbers
+valid, and after a diff the model takes a full capture before acting. The 0.36
+refusal codes map to specific recovery messages: `write_not_applied` (the
+control read back unchanged), `window_not_key` and `target_focus_unconfirmed`
+(focus not confirmed), `windowserver_connection_invalid`,
+`permission_required` and `direct_capture_consent_required` (reported as
+`permission_required` with the setup text), `foreground_partial_unknown`
+(treated as an unknown execution outcome), and
+`desktop_coordinate_scope_required` and `element_bounds_unavailable` (window
+target refusals).
 
 Upstream publishes a cosign (Sigstore) bundle beside each release asset. The
 pinned archive SHA-256 stays the authority; `npm run computer-use:vendor --
@@ -122,8 +145,18 @@ then tears down that driver and checks readiness with a fresh helper so a stale
 per-process TCC cache cannot report the pre-prompt state.
 
 Since 0.34 the driver runs its live ScreenCaptureKit probe only on a prompting
-call, so in embedded mode `screen_recording_capturable` is always `null`
-(`direct_capture_status: "not_checked"`). Readiness therefore rests on the
+call. Because the broker rewrites Aiden's prompting call to a status-only
+recheck, the driver never receives one, so in embedded mode
+`screen_recording_capturable` is always `null`
+(`direct_capture_status: "not_checked"`). Since 0.36 upstream's prompting
+`check_permissions` call also takes one tiny ScreenCaptureKit frame so the
+direct-capture consent appears during the explicit grant rather than over the
+user's window (#5352), and a bundle-identifier approval counts as that consent
+(#5402). Whether the consent now appears during **Request access** in Aiden,
+given the status-only rewrite, is unverified until packaged acceptance; if it
+appears over the first capture instead, the driver refuses with
+`direct_capture_consent_required` and Aiden reports `permission_required` with
+the setup text (it does not yet reopen the readiness checklist mid-chat). Readiness therefore rests on the
 Accessibility and Screen Recording TCC preflight booleans; an explicit `false`
 from a probe that did run still vetoes. This is weaker than the 0.8.3 live
 probe: a stale preflight can report ready, after which the first screenshot
@@ -257,7 +290,13 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
   of workspace permission; each action's grant is still bound to the exact
   target and consumed once.
 - Foreground delivery is a distinct visible-risk approval and is unavailable
-  unless the driver advertises the capability.
+  unless the driver advertises the capability. Menu actions and modified clicks
+  are always foreground. Drag (including a modified drag) defaults to the
+  background since 0.36; Aiden offers a foreground retry, with its own
+  approval, only when the driver refuses with `background_unavailable` (for a
+  native drag-and-drop session) or `electron_main_process_unavailable`, and
+  never re-sends the drag itself. Drag still has no element endpoints: a named
+  element becomes its center point.
 - Dangerous system shortcuts and destructive shell-like text are rejected
   before the approval prompt.
 - Screenshots and base64 image payloads remain transient in the Pi tool loop;
@@ -276,6 +315,13 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
 - Cua: the 0.8.3, 0.34.1 and 0.36.0 release checksums, `Skills/cua-driver/EMBEDDING.md`,
   `WORKFLOW.md` and `MACOS.md` (0.34.1), the action-result contract, telemetry
   documentation, platform support, installer scripts, and release workflow.
+  Re-audited for 0.36.0 (tag `cua-driver-rs-v0.36.0`):
+  `libs/cua/skills/cua-driver/{SKILL,WORKFLOW,MACOS}.md`, the macOS tool
+  descriptions in `libs/cua-driver/rust/crates/platform-macos/src/tools/`
+  (`get_window_state`, `click`, `type_text`, `drag`, `invoke_menu`,
+  `set_value`), `libs/cua-driver/contract/manifest.json`,
+  `libs/cua-driver/rust/CHANGELOG.md`, `list_windows.rs`,
+  `window_state_view.rs`, `action_target.rs` and `script_tool.rs`.
 - Aiden: Pi agent/tool types, `llm-client.ts`, generic MCP manager, approval UI,
   config/chat persistence, Electron lifecycle, preload allowlists, and packaging.
 
