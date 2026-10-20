@@ -42,6 +42,27 @@ function botName(feed: PeerHostFeedSnapshot | null | undefined, botId: string): 
   return name || null;
 }
 
+/** A send the host may have accepted: replayed exactly, under its key, if sent again. */
+interface UnsettledBotSend {
+  text: string;
+  /** The photos' own bytes, so a different photo is never mistaken for a staged one. */
+  photos: readonly (readonly [string, string, string])[];
+  key: string;
+  body: Record<string, unknown>;
+}
+
+function photoIdentity(images: readonly Attachment[]): (readonly [string, string, string])[] {
+  return images.map((image) => [image.name, image.mimeType, image.data ?? ""] as const);
+}
+
+function sameSend(pending: UnsettledBotSend, text: string, photos: readonly (readonly [string, string, string])[]): boolean {
+  return (
+    pending.text === text &&
+    pending.photos.length === photos.length &&
+    pending.photos.every((photo, index) => photo.every((part, at) => part === photos[index]?.[at]))
+  );
+}
+
 export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: string }) {
   const navigate = useNavigate();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
@@ -58,7 +79,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const [statusLayout, setStatusLayout] = React.useState("");
   // A send whose acknowledgement was lost keeps its key and staged photos, so
   // sending the same thing again is deduplicated by the host, not repeated.
-  const unsettledSend = React.useRef<{ fingerprint: string; key: string; attachmentIds: string[] } | null>(null);
+  const unsettledSend = React.useRef<UnsettledBotSend | null>(null);
 
   const view = live.view;
   const snapshot = view?.snapshot ?? null;
@@ -193,15 +214,19 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       toast.error(`Update Aiden on ${hostName} to send photos to ${name}.`);
       throw new Error("photos unsupported");
     }
-    const body = {
-      text: `${text}${attachmentText(attachments)}`,
-      ...(whenBusy && steerAndQueue ? { whenBusy: whenBusy === "steer" ? ("steer" as const) : ("queue" as const) } : {}),
-    };
-    const fingerprint = JSON.stringify([body, images.map((image) => [image.name, image.mimeType, image.data?.length ?? 0])]);
-    const retry = unsettledSend.current?.fingerprint === fingerprint ? unsettledSend.current : null;
+    const fullText = `${text}${attachmentText(attachments)}`;
+    const identity = photoIdentity(images);
+    // The same draft sent again replays the unsettled request as it was, even
+    // if the Bot has started running since and the composer now queues it.
+    const retry = unsettledSend.current && sameSend(unsettledSend.current, fullText, identity) ? unsettledSend.current : null;
     unsettledSend.current = null;
-    const attachmentIds: string[] = retry ? [...retry.attachmentIds] : [];
-    if (!retry) {
+    let key: string;
+    let body: Record<string, unknown>;
+    if (retry) {
+      key = retry.key;
+      body = retry.body;
+    } else {
+      const attachmentIds: string[] = [];
       for (const image of images) {
         const uploaded = await call(
           {
@@ -214,21 +239,18 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         const id = (uploaded.value as { id?: unknown } | null)?.id;
         if (typeof id === "string") attachmentIds.push(id);
       }
+      key = mintPeerIdempotencyKey();
+      body = {
+        text: fullText,
+        ...(whenBusy && steerAndQueue ? { whenBusy: whenBusy === "steer" ? "steer" : "queue" } : {}),
+        ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+      };
     }
-    const key = retry?.key ?? mintPeerIdempotencyKey();
     try {
-      await call(
-        {
-          operation: "botSend",
-          resourceId: botId,
-          idempotencyKey: key,
-          body: { ...body, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) },
-        },
-        `Aiden couldn’t send to ${name}.`,
-      );
+      await call({ operation: "botSend", resourceId: botId, idempotencyKey: key, body }, `Aiden couldn’t send to ${name}.`);
     } catch (error) {
       if ((error as { code?: unknown }).code === "outcome_unknown") {
-        unsettledSend.current = { fingerprint, key, attachmentIds };
+        unsettledSend.current = { text: fullText, photos: identity, key, body };
       }
       throw error;
     }

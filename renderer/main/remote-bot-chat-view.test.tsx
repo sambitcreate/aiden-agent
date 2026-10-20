@@ -106,11 +106,16 @@ test("a send whose acknowledgement was lost keeps the draft and retries with the
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(sends, 1));
   await waitFor(() => assert.equal(box.value, "Move the dentist"));
-  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  // The Bot starts running meanwhile, so the composer now queues the same draft.
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Queue message" }));
   await waitFor(() => assert.equal(sends, 2));
-  const keys = peerCalls().filter((call) => call.operation === "botSend").map((call) => call.idempotencyKey);
-  assert.equal(keys.length, 2);
-  assert.equal(keys[0], keys[1], "the host can tell the retry is the same message");
+  const sent = peerCalls().filter((call) => call.operation === "botSend");
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0]!.idempotencyKey, sent[1]!.idempotencyKey, "the host can tell the retry is the same message");
+  assert.deepEqual(sent[1]!.body, sent[0]!.body, "the retry replays the original request");
 });
 
 test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
