@@ -22,6 +22,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { patchPiOAuthBranding } from "../../../scripts/patch-pi-oauth-branding.mjs";
+import { patchPiAiToolCache } from "../../../scripts/patch-pi-ai-tool-cache.mjs";
 import { vendorGenerativeUiLibraries } from "../../../scripts/vendor-generative-ui-libs.mjs";
 
 const pkgDir = dirname(fileURLToPath(import.meta.url)) + "/..";
@@ -48,6 +49,14 @@ if (piAiPkg === undefined) {
 	throw new Error("Could not locate @earendil-works/pi-ai. Run npm install in packages/cli first.");
 }
 await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
+// The #11142 backport changes runtime behavior, so patch every pi-ai copy the
+// bundle could resolve, not just the first.
+for (const candidate of [
+	join(pkgDir, "node_modules", "@earendil-works", "pi-ai"),
+	join(piAgentPkg, "node_modules", "@earendil-works", "pi-ai"),
+]) {
+	if (existsSync(join(candidate, "package.json"))) await patchPiAiToolCache(resolve(pkgDir, "../.."), candidate);
+}
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };

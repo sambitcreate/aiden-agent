@@ -294,6 +294,7 @@ import {
   scheduledProviderFingerprint,
 } from "./schedule-provider-binding.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
+import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
@@ -3304,6 +3305,7 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
+      let attendedToolRecoveryRequested = false;
       if (canWarmForegroundChat({
         enabled: cacheWarmingEnabled,
         local: isLocalModelProvider(runtime.provider),
@@ -3494,6 +3496,7 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
+        ...(attendedAssistant ? { finishTurn: endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested) } : {}),
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
           attended: attendedAssistant,
@@ -3507,6 +3510,7 @@ export const llmClient = {
             return mcpServersSection.apply(prepared);
           },
           onRecovery: () => {
+            attendedToolRecoveryRequested = true;
             logger.warn(
               "pi",
               `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
