@@ -1,4 +1,4 @@
-export const CUA_DRIVER_VERSION = "0.34.1";
+export const CUA_DRIVER_VERSION = "0.36.0";
 export const CUA_DRIVER_TOOL_SCHEMA = "1";
 export const CUA_DRIVER_CAPABILITY_VERSION = "1";
 export const CUA_DRIVER_HOST_BUNDLE_ID = "com.sambitcreate.aiden-agent";
@@ -45,13 +45,14 @@ export const CUA_DRIVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
 
 /**
  * Every allowed tool is required so native and TypeScript fail closed on
- * contract drift. 0.34.1 registers each of them on macOS
- * (`platform-macos/src/tools/mod.rs::register_all`).
+ * contract drift. 0.36.0 registers each of them on macOS
+ * (`platform-macos/src/tools/mod.rs::register_all`, with the session tools
+ * from `ToolRegistry::register_session_tools`).
  */
 export const CUA_DRIVER_REQUIRED_TOOLS = CUA_DRIVER_ALLOWED_TOOLS;
 
 /**
- * Tools whose 0.34.1 schema accepts the preferred per-call tagged
+ * Tools whose 0.36.0 schema accepts the preferred per-call tagged
  * `target: {kind:"window", pid, window_id}` (upstream
  * `cua-driver-core/src/action_target.rs::TARGETED_TOOLS`). The driver refuses
  * `target` combined with flat pid/window_id, so these tools receive only
@@ -125,6 +126,9 @@ export function buildCuaDriverEnvironment(
     CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
     CUA_TELEMETRY_ENABLED: "0",
     CUA_DRIVER_RS_UPDATE_CHECK: "false",
+    // 0.35 turns run_script on by default; Aiden never forwards it, so the
+    // driver should not offer it either (matches the broker's driver.rs).
+    CUA_DRIVER_DISABLE_RUN_SCRIPT: "1",
     // Upstream's cross-tool opt-out; it overrides every other telemetry switch.
     DO_NOT_TRACK: "1",
     NO_COLOR: "1",
@@ -180,7 +184,7 @@ export function cuaDriverToolDeclaresSession(tool: CuaDriverToolInfo): boolean {
 }
 
 /**
- * Parse the pinned tools/list envelope. 0.34.1 adds `enforcement_adapters` at
+ * Parse the pinned tools/list envelope. 0.36.0 adds `enforcement_adapters` at
  * the top level and `risk`/`outputSchema` per tool; Aiden enforces its own
  * approval policy and parses each result itself, so those are ignored.
  */
