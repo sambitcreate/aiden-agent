@@ -193,6 +193,31 @@ test("a host that says the Bot is gone, or failed to answer, is reported, and re
   assert.equal(follower.getState().gone, true);
 });
 
+test("Try again after the stream could not be joined joins it again", async () => {
+  const fake = fakeTransport([session()]);
+  let joins = 0;
+  fake.transport.subscribe = async () => {
+    joins += 1;
+    if (joins === 1) throw new Error("Studio isn't reachable.");
+    return { subscriptionId: "sub_2", state: "streaming" };
+  };
+  fake.transport.read = async () =>
+    joins === 1 ? { ok: false, error: { code: "unavailable", message: "Studio isn't reachable." } } : { ok: true, value: session() };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  assert.equal(follower.getState().failed, "Studio isn't reachable.");
+  follower.reload();
+  await settle();
+  assert.equal(joins, 2);
+  assert.equal(follower.getState().stream, "streaming");
+  fake.push(event(5, { type: "partial", payload: { text: "live again" } }));
+  assert.equal(follower.getState().view?.snapshot.partial, "live again");
+  follower.stop();
+  await settle();
+  assert.deepEqual(fake.unsubscribed, ["sub_2"]);
+});
+
 test("only hosts that serve durable Bot sessions to this Mac get the Bot conversation", () => {
   const grants = ["bot:read", "bot:write", "chat:read", "chat:write"];
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: grants }), true);

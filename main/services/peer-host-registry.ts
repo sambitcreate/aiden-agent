@@ -952,8 +952,15 @@ export class PeerHostRegistry {
     const current = () => !signal?.aborted && !this.closed && this.hosts?.some((host) => host.id === id && host.deviceId === credentialIdentity) === true;
     const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
     await this.refreshGrants(id, peerStrings(server.capabilities), features, current);
-    if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined)
-      await this.learnRoutes(id, parsePeerRoutes(server.peerRoutes), current);
+    if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined) {
+      let hinted: ReturnType<typeof parsePeerRoutes> | undefined;
+      try {
+        hinted = parsePeerRoutes(server.peerRoutes);
+      } catch {
+        // A malformed hint must not drop a host whose identity just checked out.
+      }
+      if (hinted) await this.learnRoutes(id, hinted, current);
+    }
   }
 
   /** A fallback checks a better route at most once per 30 seconds; failures do not disturb it. */

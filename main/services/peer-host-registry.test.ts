@@ -568,6 +568,9 @@ test("a malformed route hint is ignored instead of failing the connection", asyn
   );
   assert.deepEqual(await store.request("host_a", { path: "/chats" }), { ok: true });
   assert.equal((await store.list())[0]?.state, "connected");
+  // The wake-time identity probe reads the same hint and must not fail on it either.
+  await store.probe("host_a");
+  assert.equal((await store.list())[0]?.state, "connected");
 });
 
 test("an older host without negotiation keeps its grants and still serves requests", async () => {

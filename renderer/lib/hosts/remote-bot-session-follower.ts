@@ -38,6 +38,7 @@ export class RemoteBotSessionFollower {
   private reading = 0;
   /** A read is in flight: events wait for it, then apply on top of its answer. */
   private inFlight = false;
+  private subscribing = false;
   private buffered: AidenRemoteBotSessionEvent[] = [];
 
   constructor(
@@ -57,20 +58,7 @@ export class RemoteBotSessionFollower {
     if (this.started || this.stopped) return;
     this.started = true;
     this.offMessages = this.transport.onMessage((message) => this.receive(message));
-    this.transport.subscribe(this.hostId, this.botId).then(
-      (subscription) => {
-        if (this.stopped) {
-          void this.transport.unsubscribe(subscription.subscriptionId).catch(() => undefined);
-          return;
-        }
-        this.subscriptionId = subscription.subscriptionId;
-        this.publish({ stream: subscription.state });
-      },
-      (error: unknown) => {
-        if (!this.stopped && this.state.view === null)
-          this.publish({ failed: error instanceof Error ? error.message : "This Bot's chat could not be opened." });
-      },
-    );
+    this.follow();
     void this.read();
   }
 
@@ -84,12 +72,33 @@ export class RemoteBotSessionFollower {
     this.listeners.clear();
   }
 
-  /** Reads the session again, keeping the current view until the answer arrives. */
+  /** Reads the session again, keeping the current view until the answer arrives, and rejoins the stream if joining failed. */
   reload = (): void => {
     if (this.stopped) return;
     this.publish({ failed: null });
+    if (!this.subscriptionId && !this.subscribing) this.follow();
     void this.read();
   };
+
+  private follow(): void {
+    this.subscribing = true;
+    this.transport.subscribe(this.hostId, this.botId).then(
+      (subscription) => {
+        this.subscribing = false;
+        if (this.stopped) {
+          void this.transport.unsubscribe(subscription.subscriptionId).catch(() => undefined);
+          return;
+        }
+        this.subscriptionId = subscription.subscriptionId;
+        this.publish({ stream: subscription.state });
+      },
+      (error: unknown) => {
+        this.subscribing = false;
+        if (!this.stopped && this.state.view === null)
+          this.publish({ failed: error instanceof Error ? error.message : "This Bot's chat could not be opened." });
+      },
+    );
+  }
 
   private publish(change: Partial<RemoteBotSessionState>): void {
     this.state = { ...this.state, ...change };

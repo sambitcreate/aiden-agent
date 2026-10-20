@@ -11,8 +11,8 @@ import {
 } from "./bot-routes";
 
 test("Bots pages are /bots and everything under it, and nothing that only starts with the same letters", () => {
-  for (const path of ["/bots", "/bots/", "/bots/b1", "/bots/b1/chat"]) assert.equal(isBotsPath(path), true, path);
-  for (const path of ["/", "/botsy", "/chat/c1", "/host/h1/chat/c1", "/settings"]) assert.equal(isBotsPath(path), false, path);
+  for (const path of ["/bots", "/bots/", "/bots/b1", "/bots/b1/chat", "/host/h1/bots/b1/chat"]) assert.equal(isBotsPath(path), true, path);
+  for (const path of ["/", "/botsy", "/chat/c1", "/host/h1/chat/c1", "/host/bots/chat/c1", "/settings"]) assert.equal(isBotsPath(path), false, path);
 });
 
 test("a Bot page names its Bot, and only the chat route counts as the Bot's chat", () => {
