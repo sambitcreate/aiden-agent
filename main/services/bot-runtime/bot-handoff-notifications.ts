@@ -8,6 +8,7 @@
 // dependencies (`bot-session-main.ts` wires them).
 
 import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
+import type { BotHandoffs } from "./bot-handoffs.js";
 
 const BODY_MAX_CHARS = 120;
 /** Wait ids already announced; old ones fall off so a long session stays bounded. */
@@ -87,4 +88,19 @@ export function createBotHandoffNotifier(deps: BotHandoffNotifierDeps): BotHando
       }
     },
   };
+}
+
+/**
+ * Offer every card `handoffs` opens to `notifier`: on each change, each of
+ * that Bot's waiting cards, so a card that opens right after another settles
+ * is announced too, and the notifier keeps it to once per `waitId`. Returns a
+ * function that stops watching.
+ */
+export function watchBotHandoffs(
+  handoffs: Pick<BotHandoffs, "onChange" | "pending">,
+  notifier: BotHandoffNotifier,
+): () => void {
+  return handoffs.onChange((botId) => {
+    for (const prompt of handoffs.pending(botId)) void notifier.opened(prompt);
+  });
 }

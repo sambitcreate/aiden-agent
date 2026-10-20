@@ -45,7 +45,7 @@ import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
-import { createBotHandoffNotifier } from "./bot-handoff-notifications.js";
+import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
@@ -364,9 +364,7 @@ const handoffNotifier = createBotHandoffNotifier({
   isPending: (botId, waitId) => botHandoffs.get(botId, waitId) !== undefined,
   onError: (stage) => logger.warn("bots", `Hand-off notification ${stage} failed.`),
 });
-botHandoffs.onChange((botId) => {
-  for (const prompt of botHandoffs.pending(botId)) void handoffNotifier.opened(prompt);
-});
+watchBotHandoffs(botHandoffs, handoffNotifier);
 
 // An approval appearing or settling changes the line to and from "Waiting for you".
 botApprovals.onChange((botId) => {

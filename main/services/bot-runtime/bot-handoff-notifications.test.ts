@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { createBotHandoffs } from "./bot-handoffs.js";
-import { createBotHandoffNotifier, type BotHandoffNotificationOptions, type BotHandoffNotifierDeps } from "./bot-handoff-notifications.js";
+import {
+  createBotHandoffNotifier,
+  watchBotHandoffs,
+  type BotHandoffNotificationOptions,
+  type BotHandoffNotifierDeps,
+} from "./bot-handoff-notifications.js";
 
 function card(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
   return {
@@ -116,4 +121,42 @@ test("a notification that cannot be shown, or a click that cannot navigate, is r
   lost.shown[0]!.onClick();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(lost.errors, ["navigation"]);
+});
+
+test("watching the hand-offs announces each card as its Bot opens it, once, and nothing after watching stops", async () => {
+  const handoffs = createBotHandoffs();
+  const { notifier, shown } = setup({ botName: (botId) => ({ "bot:ada": "Ada", "bot:bea": "Bea" })[botId] });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const stop = watchBotHandoffs(handoffs, notifier);
+
+  const bank = handoffs.request({ ...card(), signal: undefined });
+  await settle();
+  assert.deepEqual(shown.map((notification) => notification.body), ["Ada needs you to: Enter the 2FA code for your bank"]);
+
+  // Bea's card opening while Ada's still waits announces Bea's alone.
+  const invite = handoffs.request({ ...card({ botId: "bot:bea", waitId: "w-b", action: "Accept the invite" }), signal: undefined });
+  await settle();
+  // Ada's answer and the next card in the same run: only the new card is announced.
+  assert.equal(handoffs.answer("bot:ada", "w-1", { outcome: "done" }), "answered");
+  await bank;
+  const payment = handoffs.request({ ...card({ waitId: "w-2", action: "Approve the payment" }), signal: undefined });
+  await settle();
+  assert.deepEqual(
+    shown.map((notification) => [notification.title, notification.body]),
+    [
+      ["Ada", "Ada needs you to: Enter the 2FA code for your bank"],
+      ["Bea", "Bea needs you to: Accept the invite"],
+      ["Ada", "Ada needs you to: Approve the payment"],
+    ],
+  );
+
+  stop();
+  handoffs.answer("bot:ada", "w-2", { outcome: "skipped" });
+  handoffs.answer("bot:bea", "w-b", { outcome: "done" });
+  await Promise.all([payment, invite]);
+  const later = handoffs.request({ ...card({ waitId: "w-3", action: "Sign the lease" }), signal: undefined });
+  await settle();
+  assert.equal(shown.length, 3, "nothing is posted once watching stops");
+  handoffs.answer("bot:ada", "w-3", { outcome: "done" });
+  await later;
 });
