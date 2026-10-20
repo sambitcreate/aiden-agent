@@ -21,7 +21,11 @@ import {
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { parseAidenRemoteBotCapabilityCatalog } from "./aiden-remote-protocol.js";
+import {
+  parseAidenRemoteBotCapabilityCatalog,
+  parseAidenRemoteBotDetail,
+  parseAidenRemoteBotList,
+} from "./aiden-remote-protocol.js";
 import type { Chat } from "./types.js";
 
 const CATALOG_REVISION = "catalog_revision_1";
@@ -94,6 +98,7 @@ function fixture(
     updateBotAccessError?: unknown;
     createBotError?: unknown;
     chatActivity?: boolean;
+    sessionStates?: AidenRemoteBotServiceOptions["sessionStates"];
     capabilityCatalog?: (
       audienceId: string,
       botId?: string,
@@ -841,4 +846,20 @@ test("a Mac without bot-activity-v1 neither shows nor accepts chatActivity", asy
     older.service.updateIdentity("bot_1", detail.revision, { chatActivity: { level: "summary", wording: "follows" } }),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
+});
+
+test("a Bot the person paused reads paused, with its flag, on every Bot read; other Bots carry neither", async () => {
+  // The host builds the `bot:handoffs` view; the router projects it for other devices.
+  const host = fixture([bot("bot_1"), bot("bot_2")], {
+    sessionStates: async (ids) => new Map(ids.map((id) => [id, id === "bot_1" ? "paused" : "idle"] as const)),
+  });
+  const list = parseAidenRemoteBotList(JSON.parse(JSON.stringify(await host.service.list())));
+  assert.deepEqual(
+    list.bots.map((summary) => [summary.id, summary.sessionState, summary.paused]),
+    [["bot_1", "paused", true], ["bot_2", "idle", undefined]],
+  );
+  const paused = parseAidenRemoteBotDetail(JSON.parse(JSON.stringify(await host.service.get("bot_1"))));
+  assert.deepEqual([paused.sessionState, paused.paused], ["paused", true]);
+  assert.equal("paused" in (await host.service.get("bot_2")), false);
+  assert.equal((await host.service.summaryOf("bot_1")).paused, true, "the preset and host-feed rows too");
 });

@@ -18,7 +18,7 @@ import {
   MAX_DURABLE_OPERATION_ENTRIES,
   type AidenIdempotencySnapshotEntry,
 } from "./aiden-remote-operation-contract.js";
-import { parseAidenRemoteContractFixture } from "./aiden-remote-protocol.js";
+import { AIDEN_REMOTE_CONTRACT_REVISION, parseAidenRemoteContractFixture } from "./aiden-remote-protocol.js";
 
 function fixtureRecord(value: unknown, label: string): Record<string, unknown> {
   assert.ok(value !== null && typeof value === "object" && !Array.isArray(value), label);
@@ -897,7 +897,7 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 35);
+  assert.equal(fixture.contractRevision, AIDEN_REMOTE_CONTRACT_REVISION);
   assert.equal(fixture.botList.maxBots, 256);
   assert.equal(fixture.botSummary.health, "ready");
   assert.equal(fixture.botDetail.access.botId, fixture.botDetail.id);

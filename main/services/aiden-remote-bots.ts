@@ -202,6 +202,8 @@ export function projectAidenRemoteBotSummary(
     ...base,
     health,
     ...(sessionState === undefined ? {} : { sessionState }),
+    // Revision 36: the holder view; the router drops it for devices without `bot:handoffs`.
+    ...(sessionState === "paused" ? { paused: true } : {}),
   });
 }
 
@@ -251,7 +253,11 @@ export interface AidenRemoteBotServiceOptions {
   chatStore: { get(chatId: string): Promise<Chat | null> };
   /** Permanently erases a Bot (the durable session's `deleteBot`). */
   deleteBot?(botId: string): Promise<void>;
-  /** Durable session state per Bot, for `sessionState` on summaries. */
+  /**
+   * Durable session state per Bot, for `sessionState` on summaries, in the
+   * view of a `bot:handoffs` device: a person's pause is `paused`, which also
+   * sets the summary's `paused` flag (revision 36).
+   */
   sessionStates?(botIds: readonly string[]): Promise<ReadonlyMap<string, AidenRemoteBotSessionStateKind>>;
   resolveProviderModel?: (input: {
     audienceId: string;
