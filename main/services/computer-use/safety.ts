@@ -79,7 +79,15 @@ const BLOCKED_TYPE_PATTERNS = [
 
 const GLOBAL_KEYS = new Set(["action"]);
 const ACTION_KEYS: Readonly<Record<ComputerUseAction, ReadonlySet<string>>> = {
-  capture: new Set(["mode", "app", "pid", "window_id", "max_elements", "max_image_dimension"]),
+  capture: new Set([
+    "mode",
+    "app",
+    "pid",
+    "window_id",
+    "max_elements",
+    "max_image_dimension",
+    "changes_only",
+  ]),
   click: new Set([
     "element",
     "coordinate",
@@ -184,7 +192,7 @@ function optionalBoolean(
   target[key] = source[key];
 }
 
-/** Mirror cua-driver 0.34.1 `verify_state` predicate validation (`expectation.rs`). */
+/** Mirror cua-driver 0.36.0 `verify_state` predicate validation (`expectation.rs`). */
 function normalizeVerifyPredicate(value: unknown, index: number): Record<string, unknown> {
   const name = `expect[${index}]`;
   const predicate = plainObject(value);
@@ -358,12 +366,22 @@ export function parseComputerUseKeyChord(value: unknown): ParsedKeyChord {
   return { key: keys[0], modifiers };
 }
 
-function validateTypedText(value: unknown): string {
+function validateTypedText(value: unknown, options: { typedAsKeys?: boolean } = {}): string {
   if (typeof value !== "string") fail("invalid_text", "type requires text.");
   if (value.length > APPROVAL_PAYLOAD_MAX_CHARS) {
     fail(
       "payload_too_large",
       "type and set_value payloads are limited to 4,000 characters for approval safety.",
+    );
+  }
+  // cua-driver 0.35+ types \n and \r as Return and \t as Tab whenever it
+  // synthesizes keys, so a line break could submit a form or address bar.
+  // Submission stays an explicit key action. Checked on the raw value,
+  // before the shell scan below strips line continuations.
+  if (options.typedAsKeys && /[\n\r\t]/u.test(value)) {
+    fail(
+      "blocked_text",
+      "Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then send Return or Tab with the key action.",
     );
   }
   // Normalize compatibility characters, quoted executable names, escaped
@@ -506,6 +524,16 @@ export function normalizeComputerUseArgs(input: ComputerUseArgs): ComputerUseArg
         }
         result.max_image_dimension = dimension;
       }
+      if (own(source, "changes_only")) {
+        if (typeof source.changes_only !== "boolean")
+          fail("invalid_changes_only", "changes_only must be a boolean.");
+        if (source.changes_only === true) {
+          // A vision read walks no accessibility tree, so there is nothing to diff.
+          if (mode === "vision")
+            fail("invalid_changes_only", "changes_only needs mode som or ax, not vision.");
+          result.changes_only = true;
+        }
+      }
       break;
     }
     case "click":
@@ -574,8 +602,10 @@ export function normalizeComputerUseArgs(input: ComputerUseArgs): ComputerUseArg
       result.button = button;
       const modifiers = canonicalModifiers(source.modifiers);
       if (modifiers?.length) result.modifiers = modifiers;
-      // cua-driver drag.rs: macOS has no background drag route.
-      applyDelivery(source, result, "drag needs foreground delivery on macOS.");
+      // cua-driver 0.36 drags window targets in the background; it refuses
+      // with background_unavailable only when macOS starts a native
+      // drag-and-drop session, and the model then retries in the foreground.
+      applyDelivery(source, result);
       copyCaptureAfter(source, result);
       break;
     }
@@ -598,7 +628,7 @@ export function normalizeComputerUseArgs(input: ComputerUseArgs): ComputerUseArg
       break;
     }
     case "type":
-      result.text = validateTypedText(source.text);
+      result.text = validateTypedText(source.text, { typedAsKeys: true });
       applyDelivery(source, result);
       copyCaptureAfter(source, result);
       break;

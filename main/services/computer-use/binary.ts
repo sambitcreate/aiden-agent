@@ -16,7 +16,7 @@ import { runCuaDriverCommand } from "./process.js";
 
 // Security pins are compiled into Aiden. The packaged artifact JSON is release
 // provenance for humans/build tooling, never runtime security authority.
-const CUA_DRIVER_BINARY_SHA256 = "56bc881744bfb956d44386e6f6ccb2f6fc7f5cef47be25cc056e08265cdf4c7d";
+const CUA_DRIVER_BINARY_SHA256 = "87c7e782e69703d95524e4ceb7ceba03c8a159caabf1f1ce2c118eade7d2a5ec";
 const CUA_DRIVER_UPSTREAM_SIGNING_IDENTIFIER = "cua-driver";
 const CUA_DRIVER_UPSTREAM_SIGNING_TEAM_ID = "YCK386LBJ7";
 

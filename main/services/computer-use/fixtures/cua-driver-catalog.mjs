@@ -1,19 +1,27 @@
 /* global Buffer, structuredClone */
 
 /**
- * The macOS tools/list surface of cua-driver-rs-v0.34.1, restricted to the
- * tools Aiden's broker allowlists, plus the driver's argument boundary and
- * result shapes. Shared by the stdio fake driver and the in-memory test
- * sessions so both reject exactly what the pinned driver rejects.
+ * The macOS tools/list surface of cua-driver-rs-v0.36.0 for the tools Aiden's
+ * broker allowlists, plus the upstream-only batch and script tools the broker
+ * filters out (`UNFORWARDED_TOOLS`), the driver's argument boundary and result
+ * shapes. Shared by the stdio fake driver and the in-memory test sessions so
+ * both reject exactly what the pinned driver rejects. Hand-maintained from the
+ * upstream sources below; there is no generator.
  *
- * Sources (all at tag cua-driver-rs-v0.34.1, libs/cua-driver/):
- * - input schemas: rust/crates/platform-macos/src/tools/*.rs `def()`, with the
- *   advertised `session` (closed schemas) and typed `target` added by
+ * Sources (all at tag cua-driver-rs-v0.36.0, libs/cua-driver/):
+ * - input schemas: rust/crates/platform-macos/src/tools/*.rs `def()` (and
+ *   cua-driver-core/src/window_state_view.rs::schema_properties for the
+ *   get_window_state view options), with the advertised `session` (closed
+ *   schemas) and typed `target` added by
  *   cua-driver-core/src/tool.rs::advertised_runtime_input_schema; contract
- *   tools (verify_state, invoke_menu, set_window_frame, sessions) from
- *   contract/manifest.json. Descriptions are omitted.
- * - capabilities: cua-driver-core/src/tool.rs::default_capabilities_for plus
- *   the schema-derived `input.delivery_mode`.
+ *   tools (verify_state, invoke_menu, set_window_frame, sessions) and the
+ *   `target` field from contract/manifest.json, which 0.35 made
+ *   Vertex-compatible (no type arrays, oneOf, const, or nullable defaults);
+ *   run_steps from cua-driver-core/src/batch_tools.rs and run_script from
+ *   cua-driver-core/src/script_tool.rs. Descriptions are omitted.
+ * - capabilities: the manifest's per-tool capabilities, else
+ *   cua-driver-core/src/tool.rs::default_capabilities_for, plus the
+ *   schema-derived `input.delivery_mode` and `input.scroll.coordinates`.
  * - unknown arguments: tool.rs::unknown_argument -> protected_refusal
  *   `{status:"refused", refusal:{code:"invalid_arguments"}}`.
  * - action results: cua-driver-contract/src/outputs.rs::ActionResult.
@@ -27,27 +35,70 @@ const boolean = { type: "boolean" };
 const stringArray = { type: "array", items: string };
 const deliveryMode = { type: "string", enum: ["background", "foreground"] };
 const scope = { type: "string", enum: ["window", "desktop"] };
+const scopeDefaultWindow = { ...scope, default: "window" };
 const button = { type: "string", enum: ["left", "right", "middle"] };
 const elementTokenSchema = { type: "string", pattern: "^s[0-9a-f]{8}:[0-9]+$" };
+// 0.35 flattened the tagged union into one open object; the driver still
+// enforces the window/desktop shapes at dispatch (`action_target.rs`).
 const actionTarget = {
-  oneOf: [
-    {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    kind: { type: "string", enum: ["window", "desktop"] },
+    pid: { type: "integer", minimum: 0 },
+    window_id: { type: "integer", minimum: 0 },
+    display_id: { type: "string" },
+  },
+  required: ["kind"],
+};
+
+/** One verify_state predicate (`contract/manifest.json`, `expectation.rs`). */
+const verifyPredicate = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    element: {
       type: "object",
       additionalProperties: false,
       properties: {
-        kind: { const: "window" },
-        pid: { type: "integer", minimum: 1 },
-        window_id: { type: "integer", minimum: 1 },
+        enabled: boolean,
+        exists: boolean,
+        selected: boolean,
+        selector: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label_contains: { type: "string", minLength: 1 },
+            role: { type: "string", minLength: 1 },
+          },
+          required: [],
+        },
+        value_equals: string,
       },
-      required: ["kind", "pid", "window_id"],
+      required: ["selector"],
     },
-    {
+    window: {
       type: "object",
       additionalProperties: false,
-      properties: { kind: { const: "desktop" }, display_id: { const: "primary" } },
-      required: ["kind", "display_id"],
+      properties: {
+        bounds: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            height: number,
+            tolerance_px: { type: "number", minimum: 0, maximum: 100 },
+            width: number,
+            x: number,
+            y: number,
+          },
+          required: ["x", "y", "width", "height"],
+        },
+        exists: boolean,
+      },
+      required: [],
     },
-  ],
+  },
+  required: [],
 };
 
 function closed(properties, required = []) {
@@ -90,8 +141,57 @@ export const TOOL_DEFINITIONS = {
     inputSchema: open({
       session: string,
       capture_scope: { type: "string", enum: ["auto", "window", "desktop"] },
-      cursor_motion: { type: ["object", "null"] },
-      cursor_theme: { type: ["object", "null"] },
+      cursor_motion: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          arc_flow: number,
+          arc_size: number,
+          dwell_after_click_ms: number,
+          effects: {
+            type: "object",
+            additionalProperties: false,
+            properties: Object.fromEntries(
+              ["glow", "magnet", "ripple", "squish", "trail"].map((effect) => [
+                effect,
+                { type: "string", enum: ["on", "off", "default"] },
+              ]),
+            ),
+            required: [],
+          },
+          end_handle: number,
+          glide_duration_ms: number,
+          idle_hide_ms: number,
+          spring: number,
+          start_handle: number,
+          style: {
+            type: "string",
+            enum: [
+              "signature_arc",
+              "spring_settle",
+              "magnetic",
+              "comet_swoop",
+              "adaptive",
+              "classic",
+            ],
+          },
+          timing: {
+            type: "string",
+            enum: ["native", "fitts", "fixed", "relaxed", "steady", "calm", "deliberate"],
+          },
+          turn_radius: number,
+        },
+        required: [],
+      },
+      cursor_theme: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          reduced_motion: { type: "string", enum: ["auto", "on", "off"], default: "auto" },
+          theme_id: string,
+        },
+        required: ["theme_id"],
+      },
     }),
     capabilities: ["session.lifecycle.start", "session.capture_scope"],
   },
@@ -104,7 +204,10 @@ export const TOOL_DEFINITIONS = {
     capabilities: [],
   },
   check_permissions: {
-    inputSchema: closed({ prompt: boolean, probe_direct_capture: boolean }),
+    inputSchema: closed({
+      prompt: { type: "boolean", default: false },
+      probe_direct_capture: boolean,
+    }),
     capabilities: [
       "system.permissions.tcc",
       "system.permissions.tcc.accessibility",
@@ -113,7 +216,7 @@ export const TOOL_DEFINITIONS = {
   },
   list_apps: { inputSchema: closed({}), capabilities: ["app.list"] },
   list_windows: {
-    inputSchema: closed({ pid: integer, on_screen_only: boolean }),
+    inputSchema: closed({ pid: integer, app: string, on_screen_only: boolean }),
     capabilities: ["window.list"],
   },
   get_window_state: {
@@ -128,9 +231,14 @@ export const TOOL_DEFINITIONS = {
         screenshot_out_file: string,
         max_elements: { type: "integer", minimum: 1 },
         max_depth: { type: "integer", minimum: 1 },
-        timeout_ms: { type: "integer", minimum: 1 },
+        timeout_ms: { type: "integer", minimum: 100, maximum: 120_000, default: 1_000 },
         max_dimension: { type: "integer", minimum: 1 },
         max_image_dimension: { type: "integer", minimum: 0 },
+        // window_state_view.rs: the 0.35 lean-read view options.
+        tree_format: { type: "string", enum: ["markdown", "elements", "both"] },
+        since: string,
+        verbose: boolean,
+        full_output: boolean,
         display_only: boolean,
       },
       ["pid", "window_id"],
@@ -150,8 +258,8 @@ export const TOOL_DEFINITIONS = {
       {
         pid: { type: "integer", minimum: 1 },
         window_id: integer,
-        expect: { type: "array", minItems: 1, maxItems: 8, items: { type: "object" } },
-        include_screenshot: { type: ["boolean", "null"] },
+        expect: { type: "array", minItems: 1, maxItems: 8, items: verifyPredicate },
+        include_screenshot: boolean,
         stable_samples: { type: "integer", minimum: 1, maximum: 5, default: 2 },
         timeout_ms: { type: "integer", minimum: 0, maximum: 10_000, default: 5_000 },
       },
@@ -203,7 +311,7 @@ export const TOOL_DEFINITIONS = {
         element_token: elementTokenSchema,
         delivery_mode: deliveryMode,
       },
-      ["pid"],
+      [],
     ),
     capabilities: [
       "input.pointer.click",
@@ -224,7 +332,7 @@ export const TOOL_DEFINITIONS = {
         modifier: stringArray,
         delivery_mode: deliveryMode,
       },
-      ["pid"],
+      [],
     ),
     capabilities: [
       "input.pointer.click",
@@ -247,7 +355,7 @@ export const TOOL_DEFINITIONS = {
         modifier: stringArray,
         button,
         from_zoom: boolean,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -266,13 +374,18 @@ export const TOOL_DEFINITIONS = {
         element_token: elementTokenSchema,
         x: number,
         y: number,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
       ["direction"],
     ),
-    capabilities: ["input.pointer.scroll", "accessibility.element_tokens", "input.delivery_mode"],
+    capabilities: [
+      "input.pointer.scroll",
+      "accessibility.element_tokens",
+      "input.delivery_mode",
+      "input.scroll.coordinates",
+    ],
   },
   type_text: {
     inputSchema: closed(
@@ -284,7 +397,7 @@ export const TOOL_DEFINITIONS = {
         x: number,
         y: number,
         delay_ms: { type: "integer", minimum: 0, maximum: 200 },
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -307,7 +420,7 @@ export const TOOL_DEFINITIONS = {
         element_token: elementTokenSchema,
         x: number,
         y: number,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -324,7 +437,7 @@ export const TOOL_DEFINITIONS = {
         y: number,
         window_id: integer,
         element_token: elementTokenSchema,
-        scope,
+        scope: scopeDefaultWindow,
         delivery_mode: deliveryMode,
         target: actionTarget,
       },
@@ -335,7 +448,7 @@ export const TOOL_DEFINITIONS = {
   set_value: {
     inputSchema: closed(
       { pid: integer, window_id: integer, element_token: elementTokenSchema, value: string },
-      ["pid", "value"],
+      ["value"],
     ),
     capabilities: ["input.keyboard.type", "accessibility.element_tokens"],
   },
@@ -369,7 +482,74 @@ export const TOOL_DEFINITIONS = {
     ),
     capabilities: ["window.frame.set"],
   },
+  // Upstream-only: the broker never forwards these (see UNFORWARDED_TOOLS).
+  run_steps: {
+    inputSchema: closed(
+      {
+        steps: {
+          type: "array",
+          minItems: 1,
+          maxItems: 64,
+          items: {
+            type: "object",
+            additionalProperties: true,
+            properties: {
+              tool: {
+                type: "string",
+                enum: [
+                  "click",
+                  "double_click",
+                  "right_click",
+                  "set_value",
+                  "type_text",
+                  "press_key",
+                  "hotkey",
+                  "scroll",
+                  "drag",
+                  "move_cursor",
+                ],
+              },
+              args: { type: "object" },
+              wait_for: { type: "object" },
+              expect: { type: "array", maxItems: 4, items: { type: "object" } },
+              timeout_ms: { type: "integer", minimum: 0, maximum: 10_000 },
+            },
+          },
+        },
+        delay_ms: { type: "integer", minimum: 0, maximum: 2_000 },
+        pid: integer,
+        window_id: integer,
+        app: string,
+        window: string,
+        delivery_mode: deliveryMode,
+        foreground_fallback: boolean,
+        observe: { type: "object" },
+      },
+      ["steps"],
+    ),
+    capabilities: ["input.batch", "input.delivery_mode"],
+  },
+  run_script: {
+    inputSchema: closed(
+      {
+        script: { type: "string", minLength: 1, maxLength: 64 * 1024 },
+        timeout_ms: { type: "integer", minimum: 100, maximum: 120_000 },
+        max_calls: { type: "integer", minimum: 1, maximum: 500 },
+      },
+      ["script"],
+    ),
+    capabilities: ["input.script"],
+  },
 };
+
+/**
+ * Tools 0.36.0 lists that Aiden's broker allowlist drops from tools/list and
+ * refuses on tools/call: one call would run many actions (or arbitrary
+ * script) past Aiden's per-action approval. The broker also starts the driver
+ * with CUA_DRIVER_DISABLE_RUN_SCRIPT=1, so a live driver omits run_script.
+ * `run_actions` is run_steps' hidden alias and is never listed.
+ */
+export const UNFORWARDED_TOOLS = new Set(["run_steps", "run_actions", "run_script"]);
 
 const ACTION_RESULT_OUTPUT_SCHEMA = {
   type: "object",
@@ -399,7 +579,7 @@ const ACTION_RESULT_OUTPUT_SCHEMA = {
   ],
 };
 
-/** tools/list entries in the 0.34.1 wire shape for the given tool names. */
+/** tools/list entries in the 0.36.0 wire shape for the given tool names. */
 export function toolListEntries(names) {
   return names.map((name) => {
     const definition = TOOL_DEFINITIONS[name];
@@ -425,7 +605,7 @@ export function toolListEntries(names) {
   });
 }
 
-/** The full 0.34.1 tools/list result for the given tool names. */
+/** The full 0.36.0 tools/list result for the given tool names. */
 export function toolListResult(names) {
   return {
     tools: toolListEntries(names),
@@ -450,6 +630,61 @@ export function codedRefusal(code, message, extra = {}) {
     content: [{ type: "text", text: message }],
     structuredContent: { code, effect: "refused", ...extra },
   };
+}
+
+/**
+ * `cua_driver_core::delivery::background_unavailable_result`: the error
+ * envelope a background route that cannot finish answers with. `fields` sets
+ * `effect` and `reason`; the helper adds `code`, `suggestion` and the
+ * foreground `escalation`.
+ */
+function backgroundUnavailable(message, escalationReason, fields) {
+  return {
+    isError: true,
+    content: [{ type: "text", text: message }],
+    structuredContent: {
+      ...fields,
+      code: "background_unavailable",
+      suggestion: 'Retry this action with delivery_mode:"foreground".',
+      escalation: { recommended: "foreground", reason: escalationReason },
+    },
+  };
+}
+
+/**
+ * `drag.rs` `drag_and_drop_session_result`: a background drag whose press and
+ * moves were already posted started a macOS drag-and-drop session; the driver
+ * released at once, so the drop did not land where it was asked to.
+ */
+export function dragAndDropSessionRefusal(pid, windowId) {
+  return backgroundUnavailable(
+    `The background drag in pid ${pid} window ${windowId} started a macOS drag-and-drop session (for example reordering a list, moving a file or dragging page content). macOS tracks drag-and-drop with the real pointer, so the drop did not land at the requested point; the driver released at once. Look for a route that is not a drag (a Move Up/Down button or menu item, a context-menu command, a keyboard shortcut, cut and paste). If the drag is the only route and the user allows the window to come forward, retry with delivery_mode:"foreground".`,
+    "drag-and-drop sessions follow the hardware pointer on macOS",
+    {
+      effect: "no_drop",
+      event_kind: "mouse_drag",
+      reason: "drag_and_drop_session",
+      requires: ["delivery_mode:foreground", "window_id"],
+    },
+  );
+}
+
+/**
+ * `tools/mod.rs` `windowserver_connection_refusal`: a daemon without its own
+ * app-bundle identity has no valid WindowServer connection. Nothing was sent.
+ */
+export function windowServerConnectionRefusal(pid, windowId) {
+  return backgroundUnavailable(
+    `Background input is not available for pid ${pid}: the WindowServer connection is invalid (SLPSPostEventRecordTo returned 1002).`,
+    'the daemon has no valid WindowServer connection, so no-raise focus cannot work; run the app-bundle daemon, or retry with delivery_mode:"foreground".',
+    {
+      reason: "windowserver_connection_invalid",
+      status: 1002,
+      effect: "refused",
+      pid,
+      window_id: windowId,
+    },
+  );
 }
 
 /**
@@ -546,11 +781,15 @@ export function elementToken(snapshotId, index) {
 /**
  * Per-window snapshot bookkeeping: each get_window_state of a window replaces
  * its previous snapshot, staling that snapshot's tokens, and records whether
- * the capture carried a screenshot for pixel actions.
+ * the capture carried a screenshot for pixel actions. Tree reads are also
+ * remembered (markdown and view key) as `since` baselines, as
+ * `window_state_view.rs` does, even after their tokens go stale.
  */
 export class FakeSnapshotStore {
   nextId = 1;
   windows = new Map();
+  /** snapshot_id -> { pid, windowId, viewKey, markdown } */
+  baselines = new Map();
 
   publish(pid, windowId, withScreenshot) {
     const key = `${pid}:${windowId}`;
@@ -560,20 +799,13 @@ export class FakeSnapshotStore {
     return { id, invalidated: previous ? [`s${previous.id.toString(16).padStart(8, "0")}`] : [] };
   }
 
+  remember(snapshotId, pid, windowId, viewKey, markdown) {
+    this.baselines.set(snapshotId, { pid, windowId, viewKey, markdown });
+  }
+
   /** Returns a refusal result, or null when the call may proceed. */
   admit(name, args) {
     const { pid, windowId } = actionWindow(args);
-    // drag.rs refuses background delivery before resolving any coordinate.
-    if (name === "drag" && args.delivery_mode !== "foreground") {
-      return codedRefusal(
-        "background_unavailable",
-        "Background drag is unavailable on macOS: a drag is delivered as real pointer events to the frontmost window.",
-        {
-          suggestion: 'Retry this action with delivery_mode:"foreground".',
-          escalation: { recommended: "foreground", reason: "background drag unavailable" },
-        },
-      );
-    }
     if (typeof args.element_token === "string") {
       const [snapshot] = args.element_token.split(":");
       const live = [...this.windows.entries()].some(
@@ -652,6 +884,7 @@ export const DEFAULT_WINDOWS = [
   },
 ];
 
+/** 0.36 `list_apps` records: unknown optional fields are omitted, no `windows`. */
 export const DEFAULT_APPS = [
   { pid: 42, name: "Safari", bundle_id: "com.apple.Safari", running: true, active: true },
   { pid: 84, name: "Hidden App", bundle_id: "com.example.hidden", running: true, active: false },
@@ -665,11 +898,90 @@ export const DEFAULT_ELEMENTS = [
 ];
 
 /**
- * Stateful 0.34.1 driver behaviour for Aiden's allowlisted tools: closed
- * argument schemas, per-window snapshot tokens that the next capture stales,
- * same-session screenshot context for pixels, background-drag refusal, and
- * the closed ActionResult on success.
+ * A dialog whose static-text leaf echoes its parent's title. Like
+ * `tree.rs::prune_echo_text_rows`, the fake keeps such a row (`echo: true`)
+ * in `elements` with its index but omits it from `tree_markdown`.
  */
+export const ECHO_ROW_ELEMENTS = [
+  { role: "AXGroup", label: "Discard changes?", frame: { x: 110, y: 50, w: 200, h: 80 }, depth: 1 },
+  { role: "AXStaticText", label: "Discard changes?", echo: true, frame: { x: 120, y: 55, w: 120, h: 16 }, depth: 2 },
+  { role: "AXButton", label: "Cancel", frame: { x: 130, y: 100, w: 60, h: 20 }, depth: 2 },
+  { role: "AXButton", label: "Delete", frame: { x: 220, y: 100, w: 60, h: 20 }, depth: 2 },
+];
+
+/**
+ * The same dialog after the unrendered echo row disappeared: the rendered
+ * markdown rows are unchanged but every later element index shifted down by one.
+ */
+export const ECHO_ROW_PRUNED_ELEMENTS = ECHO_ROW_ELEMENTS.filter((row) => row.echo !== true);
+
+/**
+ * Stateful 0.36.0 driver behaviour for Aiden's allowlisted tools: closed
+ * argument schemas, per-window snapshot tokens that the next capture stales,
+ * same-session screenshot context for pixels, background drag, and
+ * the closed ActionResult on success. Its get_window_state is lean by default
+ * like 0.35+: only `tree_markdown`, with the structured `elements` array only
+ * when `tree_format` is "elements" or "both" or `full_output` is true. The
+ * broker's unforwarded batch/script tools are refused, never dispatched.
+ */
+/**
+ * A row-level stand-in for `window_state_view.rs::diff_markdown`: rows match
+ * by their text without the `[N]` index (upstream `identity_of` carries no
+ * index, so a shift alone is never a change); an unmatched new row whose
+ * index held a different old row is `~` (changed), otherwise `+`; unmatched
+ * old rows are `-`. Rendered like `DiffReport::render`, whose empty report
+ * says "no change" even when indices shifted.
+ */
+function diffRows(oldMarkdown, newMarkdown, since, snapshotId) {
+  const parse = (markdown) =>
+    markdown
+      .split("\n")
+      .filter((line) => line.trim().startsWith("- "))
+      .map((line) => {
+        const text = line.trim().slice(2);
+        const match = /^\[(\d+)\]\s*/u.exec(text);
+        return {
+          text,
+          key: match ? text.slice(match[0].length) : text,
+          index: match ? Number(match[1]) : undefined,
+        };
+      });
+  const oldRows = parse(oldMarkdown);
+  const newRows = parse(newMarkdown);
+  const oldKeys = new Set(oldRows.map((row) => row.key));
+  const newKeys = new Set(newRows.map((row) => row.key));
+  const added = [];
+  const changed = [];
+  const replaced = new Set();
+  for (const row of newRows) {
+    if (oldKeys.has(row.key)) continue;
+    const old = oldRows.find((candidate) => candidate.index === row.index && !newKeys.has(candidate.key));
+    if (old) {
+      replaced.add(old.key);
+      changed.push(row);
+    } else {
+      added.push(row);
+    }
+  }
+  const removed = oldRows.filter((row) => !newKeys.has(row.key) && !replaced.has(row.key));
+  const counts = { added: added.length, changed: changed.length, removed: removed.length };
+  const empty = !added.length && !changed.length && !removed.length;
+  const text = empty
+    ? `no change since ${since}. Rows and indices are as before; use snapshot_id ${snapshotId} in element_tokens (${snapshotId}:N).`
+    : [
+        `since ${since}: ${counts.added} added, ${counts.changed} changed, ${counts.removed} removed. Use element_tokens ${snapshotId}:N for + and ~ rows and unchanged rows; - ids are from ${since}.`,
+        ...added.map((row) => `+ ${row.text}`),
+        ...changed.map((row) => `~ ${row.text}`),
+        ...removed.map((row) => `- ${row.text}`),
+      ].join("\n");
+  return {
+    empty,
+    text,
+    counts,
+    kept: [...added, ...changed].map((row) => row.index).filter((index) => index !== undefined),
+  };
+}
+
 export class FakeCuaDriver {
   constructor({
     windows = DEFAULT_WINDOWS,
@@ -692,6 +1004,11 @@ export class FakeCuaDriver {
   }
 
   call(name, args = {}) {
+    // The broker drops these before the driver (`jsonrpc.rs`), so an in-memory
+    // caller sees the same refusal a live session would.
+    if (UNFORWARDED_TOOLS.has(name)) {
+      return refusalResult("tool_not_allowed", `${name} is not allowed`);
+    }
     const refused = argumentRefusal(name, args);
     if (refused) return refused;
     switch (name) {
@@ -714,6 +1031,7 @@ export class FakeCuaDriver {
         const windows = this.windows.filter(
           (window) =>
             (args.pid === undefined || window.pid === args.pid) &&
+            (args.app === undefined || this.appFilterMatches(args.app, window)) &&
             (args.on_screen_only !== true || window.is_on_screen),
         );
         return {
@@ -741,15 +1059,24 @@ export class FakeCuaDriver {
     }
   }
 
+  /** `tool_args.rs::app_filter_matches`: name substring or exact bundle id, ignoring case. */
+  appFilterMatches(filter, window) {
+    const query = String(filter).trim().toLowerCase();
+    if (!query) return true;
+    const bundleId = this.apps.find((app) => app.pid === window.pid)?.bundle_id;
+    if (typeof bundleId === "string" && bundleId.toLowerCase() === query) return true;
+    return window.app_name.toLowerCase().includes(query);
+  }
+
   healthReport(args) {
     const names = ["binary_version", "platform_supported", "session_active"];
     const include = Array.isArray(args.include) ? new Set(args.include) : null;
     return {
-      content: [{ type: "text", text: "cua-driver 0.34.1 on darwin — ok" }],
+      content: [{ type: "text", text: "cua-driver 0.36.0 on darwin — ok" }],
       structuredContent: {
         schema_version: "1",
         platform: "darwin",
-        driver_version: "0.34.1",
+        driver_version: "0.36.0",
         overall: "ok",
         checks: names.map((check) =>
           include && !include.has(check)
@@ -837,6 +1164,60 @@ export class FakeCuaDriver {
       type: "text",
       text: `window_id=${window.window_id} pid=${window.pid} elements=${elements.length}`,
     });
+    // window_state_view.rs: the structured rows are opt-in since 0.35.
+    const withElements =
+      args.tree_format === "elements" || args.tree_format === "both" || args.full_output === true;
+    const treeMarkdown = elements
+      .filter((row) => row.echo !== true)
+      .map((row) =>
+        `${"  ".repeat(row.depth ?? 0)}- [${row.element_index}] ${row.role} ${row.label ?? ""}${
+          row.value === undefined ? "" : ` = ${JSON.stringify(row.value)}`
+        }`.trimEnd(),
+      )
+      .join("\n");
+    const snapshotId = `s${id.toString(16).padStart(8, "0")}`;
+    const since = withTree ? this.sinceView(args, window, snapshotId, treeMarkdown) : null;
+    if (withTree) {
+      this.snapshots.remember(snapshotId, window.pid, window.window_id, args.max_elements ?? null, treeMarkdown);
+    }
+    if (since?.diff) {
+      // window_state_view.rs: a diff keeps only the + and ~ rows' elements
+      // and drops tree_markdown; the text body becomes the diff.
+      const keep = new Set(since.diff.kept);
+      // get_window_state.rs focused_element_description: an empty diff names
+      // the focused row (a row marked `focused: true` here).
+      const focused = since.diff.empty ? elements.find((row) => row.focused === true) : undefined;
+      content[content.length - 1] = {
+        type: "text",
+        text: `window_id=${window.window_id} pid=${window.pid} snapshot_id=${snapshotId}\n${since.diff.text}`,
+      };
+      return {
+        content,
+        structuredContent: {
+          window_id: window.window_id,
+          pid: window.pid,
+          element_count: elements.length,
+          ...(withElements
+            ? { elements: elements.filter((row) => keep.has(row.element_index)) }
+            : {}),
+          snapshot_id: snapshotId,
+          ...(invalidated.length ? { invalidated_snapshot_ids: invalidated } : {}),
+          since: args.since,
+          since_status: since.diff.empty ? "no_change" : "diff",
+          tree_diff: since.diff.text,
+          diff_counts: since.diff.counts,
+          ...(focused
+            ? {
+                focused_element: `[${focused.element_index}] ${focused.role}${
+                  focused.label ? ` "${focused.label}"` : ""
+                }`,
+              }
+            : {}),
+          app_name: window.app_name,
+          window_title: window.title,
+        },
+      };
+    }
     return {
       content,
       structuredContent: {
@@ -846,9 +1227,10 @@ export class FakeCuaDriver {
         total_element_count: elements.length,
         returned_element_count: elements.length,
         elements_complete: false,
-        tree_markdown: "",
-        elements,
-        snapshot_id: `s${id.toString(16).padStart(8, "0")}`,
+        tree_markdown: treeMarkdown,
+        ...(withElements ? { elements } : {}),
+        ...(since?.fallback ? { since: args.since, since_status: since.fallback } : {}),
+        snapshot_id: snapshotId,
         ...(invalidated.length ? { invalidated_snapshot_ids: invalidated } : {}),
         ...(withScreenshot
           ? {
@@ -864,6 +1246,21 @@ export class FakeCuaDriver {
         window_title: window.title,
       },
     };
+  }
+
+  /**
+   * `window_state_view.rs` `since` resolution: a diff against a remembered
+   * read of the same window and view, or a fallback reason for a full read.
+   */
+  sinceView(args, window, snapshotId, markdown) {
+    if (typeof args.since !== "string" || args.full_output === true) return null;
+    const old = this.snapshots.baselines.get(args.since);
+    if (!old) return { fallback: "unknown_snapshot" };
+    if (old.pid !== window.pid || old.windowId !== window.window_id) {
+      return { fallback: "other_window" };
+    }
+    if (old.viewKey !== (args.max_elements ?? null)) return { fallback: "view_changed" };
+    return { diff: diffRows(old.markdown, markdown, args.since, snapshotId) };
   }
 
   /** `expectation.rs`: one sample, AND of predicates, absence never provable. */

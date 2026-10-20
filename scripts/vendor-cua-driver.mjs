@@ -195,7 +195,7 @@ export async function validateVendoredBinary(binaryPath, runner = run, hashBinar
   }
 }
 
-// The 0.34 release tarball carries five signed members (cua-driver,
+// The 0.36.0 release tarball (like 0.34) carries five signed members (cua-driver,
 // cua-cursor-theme, libcua_driver_sdk.dylib, cua_driver_node_runtime.node,
 // cua_driver_abi.h). Aiden vendors only the top-level `cua-driver` member.
 export const CUA_DRIVER_ARCHIVE_MEMBER = "cua-driver";

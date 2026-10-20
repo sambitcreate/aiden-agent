@@ -21,6 +21,7 @@ import {
 } from "./safety.js";
 import type { FormFillBatchPlan, FormFillBatchResult, FormFillRowResult } from "../form-fill/batch-core.js";
 import { FORM_FILL_UNAVAILABLE_MESSAGE } from "../../../renderer/shared/form-fill-availability.js";
+import { COMPUTER_USE_SETUP_REASON } from "./access-gate.js";
 
 const ACTION_TIMEOUT_MS = 30_000;
 export const COMPUTER_USE_DISCOVERY_TIMEOUT_MS = 120_000;
@@ -89,6 +90,8 @@ export interface ComputerUseResultDetails {
   /** Driver advice for the next rung; the harness decides whether to follow it. */
   escalation?: { target: string; reason: string };
   capturedAfter?: boolean;
+  /** capture only: a `changes_only` read that returned the driver's diff. */
+  changesOnly?: boolean;
   /** verify only: the aggregate verify_state status. */
   verifyStatus?: ComputerUseVerifyStatus;
 }
@@ -208,7 +211,32 @@ const WINDOW_TARGET_REFUSALS = new Set([
   "window_target_not_found",
   "window_id_not_found",
   "window_owner_pid_mismatch",
+  "desktop_coordinate_scope_required",
+  "element_bounds_unavailable",
 ]);
+/**
+ * Refusals proving the target lacked keyboard focus; nothing was sent. The
+ * macOS 0.36.0 driver sends window_not_key; target_focus_unconfirmed is a
+ * forward-compatible mapping for later releases.
+ */
+const FOCUS_REFUSALS = new Set(["window_not_key", "target_focus_unconfirmed"]);
+/**
+ * Refusals only macOS setup can clear. The macOS 0.36.0 driver sends none of
+ * these as a `code` (it reports windowserver_connection_invalid as a `reason`
+ * under background_unavailable, handled in refusalError); they are
+ * forward-compatible mappings.
+ */
+const READINESS_REFUSALS = new Set([
+  "windowserver_connection_invalid",
+  "permission_required",
+  "direct_capture_consent_required",
+]);
+/**
+ * Refusals a visible foreground retry can satisfy. The macOS 0.36.0 driver
+ * sends background_unavailable; electron_main_process_unavailable is a
+ * forward-compatible mapping.
+ */
+const FOREGROUND_REFUSALS = new Set(["background_unavailable", "electron_main_process_unavailable"]);
 
 class ComputerUseDriverActionError extends Error {
   constructor(
@@ -218,6 +246,12 @@ class ComputerUseDriverActionError extends Error {
     readonly code?: string,
     /** The driver could not account for input it may already have delivered. */
     readonly executionUnknown = false,
+    /**
+     * The envelope's `effect` and `reason` (`delivery.rs`
+     * background_unavailable_result): an effect other than `refused` means
+     * input was already posted before the driver stopped.
+     */
+    readonly envelope: { effect?: string; reason?: string } = {},
   ) {
     super(message);
     this.name = "ComputerUseDriverActionError";
@@ -373,14 +407,18 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
     .replace(/[a-z0-9+/]{256,}={0,2}/giu, "[encoded data omitted]")
     .slice(0, MAX_DRIVER_TEXT_CHARS);
   if (parsed.isError === true) {
+    const structured = asRecord(parsed.structuredContent);
+    const effect = identifier(structured?.effect);
+    const reason = identifier(structured?.reason);
     throw new ComputerUseDriverActionError(
       text.trim()
         ? `cua-driver rejected the action: ${text.trim().slice(0, 2_000)}`
         : "cua-driver rejected the action.",
       false,
-      refusalCode(asRecord(parsed.structuredContent)),
+      refusalCode(structured),
       // tool.rs / mcp_result.rs: output-contract failures after dispatch.
-      asRecord(parsed.structuredContent)?.execution_state === "unknown",
+      structured?.execution_state === "unknown",
+      { ...(effect ? { effect } : {}), ...(reason ? { reason } : {}) },
     );
   }
   return { text, image, structured: asRecord(parsed.structuredContent) };
@@ -393,8 +431,14 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
  */
 function refusalCode(structured: Record<string, unknown> | null): string | undefined {
   if (!structured) return undefined;
-  const code = structured.code ?? asRecord(structured.refusal)?.code ?? asRecord(structured.error)?.code;
-  return typeof code === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(code) ? code : undefined;
+  return identifier(
+    structured.code ?? asRecord(structured.refusal)?.code ?? asRecord(structured.error)?.code,
+  );
+}
+
+/** A driver machine identifier (`code`, `effect`, `reason`), or undefined. */
+function identifier(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : undefined;
 }
 
 function enumString(value: unknown, allowed: ReadonlySet<string>): string | undefined {
@@ -605,6 +649,20 @@ function textResult(
   return { content, details };
 }
 
+/** Adds a `note` to a capture result's JSON text block. */
+function withCaptureNote(
+  result: AgentToolResult<ComputerUseResultDetails>,
+  note: string,
+): AgentToolResult<ComputerUseResultDetails> {
+  const [first, ...rest] = result.content;
+  if (first?.type !== "text") return result;
+  const payload = JSON.parse(first.text) as Record<string, unknown>;
+  return {
+    ...result,
+    content: [{ type: "text", text: JSON.stringify({ ...payload, note }) }, ...rest],
+  };
+}
+
 function abortError(signal?: AbortSignal): ComputerUseSafetyError {
   return signal?.reason instanceof ComputerUseSafetyError
     ? signal.reason
@@ -737,6 +795,12 @@ export class ComputerUseController {
   private readonly driverCalls = new Set<Promise<unknown>>();
   private readonly lifecycle = new AbortController();
   private target: ActiveTarget | null = null;
+  /**
+   * The driver snapshot of this generation's latest tree read: the `since`
+   * baseline for a `changes_only` capture of the same window. It outlives
+   * element-map invalidation, since actions do not replace driver snapshots.
+   */
+  private lastTreeSnapshot: { pid: number; windowId: number; snapshotId: string } | null = null;
   private revision = 0;
   private readonly grants: ComputerUseGrantLedger;
 
@@ -912,12 +976,17 @@ export class ComputerUseController {
 
   /**
    * Translate the driver's machine-readable refusals into Aiden's recovery
-   * instructions, and drop local state the refusal proves stale. Nothing was
-   * delivered for any of these, so the session stays usable.
+   * instructions, and drop local state the refusal proves stale. The session
+   * stays usable. Most refusals deliver nothing; execution_unknown and a
+   * background_unavailable whose effect is not `refused` (a drag that started
+   * a drag-and-drop session) may already have changed the window, so they
+   * invalidate the capture and ask for a fresh look before any retry.
    */
   private refusalError(error: ComputerUseDriverActionError): Error {
     const detail = error.message.slice(0, 1_000);
-    if (error.executionUnknown) {
+    const { effect, reason } = error.envelope;
+    // foreground_partial_unknown: the foreground route may have delivered part of the input.
+    if (error.executionUnknown || error.code === "foreground_partial_unknown") {
       // The UI may already have changed; nothing captured before can be trusted.
       if (this.target) this.invalidateTargetSnapshot(this.target);
       return new ComputerUseSafetyError(
@@ -946,7 +1015,51 @@ export class ComputerUseController {
         `The captured window no longer resolves to one exact target (${error.code}). Call list_windows, then capture the intended pid and window_id again. (${detail})`,
       );
     }
-    if (error.code === "background_unavailable") {
+    if (error.code === "write_not_applied") {
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      return new ComputerUseSafetyError(
+        "write_not_applied",
+        `cua-driver read the control back and the value did not change. Capture the window again and choose another route (an element click or the key action) instead of repeating set_value. (${detail})`,
+      );
+    }
+    if (error.code && FOCUS_REFUSALS.has(error.code)) {
+      return new ComputerUseSafetyError(
+        "focus_unconfirmed",
+        `The target did not have keyboard focus, so nothing was sent. Click the element first or capture again. (${detail})`,
+      );
+    }
+    // tools/mod.rs: the 0.36.0 driver reports an invalid WindowServer
+    // connection as a reason under background_unavailable. Foreground input
+    // would not fix the daemon, so it is setup, not a foreground retry.
+    const readiness =
+      error.code && READINESS_REFUSALS.has(error.code)
+        ? error.code
+        : error.code === "background_unavailable" && reason === "windowserver_connection_invalid"
+          ? reason
+          : undefined;
+    if (readiness) {
+      return new ComputerUseSafetyError(
+        "permission_required",
+        `macOS has not granted Aiden Computer Use what this action needs (${readiness}). ${COMPUTER_USE_SETUP_REASON} (${detail})`,
+      );
+    }
+    if (
+      error.code === "background_unavailable" &&
+      (reason === "drag_and_drop_session" || (effect !== undefined && effect !== "refused"))
+    ) {
+      // drag.rs: the press and moves were posted before macOS started a
+      // drag-and-drop session; the driver released at once (effect no_drop).
+      // The window may have changed, so the old capture cannot be trusted.
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      const dragAndDrop = reason === "drag_and_drop_session";
+      return new ComputerUseSafetyError(
+        dragAndDrop ? "drag_released" : "execution_unknown",
+        dragAndDrop
+          ? `The background drag started a macOS drag-and-drop session and was released at once, so the drop did not land at the requested point but the window may have changed. Capture the window again and check what changed. Prefer a route that is not a drag (a button, menu, or key action); only if nothing changed and the drag is the only route, retry it with delivery_mode "foreground", which visibly fronts the window and needs its own approval. (${detail})`
+          : `cua-driver stopped this background action after some input was already sent${effect ? ` (effect ${effect})` : ""}, so it may already have taken effect. Capture the window again and check before any retry, and never repeat it blindly. (${detail})`,
+      );
+    }
+    if (error.code && FOREGROUND_REFUSALS.has(error.code)) {
       return new ComputerUseSafetyError(
         "foreground_required",
         `cua-driver cannot deliver this action in the background. Retry it with delivery_mode "foreground", which visibly fronts the window and needs its own approval. (${detail})`,
@@ -960,6 +1073,7 @@ export class ComputerUseController {
     this.state = "poisoned";
     this.grants.clear();
     this.clearTarget();
+    this.lastTreeSnapshot = null;
     void this.session?.close().catch(() => {});
   }
 
@@ -1006,9 +1120,15 @@ export class ComputerUseController {
     this.revision += 1;
   }
 
-  private async loadWindows(signal: AbortSignal): Promise<WindowRecord[]> {
+  /** `app` filters host-side (0.36): a name substring or the exact bundle id. */
+  private async loadWindows(signal: AbortSignal, app?: string): Promise<WindowRecord[]> {
     return normalizeWindows(
-      await this.callDriver("list_windows", {}, signal, COMPUTER_USE_DISCOVERY_TIMEOUT_MS),
+      await this.callDriver(
+        "list_windows",
+        app === undefined ? {} : { app },
+        signal,
+        COMPUTER_USE_DISCOVERY_TIMEOUT_MS,
+      ),
     );
   }
 
@@ -1022,8 +1142,14 @@ export class ComputerUseController {
     input: { app?: string; pid?: number; window_id?: number },
     signal: AbortSignal,
   ): Promise<WindowRecord> {
-    const windows = await this.loadWindows(signal);
-    if (input.pid !== undefined && input.window_id !== undefined) {
+    const exactWindow = input.pid !== undefined && input.window_id !== undefined;
+    if (!exactWindow && !input.app) {
+      throw new ComputerUseDriverActionError(
+        "Capture requires app or exact pid and window_id. Call list_windows, then capture the intended target.",
+      );
+    }
+    const windows = await this.loadWindows(signal, exactWindow ? undefined : input.app?.trim());
+    if (exactWindow) {
       const exact = windows.find(
         (window) => window.pid === input.pid && window.windowId === input.window_id,
       );
@@ -1031,12 +1157,7 @@ export class ComputerUseController {
         throw new ComputerUseDriverActionError("The requested window is no longer available.");
       return exact;
     }
-    if (!input.app) {
-      throw new ComputerUseDriverActionError(
-        "Capture requires app or exact pid and window_id. Call list_windows, then capture the intended target.",
-      );
-    }
-    const query = input.app.trim().toLowerCase();
+    const query = (input.app ?? "").trim().toLowerCase();
     const directExact = windows.filter((window) => window.appName.trim().toLowerCase() === query);
     if (directExact.length) return directExact[0];
 
@@ -1066,11 +1187,8 @@ export class ComputerUseController {
         .filter((pid): pid is number => pid !== undefined),
     );
     const metadataPartial = windows.filter((window) => partialPids.has(window.pid));
-    const titleFallback = windows.filter(
-      (window) => !window.appName.trim() && window.title.toLowerCase().includes(query),
-    );
     const partialMatches = new Map<string, WindowRecord>();
-    for (const window of [...directPartial, ...metadataPartial, ...titleFallback]) {
+    for (const window of [...directPartial, ...metadataPartial]) {
       partialMatches.set(`${window.pid}:${window.windowId}`, window);
     }
     if (partialMatches.size === 1) return partialMatches.values().next().value as WindowRecord;
@@ -1110,13 +1228,28 @@ export class ComputerUseController {
         args.app && DESKTOP_NAMES.has(args.app.trim().toLowerCase())
           ? await this.resolveDesktopWindow(signal)
           : await this.resolveTarget(args, signal);
-      return await this.captureWindow(
+      const baseline = this.lastTreeSnapshot;
+      const changes =
+        args.changes_only === true &&
+        baseline?.pid === target.pid &&
+        baseline.windowId === target.windowId
+          ? { since: baseline.snapshotId }
+          : undefined;
+      const result = await this.captureWindow(
         target,
         requestedMode,
         args.max_elements ?? 100,
         signal,
         args.max_image_dimension,
+        changes,
       );
+      if (args.changes_only === true && !changes) {
+        return withCaptureNote(
+          result,
+          "changes_only: no previous capture of this window in this session to compare against, so this is a full capture.",
+        );
+      }
+      return result;
     } catch (error) {
       this.clearTarget();
       throw error;
@@ -1129,16 +1262,20 @@ export class ComputerUseController {
     maximumElements: number,
     signal: AbortSignal,
     maxImageDimension?: number,
+    changes?: { since: string },
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     // A new snapshot invalidates every prior index/token even if the driver
     // subsequently reports an error.
     this.setTarget(window, []);
     const degraded = requestedMode === "vision" && !this.supportsImages;
-    const effectiveMode: ComputerUseMode = degraded ? "ax" : requestedMode;
+    // A changes_only read is a tree diff: no screenshot, so an ax read.
+    const effectiveMode: ComputerUseMode = degraded || changes ? "ax" : requestedMode;
     const includeScreenshot = this.supportsImages && effectiveMode !== "ax";
     // 0.34 ignores the deprecated capture_mode; the two include_* switches
     // select the work. Vision skips the AX walk entirely (its snapshot still
     // anchors pixel actions); ax and text-only models skip the screenshot.
+    // Since 0.35 the read is lean: the structured `elements` rows Aiden numbers
+    // arrive only with tree_format "elements", so som/ax ask for exactly that.
     const driverArgs: Record<string, unknown> =
       effectiveMode === "vision"
         ? {
@@ -1146,12 +1283,17 @@ export class ComputerUseController {
             window_id: window.windowId,
             include_accessibility_tree: false,
             include_screenshot: true,
+            tree_format: "markdown",
           }
         : {
             pid: window.pid,
             window_id: window.windowId,
             include_screenshot: includeScreenshot,
             max_elements: axWalkBudget(maximumElements),
+            tree_format: "elements",
+            // 0.36 window_state_view.rs: rows changed since that snapshot, or
+            // "no change"; a full read (since_status = reason) when it cannot diff.
+            ...(changes ? { since: changes.since } : {}),
           };
     if (maxImageDimension !== undefined && driverArgs.include_screenshot === true) {
       driverArgs.max_image_dimension = maxImageDimension;
@@ -1164,6 +1306,25 @@ export class ComputerUseController {
     );
     if (includeScreenshot && !result.image) {
       throw new ComputerUseDriverActionError("Window capture returned no screenshot.");
+    }
+    // Every get_window_state publishes a new driver snapshot (staling the
+    // previous one's tokens); tree reads become the next `since` baseline.
+    // A tree read without a snapshot_id leaves no baseline: the previous one
+    // is already stale, so the next changes_only read takes a full capture.
+    const snapshotId = safeString(result.structured?.snapshot_id, 128);
+    if (effectiveMode !== "vision") {
+      this.lastTreeSnapshot = snapshotId
+        ? { pid: window.pid, windowId: window.windowId, snapshotId }
+        : null;
+    }
+    const sinceStatus = changes ? safeString(result.structured?.since_status, 64) : undefined;
+    if (changes && (sinceStatus === "no_change" || sinceStatus === "diff")) {
+      return this.captureChangesResult(
+        window,
+        requestedMode,
+        result,
+        sinceStatus === "no_change",
+      );
     }
     const elements = effectiveMode === "vision" ? [] : normalizeElements(result, maximumElements);
     const target = this.setTarget(window, elements);
@@ -1193,6 +1354,11 @@ export class ComputerUseController {
       ...(result.structured?.degraded === true && safeString(result.structured.degraded_reason)
         ? { capture_note: safeString(result.structured.degraded_reason, 1_000) }
         : {}),
+      ...(changes
+        ? {
+            note: `changes_only: cua-driver could not diff against the previous capture (${sinceStatus ?? "no since_status"}), so this is a full accessibility capture without a screenshot.`,
+          }
+        : {}),
     };
     return textResult(
       payload,
@@ -1208,6 +1374,57 @@ export class ComputerUseController {
       },
       includeScreenshot ? result.image : undefined,
     );
+  }
+
+  /**
+   * A `since` read the driver answered with a diff or "no change". It never
+   * mints or keeps element numbers, so the element map stays empty until a
+   * full capture. Even "no change" cannot vouch for indices: 0.36 diffs only
+   * rendered rows keyed without their index (`window_state_view.rs`
+   * `identity_of`), `DiffReport::is_empty` ignores reindexed rows, and
+   * `tree.rs::prune_echo_text_rows` keeps indices for rows it never renders,
+   * so an unrendered row vanishing shifts later indices under "no change".
+   */
+  private captureChangesResult(
+    window: WindowRecord,
+    requestedMode: ComputerUseMode,
+    result: ParsedDriverResult,
+    noChange: boolean,
+  ): AgentToolResult<ComputerUseResultDetails> {
+    const target = this.setTarget(window, []);
+    const counts = asRecord(result.structured?.diff_counts);
+    // window_state_view.rs: an unchanged read names the focused row, if any
+    // (untrusted application text, like every row label).
+    const focused = noChange ? safeString(result.structured?.focused_element, 500) : undefined;
+    const payload: Record<string, unknown> = {
+      ok: true,
+      action: "capture",
+      mode: "ax",
+      requested_mode: requestedMode,
+      changes_only: true,
+      target: this.targetDetails(target),
+      ...(noChange
+        ? { no_change: true, ...(focused ? { focused_element: focused } : {}) }
+        : {
+            changes: safeString(result.structured?.tree_diff, 20_000) ?? "",
+            diff_counts: {
+              added: safeInteger(counts?.added, 0) ?? 0,
+              changed: safeInteger(counts?.changed, 0) ?? 0,
+              removed: safeInteger(counts?.removed, 0) ?? 0,
+            },
+          }),
+      note: noChange
+        ? "No visible rows changed since the previous capture, but element numbers may have shifted, so none are current. A changes_only read carries no element numbers; take a full capture before acting by element number or pixel."
+        : "A changes_only read carries no element numbers; earlier element numbers are no longer valid. Take a full capture before acting by element number or pixel.",
+    };
+    return textResult(payload, {
+      action: "capture",
+      mode: "ax",
+      requestedMode,
+      target: this.targetDetails(target),
+      elementCount: 0,
+      changesOnly: true,
+    });
   }
 
   private async listAppsResult(
@@ -1415,7 +1632,8 @@ export class ComputerUseController {
         break;
       }
       case "drag": {
-        // macOS 0.34 drag has no element endpoints and is foreground-only.
+        // cua-driver drag has no element endpoints, so elements resolve to
+        // screenshot-frame centres. It defaults to background delivery.
         tool = "drag";
         const from =
           args.from_element !== undefined

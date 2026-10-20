@@ -9,7 +9,7 @@ import {
 import { ComputerUseStatusService } from "./status-core.js";
 import { FakeCuaDriver } from "./fixtures/cua-driver-catalog.mjs";
 
-// The 0.34.1 health_report/check_permissions wire shapes, as the embedded
+// The 0.36.0 health_report/check_permissions wire shapes, as the embedded
 // driver returns them (no prompt, no ScreenCaptureKit probe).
 function health(overrides: Record<string, unknown> = {}) {
   const result = new FakeCuaDriver().call("health_report", {
@@ -97,7 +97,7 @@ test("accepts only the pinned healthy driver with both macOS permissions", async
   const cached = await service.status();
   assert.equal(first.state, "ready");
   assert.equal(first.ready, true);
-  assert.equal(first.driverVersion, "0.34.1");
+  assert.equal(first.driverVersion, "0.36.0");
   assert.equal(cached, first);
   assert.equal(concurrent, first);
   assert.equal(hosts, 1);

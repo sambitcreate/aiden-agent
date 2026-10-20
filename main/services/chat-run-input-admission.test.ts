@@ -139,6 +139,38 @@ test("run input admission routes queue mode to the follow-up queue", async () =>
   assert.equal(app.steered.length, 0);
 });
 
+test("only an accepted steer stops the run's subagents, after the guidance is queued", async () => {
+  const app = fixture();
+  const events: string[] = [];
+  const queueSteer = app.generation.agent.queueSteer;
+  app.generation.agent.queueSteer = (message, options) => {
+    events.push("steer-queued");
+    return queueSteer(message, options);
+  };
+  app.generation.stopSubagentsForGuidance = () => {
+    events.push("subagents-stopped");
+  };
+
+  await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "Later" });
+  assert.equal(events.length, 0);
+
+  app.setSteerReceipt({ accepted: false, reason: "capacity" });
+  const rejected = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "Full" });
+  assert.equal(rejected.admitted, false);
+  assert.deepEqual(events, ["steer-queued"]);
+
+  app.setSteerReceipt({ accepted: true, queue: "steer" });
+  events.length = 0;
+  app.generation.stopSubagentsForGuidance = () => {
+    events.push("subagents-stopped");
+    throw new Error("stop failed");
+  };
+  const admitted = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "Now" });
+  // A failed stop never turns admitted guidance into an error.
+  assert.equal(admitted.admitted, true);
+  assert.deepEqual(events, ["steer-queued", "subagents-stopped"]);
+});
+
 test("run input admission rejects unknown, foreign, and mismatched streams without consuming the draft", async () => {
   const app = fixture();
   for (const input of [

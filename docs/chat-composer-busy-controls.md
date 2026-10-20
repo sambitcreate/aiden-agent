@@ -20,6 +20,14 @@ All three clients show the same control while a response runs: one accent pill w
 
 Desktop Steer, Telegram `/steer`, and the Remote inputs route all enter Pi through `llmClient.admitChatRunInput`. The guidance is durable in the transcript before Pi accepts it, so a Mac restart cannot lose an accepted receipt; the run itself ends with the app, and a later delivery attempt is rejected as `run_not_active`. Desktop and Telegram do not keep a request-ID ledger: neither surface auto-retries, and Telegram does not resend edited `/steer` commands. This work is tracked by [Hermes-inspired Bot run control](plans/hermes-bot-run-control-plan.md).
 
+## Steer and running subagents
+
+Pi delivers steering only after the current tool call returns, and a `subagent` call can run for many minutes. So an accepted Steer (from any of the three surfaces) also stops that response's subagents that are still running. The response itself keeps going: each stopped subagent comes back as interrupted, with a note that the user sent new guidance, and the model reads the guidance next. A subagent that already finished keeps its result. A `subagent` call made before the guidance is delivered (for example, a second call in the same model message) launches nothing and uses none of the response's subagent budget. Queue never stops subagents. Bot conversations steer through their own runtime and are not covered yet.
+
+## Stop, failed responses and subagents
+
+Stop cancels the response's subagents and settles each one as interrupted. A subagent that ignores cancellation is cut off after a short grace period. If it is still draining after that, it keeps its model deployment quarantined, but it no longer holds the chat's turn, so queued messages and new sends are not held behind it. Deleting, copying, exporting or moving the chat still waits for it. A response that fails for any other reason also cancels any child work it still owns when it settles.
+
 ## Stop and admitted input
 
 Steer and Queue input admitted through `admitChatRunInput` (desktop Steer, Telegram `/steer`, and the phone's Steer now and Queue to run next) is saved to the transcript before Pi accepts it. Pi holds it only for the current run. Stop ends that run, and Pi does not drain its steer or follow-up queues after an aborted terminal, so:
