@@ -4,6 +4,7 @@ import {
   applyBrowserGuestIdentityHeaders,
   browserGuestBrands,
   browserGuestUserAgent,
+  browserGoogleSignInUserAgent,
   browserUrl,
   browserDisplayUrl,
   browserRedactPreviewUrls,
@@ -39,12 +40,13 @@ test("navigation normalizes public and loopback hosts but refuses privileged sch
     assert.throws(() => browserUrl(url));
   }
 });
-test("guest user-agent drops Electron and Aiden product tokens Google rejects", () => {
+test("guest user-agent drops Electron and Aiden product tokens and reduces Chrome to its major", () => {
   const electron = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Aiden Agent/0.43.0 Chrome/142.0.7444.175 Electron/43.1.1 Safari/537.36";
   const guest = browserGuestUserAgent(electron);
+  // Shipping Chrome's reduced User-Agent: the build number is never exposed.
   assert.equal(
     guest,
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.175 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
   );
   assert.doesNotMatch(guest, /Electron|Aiden/u);
   const linux = browserGuestUserAgent(
@@ -67,7 +69,7 @@ test("guest identity headers rewrite Client Hints without dropping preview grant
       "Sec-CH-UA-Full-Version-List": '"Electron";v="43.1.1"',
     },
     ua,
-    "https://accounts.google.com/",
+    "https://mail.google.com/",
     "darwin",
   );
   assert.equal(headers["User-Agent"], ua);
@@ -88,6 +90,42 @@ test("guest identity headers rewrite Client Hints without dropping preview grant
   // Chromium never sends UA-CH to insecure origins.
   const insecure = applyBrowserGuestIdentityHeaders({ "sec-ch-ua": "x" }, ua, "http://example.com/", "darwin");
   assert.deepEqual(insecure, { "User-Agent": ua });
+});
+
+test("Google's sign-in host alone gets a current Firefox identity with no Client Hints", () => {
+  const ua = browserGuestUserAgent(
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Electron/43.1.1 Safari/537.36",
+  );
+  const now = Date.UTC(2026, 9, 20);
+  const signIn = applyBrowserGuestIdentityHeaders(
+    { Cookie: "SID=1", "sec-ch-ua": '"Chromium";v="150"', "User-Agent": ua },
+    ua,
+    "https://accounts.google.com/v3/signin/identifier?flowName=GlifWebSignIn",
+    "darwin",
+    now,
+  );
+  assert.deepEqual(signIn, {
+    Cookie: "SID=1",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0",
+  });
+  // Every other host, including other Google hosts and look-alikes, stays Chromium.
+  for (const url of [
+    "https://www.google.com/",
+    "https://accounts.google.com.example.com/",
+    "http://accounts.google.com/",
+  ]) {
+    assert.equal(applyBrowserGuestIdentityHeaders({}, ua, url, "darwin", now)["User-Agent"], ua);
+  }
+});
+
+test("Google sign-in Firefox version follows the four-week release train without running ahead", () => {
+  // Firefox 144 shipped 2025-10-14 and 157 is due 2026-10-13 on the four-week train.
+  assert.match(browserGoogleSignInUserAgent("linux", Date.UTC(2025, 9, 20)), /^Mozilla\/5\.0 \(X11; Linux x86_64; rv:(\d+)\.0\) Gecko\/20100101 Firefox\/\1\.0$/u);
+  const version = (when: number) => Number(browserGoogleSignInUserAgent("win32", when).match(/Firefox\/(\d+)/u)?.[1]);
+  assert.ok(version(Date.UTC(2025, 9, 20)) <= 144);
+  assert.ok(version(Date.UTC(2025, 9, 20)) >= 142);
+  assert.ok(version(Date.UTC(2026, 9, 20)) > version(Date.UTC(2025, 9, 20)));
+  assert.match(browserGoogleSignInUserAgent("win32", Date.UTC(2026, 9, 20)), /Windows NT 10\.0; Win64; x64/u);
 });
 
 test("guest brands follow Chromium's GREASE spelling and order for each major", () => {
