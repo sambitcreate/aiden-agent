@@ -259,11 +259,15 @@ test("a paused Bot can be deleted, and the delete forgets its pause", async () =
   }
 });
 
-test("an open chat gets a new-epoch snapshot showing the Bot paused, with no gaps", async () => {
+test("an open chat gets a new-epoch snapshot showing the Bot paused, then the skipped-routines notice on unpause", async () => {
   const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
   let projection: ReturnType<typeof createBotLiveProjection> | undefined;
-  const service = await serviceFor(tempProfile(), fauxModels, {
+  const skipped = [{ routineId: "r1", name: "Daily digest", count: 2 }];
+  const service: BotSessionRuntime = await serviceFor(tempProfile(), fauxModels, {
     onStateChange: (botId, state) => projection?.notifyState(botId, state),
+    // As the desktop does: the notice is appended once the pause is cleared.
+    onUnpaused: (botId, record) =>
+      service.appendEntry(botId, BOT_NOTICE_ENTRY_KIND, { notice: "routines_skipped", since: record.since, routines: skipped }),
   });
   projection = createBotLiveProjection({
     conversation: (botId) => service.conversation(botId),
@@ -291,6 +295,15 @@ test("an open chat gets a new-epoch snapshot showing the Bot paused, with no gap
       assert.deepEqual(view!.state, pausedAt(submissionId));
       assert.notEqual(view!.epoch, subscribed.snapshot.epoch, "the reopened session is a new epoch");
       assert.ok(events.some((event) => event.type === "snapshot" && event.epoch !== subscribed.snapshot.epoch));
+
+      assert.deepEqual(await service.unpause(BOT), { kind: "interrupted", submissionId });
+      await waitFor(() => view?.entries.some((entry) => entry.type === "routines_skipped") === true, {
+        what: "the skipped-routines notice in the open chat",
+      });
+      const notice = view!.entries.find((entry) => entry.type === "routines_skipped");
+      assert.deepEqual(notice?.type === "routines_skipped" ? [notice.since, notice.routines] : null, [1_000, skipped]);
+      assert.deepEqual(view!.state, { kind: "interrupted", submissionId }, "the notice does not start the turn");
+      assert.equal(fauxModels.calls(), 1);
       assert.equal(gaps, 0);
     } finally {
       subscribed.unsubscribe();
