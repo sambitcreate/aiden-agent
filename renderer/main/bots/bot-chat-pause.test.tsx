@@ -1,4 +1,4 @@
-import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
+import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -35,7 +35,7 @@ async function mountChat(handlers: Record<string, (...args: unknown[]) => unknow
   return calls;
 }
 
-const callsTo = (calls: { channel: string }[], channel: string) => calls.filter((call) => call.channel === channel);
+const callsTo = (calls: BotTestIpcCall[], channel: string) => calls.filter((call) => call.channel === channel);
 
 function pushState(seq: number, state: BotSessionState) {
   act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq, type: "state", state }));
@@ -136,7 +136,8 @@ test("routines skipped while paused are listed, and Run now runs that one routin
   const runBrief = within(card).getByRole("button", { name: "Run Morning brief now" });
   fireEvent.click(runBrief);
   await waitFor(() => assert.equal(callsTo(calls, "bots:routines:runNow").length, 1));
-  await waitFor(() => assert.equal(runBrief.hasAttribute("disabled"), false), "a failed run leaves Run now available");
+  // A failed run leaves Run now available.
+  await waitFor(() => assert.equal(runBrief.hasAttribute("disabled"), false));
 
   fireEvent.click(runBrief);
   await waitFor(() => assert.ok(within(card).getByText("Started")));
