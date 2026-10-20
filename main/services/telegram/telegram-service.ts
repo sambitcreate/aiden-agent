@@ -386,6 +386,7 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
             binding.threadId === threadId
           );
         },
+        botName: async (botId) => (await (await import("../bot-store.js")).botStore.get(botId))?.name,
         onError: (message, cause) => logger.error("telegram", `[${profile}] ${message}`, cause),
       })
     : undefined;
