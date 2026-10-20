@@ -108,6 +108,8 @@ actor AidenChatCache {
         // Optional so caches written before contract revision 18 still load.
         let rowState: AidenChatRowState?
         let unread: Bool?
+        // Optional so caches written before contract revision 36 still load.
+        let lastRunFailed: Bool?
         // Optional so caches written before contract revision 21 still load.
         let forkedFrom: AidenChatForkLineage?
 
@@ -122,6 +124,7 @@ actor AidenChatCache {
             activity = summary.activity
             rowState = summary.rowState
             unread = summary.unread
+            lastRunFailed = summary.lastRunFailed
             forkedFrom = summary.forkedFrom
         }
 
@@ -137,6 +140,7 @@ actor AidenChatCache {
                 activity: activity,
                 rowState: rowState,
                 unread: unread ?? false,
+                lastRunFailed: lastRunFailed ?? false,
                 forkedFrom: forkedFrom
             )
         }

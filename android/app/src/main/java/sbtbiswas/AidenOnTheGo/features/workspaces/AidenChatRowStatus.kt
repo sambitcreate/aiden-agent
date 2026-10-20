@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,15 +48,29 @@ fun AidenChatRowState.attentionRank(): Int = when (this) {
 }
 
 /**
- * Moves chats that need the user, then working chats, ahead of idle ones.
- * The sort is stable, so rows within a tier keep the incoming (recency)
- * order and do not jitter between refreshes.
+ * Triage rank for a whole row. Mirrors the desktop Needs attention tiers:
+ * approval, input, then an idle chat whose unseen output is a failed turn
+ * (it needs a look; a working chat needs nothing), then working, then the rest.
+ */
+fun AidenChatSummary.attentionRank(): Int {
+    val state = displayRowState
+    return when {
+        state == AidenChatRowState.NEEDS_APPROVAL || state == AidenChatRowState.NEEDS_INPUT -> state.attentionRank()
+        state == AidenChatRowState.IDLE && showsFailed -> 2
+        else -> state.attentionRank() + 1
+    }
+}
+
+/**
+ * Moves chats that need the user, then unseen failures, then working chats,
+ * ahead of idle ones. The sort is stable, so rows within a tier keep the
+ * incoming (recency) order and do not jitter between refreshes.
  */
 fun aidenNeedsAttentionFirst(chats: List<AidenChatSummary>): List<AidenChatSummary> =
-    chats.sortedBy { it.displayRowState.attentionRank() }
+    chats.sortedBy { it.attentionRank() }
 
 /** Semantic tone for a row-status pill; resolved against the active palette. */
-enum class AidenChatRowStatusTone { WARNING, ACCENT }
+enum class AidenChatRowStatusTone { WARNING, ACCENT, DANGER }
 
 /** What a chat row's trailing status shows, independent of Compose. */
 data class AidenChatRowStatusPresentation(
@@ -62,11 +79,23 @@ data class AidenChatRowStatusPresentation(
     /** Working shows a breathing activity dot; Aiden never uses a spinner for it. */
     val showsActivity: Boolean,
     val showsUnreadDot: Boolean,
+    /**
+     * The unseen output is a failed turn: a soft danger Failed pill replaces
+     * the unread dot so a failure never reads as a fresh reply.
+     */
+    val showsFailed: Boolean,
     /** Spoken summary for the whole status, or null when nothing is shown. */
     val contentDescription: String?
 ) {
     companion object {
-        fun of(state: AidenChatRowState, unread: Boolean): AidenChatRowStatusPresentation {
+        const val FAILED_TITLE = "Failed"
+
+        fun of(
+            state: AidenChatRowState,
+            unread: Boolean,
+            failed: Boolean = false
+        ): AidenChatRowStatusPresentation {
+            val showsFailed = unread && failed
             val (title, tone) = when (state) {
                 AidenChatRowState.NEEDS_APPROVAL -> "Approve" to AidenChatRowStatusTone.WARNING
                 AidenChatRowState.NEEDS_INPUT -> "Reply" to AidenChatRowStatusTone.ACCENT
@@ -74,13 +103,18 @@ data class AidenChatRowStatusPresentation(
             }
             val spoken = listOfNotNull(
                 state.accessibilityLabel.takeIf { state != AidenChatRowState.IDLE },
-                "Unread".takeIf { unread }
+                when {
+                    showsFailed -> FAILED_TITLE
+                    unread -> "Unread"
+                    else -> null
+                }
             )
             return AidenChatRowStatusPresentation(
                 pillTitle = title,
                 pillTone = tone,
                 showsActivity = state == AidenChatRowState.WORKING,
-                showsUnreadDot = unread,
+                showsUnreadDot = unread && !showsFailed,
+                showsFailed = showsFailed,
                 contentDescription = spoken.joinToString(", ").ifEmpty { null }
             )
         }
@@ -90,13 +124,19 @@ data class AidenChatRowStatusPresentation(
 /**
  * Trailing chat-row status. Attention states use soft semantic fills with no
  * borders, Working shows a breathing activity dot, and the unread dot is independent
- * because a chat can be working while holding unseen earlier output. State changes
+ * because a chat can be working while holding unseen earlier output. When that unseen
+ * output is a failed turn, a soft danger Failed pill takes the dot's place. State changes
  * morph with a snappy spring; with reduced motion they swap instantly and the
  * Working dot holds still. The whole status is spoken once, for example "Working".
  */
 @Composable
-fun AidenChatRowStatus(state: AidenChatRowState, unread: Boolean, palette: AidenPalette) {
-    val presentation = AidenChatRowStatusPresentation.of(state, unread)
+fun AidenChatRowStatus(
+    state: AidenChatRowState,
+    unread: Boolean,
+    palette: AidenPalette,
+    failed: Boolean = false
+) {
+    val presentation = AidenChatRowStatusPresentation.of(state, unread, failed)
     val description = presentation.contentDescription
     val reduceMotion = aidenReduceMotion()
     AnimatedContent(
@@ -134,6 +174,7 @@ private fun AidenChatRowStatusContent(
             val tint: Color = when (tone) {
                 AidenChatRowStatusTone.WARNING -> palette.warning
                 AidenChatRowStatusTone.ACCENT -> palette.accent
+                AidenChatRowStatusTone.DANGER -> palette.danger
             }
             Text(
                 title,
@@ -152,6 +193,25 @@ private fun AidenChatRowStatusContent(
                 modifier = Modifier.size(16.dp).background(palette.accent.copy(alpha = 0.14f), CircleShape)
             ) {
                 AidenActivityDot(color = palette.accent, size = 8.dp)
+            }
+        }
+        if (presentation.showsFailed) {
+            // Same soft 12% semantic fill as the attention pills, with no border.
+            val tint = palette.danger
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .background(tint.copy(alpha = 0.12f), RoundedCornerShape(50))
+                    .padding(start = 6.dp, end = 8.dp, top = 3.dp, bottom = 3.dp)
+            ) {
+                Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+                Text(
+                    AidenChatRowStatusPresentation.FAILED_TITLE,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = tint
+                )
             }
         }
         if (presentation.showsUnreadDot) {

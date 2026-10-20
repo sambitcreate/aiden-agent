@@ -31,9 +31,12 @@ struct AidenRelativeTimestampView: View {
 /// Trailing chat-row status. Attention states use soft semantic fills with no
 /// borders; Working keeps the compact spinner; the unread dot is independent
 /// because a chat can be both working and holding unseen earlier output.
+/// Unseen output from a failed turn says Failed in place of the dot.
 struct AidenChatRowStatusView: View {
     let state: AidenChatRowState
     let unread: Bool
+    /// True while the unseen output is a failed turn (`showsFailed`).
+    let failed: Bool
     let palette: AidenPalette
 
     var body: some View {
@@ -51,7 +54,9 @@ struct AidenChatRowStatusView: View {
             case .idle:
                 EmptyView()
             }
-            if unread {
+            if failed {
+                pill("Failed", systemImage: "exclamationmark.circle", tint: palette.danger, label: "Failed")
+            } else if unread {
                 Circle()
                     .fill(palette.accent)
                     .frame(width: 8, height: 8)
@@ -1931,6 +1936,7 @@ struct AidenWorkspaceShellView: View {
             AidenChatRowStatusView(
                 state: chat.displayRowState,
                 unread: chat.unread,
+                failed: chat.showsFailed,
                 palette: palette
             )
 
