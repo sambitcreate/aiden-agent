@@ -94,6 +94,8 @@ export class ContextPressureFeed<Draft> {
     if (chatId === null || this.live) return;
     const draft = this.draft;
     const request = ++this.request;
+    // Every request that can publish history takes a ticket, so an older one never overwrites a newer reading.
+    const historyTicket = draft === undefined ? ++this.historyRequest : undefined;
     const reading = this.options.fetch(chatId, draft);
     const history = withHistory && draft !== undefined && this.options.publishHistory ? this.readHistory(chatId) : undefined;
     let pressure: ChatContextPressureV1 | null;
@@ -106,7 +108,7 @@ export class ContextPressureFeed<Draft> {
     }
     if (request === this.request && !this.live && chatId === this.chatId) {
       this.options.publish(pressure);
-      if (draft === undefined) this.options.publishHistory?.(pressure, chatId);
+      if (historyTicket === this.historyRequest) this.options.publishHistory?.(pressure, chatId);
     }
     await history;
   }
@@ -125,6 +127,7 @@ export class ContextPressureFeed<Draft> {
   }
 
   private publishBoth(pressure: ChatContextPressureV1 | null): void {
+    this.historyRequest += 1;
     this.options.publish(pressure);
     this.options.publishHistory?.(pressure, this.chatId);
   }

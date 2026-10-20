@@ -107,6 +107,27 @@ test("the draft-free history follows every trigger except typing, even with a sa
   assert.deepEqual(h.histories.slice(-2), [{ chatId: "a", tokens: 121 }, { chatId: "b", tokens: null }]);
 });
 
+test("an older draft-free history response never overwrites a newer one", async () => {
+  const h = harness({ history: true });
+  h.feed.showChat("a");
+  h.feed.draftChanged("saved draft");
+  void h.feed.refresh();
+  // The user clears the draft and switches models before the history read returns.
+  h.feed.draftChanged(undefined);
+  void h.feed.refresh();
+  assert.deepEqual(
+    h.requests.map((request) => request.draft),
+    ["saved draft", undefined, undefined],
+  );
+  h.requests[2].reply.resolve(reading(90));
+  await settle();
+  h.requests[1].reply.resolve(reading(140));
+  h.requests[0].reply.resolve(reading(150));
+  await settle();
+  assert.deepEqual(h.histories, [{ chatId: "a", tokens: null }, { chatId: "a", tokens: 90 }]);
+  assert.deepEqual(h.published, [null, 90]);
+});
+
 test("switching chats cancels a pending draft refresh from the previous chat", async () => {
   const h = harness();
   h.feed.showChat("a");
