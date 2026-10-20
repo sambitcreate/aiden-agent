@@ -1,8 +1,11 @@
-import { installBotTestIpc } from "./test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BotDefinition, BotUpdateInput } from "../../shared/bots";
+import type { BotSessionState } from "./bot-session-state";
+import { useQueryClient } from "@tanstack/react-query";
+import { useBotNotificationsSync } from "../../lib/bot-notifications-sync";
 import { BotsView } from "../bots-view";
 import { mountWithBotRouter } from "./test-providers";
 import { botFixture, catalogFixture } from "./test-fixtures";
@@ -123,15 +126,39 @@ test("Escape abandons an inline name edit instead of saving it", async () => {
   assert.equal(store.updates[0]!.name, "Trip Planner");
 });
 
-test("the Profile ••• menu holds Advanced and Delete Bot", async () => {
+test("the Profile ••• menu holds Advanced, Pause Bot and Delete Bot", async () => {
   botStoreIpc(botFixture());
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
   await openMenu("More for Planner");
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Advanced", "Delete Bot"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Advanced", "Pause Bot", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Delete Bot" }));
   const dialog = await screen.findByRole("alertdialog");
   assert.ok(within(dialog).getByRole("heading", { name: "Delete Planner?" }));
+});
+
+test("a paused Bot's Profile ••• menu resumes it, and a running one's pauses it", async () => {
+  let state: BotSessionState = { kind: "paused", since: 1, by: "phone" };
+  const { calls } = botStoreIpc(botFixture(), {
+    "bots:live:summary": (botId) => ({ botId, preview: null, updatedAt: null, state, needsYou: false, lastReplyAt: null }),
+    "bots:unpause": () => (state = { kind: "idle" }),
+    "bots:pause": () => (state = { kind: "paused", since: 2, by: "mac" }),
+  });
+  // As in the app window: main's `bots:changed` re-reads the Bot's summary.
+  const Sync = () => {
+    useBotNotificationsSync(useQueryClient());
+    return null;
+  };
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1", sidebar: <Sync /> });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:live:summary")));
+  await openMenu("More for Planner");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Resume Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:unpause").map((call) => call.args), [["bot-1"]]));
+
+  act(() => emitBotTestNotification("bots:changed", { botId: "bot-1", session: state }));
+  await openMenu("More for Planner");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:pause").map((call) => call.args), [["bot-1"]]));
 });
 
 test("Advanced shows the model, image model, access and Telegram controls, and no opening greeting", async () => {

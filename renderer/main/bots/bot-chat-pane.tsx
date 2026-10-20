@@ -10,6 +10,7 @@ import { AskUserQuestionComposer } from "../../components/ask-user-question-comp
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
@@ -31,6 +32,7 @@ import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-head
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
+import { BotPausedCard, botPausedText } from "./bot-paused-card";
 import { BotActivityRecap } from "./bot-activity-recap";
 import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
@@ -345,6 +347,7 @@ function TranscriptEntries({
   onReply,
   onRetry,
   onOpenMemory,
+  onRunRoutine,
   onRespondToProposal,
 }: {
   name: string;
@@ -362,6 +365,8 @@ function TranscriptEntries({
   onReply(text: string): void;
   onRetry(text: string): void;
   onOpenMemory(): void;
+  /** Run now on a routine skipped while paused; rejects when it didn't start. */
+  onRunRoutine(routineId: string): Promise<void>;
   onRespondToProposal(
     proposalId: string,
     decision: BotRoutineProposalDecision,
@@ -443,6 +448,8 @@ function TranscriptEntries({
             );
           case "memory_update":
             return <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} />;
+          case "routines_skipped":
+            return <RoutinesSkippedCard key={row.id} routines={row.routines} onRunNow={onRunRoutine} />;
           case "routine_proposal":
             return (
               <RoutineProposalCard
@@ -542,6 +549,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             <BotChatActions
               bot={current}
               pinned={pinned}
+              paused={state?.kind === "paused"}
               onAction={(action, returnFocus) => menuAction(current, action, returnFocus)}
             />
           </>
@@ -752,6 +760,16 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  /** Run now: a routine that came due while the Bot was paused runs once, now. */
+  const runRoutine = async (routineId: string) => {
+    try {
+      await botsApi.routines.runNow(current.id, routineId);
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t run that routine."));
+      throw error;
+    }
+  };
+
   const dismissConnection = async (pluginId: string) => {
     try {
       await botsApi.dismissConnection(current.id, pluginId);
@@ -800,8 +818,14 @@ export function BotChatPane({ botId }: { botId: string }) {
       ) : (
         <Composer
           key={`bot:${current.id}`}
-          ready={!state || state.kind !== "unavailable"}
-          readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
+          ready={!state || (state.kind !== "unavailable" && state.kind !== "paused")}
+          readinessMessage={
+            state?.kind === "unavailable"
+              ? BOT_UNAVAILABLE_LABEL
+              : state?.kind === "paused"
+                ? botPausedText(current.name)
+                : undefined
+          }
           hasMessages={snapshot.entries.length > 0}
           chatId={`bot:${current.id}`}
           placeholder={`Ask ${current.name}`}
@@ -837,6 +861,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onReply={reply}
           onRetry={(text) => void retry(text)}
           onOpenMemory={openMemory}
+          onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
         />
       </MessageAttachmentPreviewProvider>
@@ -849,6 +874,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onLayoutChange={setStatusLayout}
         />
       ) : null}
+      {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
       {state?.kind === "interrupted" ? (
         <BotInterruptedCard
           name={current.name}

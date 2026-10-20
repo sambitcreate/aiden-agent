@@ -47,6 +47,13 @@ export type BotTranscriptRow =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+    }
+  /** Routines that fired while the person had paused the Bot, each with Run now. */
+  | {
+      kind: "routines_skipped";
+      id: string;
+      since: number;
+      routines: { routineId: string; name: string; count: number }[];
     };
 
 export function botTranscriptRows(
@@ -124,6 +131,9 @@ export function botTranscriptRows(
             status: entry.status,
             ...(entry.routineId ? { routineId: entry.routineId } : {}),
           });
+          break;
+        case "routines_skipped":
+          rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
           break;
         case "tool_result":
           break;
