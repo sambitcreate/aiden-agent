@@ -48,14 +48,31 @@ test("returning to a large chat after its cache expired compacts with pi-vcc exa
   const returns = tracker();
   returns.returned("chat", AFTER_EXPIRY);
   assert.equal(returns.takeAutomatic("chat", vcc(pressure())), true);
-  // Later renders, focus changes and keystrokes in the same window do nothing.
+  // Later renders in the same return do nothing while the compaction runs.
   assert.equal(returns.takeAutomatic("chat", vcc(pressure())), false);
+  returns.settle("chat", pressure(), AFTER_EXPIRY + 2_000);
+  // Later focus changes and keystrokes in the same window do nothing either.
   returns.returned("chat", AFTER_EXPIRY + 1);
   assert.equal(returns.takeAutomatic("chat", vcc(pressure({ contextTokens: 120_000 }), AFTER_EXPIRY + 1)), false);
   // A new request opens a new window, which expires and compacts again on return.
   const later = pressure({ promptCache: { ttlMs: 5 * MINUTE, lastRequestAt: LAST_REQUEST + 20 * MINUTE } });
   returns.returned("chat", LAST_REQUEST + 30 * MINUTE);
   assert.equal(returns.takeAutomatic("chat", vcc(later, LAST_REQUEST + 30 * MINUTE)), true);
+});
+
+test("a compaction that never ran is retried on the next return, and one while warm settles nothing", () => {
+  const returns = tracker();
+  returns.returned("chat", AFTER_EXPIRY);
+  assert.equal(returns.takeAutomatic("chat", vcc(pressure())), true);
+  // The compaction could not start (another session command held it): no settle.
+  returns.returned("chat", AFTER_EXPIRY + MINUTE);
+  assert.equal(returns.takeAutomatic("chat", vcc(pressure(), AFTER_EXPIRY + MINUTE)), true);
+
+  // A manual /compact before expiry leaves the coming expiry to its own return.
+  const warm = tracker();
+  warm.settle("chat", pressure(), LAST_REQUEST + MINUTE);
+  warm.returned("chat", AFTER_EXPIRY);
+  assert.deepEqual(warm.offer("chat", llm(pressure())), { contextTokens: 140_000 });
 });
 
 test("expiry while the user stays never compacts or offers; only a later return does", () => {
@@ -105,7 +122,7 @@ test("LLM compaction is only offered, and the offer ends when the user answers i
   assert.equal(returns.takeAutomatic("chat", llm(pressure())), false);
   assert.deepEqual(returns.offer("chat", llm(pressure())), { contextTokens: 140_000 });
   assert.equal(returns.offer("chat", llm(pressure(), AFTER_EXPIRY, false)), undefined);
-  returns.settle("chat", pressure());
+  returns.settle("chat", pressure(), AFTER_EXPIRY);
   assert.equal(returns.offer("chat", llm(pressure())), undefined);
   // Switching to pi-vcc afterwards does not compact the window the user answered.
   returns.returned("chat", AFTER_EXPIRY + 1);
@@ -116,9 +133,10 @@ test("an answered window stays answered across a restart", () => {
   const saved = { value: {} as Record<string, number> };
   const before = tracker(saved);
   before.returned("dismissed", AFTER_EXPIRY);
-  before.settle("dismissed", pressure());
+  before.settle("dismissed", pressure(), AFTER_EXPIRY);
   before.returned("compacted", AFTER_EXPIRY);
   assert.equal(before.takeAutomatic("compacted", vcc(pressure())), true);
+  before.settle("compacted", pressure(), AFTER_EXPIRY + 2_000);
 
   const after = tracker(saved);
   after.returned("dismissed", AFTER_EXPIRY + MINUTE);

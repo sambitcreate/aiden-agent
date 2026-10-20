@@ -429,7 +429,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => true,
   );
   const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
-  // The latest reading without a draft, and its chat, for compacting on
+  // The latest reading without the draft, and its chat, for compacting on
   // return to an expired cache: a pasted draft is not history compaction can
   // shrink, and a chat switch must never judge the new chat by the old one.
   const [contextHistory, setContextHistory] = React.useState<{
@@ -449,10 +449,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () =>
       new ContextPressureFeed<ContextDraft>({
         fetch: (targetChatId, visibleDraft) => contextFetchRef.current(targetChatId, visibleDraft),
-        publish: (pressure, owner, visibleDraft) => {
-          setContextPressure(pressure);
-          if (!visibleDraft || pressure === null) setContextHistory({ chatId: owner, pressure });
-        },
+        publish: setContextPressure,
+        publishHistory: (pressure, owner) => setContextHistory({ chatId: owner, pressure }),
       }),
   );
   // ChatPane stays mounted across chat navigation (see chat-transition tests),

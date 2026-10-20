@@ -48,11 +48,9 @@ export function useExpiredCacheReturn({ chatId, pressure, engine, idle, compact 
     }
   }, [chatId, engine, idle, pressure, returns]);
 
-  const offer = engine
-    ? expiredCacheReturns.offer(chatId, { pressure, engine, idle, now: Date.now() })
-    : undefined;
+  const offer = engine ? expiredCacheReturns.offer(chatId, { pressure, engine, idle }) : undefined;
   const settle = React.useCallback(() => {
-    expiredCacheReturns.settle(chatId, pressure);
+    expiredCacheReturns.settle(chatId, pressure, Date.now());
     setReturns((value) => value + 1);
   }, [chatId, pressure]);
   return {

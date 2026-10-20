@@ -75,9 +75,9 @@ const localHandledStore: HandledStore = {
  * type, and it counts only once the cache has lapsed, so expiry while the user
  * sits idle never compacts. pi-vcc compacts locally for free, so a return
  * compacts on its own. LLM compaction spends model tokens, so a return only
- * offers it. Either happens at most once per cache window: only a new request
- * that uses the cache, or a compaction that changes the reading, brings the
- * offer or the compaction back.
+ * offers it. Either happens at most once per cache window, keyed by the
+ * request that last used the cache: compaction keeps that key, so only a new
+ * request brings the offer or the compaction back.
  */
 export class ExpiredCacheReturns {
   private readonly returnedAt = new Map<string, number>();
@@ -91,8 +91,10 @@ export class ExpiredCacheReturns {
   }
 
   /**
-   * Whether to start a pi-vcc compaction now. Claims the window when it says
-   * yes, so callers start exactly one compaction for it.
+   * Whether to start a pi-vcc compaction now. Uses up the return when it says
+   * yes, so callers start one compaction per return; the compaction itself
+   * settles the window once it has run, so one that never started is retried
+   * on the next return.
    */
   takeAutomatic(chatId: string, input: ExpiredCacheInput): boolean {
     if (input.engine !== "vcc" || !input.idle) return false;
@@ -101,12 +103,11 @@ export class ExpiredCacheReturns {
     const window = expiredWindow(input.pressure, returnedAt);
     if (window === undefined || this.handledMap().get(chatId) === window) return false;
     this.returnedAt.delete(chatId);
-    this.markHandled(chatId, window);
     return true;
   }
 
   /** The "Compact first?" offer for LLM compaction, if one stands. */
-  offer(chatId: string, input: ExpiredCacheInput): { contextTokens: number } | undefined {
+  offer(chatId: string, input: Omit<ExpiredCacheInput, "now">): { contextTokens: number } | undefined {
     if (input.engine !== "llm" || !input.idle || !input.pressure) return undefined;
     const returnedAt = this.returnedAt.get(chatId);
     if (returnedAt === undefined) return undefined;
@@ -116,12 +117,15 @@ export class ExpiredCacheReturns {
   }
 
   /**
-   * The window is answered: the user accepted or dismissed the offer, or any
-   * compaction ran in it. Its reading may not refresh before the next render.
+   * The expired window is answered: the user accepted or dismissed the offer,
+   * or a compaction ran after the cache lapsed. A compaction while the cache
+   * is still warm leaves the coming expiry to its own return.
    */
-  settle(chatId: string, pressure: ChatContextPressureV1 | null | undefined): void {
+  settle(chatId: string, pressure: ChatContextPressureV1 | null | undefined, now: number): void {
+    const expiresAt = promptCacheExpiresAt(pressure);
+    if (!pressure?.promptCache || expiresAt === undefined || now < expiresAt) return;
     this.returnedAt.delete(chatId);
-    if (pressure?.promptCache) this.markHandled(chatId, pressure.promptCache.lastRequestAt);
+    this.markHandled(chatId, pressure.promptCache.lastRequestAt);
   }
 
   private handledMap(): Map<string, number> {

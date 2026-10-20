@@ -965,7 +965,12 @@ export function Composer({
       !configurationBusy &&
       !permissionSaving &&
       !gitOperationBusy,
-    compact: (engine, automatic) => void compactChat(engine, automatic ? { cacheExpired: true } : undefined),
+    compact: (engine, automatic) => {
+      // The IPC failing outright leaves nothing to report for a compaction nobody asked for.
+      void compactChat(engine, automatic ? { cacheExpired: true } : undefined).catch(() => {
+        if (!automatic) toast.error("Compaction failed.");
+      });
+    },
   });
   settleExpiredCacheRef.current = expiredCacheReturn.settle;
   const typedRef = React.useRef(false);
