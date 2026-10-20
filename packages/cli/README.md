@@ -2,7 +2,7 @@
 
 A headless Aiden Agent: the full pi coding agent TUI, rebranded and themed as Aiden, deployable on macOS and Linux with Node.js ≥ 22.19, including servers with no display.
 
-Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.3.0` — the same line the Aiden desktop app uses). The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
+Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.3.0` — the same line the Aiden desktop app uses). Until the next Pi release, both builds also apply a backport of Pi's [#11142](https://github.com/earendil-works/pi/pull/11142) to pi-ai 1.3.0 (`patches/pi-ai-1.3.0-responses-tool-cache.patch`, applied by `scripts/patch-pi-ai-tool-cache.mjs`), so OpenAI Responses, Codex and Azure models keep their prompt cache when the tool set changes. The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
 
 ## Build and run
 

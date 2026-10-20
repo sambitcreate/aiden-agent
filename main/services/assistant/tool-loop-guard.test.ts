@@ -16,6 +16,7 @@ import {
   MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS,
   advanceAttendedToolErrorState,
   attendedToolRecoveryMessage,
+  endRunAfterIgnoredToolRecovery,
   recoverAttendedToolErrorContext,
 } from "./tool-loop-guard.js";
 
@@ -131,6 +132,53 @@ test("managed attended recovery publishes removed schemas before emergency conte
   assert.deepEqual(reductions, []);
 });
 
+
+// Responses models that declare tools in place keep removed tools in the request
+// and are only told not to call them, so a model can ignore the recovery turn.
+test("attended recovery ends the run when the model keeps calling a removed tool", async () => {
+  const core = createFauxCore({ api: "ignored-recovery", provider: "ignored-recovery", models: [{ id: "fixture", contextWindow: 16_000, maxTokens: 4_000 }] });
+  const model = core.getModel();
+  const models = createModels();
+  let toolCalls = 0;
+  const tool: AgentTool = { name: "broken", label: "Broken", description: "Always fails", parameters: Type.Object({}), execute: async () => {
+    toolCalls += 1; throw new Error("broken");
+  } };
+  const user: AgentMessage = { role: "user", content: "Do the thing", timestamp: 1 };
+  const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: "ignored-recovery-fixture" }));
+  const generationOptions = { contextWindow: model.contextWindow, systemPrompt: "Policy", tools: [tool], providerId: model.provider, modelId: model.id };
+  let recoveryRequested = false;
+  let requests = 0;
+  const harness = new PiAgentRuntimeHarness({
+    convertToLlm,
+    initialState: { systemPrompt: "Policy", thinkingLevel: "off", tools: [tool], messages: [user], model },
+    durability: { session, initialMessages: [user], appendMessages: appendPiMessages,
+      compaction: { models, model, thinkingLevel: "off", settings: { enabled: false }, retryDelayMs: 0 } },
+    finishTurn: endRunAfterIgnoredToolRecovery(() => recoveryRequested),
+    prepareNextTurnWithContext: createPiTurnContextPreparation({
+      prepareContext: async (context) => context,
+      attended: true,
+      generationOptions,
+      onRecovery: () => { recoveryRequested = true; },
+    }),
+    streamFn: () => {
+      requests += 1;
+      assert.ok(requests <= 3, "the run must not keep requesting after the ignored recovery");
+      const next = fauxAssistantMessage([fauxToolCall("broken", {}, { id: `call-${requests}` })], { stopReason: "toolUse", timestamp: requests * 2 });
+      const message: AssistantMessage = { ...next, api: model.api, provider: model.provider, model: model.id };
+      const stream = createAssistantMessageEventStream(); stream.push({ type: "done", reason: "toolUse", message }); stream.end(message); return stream;
+    },
+  });
+  const outcome = await harness.runManaged({ kind: "continue-durable-tail" });
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.equal(requests, 3);
+  assert.equal(toolCalls, 2, "the removed tool is never executed after recovery");
+});
+
+test("the ignored-recovery stop never ends a run before recovery was requested", () => {
+  const finish = endRunAfterIgnoredToolRecovery(() => false);
+  assert.equal(finish({ toolResults: [{ role: "toolResult" } as never] }), undefined);
+  assert.equal(endRunAfterIgnoredToolRecovery(() => true)({ toolResults: [] }), undefined);
+});
 
 test("turn preparation preserves unchanged identity and forwards cancellation and preparation errors", async () => {
   const context: AgentContext = { messages: [], tools: [] };

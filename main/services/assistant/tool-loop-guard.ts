@@ -1,4 +1,4 @@
-import type { AgentContext } from "@earendil-works/pi-agent-core";
+import type { AgentContext, AgentTurnContext, AgentTurnDecision } from "@earendil-works/pi-agent-core";
 
 export const MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS = 2;
 export const ATTENDED_TOOL_FAILURE_RECOVERY_REPLY =
@@ -57,4 +57,16 @@ export function recoverAttendedToolErrorContext(
     ],
     tools: [],
   };
+}
+
+/**
+ * Ends the run when the model still calls tools after the text-only recovery.
+ * Responses models that declare tools in place (pi #11142) cannot have a tool
+ * removed from the request, only announced as unavailable, so the recovery
+ * turn alone no longer guarantees the loop stops.
+ */
+export function endRunAfterIgnoredToolRecovery(
+  recoveryRequested: () => boolean,
+): (turn: Pick<AgentTurnContext, "toolResults">) => AgentTurnDecision | undefined {
+  return (turn) => (recoveryRequested() && turn.toolResults.length > 0 ? { action: "end" } : undefined);
 }
