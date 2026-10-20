@@ -5635,3 +5635,32 @@ test("a send the paused Bot refused is not recorded: once resumed, the same key 
     await sessions.close();
   }
 });
+
+test("a fully wired host tells every device type at most the server feature budget, and desktops keep every token they gate on", async () => {
+  const { aidenRemoteServerFeatures } = await import("./aiden-remote-router.js");
+  const { AIDEN_REMOTE_MAX_SERVER_FEATURES } = await import("./aiden-remote-protocol.js");
+  const { remoteHostCapabilities } = await import("../../renderer/lib/hosts/remote-host-adapter.js");
+  // Every support flag on, including ones added after this test was written.
+  const everything = new Proxy({}, { get: () => true }) as Parameters<typeof aidenRemoteServerFeatures>[1];
+  const desktopGrants = [
+    "chat:read", "chat:write", "workspace:browse", "workspace:manage", "bot:read", "bot:write",
+    "skills:invoke", "runs:observe", "runs:control",
+  ];
+  for (const type of ["mac", "linux", "iphone", "ipad", "android"] as const) {
+    const features = aidenRemoteServerFeatures({ type }, everything);
+    assert.ok(
+      features.length <= AIDEN_REMOTE_MAX_SERVER_FEATURES,
+      `${type} hears ${features.length} feature tokens; shipped clients refuse more than ${AIDEN_REMOTE_MAX_SERVER_FEATURES}`,
+    );
+    assert.equal(new Set(features).size, features.length, type);
+  }
+  // Trimming the desktop list must not take away anything a paired Mac can do.
+  const allTokens = new Set(
+    (["mac", "iphone"] as const).flatMap((type) => aidenRemoteServerFeatures({ type }, everything)),
+  );
+  for (const type of ["mac", "linux"] as const) {
+    const announced = remoteHostCapabilities({ features: aidenRemoteServerFeatures({ type }, everything), capabilities: desktopGrants });
+    const unrestricted = remoteHostCapabilities({ features: [...allTokens], capabilities: desktopGrants });
+    assert.deepEqual([...announced].sort(), [...unrestricted].sort(), type);
+  }
+});

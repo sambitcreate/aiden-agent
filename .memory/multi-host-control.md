@@ -90,3 +90,10 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1�
   refresh; failure/key change clears the observation. It is still independently
   verified before use. Tests cover delayed collection, retained feeds, and failover
   after LAN loss without incidental wake.
+
+
+## Feature-token budget and the Bot split — 2026-10-20
+
+- 0.59.0 regression: a fully wired host announced 33 `/server.features` to a paired Mac (32 after `chat-visual-viewer-v1`, plus `chat-ui-panels-enabled-v1` when **Paired-device chat controls** is on). The desktop parser (`peerStrings(server.features, 32)`) threw "Invalid peer capabilities." and the host showed as unavailable. Phones topped out at 30.
+- Fix: `aidenRemoteServerFeatures(device, support)` in `aiden-remote-router.ts` scopes tokens by audience. Desktops are not told about phone surfaces (`chat-ui-panels-v1`, `chat-ui-panels-enabled-v1`, `tts-v1`, `speech-request-gzip-v1`, `providers-create-v1`); fully wired counts are 28 (desktop) and 30 (phone). The desktop client now accepts up to `PEER_MAX_SERVER_FEATURES` (64). Router test "a fully wired host tells every device type at most the server feature budget…" turns every support flag on through a Proxy and checks each device type, plus that a Mac keeps every `remoteHostCapabilities` gate. The old protocol test only counted exported `*_FEATURE` constants and missed literal tokens; it was removed.
+- Open (not fixed): the desktop peer client never moved to the durable Bot session API. `POST /bots/{id}/chats` returns the emptied canonical row and `/chats/{id}/turns` runs a Bot turn on the legacy `llmClient` path, so a remote Mac's Bot chat is a separate transcript from the owner Mac, phones and Telegram. Durable Bot turns are also absent from `HostRunRegistry`. Plan: desktop peer operations and a `/host/$hostId/bots/$botId/chat` route over the existing `/bots/{id}/session` routes, then refuse legacy turns on durable Bot chats.
