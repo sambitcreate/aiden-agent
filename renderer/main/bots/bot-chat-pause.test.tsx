@@ -133,7 +133,10 @@ test("routines skipped while paused are listed, and Run now runs that one routin
   assert.ok(within(card).getByText("Skipped 3 times"));
   assert.ok(within(card).getByText("Skipped once"));
 
-  const runBrief = within(card).getByRole("button", { name: "Run Morning brief now" });
+  // Label in name: the accessible name starts with the words on the button, so
+  // a voice-control user saying "Run now" reaches it.
+  const runBrief = within(card).getByRole("button", { name: "Run now: Morning brief" });
+  assert.equal(runBrief.textContent, "Run now");
   fireEvent.click(runBrief);
   await waitFor(() => assert.equal(callsTo(calls, "bots:routines:runNow").length, 1));
   // A failed run leaves Run now available.
@@ -141,8 +144,8 @@ test("routines skipped while paused are listed, and Run now runs that one routin
 
   fireEvent.click(runBrief);
   await waitFor(() => assert.ok(within(card).getByText("Started")));
-  assert.equal(within(card).queryByRole("button", { name: "Run Morning brief now" }), null);
-  assert.ok(within(card).getByRole("button", { name: "Run Inbox sweep now" }), "the other routine is untouched");
+  assert.equal(within(card).queryByRole("button", { name: "Run now: Morning brief" }), null);
+  assert.ok(within(card).getByRole("button", { name: "Run now: Inbox sweep" }), "the other routine is untouched");
   assert.deepEqual(
     callsTo(calls, "bots:routines:runNow").map((call) => call.args[0]),
     [

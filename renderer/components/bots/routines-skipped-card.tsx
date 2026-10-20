@@ -75,7 +75,7 @@ export function RoutinesSkippedCard({
                   size="small"
                   className="shrink-0"
                   disabled={isRunning}
-                  aria-label={`Run ${routine.name} now`}
+                  aria-label={`Run now: ${routine.name}`}
                   onClick={() => void runNow(routine.routineId)}
                 >
                   {isRunning ? "Starting…" : "Run now"}
