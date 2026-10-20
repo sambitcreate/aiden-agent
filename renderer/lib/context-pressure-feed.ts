@@ -6,8 +6,11 @@ export interface ContextPressureFeedOptions<Draft> {
     chatId: string,
     draft: Draft | undefined,
   ): Promise<ChatContextPressureV1 | null>;
-  /** Render a reading; null means the quiet "unknown" meter. */
-  publish(pressure: ChatContextPressureV1 | null): void;
+  /**
+   * Render a reading for the shown chat; null means the quiet "unknown" meter.
+   * `draft` is the composer draft the reading prices, if any.
+   */
+  publish(pressure: ChatContextPressureV1 | null, chatId: string | null, draft: Draft | undefined): void;
   draftDelayMs?: number;
   schedule?(run: () => void, delayMs: number): unknown;
   cancel?(handle: unknown): void;
@@ -54,7 +57,7 @@ export class ContextPressureFeed<Draft> {
     // changes, so it stays the baseline across chats in the same workspace.
     this.draft = undefined;
     this.invalidate();
-    this.options.publish(null);
+    this.options.publish(null, this.chatId, undefined);
   }
 
   /**
@@ -69,7 +72,7 @@ export class ContextPressureFeed<Draft> {
     this.scope = scope;
     if (previous === undefined || previous === scope) return;
     this.invalidate();
-    this.options.publish(null);
+    this.options.publish(null, this.chatId, undefined);
   }
 
   /** While live, only pushed readings reach the meter. */
@@ -92,7 +95,7 @@ export class ContextPressureFeed<Draft> {
       return;
     }
     if (request === this.request && !this.live && chatId === this.chatId) {
-      this.options.publish(pressure);
+      this.options.publish(pressure, chatId, draft);
     }
   }
 
@@ -114,7 +117,7 @@ export class ContextPressureFeed<Draft> {
    */
   pushed(chatId: string, pressure: ChatContextPressureV1 | null): void {
     if (chatId !== this.chatId) return;
-    if (this.live) this.options.publish(pressure);
+    if (this.live) this.options.publish(pressure, chatId, undefined);
     else void this.refresh();
   }
 

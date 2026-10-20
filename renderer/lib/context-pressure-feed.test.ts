@@ -17,6 +17,7 @@ function deferred<T>() {
 
 function harness() {
   const published: (number | null)[] = [];
+  const owners: { chatId: string | null; draft?: string }[] = [];
   const requests: {
     chatId: string;
     draft?: string;
@@ -30,7 +31,10 @@ function harness() {
       requests.push({ chatId, draft, reply });
       return reply.promise;
     },
-    publish: (pressure) => published.push(pressure?.contextTokens ?? null),
+    publish: (pressure, chatId, draft) => {
+      published.push(pressure?.contextTokens ?? null);
+      owners.push(draft === undefined ? { chatId } : { chatId, draft });
+    },
     schedule: (run) => {
       const id = nextTimer++;
       timers.set(id, run);
@@ -43,7 +47,7 @@ function harness() {
     timers.clear();
     for (const run of pending) run();
   };
-  return { feed, published, requests, timers, fireTimers };
+  return { feed, published, owners, requests, timers, fireTimers };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -66,6 +70,26 @@ test("switching chats clears the old reading and drops its in-flight response", 
   h.requests[1].reply.resolve(reading(100));
   await settle();
   assert.deepEqual(h.published, [null, null, 100]);
+});
+
+test("each reading names its chat and the draft it priced", async () => {
+  const h = harness();
+  h.feed.showChat("a");
+  void h.feed.refresh();
+  h.requests[0].reply.resolve(reading(100));
+  await settle();
+  h.feed.draftChanged("pasted notes");
+  h.fireTimers();
+  h.requests[1].reply.resolve(reading(180));
+  await settle();
+  h.feed.showChat("b");
+  assert.deepEqual(h.published, [null, 100, 180, null]);
+  assert.deepEqual(h.owners, [
+    { chatId: "a" },
+    { chatId: "a" },
+    { chatId: "a", draft: "pasted notes" },
+    { chatId: "b" },
+  ]);
 });
 
 test("switching chats cancels a pending draft refresh from the previous chat", async () => {
