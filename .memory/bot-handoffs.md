@@ -55,6 +55,9 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §4.1 (package P1: the h
   - A click opens `/bots/<id>/chat` through `requestAppPath`, which restores and focuses the main window.
   - It uses Electron `Notification`, so it also posts on Linux.
 
+## Rule hand-offs (P3)
+- Bot rules (`bot-rules.md`) hand a ruled tool call to the person through the same bridge: `ruleHandoffRequest` builds a `kind: "action"`, `source: "rule"` request with the rule, and `beforeTool` blocks the call with `ruleHandoffDoneBlock` or `handoffSkippedText`. The answer is recorded as an `aiden.handoff-result` session entry, which live projection maps to the same `handoff_result` row (`handoff:<toolCallId>`).
+
 ## Not yet
 - Remote and phones (P4): `projectBotSessionEntries` drops `handoff_result` through `default:`, so phones show no line for the person's answer until P4 maps it. There is no Remote endpoint yet.
 - CLI: hand-offs are desktop-only. The CLI bundles `renderer/shared/bot-activity.ts`, which is why it names the `hand_off` literal instead of importing the constant.
