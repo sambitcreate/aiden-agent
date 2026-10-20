@@ -4,7 +4,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 
 ## Model
 - Shared contract: `renderer/shared/bot-rules.ts`.
-  - Classes: credentials, money, purchase, communicate, delete, publish, install.
+  - Classes: credentials, money, purchase, communicate, delete, publish, install. The install rule reads "Install software on your Mac": inside a Bot's own computer installing is not ruled (plan §8.7), so the `computer` surface never yields `install` (a custom rule still can).
   - Behaviors: `ask` and `hand_off`. `allowed` is only a baseline, never a rule.
   - Locked rules (`locked.credentials`, `locked.money`, hand off) are code constants and are never stored.
   - Built-in rules (`default.<class>`, Ask first) can switch to Hand off to me but can't be removed.
@@ -27,7 +27,9 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
   - Labels on type, set_value and press count only for the locked classes.
   - An MCP description's first sentence counts only for the non-locked classes.
 - Custom rules match when every content word of the rule appears among the action's words. The window title, URL host and app are used for custom rules only.
-- Oracle: `fixtures/actions.json` (138 rows). The test reports precision and recall per class. Locked classes must have zero misses and precision ≥ 0.9; the others need ≥ 0.85.
+- Passive actions (scroll, wait, focus_app, set_window_frame, move …) match no rule at all, custom ones included: a custom "book a flight" must not stop a scroll in a window titled "Book a flight".
+- `describeMcpAction` (`mcp-action.ts`) reads the live tools/list entry through `facts.mcpToolDescriptor` (the same live inventory the grant was checked against), so a tool's server title, description and `destructiveHint` count, not only its name. `mcp-action.test.ts` covers it, and `bot-tool-assembly.test.ts` checks it end to end.
+- Oracle: `fixtures/actions.json` (144 rows; password, one-time-code and card rows on all four surfaces). The test reports precision and recall per class. Locked classes must have zero misses and precision ≥ 0.9; the others need ≥ 0.85.
 
 ## Store (`store.ts`, singleton `store-main.ts`)
 - File: `<userData>/bots/<dir>/rules.json`, `{version:1, revision, behaviors, custom}`, parsed strictly. A missing or invalid file reads as the defaults at revision 0. An unreadable file throws, and enforcement then fails closed with "This Bot's rules couldn't be read…".
@@ -39,7 +41,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 
 ## Enforcement (`bot-tool-assembly.ts` checkPolicy, `bot-extension.ts` beforeTool)
 - Baseline:
-  - Computer Use: `approvalFor` returns `BotLiveApproval {approval|null, action}`.
+  - Computer Use: `approvalFor` returns `BotLiveApproval {approval|null, action}`. In `bot-tool-sources-main.ts` it is a `switch` on the tool name, so the Bot browser and Bot computer packages each add a `case`.
   - Everything else: `botToolApprovalSummary`.
   - With no classifiable action, or no `rules` port, the baseline decision stands.
 - ask:
@@ -50,7 +52,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
   - stores the approval memo with `kind:"handoff"` and `rule`;
   - asks through `requestHandoff`, which is `ruleHandoffRequest` from `bot-handoffs.ts`: kind `action`, source `rule`;
   - stores the answer memo `aiden.handoff.answer`;
-  - records an `aiden.handoff-result` entry through `recordHandoff` (`runtime.appendEntry`, idempotent per toolCallId);
+  - records an `aiden.handoff-result` entry through `recordHandoff`: `recordRuleHandoffEntry` in `bot-handoffs.ts` (appends through `runtime.appendEntry`, never submits; writes nothing when that toolCallId already has a row). `bot-tool-assembly.test.ts` runs it from inside `beforeTool` on a real conversation;
   - blocks the call with "The person did this themselves: …" or the skipped text.
   - The answer memo is read before anything else, so a resume applies the answer without asking again or re-deciding.
 - Unattended turns (`routine:`, `tg:`): a hand-off, or a rule-made ask with no baseline, blocks at once with `ruleUnattendedBlock` or `ruleAskUnattendedBlock`. A run with no `requestHandoff` dep also fails closed with the unattended text.
