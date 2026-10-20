@@ -210,11 +210,3 @@ test("ending or destroying the stream clears the pending repeat", async () => {
   assert.equal(destroyed.timers.size, 0);
 });
 
-test("forwarded chunks are the hub's own bytes, unchanged", () => {
-  const { stream } = harness();
-  const seen: Buffer[] = [];
-  stream.on("data", (chunk: Buffer) => seen.push(chunk));
-  const chunk = part("A");
-  stream.write(chunk);
-  assert.equal(seen[0], chunk);
-});

@@ -144,6 +144,9 @@ export function repeatStillFrame(boundary: string, options: StillFrameOptions = 
       for (const view of lastPart) stream.push(view);
       stream.push(CRLF);
     } else {
+      // Mid-boundary or mid-part: look again shortly. A part that completes
+      // first replaces this timer with its own.
+      timer = timers.set(() => repeat(stream), idleMs);
       return;
     }
     repeated = true;
@@ -253,7 +256,7 @@ export function repeatStillFrame(boundary: string, options: StillFrameOptions = 
 
   return new Transform({
     transform(this: Transform, chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-      // The timer runs from the latest complete part; if the next part is half-read when it fires, no repeat is sent.
+      // The timer runs from the latest complete part; while the next part is half-read it only re-arms.
       if (phase !== "passthrough" && !track(this, chunk)) giveUp();
       callback(null, chunk);
     },

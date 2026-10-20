@@ -438,7 +438,11 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
       // pipe() never forwards errors: a hub that resets mid-stream must end this response, not crash main.
       hubResponse.once("error", () => response.destroy());
       // A browser paints an MJPEG part only when the next one begins, so a still frame is repeated once.
-      const boundary = request.method === "GET" ? mjpegBoundary(hubResponse.headers["content-type"]) : null;
+      // A response with a declared length cannot grow, so it is passed through as is.
+      const boundary =
+        request.method === "GET" && hubResponse.headers["content-length"] === undefined
+          ? mjpegBoundary(hubResponse.headers["content-type"])
+          : null;
       if (boundary === null) {
         hubResponse.pipe(response);
       } else {

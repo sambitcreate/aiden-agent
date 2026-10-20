@@ -53,6 +53,14 @@ async function startFakeHub(): Promise<FakeHub> {
         response.write("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nJPEG\r\n");
         return;
       }
+      if (request.url?.includes("mjpegreset=1")) {
+        // An MJPEG hub that dies after one frame, through the still-frame path.
+        response.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=frame" });
+        response.write("--frame\r\nContent-Length: 4\r\n\r\nJPEG\r\n", () =>
+          setTimeout(() => request.socket.destroy(), 10),
+        );
+        return;
+      }
       if (request.url?.includes("reset=1")) {
         // Promise more than is sent, then reset mid-body, as a hub that dies while streaming would.
         response.writeHead(200, { "content-type": "application/octet-stream", "content-length": "1000" });
@@ -370,24 +378,27 @@ test("closing a host ends its open sockets and leaves other hosts alone", async 
 });
 
 test("a hub that resets mid-response ends that response without crashing the proxy", async () => {
+  const paths = ["/api/devices?reset=1", `/vendor/serve-sim/helper/${UDID}/stream.mjpeg?mjpegreset=1`];
   await withProxy(async ({ proxy }) => {
-    const { token } = proxy.mintGrant();
-    await new Promise<void>((resolve) => {
-      const request = httpRequest(`${proxy.origin}/api/devices?t=${token}&reset=1`, {
-        headers: { origin: "file://" },
+    for (const path of paths) {
+      const { token } = proxy.mintGrant();
+      await new Promise<void>((resolve) => {
+        const request = httpRequest(`${proxy.origin}${path}&t=${token}`, {
+          headers: { origin: "file://" },
+        });
+        request.once("response", (response) => {
+          assert.equal(response.statusCode, 200);
+          response.on("data", () => undefined);
+          response.once("error", () => resolve());
+          response.once("close", () => resolve());
+        });
+        request.once("error", () => resolve());
+        request.end();
       });
-      request.once("response", (response) => {
-        assert.equal(response.statusCode, 200);
-        response.on("data", () => undefined);
-        response.once("error", () => resolve());
-        response.once("close", () => resolve());
-      });
-      request.once("error", () => resolve());
-      request.end();
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    // Still serving: the reset reached only that one response.
-    assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Still serving: the reset reached only that one response.
+      assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200, path);
+    }
   });
 });
 
