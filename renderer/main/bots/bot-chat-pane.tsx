@@ -9,8 +9,8 @@ import { CircleAlert, FileText, Pause, RotateCcw, ShieldQuestion, Square } from 
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
-import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
 import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
+import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
