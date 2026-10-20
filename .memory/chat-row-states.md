@@ -37,3 +37,11 @@ Branch `feature/mobile-needs-attention-sort`, client-only (no contract revision)
 - Applied once in each platform's Workspace sidebar projection (`projectAidenWorkspaceSidebar` / `AidenWorkspaceSidebarProjection.make`), so both the per-workspace sections (including the preview limit) and the Recent list sort attention-first. Workspace section order is unchanged; `newestActivityAt` now takes the max chat time because the first chat is no longer the newest.
 - No section headers: desktop only labels tiers in its separate Needs attention view, and the row pills/spinner already mark state. No pins exist on mobile or desktop chat rows. Bots home is a contact list (not chat rows, excluded from row states) and is being reworked in #377, so it is unchanged.
 - Tests: `AidenChatRowStatusTest.kt` (Android) and `AidenAppearanceTests` in `AidenChatTests.swift` (iOS).
+
+## Failed row marker (2026-10-20, Remote contract revision 36, provisional)
+
+Port of pingdotgg/t3code#20996. Before this, a failed turn with no text never counted as assistant output (`metaOf` required visible content), so a chat that failed in the background looked idle; one with partial text looked like a fresh reply.
+- `metaOf` in `chat-store-core.ts` counts a failed assistant message (`isFailedAssistantTurn` in `renderer/shared/chat-row-state.ts`: a valid `providerFailure` or `timeline.status === "failed"`; a Stop/`cancelled` never counts) as output, and sets `ChatMeta.lastAssistantFailed: true` when the message at `lastAssistantAt` failed. Legacy index rows lack it until their next write.
+- Desktop: `ChatRowStatus` takes `failed`; unread + failed renders a soft red Failed pill (`bg-status-red-surface`) in place of the dot. `sidebarAttention(rowState, unread, failed)` adds a `failed` tier ranked after needs_input and before working in Needs attention.
+- Remote: summary rows carry `lastRunFailed: true` (absent when false; the parser rejects `false`). Remote desktop rows (`sidebar-remote-groups.ts`) and iOS/Android rows show Failed only while `unread`.
+- Revision 36 is provisional: re-claim the next revision after `main`'s at merge (the Cua Bots PR #559 also planned 36).
