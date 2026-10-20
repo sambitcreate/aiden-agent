@@ -2495,12 +2495,16 @@ test("managed steering is accepted only while active and queued input is durable
     message: { role: "user", content: "start", timestamp: 1 },
   });
   await atTool;
+  assert.equal(harness.hasUndeliveredSteer(), false);
   assert.deepEqual(harness.queueSteer({ role: "user", content: "new instruction", timestamp: 2 }), {
     accepted: true,
     queue: "steer",
   });
+  // Pi holds steering until the running tool returns.
+  assert.equal(harness.hasUndeliveredSteer(), true);
   releaseTool();
   assert.equal((await running).kind, "completed");
+  assert.equal(harness.hasUndeliveredSteer(), false);
   const users = (await session.buildContext()).messages.filter(
     (message) => message.role === "user",
   );

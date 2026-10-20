@@ -25,6 +25,12 @@ export interface ChatRunInputGenerationRef {
   cancelRequested: boolean;
   /** Runs that take no mid-flight input (Design Studio). */
   inputClosed?: boolean;
+  /**
+   * Stop the run's still-running subagents once steering is accepted. Pi
+   * delivers steering only after the current tool call returns, so without
+   * this a steer would wait for every child to finish.
+   */
+  stopSubagentsForGuidance?(): void;
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
     queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
@@ -159,6 +165,13 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
         committed: true,
         messageId,
       };
+    }
+    if (input.mode === "steer") {
+      try {
+        generation.stopSubagentsForGuidance?.();
+      } catch {
+        // The guidance is already queued; it still lands when the children end.
+      }
     }
     return { admitted: true, queue: receipt.queue, committed: true, messageId };
   }
