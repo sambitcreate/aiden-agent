@@ -393,6 +393,7 @@ class AidenChatCache(
             else {
                 // A freshly admitted chat is the one being viewed, so it is read;
                 // the server row state is kept until the next summary refresh.
+                // unread and lastRunFailed reset, so a viewed failure stops saying Failed.
                 val existing = visibleSummaries[chat.id]
                 visibleSummaries[chat.id] = AidenChatSummary.fromChat(chat, existing?.activity ?: AidenChatSummaryActivity.IDLE)
                     .copy(rowStateWire = existing?.rowStateWire)

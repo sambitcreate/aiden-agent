@@ -237,14 +237,19 @@ export interface AidenRemoteChatSummaryProjection {
   rowState?: ChatRowState;
   /** Additive (protocol revision 18): assistant output arrived after the last view. */
   unread?: boolean;
+  /**
+   * Additive (protocol revision 36): the newest assistant output is a failed
+   * turn. Present only when true; clients say Failed while the row is unread.
+   */
+  lastRunFailed?: true;
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
 }
 
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
-  "titlePending" | "activity" | "rowState" | "unread"
-> & { lastAssistantAt?: number; lastAssistantSequence?: number };
+  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed"
+> & { lastAssistantAt?: number; lastAssistantSequence?: number; lastAssistantFailed?: boolean };
 
 /** Shared, main-owned read markers used for honest unread summaries. */
 export interface AidenRemoteChatReadMarkers {
@@ -577,7 +582,11 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
     revision: chatSummaryRevision(meta),
     ...(forkedFrom ? { forkedFrom } : {}),
     ...(typeof meta.lastAssistantAt === "number" && Number.isSafeInteger(meta.lastAssistantAt)
-      ? { lastAssistantAt: meta.lastAssistantAt, lastAssistantSequence: meta.lastAssistantSequence }
+      ? {
+          lastAssistantAt: meta.lastAssistantAt,
+          lastAssistantSequence: meta.lastAssistantSequence,
+          ...(meta.lastAssistantFailed === true ? { lastAssistantFailed: true } : {}),
+        }
       : {}),
   };
 }
@@ -1305,8 +1314,9 @@ export class AidenRemoteChatService {
     const inputChatIds = new Set(activity?.inputChatIds ?? []);
     // A marker read failure hides unread dots rather than failing the list.
     const markers = await this.options.readMarkers?.snapshot().catch(() => null);
-    return summaries.map(({ lastAssistantAt, lastAssistantSequence, ...summary }) => ({
+    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => ({
       ...summary,
+      ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
       titlePending: this.options.isTitlePending?.(summary.id) === true,
       activity: activeChatIds.has(summary.id) ? "active" : "idle",
       rowState: chatRowState({

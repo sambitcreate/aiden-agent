@@ -510,6 +510,7 @@
         "main/services/devices/device-feature-ipc.test.ts",
         "main/services/devices/device-features.test.ts",
         "main/services/devices/device-hub-proxy.test.ts",
+        "main/services/devices/mjpeg-still-frame.test.ts",
         "main/services/devices/device-ipc.test.ts",
         "main/services/devices/device-recording.test.ts",
         "main/services/devices/device-save-path.test.ts",

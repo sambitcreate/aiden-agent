@@ -1,3 +1,5 @@
+import { parseProviderFailureV1 } from "./provider-failure.js";
+
 /**
  * Chat list row state shared by the desktop sidebar and the Aiden Remote chat
  * summary projection. The order is the display priority: a chat that is
@@ -38,6 +40,25 @@ export const CHAT_ROW_STATE_LABELS: Readonly<Record<ChatRowState, string>> = {
   working: "Working",
   idle: "Idle",
 };
+
+/** Shown in place of the unread dot when the unseen output is a failed turn. */
+export const CHAT_ROW_FAILED_LABEL = "Failed";
+
+/**
+ * Whether a persisted assistant message ended its turn in failure. A Stop is a
+ * cancellation, not a failure, so it never counts.
+ */
+export function isFailedAssistantTurn(message: {
+  role: string;
+  providerFailure?: unknown;
+  timeline?: { status?: string };
+}): boolean {
+  return (
+    message.role === "assistant" &&
+    (parseProviderFailureV1(message.providerFailure) !== undefined ||
+      message.timeline?.status === "failed")
+  );
+}
 
 /**
  * Durable "last viewed" markers. `baselineAt` is the moment read tracking was

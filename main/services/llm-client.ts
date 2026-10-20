@@ -2685,7 +2685,10 @@ export const llmClient = {
               : undefined,
             providerFailure,
             timeline:
-              finalTimeline.steps.length || finalTimeline.status === "cancelled"
+              // A failed status is kept so a partial reply still reads as Failed in the chat list.
+              finalTimeline.steps.length ||
+              finalTimeline.status === "cancelled" ||
+              finalTimeline.status === "failed"
                 ? finalTimeline
                 : undefined,
             turnStats: {

@@ -4524,6 +4524,34 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAFailedUploadKeepsTheOtherAttachmentReadyToSend() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        await model.load(observeProgress: false)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            // Refuse only the first upload; the second takes the default route.
+            guard request.httpMethod == "POST",
+                  request.url?.path.hasSuffix("/attachments") == true,
+                  AidenChatProgressLifecycleURLProtocol.uploadRequestCount == 1 else { return nil }
+            return (413, "application/json", Data(#"{"error":{"code":"payload_too_large","message":"Too large.","requestId":"upload-too-large","retryable":false}}"#.utf8))
+        }
+
+        let failures = await model.upload([
+            .text(name: "first.txt", mimeType: "text/plain", text: "first"),
+            .text(name: "second.txt", mimeType: "text/plain", text: "second"),
+        ])
+
+        XCTAssertEqual(failures, 1)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 2)
+        XCTAssertEqual(model.pendingAttachments.count, 1)
+        XCTAssertFalse(model.isUploadingAttachment)
+        let message = try XCTUnwrap(model.presentedError)
+        XCTAssertTrue(message.contains("One attachment could not be uploaded"), message)
+        XCTAssertTrue(model.canSend, "The attachment that did upload can still be sent")
+        model.setAllowsMutations(false)
+    }
+
+    @MainActor
     func testOverlappingPurgeWaitsForAlreadyClaimedLifetimeCleanup() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-overlapping-cleanup-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -10522,6 +10550,29 @@ final class AidenAppearanceTests: XCTestCase {
         )
     }
 
+    func testUnseenFailuresSortBetweenChatsNeedingTheUserAndWorkingChats() {
+        var seenFailure = attentionSummary("seen-failure", updated: 40)
+        seenFailure.lastRunFailed = true
+        var unseenFailure = attentionSummary("unseen-failure", updated: 30)
+        unseenFailure.unread = true
+        unseenFailure.lastRunFailed = true
+        var unreadReply = attentionSummary("unread-reply", updated: 25)
+        unreadReply.unread = true
+        let newestFirst = [
+            attentionSummary("idle-newest", updated: 60),
+            attentionSummary("running", updated: 50, active: true, rowState: .working),
+            seenFailure,
+            unseenFailure,
+            unreadReply,
+            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
+        ]
+
+        XCTAssertEqual(
+            aidenNeedsAttentionFirst(newestFirst).map(\.id),
+            ["question", "unseen-failure", "running", "idle-newest", "seen-failure", "unread-reply"]
+        )
+    }
+
     func testStaleAttentionStateOnIdleChatDoesNotJumpTheQueue() {
         let newestFirst = [
             attentionSummary("newer", updated: 20),
@@ -13819,6 +13870,7 @@ final class AidenCacheFirstHomeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         var row = AidenChatSummary(chat: chat("waiting", workspaceId: "alpha", updatedAt: 1_787_100_020))
         row.unread = true
+        row.lastRunFailed = true
         row.rowState = .needsApproval
         _ = try await cache.saveChatSummaries(
             .init(summaries: [row], nextCursor: nil),
@@ -13834,9 +13886,26 @@ final class AidenCacheFirstHomeTests: XCTestCase {
         let summaries = await reopened.loadChatSummaries(instanceId: instanceId)
         let saved = try XCTUnwrap(summaries?.summaries.first { $0.id == "waiting" })
         XCTAssertTrue(saved.unread)
+        XCTAssertTrue(saved.showsFailed)
         XCTAssertEqual(saved.rowState, .needsApproval)
         let transcript = await reopened.loadChat(instanceId: instanceId, chatId: "waiting")
         XCTAssertEqual(transcript?.revision, "revision-2")
+    }
+
+    func testOpeningAFailedUnreadRowClearsFailedWithTheDot() {
+        let (cache, root) = makeCache()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var failed = AidenChatSummary(chat: chat("failed", workspaceId: "alpha", updatedAt: 1_787_100_020))
+        failed.unread = true
+        failed.lastRunFailed = true
+        let home = AidenHomeModel(chatCache: cache)
+        home.chats = [failed]
+        XCTAssertTrue(home.chats[0].showsFailed)
+
+        home.markViewed(chatID: "failed")
+
+        XCTAssertFalse(home.chats[0].unread)
+        XCTAssertFalse(home.chats[0].showsFailed)
     }
 
     func testSwitchingToAnUnsavedMacShowsSkeletonsNotTheLastMacsEmptyState() async throws {

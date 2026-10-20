@@ -47,6 +47,24 @@ class AidenChatRowStatusTest {
         assertFalse(unreadOnly.showsActivity)
     }
 
+    @Test
+    fun unseenFailedTurnReplacesTheUnreadDotWithADangerPill() {
+        val failed = AidenChatRowStatusPresentation.of(AidenChatRowState.IDLE, unread = true, failed = true)
+        assertTrue(failed.showsFailed)
+        assertFalse(failed.showsUnreadDot)
+        assertEquals("Failed", failed.contentDescription)
+
+        // A chat can be working again while its earlier failure is unseen.
+        val workingAgain = AidenChatRowStatusPresentation.of(AidenChatRowState.WORKING, unread = true, failed = true)
+        assertTrue(workingAgain.showsActivity && workingAgain.showsFailed)
+        assertEquals("Working, Failed", workingAgain.contentDescription)
+
+        // Once the chat is viewed, the failure is no longer news.
+        val read = AidenChatRowStatusPresentation.of(AidenChatRowState.IDLE, unread = false, failed = true)
+        assertFalse(read.showsFailed)
+        assertNull(read.contentDescription)
+    }
+
     private val base = Instant.parse("2026-10-01T12:00:00Z")
 
     private fun summary(
@@ -54,7 +72,9 @@ class AidenChatRowStatusTest {
         updatedSeconds: Long,
         active: Boolean = false,
         rowState: String? = null,
-        workspaceId: String = "alpha"
+        workspaceId: String = "alpha",
+        unread: Boolean = false,
+        lastRunFailed: Boolean = false
     ) = AidenChatSummary(
         id = id,
         workspaceId = workspaceId,
@@ -64,7 +84,9 @@ class AidenChatRowStatusTest {
         updatedAt = base.plusSeconds(updatedSeconds),
         revision = "$id-r1",
         activity = if (active) AidenChatSummaryActivity.ACTIVE else AidenChatSummaryActivity.IDLE,
-        rowStateWire = rowState
+        rowStateWire = rowState,
+        unread = unread,
+        lastRunFailed = lastRunFailed
     )
 
     @Test
@@ -79,6 +101,23 @@ class AidenChatRowStatusTest {
 
         assertEquals(
             listOf("approval", "question", "running", "idle-newest", "idle-middle"),
+            aidenNeedsAttentionFirst(newestFirst).map { it.id }
+        )
+    }
+
+    @Test
+    fun unseenFailuresSortBetweenChatsNeedingTheUserAndWorkingChats() {
+        val newestFirst = listOf(
+            summary("idle-newest", 60),
+            summary("running", 50, active = true, rowState = "working"),
+            summary("seen-failure", 40, lastRunFailed = true),
+            summary("unseen-failure", 30, unread = true, lastRunFailed = true),
+            summary("unread-reply", 25, unread = true),
+            summary("question", 20, active = true, rowState = "needs_input")
+        )
+
+        assertEquals(
+            listOf("question", "unseen-failure", "running", "idle-newest", "seen-failure", "unread-reply"),
             aidenNeedsAttentionFirst(newestFirst).map { it.id }
         )
     }

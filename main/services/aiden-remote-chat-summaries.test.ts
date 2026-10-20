@@ -189,6 +189,7 @@ test("summaries project attention row states and honest unread from shared marke
     metadata("chat-busy", 4_000, { lastAssistantAt: 2_000 }),
     metadata("chat-seen", 3_000, { lastAssistantAt: 2_500 }),
     metadata("chat-new", 2_900, { lastAssistantAt: 2_800 }),
+    metadata("chat-failed", 2_850, { lastAssistantAt: 2_700, lastAssistantFailed: true }),
   ], {
     activity: () => ({
       revision: 3,
@@ -214,8 +215,16 @@ test("summaries project attention row states and honest unread from shared marke
   assert.equal(byId["chat-busy"]!.unread, true);
   assert.equal(byId["chat-new"]!.unread, true);
   assert.equal(byId["chat-ask"]!.unread, false);
+  // Only a chat whose newest output failed says so, and only as `true`.
+  assert.equal(byId["chat-failed"]!.unread, true);
+  assert.equal(byId["chat-failed"]!.lastRunFailed, true);
+  assert.deepEqual(
+    page.summaries.filter((summary) => "lastRunFailed" in summary).map(({ id }) => id),
+    ["chat-failed"],
+  );
   // The internal assistant timestamp never reaches the wire.
   assert.ok(page.summaries.every((summary) => !("lastAssistantAt" in summary)));
+  assert.ok(page.summaries.every((summary) => !("lastAssistantFailed" in summary)));
 });
 
 test("a failing marker store hides unread dots instead of failing the list", async () => {
@@ -246,6 +255,12 @@ test("summary parser accepts additive row state and rejects unknown values", () 
   assert.equal(parsed.unread, true);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, rowState: "blocked" }), /rowState/u);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, unread: "yes" }), /unread/u);
+  assert.equal(parseAidenRemoteChatSummaryProjection({ ...summary, lastRunFailed: true }).lastRunFailed, true);
+  assert.equal("lastRunFailed" in parseAidenRemoteChatSummaryProjection(summary), false);
+  assert.throws(
+    () => parseAidenRemoteChatSummaryProjection({ ...summary, lastRunFailed: false }),
+    /lastRunFailed/u,
+  );
 });
 
 test("equal timestamps use ordinal chat ID ordering", async () => {

@@ -312,7 +312,8 @@ class AidenWorkspaceHomeViewModel(
     }
 
     fun accept(chat: AidenChat) {
-        // An accepted chat is the one being viewed, so its row is read.
+        // An accepted chat is the one being viewed, so its row is read (and no
+        // longer says Failed); the next summary refresh restores server flags.
         val summary = AidenChatSummary.fromChat(chat)
             .copy(rowStateWire = _chats.value.firstOrNull { it.id == chat.id }?.rowStateWire)
         _chats.value = regularNewestFirst(_chats.value.filterNot { it.id == summary.id } + summary)

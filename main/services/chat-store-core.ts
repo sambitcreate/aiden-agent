@@ -21,6 +21,7 @@ import {
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
 import { chatSurface, parseChatOwnerV1, type ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import { isFailedAssistantTurn } from "../../renderer/shared/chat-row-state.js";
 import type { Attachment, Chat, ChatMessage, ChatMeta } from "./types.js";
 import {
   FORK_SUMMARY_HOLD_MESSAGE,
@@ -396,6 +397,7 @@ export function createChatStore(
         (typeof meta.lastAssistantAt === "number" &&
           Number.isSafeInteger(meta.lastAssistantAt) &&
           meta.lastAssistantAt >= 0)) &&
+      (meta.lastAssistantFailed === undefined || meta.lastAssistantFailed === true) &&
       (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined)
     );
   }
@@ -959,14 +961,17 @@ export function createChatStore(
           (message.attachments?.length ?? 0) > 0 ||
           (message.htmlArtifacts?.length ?? 0) > 0 ||
           (message.uiVisuals?.length ?? 0) > 0 ||
-          (message.appPanels?.length ?? 0) > 0) &&
+          (message.appPanels?.length ?? 0) > 0 ||
+          // A failed turn is news even when it produced nothing visible.
+          isFailedAssistantTurn(message)) &&
         Number.isSafeInteger(message.createdAt) &&
         message.createdAt >= 0,
       );
     const lastAssistantSequence = lastAssistantReverseIndex < 0
       ? -1
       : chat.messages.length - 1 - lastAssistantReverseIndex;
-    const lastAssistantAt = chat.messages[lastAssistantSequence]?.createdAt;
+    const lastAssistant = chat.messages[lastAssistantSequence];
+    const lastAssistantAt = lastAssistant?.createdAt;
     const boundedPreview = preview === undefined
       ? undefined
       : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
@@ -981,6 +986,7 @@ export function createChatStore(
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence } : {}),
+      ...(lastAssistant && isFailedAssistantTurn(lastAssistant) ? { lastAssistantFailed: true } : {}),
       ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,

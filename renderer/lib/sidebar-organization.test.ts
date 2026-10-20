@@ -193,6 +193,7 @@ test("needs attention orders triage tiers, then newest activity, ignoring the ch
   const chats = [
     chat("idle-new", "local:alpha", { lastActivityAt: NOW, createdAt: 1 }),
     chat("unread", "local:alpha", { attention: "unread", lastActivityAt: NOW - 5 * HOUR }),
+    chat("failed", "local:alpha", { attention: "failed", lastActivityAt: NOW - 7 * HOUR }),
     chat("working-old", "local:beta", { attention: "working", lastActivityAt: NOW - 9 * HOUR, createdAt: 9 }),
     chat("working-new", "local:gamma", { attention: "working", lastActivityAt: NOW - HOUR, createdAt: 2 }),
     chat("input", "local:beta", { attention: "needs_input", lastActivityAt: NOW - 8 * HOUR }),
@@ -205,6 +206,7 @@ test("needs attention orders triage tiers, then newest activity, ignoring the ch
     [
       ["Needs approval", ["approval"]],
       ["Needs input", ["input"]],
+      ["Failed", ["failed"]],
       ["Working", ["working-new", "working-old"]],
       ["Unread", ["unread"]],
       ["Other chats", ["idle-new"]],
@@ -263,6 +265,10 @@ test("attention tier follows the live row state before unread", () => {
   assert.equal(sidebarAttention("working", true), "working");
   assert.equal(sidebarAttention("idle", true), "unread");
   assert.equal(sidebarAttention("idle", false), "none");
+  // An unseen failure is its own tier; once read, or while a new run works, it is not.
+  assert.equal(sidebarAttention("idle", true, true), "failed");
+  assert.equal(sidebarAttention("idle", false, true), "none");
+  assert.equal(sidebarAttention("working", true, true), "working");
 });
 
 test("project order keys qualify hosts unambiguously", () => {
