@@ -137,6 +137,15 @@ test("the Profile ••• menu holds Advanced, Pause Bot and Delete Bot", asyn
   assert.ok(within(dialog).getByRole("heading", { name: "Delete Planner?" }));
 });
 
+test("the Profile shows the Bot's rules after its routines", async () => {
+  botStoreIpc(botFixture());
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+  const rules = await screen.findByRole("list", { name: "Rules" });
+  assert.ok(within(rules).getByText("Move money or enter card details"));
+  const headings = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
+  assert.ok(headings.includes("Routines") && headings.indexOf("Rules") > headings.indexOf("Routines"), headings.join(", "));
+});
+
 test("a paused Bot's Profile ••• menu resumes it, and a running one's pauses it", async () => {
   let state: BotSessionState = { kind: "paused", since: 1, by: "phone" };
   const { calls } = botStoreIpc(botFixture(), {
