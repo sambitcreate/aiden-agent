@@ -656,6 +656,8 @@ export interface ChatMeta {
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  /** The message at `lastAssistantAt` is a failed turn; the sidebar says Failed while it is unread. */
+  lastAssistantFailed?: boolean;
   /** Set when this chat was created by Fork. */
   forkedFrom?: ChatForkLineageV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 35,
+  "contractRevision": 36,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -138,7 +138,8 @@
         "revision": "rev_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
         "activity": "idle",
         "rowState": "idle",
-        "unread": true
+        "unread": true,
+        "lastRunFailed": true
       }
     ],
     "nextCursor": "cur_eyJ2IjoxLCJzbmFwc2hvdElkIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwib2Zmc2V0IjoyLCJleHBpcmVzQXQiOjE3ODcwNzk5MDAwMDB9.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
@@ -1538,7 +1539,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 35,
+    "contractRevision": 36,
     "pairingRequests": true
   },
   "hostFeedEvents": [

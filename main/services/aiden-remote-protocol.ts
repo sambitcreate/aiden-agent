@@ -68,8 +68,12 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * at merge): the phone visual viewer (`chat-visual-viewer-v1`).
  * `GET /chats/{chatId}/visuals/{visualId}/document` returns one self-contained
  * HTML document for a visual the chat projects, which phones open full screen.
+ *
+ * Contract revision 36 (provisional; re-claim the next revision after `main`'s
+ * at merge): Chat Summary rows may carry `lastRunFailed: true` when the newest
+ * assistant output is a failed turn, so an unread row can say Failed.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 35 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 36 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -3249,6 +3253,12 @@ export function parseAidenRemoteChatSummaryProjection(
       ? typeof value.unread === "boolean"
         ? { unread: value.unread }
         : (() => { throw new Error(`${label} unread must be a boolean.`); })()
+      : {}),
+    // Additive in contract revision 36; present only when true.
+    ...(hasOwn(value, "lastRunFailed")
+      ? value.lastRunFailed === true
+        ? { lastRunFailed: true as const }
+        : (() => { throw new Error(`${label} lastRunFailed must be true when present.`); })()
       : {}),
     // Additive in contract revision 21; rows never carry the summary.
     ...(hasOwn(value, "forkedFrom")

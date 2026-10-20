@@ -56,6 +56,8 @@ export interface RemoteSidebarChat extends SidebarChatSummary {
   workspaceId: string;
   rowState: ChatRowState;
   unread: boolean;
+  /** The host reports that the chat's newest output is a failed turn (revision 36). */
+  lastRunFailed: boolean;
   stale: boolean;
 }
 
@@ -198,6 +200,7 @@ export function remoteSidebarRows(
     // run's hint, which only stands in when a summary has no read state.
     const hostUnread = typeof row.unread === "boolean" ? row.unread : run?.unread === true;
     const unread = !isOpen(host.id, row.id) && hostUnread;
+    const lastRunFailed = row.lastRunFailed === true;
     return [
       {
         key: projectOrderKey(host.id, row.id),
@@ -205,7 +208,7 @@ export function remoteSidebarRows(
         title: text(row, "title") ?? "New chat",
         createdAt: time(row, "createdAt"),
         lastActivityAt: time(row, "updatedAt"),
-        attention: sidebarAttention(rowState, unread),
+        attention: sidebarAttention(rowState, unread, lastRunFailed),
         remote: true,
         hostId: host.id,
         hostLabel: host.label,
@@ -213,6 +216,7 @@ export function remoteSidebarRows(
         workspaceId,
         rowState,
         unread,
+        lastRunFailed,
         stale,
       },
     ];

@@ -1755,6 +1755,46 @@ test("the summary index records when assistant output was last persisted", async
   const afterUser = (await store.list()).find((meta) => meta.id === chat.id);
   assert.equal(afterUser?.lastAssistantAt, assistant?.createdAt);
   assert.equal(afterUser?.lastAssistantSequence, 1);
+  assert.equal(afterUser?.lastAssistantFailed, undefined);
+});
+
+test("a failed turn counts as new assistant output and is marked failed until a reply succeeds", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Hello" });
+  // A provider failure that produced no text is still news for the sidebar.
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "",
+    providerFailure: { version: 1, category: "network", attempts: 1, retryExhausted: false },
+  });
+  const failed = await store.get(chat.id);
+  const failure = failed?.messages[failed.messages.length - 1];
+  const afterFailure = (await store.list()).find((meta) => meta.id === chat.id);
+  assert.equal(afterFailure?.lastAssistantAt, failure?.createdAt);
+  assert.equal(afterFailure?.lastAssistantSequence, 1);
+  assert.equal(afterFailure?.lastAssistantFailed, true);
+
+  // The flag survives a cold index read.
+  const reopened = createChatStore(async () => directory);
+  assert.equal((await reopened.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed, true);
+
+  await store.appendMessage(chat.id, { role: "user", content: "Try again" });
+  await store.appendMessage(chat.id, { role: "assistant", content: "Done this time" });
+  const recovered = (await store.list()).find((meta) => meta.id === chat.id);
+  assert.equal(recovered?.lastAssistantSequence, 3);
+  assert.equal(recovered?.lastAssistantFailed, undefined);
+
+  // A Stop is a cancellation, not a failure.
+  await store.appendMessage(chat.id, { role: "user", content: "Another" });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Partial",
+    timeline: { version: 3, generationId: "gen-stop", status: "cancelled", startedAt: 1, finishedAt: 2, steps: [] },
+  });
+  assert.equal((await store.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed, undefined);
 });
 
 

@@ -10221,6 +10221,13 @@
             "description": "Additive in contract revision 18. True only when assistant output was persisted after the chat was last viewed on any surface (desktop or a paired device). Output older than the host's read-tracking baseline is never unread. Always false on hosts that do not advertise chat-read-state-v1.",
             "type": "boolean"
           },
+          "lastRunFailed": {
+            "description": "Additive in contract revision 36. Present, and true, only when the chat's newest assistant output is a failed turn (a provider failure or a failed generation timeline; a Stop is not a failure). Clients show Failed in place of the unread dot while unread is true. Older servers omit it.",
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
           "forkedFrom": {
             "description": "Additive in contract revision 21: lineage for the sidebar fork glyph. Rows never carry the summary.",
             "allOf": [
