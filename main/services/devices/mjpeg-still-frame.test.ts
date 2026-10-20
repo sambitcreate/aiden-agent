@@ -210,3 +210,23 @@ test("ending or destroying the stream clears the pending repeat", async () => {
   assert.equal(destroyed.timers.size, 0);
 });
 
+
+test("a client that closes while the repeat is being sent stops it without an error", () => {
+  const timers = new ManualTimers();
+  const stream = repeatStillFrame("frame", { idleMs: 100, timers });
+  const out: Buffer[] = [];
+  let repeating = false;
+  stream.on("data", (chunk: Buffer) => {
+    out.push(chunk);
+    // The viewer goes away the moment the repeat's first bytes reach it.
+    if (repeating) stream.destroy();
+  });
+  // The hub has sent the body but not yet the CRLF after it, so the repeat leads with one.
+  stream.write(part("A").subarray(0, -2));
+  repeating = true;
+  assert.doesNotThrow(() => timers.advance(100));
+  assert.equal(stream.destroyed, true);
+  assert.equal(timers.size, 0);
+  // Nothing after the repeat's first chunk was written.
+  assert.equal(out.length, 2);
+});

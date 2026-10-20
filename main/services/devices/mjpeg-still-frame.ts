@@ -135,14 +135,21 @@ export function repeatStillFrame(boundary: string, options: StillFrameOptions = 
 
   const repeat = (stream: Transform) => {
     timer = null;
-    if (!lastPart || repeated || stream.destroyed || stream.writableEnded) return;
+    const part = lastPart;
+    if (!part || repeated || stream.destroyed || stream.writableEnded) return;
+    // A push can reach a client that closes on the spot, which destroys this
+    // stream and drops `lastPart`; stop at once rather than write after that.
+    const send = (views: readonly Buffer[]) => {
+      for (const view of views) {
+        if (stream.destroyed) return;
+        stream.push(view);
+      }
+    };
     // Only at a part boundary, never inside a part that is still arriving.
     if (phase === "bodyEnd" && matched === 0) {
-      stream.push(CRLF);
-      for (const view of lastPart) stream.push(view);
+      send([CRLF, ...part]);
     } else if (phase === "between" && (matched === 0 || lastGapByte === LF)) {
-      for (const view of lastPart) stream.push(view);
-      stream.push(CRLF);
+      send([...part, CRLF]);
     } else {
       // Mid-boundary or mid-part: look again shortly. A part that completes
       // first replaces this timer with its own.

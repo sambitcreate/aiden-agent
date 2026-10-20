@@ -1795,6 +1795,15 @@ test("a failed turn counts as new assistant output and is marked failed until a 
     timeline: { version: 3, generationId: "gen-stop", status: "cancelled", startedAt: 1, finishedAt: 2, steps: [] },
   });
   assert.equal((await store.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed, undefined);
+
+  // A runtime failure after partial text has no provider failure, only a failed timeline.
+  await store.appendMessage(chat.id, { role: "user", content: "Once more" });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Partial before the runtime failed",
+    timeline: { version: 3, generationId: "gen-host", status: "failed", startedAt: 1, finishedAt: 2, steps: [] },
+  });
+  assert.equal((await store.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed, true);
 });
 
 
