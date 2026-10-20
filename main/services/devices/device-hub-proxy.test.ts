@@ -47,6 +47,12 @@ async function startFakeHub(): Promise<FakeHub> {
     });
     request.on("end", () => {
       records.push({ method: request.method!, url: request.url!, headers: request.headers, body, upgrade: false });
+      if (request.url?.includes("still=1")) {
+        // serve-sim sends a frame only when the screen changes: one part, then silence.
+        response.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=frame" });
+        response.write("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nJPEG\r\n");
+        return;
+      }
       if (request.url?.includes("reset=1")) {
         // Promise more than is sent, then reset mid-body, as a hub that dies while streaming would.
         response.writeHead(200, { "content-type": "application/octet-stream", "content-length": "1000" });
@@ -381,6 +387,35 @@ test("a hub that resets mid-response ends that response without crashing the pro
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     // Still serving: the reset reached only that one response.
+    assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200);
+  });
+});
+
+test("a still MJPEG frame reaches the client twice, so a browser paints it", { timeout: 5_000 }, async () => {
+  await withProxy(async ({ proxy }) => {
+    const { token } = proxy.mintGrant();
+    const body = await new Promise<string>((resolve, reject) => {
+      const request = httpRequest(`${proxy.origin}/vendor/serve-sim/helper/${UDID}/stream.mjpeg?t=${token}&still=1`, {
+        headers: { origin: "file://" },
+      });
+      request.once("response", (response) => {
+        assert.equal(response.statusCode, 200);
+        let text = "";
+        response.setEncoding("latin1");
+        response.on("data", (chunk: string) => {
+          text += chunk;
+          if (text.split("JPEG\r\n").length - 1 >= 2) {
+            response.destroy();
+            resolve(text);
+          }
+        });
+      });
+      request.once("error", reject);
+      request.end();
+    });
+    const part = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nJPEG\r\n";
+    assert.equal(body, part + part);
+    // The proxy keeps serving after the client drops the stream.
     assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200);
   });
 });
