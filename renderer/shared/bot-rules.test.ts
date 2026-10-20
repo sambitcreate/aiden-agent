@@ -21,7 +21,7 @@ test("every Bot starts with the plan's rule table", () => {
     ["Send a message or email to someone", "ask", false],
     ["Post or publish something publicly", "ask", false],
     ["Permanently delete something", "ask", false],
-    ["Install software", "ask", false],
+    ["Install software on your Mac", "ask", false],
   ];
   const rules = defaultBotRules();
   assert.deepEqual(

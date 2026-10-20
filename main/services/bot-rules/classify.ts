@@ -20,6 +20,11 @@
 //   sentence. Typing into a field labelled "Reply" is not sending.
 // - Window titles, URL hosts and app names never make a class by word; they
 //   only feed custom-rule matching.
+// - Passive actions (scroll, wait, focus an app, move a window) change nothing
+//   a rule covers, so they match no rule at all: a custom "book a flight" must
+//   not stop the Bot scrolling a window titled "Book a flight".
+// - Inside the Bot's own computer (the `computer` surface) installing is not
+//   ruled: "Install software" is about the person's Mac (plan §8.7).
 
 import {
   BOT_ACTION_CLASSES,
@@ -122,6 +127,8 @@ const MONEY_ONLY: ReadonlySet<BotActionClass> = new Set(["money"]);
 const NOT_LOCKED_WITHOUT_DELETE: ReadonlySet<BotActionClass> = new Set(
   [...NOT_LOCKED].filter((entry) => entry !== "delete"),
 );
+/** The Bot's own computer: everything but installing, which happens inside its own VM. */
+const COMPUTER_CLASSES: ReadonlySet<BotActionClass> = new Set(BOT_ACTION_CLASSES.filter((entry) => entry !== "install"));
 
 /** Actions that put text or keys into whatever has focus. */
 const TYPE_ACTIONS = new Set(["type", "type_text", "key", "press_key", "hotkey", "set_value"]);
@@ -258,8 +265,8 @@ function hostOf(url: string | undefined): string | undefined {
 
 function classifyComputerUse(action: Extract<BotClassifiableAction, { surface: "computer_use" }>, out: Collector): void {
   const name = lower(action.action);
-  out.text(action.app, action.windowTitle, action.element?.label, action.focusedElement?.label, ...(action.menuPath ?? []));
   if (PASSIVE_ACTIONS.has(name)) return;
+  out.text(action.app, action.windowTitle, action.element?.label, action.focusedElement?.label, ...(action.menuPath ?? []));
   const typing = TYPE_ACTIONS.has(name);
   const chord = name === "key" ? chordOf(action.keys) : undefined;
 
@@ -292,12 +299,11 @@ function classifyComputerUse(action: Extract<BotClassifiableAction, { surface: "
 
 function classifyComputer(action: Extract<BotClassifiableAction, { surface: "computer" }>, out: Collector): void {
   const name = lower(action.action);
-  out.text(action.app, action.windowTitle, action.element?.label, action.intent);
   if (PASSIVE_ACTIONS.has(name)) return;
+  out.text(action.app, action.windowTitle, action.element?.label, action.intent);
   const typing = TYPE_ACTIONS.has(name);
   if (isSecureRole(action.element?.role)) out.strong("credentials", "the targeted element is a secure text field");
-  const classes = typing ? LOCKED_CLASSES : ALL;
-  if (!typing && isInstallLeaf(action.element?.label)) out.strong("install", "button Get or Install");
+  const classes = typing ? LOCKED_CLASSES : COMPUTER_CLASSES;
   out.words(action.element?.label, typing ? "field label" : "element label", classes);
   out.words(action.intent, "the Bot's stated intent", classes);
 }
@@ -385,7 +391,7 @@ function classifyMcp(action: Extract<BotClassifiableAction, { surface: "mcp" }>,
  * The classes this call belongs to and the custom rules it matches. A custom
  * rule matches when every content word of its text (stop words dropped, at
  * least one) appears in the action's labels, intent, tool name, title,
- * summary, window title, app or URL host.
+ * summary, window title, app or URL host. A passive action matches none.
  */
 export function classifyBotAction(action: BotClassifiableAction, customRules: readonly BotRule[]): BotActionClassification {
   const out = new Collector();

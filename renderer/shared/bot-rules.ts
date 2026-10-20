@@ -52,7 +52,8 @@ const ACTION_CLASS_LABELS: Readonly<Record<BotActionClass, string>> = Object.fre
   communicate: "Send a message or email to someone",
   publish: "Post or publish something publicly",
   delete: "Permanently delete something",
-  install: "Install software",
+  // The person's Mac: inside a Bot's own computer, installing is not ruled (plan §8.7).
+  install: "Install software on your Mac",
 });
 
 function rule(actionClass: BotActionClass, behavior: BotRuleBehavior, locked: boolean): BotRule {

@@ -785,6 +785,26 @@
       "expected": []
     },
     {
+      "id": "cu-scroll-custom-flight",
+      "note": "Scrolling changes nothing a rule covers, even in a window the person's rule names.",
+      "action": {
+        "surface": "computer_use",
+        "action": "scroll",
+        "app": "Safari",
+        "windowTitle": "Book a flight – United Airlines"
+      },
+      "expected": [],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000001",
+          "text": "book a flight",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": []
+    },
+    {
       "id": "cu-postal-code",
       "note": "postal is not post.",
       "action": {
@@ -956,6 +976,26 @@
       "expected": []
     },
     {
+      "id": "co-scroll-custom-flight",
+      "note": "A passive action in the Bot's own computer matches no rule either.",
+      "action": {
+        "surface": "computer",
+        "action": "scroll",
+        "intent": "Scroll down to book a flight",
+        "app": "Safari"
+      },
+      "expected": [],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000001",
+          "text": "book a flight",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": []
+    },
+    {
       "id": "co-type-reply",
       "note": "Typing the text is not sending.",
       "action": {
@@ -972,6 +1012,7 @@
     },
     {
       "id": "co-installer",
+      "note": "Installing inside the Bot's own computer is not ruled (plan §8.7); the install rule is about the person's Mac.",
       "action": {
         "surface": "computer",
         "action": "click",
@@ -982,8 +1023,32 @@
           "label": "Install"
         }
       },
-      "expected": [
-        "install"
+      "expected": []
+    },
+    {
+      "id": "co-installer-custom",
+      "note": "The person can still rule installs inside the Bot's computer in their own words.",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Finish the Zoom setup",
+        "app": "Installer",
+        "element": {
+          "role": "AXButton",
+          "label": "Install"
+        }
+      },
+      "expected": [],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000007",
+          "text": "install Zoom",
+          "behavior": "ask",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-000000000007"
       ]
     },
     {
@@ -1901,6 +1966,61 @@
       },
       "expected": [
         "credentials"
+      ]
+    },
+    {
+      "id": "mcp-submit-otp",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "mcp",
+        "modelName": "bank__submit_otp_code",
+        "serverId": "srv-bank",
+        "remoteName": "submit_otp_code",
+        "summary": "bank__submit_otp_code",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "mcp-update-card",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "mcp",
+        "modelName": "billing__update_card_details",
+        "serverId": "srv-billing",
+        "remoteName": "update_card_details",
+        "summary": "billing__update_card_details",
+        "destructive": "unknown",
+        "annotations": {
+          "title": "Update card details",
+          "readOnlyHint": false
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-add-payment-method",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "mcp",
+        "modelName": "shop__add_payment_method",
+        "serverId": "srv-shop",
+        "remoteName": "add_payment_method",
+        "summary": "shop__add_payment_method",
+        "destructive": "additive"
+      },
+      "expected": [
+        "money"
       ]
     },
     {

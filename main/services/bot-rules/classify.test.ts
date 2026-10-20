@@ -35,8 +35,9 @@ test("the corpus covers every surface and class with enough rows to mean somethi
     );
   }
   assert.ok(corpus.rows.filter((row) => row.expected.length === 0).length >= 20, "too few negatives");
-  // Password, one-time-code and card fields on every surface that has fields.
-  for (const surface of ["browser", "computer", "computer_use"]) {
+  // Password, one-time-code and card fields on every surface (for connection
+  // tools: tools that take or change them).
+  for (const surface of ["browser", "computer", "computer_use", "mcp"]) {
     const sensitive = corpus.rows.filter((row) => row.action.surface === surface && row.tags?.includes("sensitive_field"));
     assert.ok(sensitive.some((row) => row.expected.includes("credentials")), `${surface}: no credential field`);
     assert.ok(sensitive.some((row) => row.expected.includes("money")), `${surface}: no card field`);
