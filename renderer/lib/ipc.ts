@@ -1596,6 +1596,13 @@ export const botsApi = {
     edit: (input: import("../shared/bot-memory").BotMemoryEditInput) =>
       invoke<import("../shared/bot-memory").BotMemoryEditResult>("bots:memory:edit", input),
   },
+  /** A Bot's rules: what it must ask about first or hand to the person. */
+  rules: {
+    get: (botId: string) => invoke<import("../shared/bot-rules").BotRulesView>("bots:rules:get", botId),
+    /** One change against the view's revision; a refused change answers its reason with the fresh view. */
+    update: (input: import("../shared/bot-rules").BotRulesUpdateInput) =>
+      invoke<import("../shared/bot-rules").BotRulesUpdateResult>("bots:rules:update", input),
+  },
   /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
   onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>
     onNotification<import("../shared/bot-memory").BotMemoryChangedEvent>("bots:memory:changed", handler),

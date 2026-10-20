@@ -27,7 +27,9 @@ import { registerBotLiveHandlers } from "./bot-live.js";
 import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
-import { registerBotMemoryHandlers } from "./bot-memory.js";
+import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
+import { registerBotRuleHandlers } from "./bot-rules.js";
+import { botRules } from "../services/bot-rules/store-main.js";
 import { botMemoryService } from "../services/bot-memory/bot-memory-main.js";
 import { registerBotFileHandlers } from "./bot-files.js";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
@@ -204,11 +206,19 @@ export function registerBotHandlers(): void {
       return openBotHandoffById(botId, waitId, "desktop");
     },
   });
+  // The Bot store answers null for a Bot it doesn't have.
+  const botExists = botExistsIn(botApplicationService);
   // Profile → Memory: view, edit, delete and erase what the Bot remembers.
   registerBotMemoryHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     memory: botMemoryService,
-    botExists: async (botId) => (await botApplicationService.get(botId)) !== undefined,
+    botExists,
+  });
+  // Profile → Rules: what the Bot must ask about or hand to the person.
+  registerBotRuleHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    rules: botRules,
+    botExists,
   });
   // Read-only Files: the Bot's own folder.
   registerBotFileHandlers({
