@@ -13,10 +13,11 @@ export const botRoutineProposals = createBotRoutineProposalService({
   profileDir,
   routines: botRoutineService,
   defaultTimezone: systemTimezone,
+  // Appended without a submission: a write submission starts the Bot's
+  // scheduler, which would run a turn left interrupted or paused.
   async appendEntry(botId, kind, data) {
     const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
-    const conversation = await (await botSessionRuntime()).conversation(botId);
-    await conversation.submit({ type: "write", entry: { kind, data: data as JsonValue } }, BACKGROUND_CONTEXT);
+    await (await botSessionRuntime()).appendEntry(botId, kind, data as JsonValue);
   },
   // The active entries the live projection renders as cards.
   async conversationEntries(botId) {
