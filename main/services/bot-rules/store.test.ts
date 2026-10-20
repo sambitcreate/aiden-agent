@@ -62,7 +62,7 @@ test("changes persist across stores, bump the revision and keep the order locked
     ["locked", "locked", "default", "default", "default", "default", "default", "custom"],
   );
   assert.equal(byId(view.rules, "default.purchase")?.behavior, "hand_off");
-  const customRule = view.rules.at(-1)!;
+  const customRule = view.rules[view.rules.length - 1]!;
   assert.match(customRule.id, /^custom\.[0-9a-f-]{36}$/u);
   assert.equal(customRule.text, "book a flight");
   assert.equal(customRule.behavior, "ask");
@@ -77,7 +77,7 @@ test("changes persist across stores, bump the revision and keep the order locked
 test("edit and remove a custom rule", async () => {
   const p = profile();
   const added = await p.store.update(BOT, 0, { type: "add_custom", text: "email my landlord", behavior: "ask" });
-  const id = added.view.rules.at(-1)!.id;
+  const id = added.view.rules[added.view.rules.length - 1]!.id;
   const edited = await p.store.update(BOT, 1, { type: "edit_custom", ruleId: id, behavior: "hand_off" });
   assert.equal(byId(edited.view.rules, id)?.behavior, "hand_off");
   assert.equal(byId(edited.view.rules, id)?.text, "email my landlord");
@@ -197,7 +197,7 @@ test("invalid text and the custom-rule limit are refusals, not throws", async ()
 test("set_behavior is for built-in rules and edit_custom for custom ones", async () => {
   const p = profile();
   const added = await p.store.update(BOT, 0, { type: "add_custom", text: "order food", behavior: "ask" });
-  const id = added.view.rules.at(-1)!.id;
+  const id = added.view.rules[added.view.rules.length - 1]!.id;
   const wrongKind = await p.store.update(BOT, 1, { type: "set_behavior", ruleId: id, behavior: "hand_off" });
   assert.equal(wrongKind.ok ? undefined : wrongKind.reason, "invalid");
   const builtIn = await p.store.update(BOT, 1, { type: "edit_custom", ruleId: "default.publish", text: "post" });

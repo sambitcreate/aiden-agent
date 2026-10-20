@@ -270,7 +270,7 @@ function classifyComputerUse(action: Extract<BotClassifiableAction, { surface: "
   }
 
   if (name === "menu") {
-    const leaf = action.menuPath?.at(-1);
+    const leaf = action.menuPath?.[action.menuPath.length - 1];
     if (isInstallLeaf(leaf)) out.strong("install", "menu item Install");
     out.words(leaf, "menu item", ALL);
   } else if (name === "set_value") {

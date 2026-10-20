@@ -6,7 +6,7 @@ import { renderBotRulesSection } from "./prompt.js";
 function between(section: string): string[] {
   const lines = section.split("\n");
   assert.equal(lines[0], "<bot_rules>");
-  assert.equal(lines.at(-1), "</bot_rules>");
+  assert.equal(lines[lines.length - 1], "</bot_rules>");
   return lines.slice(1, -1);
 }
 

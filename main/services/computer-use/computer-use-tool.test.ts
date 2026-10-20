@@ -13,7 +13,7 @@ import {
   type CuaDriverSessionLike,
 } from "./controller.js";
 import { normalizeComputerUseArgs } from "./safety.js";
-import { ComputerUseParameters } from "./schema.js";
+import { ComputerUseParameters, type ComputerUseArgs } from "./schema.js";
 import { createComputerUseAgentTool } from "./tool.js";
 import { COMPUTER_USE_SETUP_REASON, authorizeAllowedComputerUseAction } from "./access-gate.js";
 import {
@@ -1982,10 +1982,10 @@ test("a Bot's approval names the element an action touches by role and label, ne
   assert.equal(action.includes("5555"), false);
 
   // A pixel click names the innermost element under it.
-  const payByPixel = { action: "click", coordinate: [230, 90] } as const;
+  const payByPixel: ComputerUseArgs = { action: "click", coordinate: [230, 90] };
   assert.deepEqual((await controller.approvalFor(payByPixel))?.element, { role: "AXButton", label: "Pay now" });
   // A menu names its path.
-  const menu = { action: "menu", menu_path: ["File", "Print…"] } as const;
+  const menu: ComputerUseArgs = { action: "menu", menu_path: ["File", "Print…"] };
   assert.deepEqual((await controller.approvalFor(menu))?.menuPath, ["File", "Print…"]);
   // Observations need no approval and are not classified.
   assert.deepEqual(

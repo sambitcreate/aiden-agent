@@ -244,17 +244,20 @@ interface ApprovalMemo {
   waitId: string;
   toolCallId: string;
   summary: string;
-  /** What the wait was opened as. Missing (memos written before rules): "approval". */
-  kind?: "approval" | "handoff";
-  /** The rule id that made it, if any. */
-  rule?: string;
+  /**
+   * What the wait was opened as. Memos written before rules have neither
+   * `kind` nor `rule`, and were approvals.
+   */
+  kind: "approval" | "handoff";
+  /** The rule id that made it, or null. */
+  rule: string | null;
 }
 
 /** Everything needed to apply a rule hand-off's answer without asking or re-deciding. */
 interface HandoffAnswerMemo {
   [key: string]: JsonValue;
   outcome: BotHandoffOutcome;
-  note?: string;
+  note: string | null;
   summary: string;
   action: string;
   rule: { id: string; label: string };
@@ -312,7 +315,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         kind: "action",
         outcome: answer.outcome,
         action: answer.action,
-        ...(answer.note === undefined ? {} : { note: answer.note }),
+        ...(typeof answer.note === "string" ? { note: answer.note } : {}),
         toolCallId,
         rule: { id: answer.rule.id, label: answer.rule.label },
       });
@@ -322,8 +325,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     return {
       block:
         answer.outcome === "done"
-          ? ruleHandoffDoneBlock(answer.summary, answer.note)
-          : handoffSkippedText(answer.action, answer.note),
+          ? ruleHandoffDoneBlock(answer.summary, answer.note ?? undefined)
+          : handoffSkippedText(answer.action, answer.note ?? undefined),
     };
   }
 
@@ -437,7 +440,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             HANDOFF_ANSWER_MEMO,
             {
               outcome: answer.outcome,
-              ...(answer.note === undefined ? {} : { note: answer.note }),
+              note: answer.note ?? null,
               summary: handoff.summary,
               action: handoff.action,
               rule: { id: handoff.rule.id, label: handoff.rule.label },
@@ -454,13 +457,13 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             toolCallId: call.id,
             summary: decision.approval.summary,
             kind: "approval",
-            ...(decision.approval.rule === undefined ? {} : { rule: decision.approval.rule.id }),
+            rule: decision.approval.rule?.id ?? null,
           },
           context,
         );
         // A wait first opened as a hand-off (the rules changed since) asks with
         // today's summary under the same wait id.
-        const summary = (memo.kind ?? "approval") === "approval" ? memo.summary : decision.approval.summary;
+        const summary = memo.kind === "handoff" ? decision.approval.summary : memo.summary;
         const answer = await deps.requestApproval({
           botId,
           waitId: memo.waitId,
