@@ -61,6 +61,11 @@ test("a search step shows its query; a connection step names the app and shows n
     app: "Notion",
   });
   assert.deepEqual(botStepDescriptor("ask_user_question", {}), { kind: "waiting", label: "Asked you a question" });
+  assert.deepEqual(
+    botStepDescriptor("hand_off", { action: "Enter the 2FA code", open: { url: "https://bank.example/verify" } }),
+    { kind: "waiting", label: "Handed you a step" },
+    "a hand-off is not a question, and its card already shows what it asks",
+  );
   assert.deepEqual(botStepDescriptor("read_file", "not an object"), { kind: "reading", label: "Read 1 file" });
 });
 

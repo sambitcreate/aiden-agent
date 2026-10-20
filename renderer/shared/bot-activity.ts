@@ -88,7 +88,11 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
   ["routines", "routine"],
   ["routine_notes", "routine"],
   ["ask_user_question", "waiting"],
+  ["hand_off", "waiting"],
 ]);
+
+/** Fixed tools whose finished step reads differently from their phase's: a hand-off is not a question. */
+const TOOL_STEP_LABELS: ReadonlyMap<string, string> = new Map<string, string>([["hand_off", "Handed you a step"]]);
 
 const PHASE_IDS: ReadonlySet<string> = new Set(BOT_ACTIVITY_PHASES);
 
@@ -190,6 +194,11 @@ function stepPhrases(kind: BotToolPhase, app?: string): StepPhrases {
 export function botStepPhrase(kind: BotToolPhase, count: number, app?: string): string {
   const phrases = stepPhrases(kind, app);
   return count <= 1 ? phrases.one : phrases.many(count);
+}
+
+/** One finished call, past tense: its tool's own phrase ("Handed you a step"), else its phase's ("Read 1 file"). */
+export function botToolStepLabel(toolName: string, kind: BotToolPhase, app?: string): string {
+  return TOOL_STEP_LABELS.get(toolName) ?? botStepPhrase(kind, 1, app);
 }
 
 /** The bare verb phrase for "Couldn’t …" and "Blocked: …". */
