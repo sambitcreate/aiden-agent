@@ -119,7 +119,7 @@ export const ComputerUseParameters = Type.Object(
     changes_only: Type.Optional(
       Type.Boolean({
         description:
-          "Capture only (som or ax, never vision): the cheap verification read. Re-reads the same window and returns just the accessibility rows added, changed or removed since its previous capture, or no_change, without a screenshot or element numbers. After no_change the previous element numbers stay valid; after a diff take a full capture before acting by number. Falls back to a full capture when there is no previous capture of that window.",
+          "Capture only (som or ax, never vision): the cheap verification read. Re-reads the same window and returns just the accessibility rows added, changed or removed since its previous capture, or no_change, without a screenshot. It never carries or keeps element numbers, even after no_change: take a full capture before acting by number. Falls back to a full capture when there is no previous capture of that window.",
       }),
     ),
     element: Type.Optional(

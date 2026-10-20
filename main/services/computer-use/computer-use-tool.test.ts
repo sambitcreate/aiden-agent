@@ -22,6 +22,8 @@ import {
 } from "../bot-runtime/bot-computer-use-approval.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import {
+  ECHO_ROW_ELEMENTS,
+  ECHO_ROW_PRUNED_ELEMENTS,
   FakeCuaDriver,
   actionResult,
   codedRefusal,
@@ -855,18 +857,18 @@ test("changes_only capture sends since and reports no_change", async () => {
   assert.equal((first.elements as unknown[]).length, 2);
   assert.match(String(first.note), /no previous capture/u);
 
-  // Nothing changed: the driver diffs against the first snapshot and the
-  // model's element numbers stay usable.
+  // Nothing changed: the driver diffs against the first snapshot, but a
+  // changes_only read never carries or keeps element numbers.
   const unchanged = payloadOf(await controller.execute("changes-none", changesOnly));
   assert.equal(reads()[1].args.since, snapshotOf(0));
   assert.equal(unchanged.no_change, true);
   assert.equal(unchanged.elements, undefined);
-  assert.match(String(unchanged.note), /element numbers/u);
-  await approved(controller, "after-no-change", { action: "click", element: 1 });
-  const click = session.calls[session.calls.length - 1];
-  assert.equal(click.name, "click");
-  assert.equal(click.args.element_token, `${snapshotOf(1)}:1`);
-  assert.equal((session.results[session.results.length - 1].result as { isError?: boolean }).isError, undefined);
+  assert.match(String(unchanged.note), /full capture/u);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: 1 }),
+    /latest capture/u,
+  );
+  assert.equal(session.calls.some((call) => call.name === "click"), false);
 
   // Something changed: the diff rows come back without element numbers, and
   // acting by number now needs a full capture.
@@ -897,6 +899,56 @@ test("changes_only capture sends since and reports no_change", async () => {
   assert.match(String(fallback.note), /view_changed/u);
   await approved(controller, "after-fallback", { action: "click", element: 2 });
   assert.equal(session.calls[session.calls.length - 1].args.element_token, `${snapshotOf(3)}:2`);
+  await controller.close();
+});
+
+test("a no_change read after an unrendered row vanished never keeps the old element numbers", async () => {
+  const { controller, session } = harness(false);
+  type PublicElement = { element_index: number; label?: string };
+  const payloadOf = (result: Awaited<ReturnType<typeof capture>>) =>
+    JSON.parse((result.content[0] as { text: string }).text) as Record<string, unknown>;
+  const labelled = (payload: Record<string, unknown>, label: string) =>
+    (payload.elements as PublicElement[]).find((element) => element.label === label);
+  const clicks = () => session.calls.filter((call) => call.name === "click");
+  const latestSnapshot = () =>
+    (
+      session.results.filter((entry) => entry.name === "get_window_state").slice(-1)[0].result as {
+        structuredContent: { snapshot_id: string };
+      }
+    ).structuredContent.snapshot_id;
+  session.driver.elements = () => ECHO_ROW_ELEMENTS;
+
+  const full = payloadOf(await capture(controller, "ax"));
+  const cancel = labelled(full, "Cancel");
+  assert.ok(cancel);
+
+  // The echo text row the driver never rendered disappears: the rendered rows
+  // are identical, so the driver says no_change, yet every later index moved.
+  session.driver.elements = () => ECHO_ROW_PRUNED_ELEMENTS;
+  const unchanged = payloadOf(
+    await controller.execute("echo-gone", { action: "capture", mode: "ax", app: "Safari", changes_only: true }),
+  );
+  assert.equal(unchanged.no_change, true);
+  assert.equal(unchanged.elements, undefined);
+  assert.match(String(unchanged.note), /full capture/u);
+
+  // The old Cancel number must not reach the driver, where it now names Delete.
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: cancel.element_index }),
+    /latest capture/u,
+  );
+  assert.equal(clicks().length, 0);
+
+  // A full capture renumbers the dialog: the old Cancel number is Delete now,
+  // and Cancel is reachable at its new number.
+  const fresh = payloadOf(await capture(controller, "ax"));
+  assert.equal(labelled(fresh, "Delete")?.element_index, cancel.element_index);
+  const freshCancel = labelled(fresh, "Cancel");
+  assert.ok(freshCancel);
+  await approved(controller, "cancel-after", { action: "click", element: freshCancel.element_index });
+  assert.equal(clicks().length, 1);
+  assert.equal(clicks()[0].args.element_token, `${latestSnapshot()}:${freshCancel.element_index}`);
+  assert.equal((session.results[session.results.length - 1].result as { isError?: boolean }).isError, undefined);
   await controller.close();
 });
 
@@ -1759,8 +1811,8 @@ test("the system prompt carries Computer Use guidance only when the tool is offe
     assert.match(guidance, /untrusted/iu);
     assert.match(guidance, /foreground/iu);
     // cua-driver 0.36 behavior the model must plan around.
-    assert.match(guidance, /changes_only read that reports no_change keeps them/u);
-    assert.match(guidance, /after a diff take a full capture before acting/u);
+    assert.match(guidance, /changes_only read never carries or keeps element numbers/u);
+    assert.match(guidance, /take a full capture before acting by number/u);
     assert.match(guidance, /closed menus do not appear in captures/iu);
     assert.match(guidance, /never contain line breaks or tabs/iu);
     assert.match(guidance, /only after a foreground_required error/u);

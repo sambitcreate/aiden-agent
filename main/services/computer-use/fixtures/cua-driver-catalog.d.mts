@@ -48,6 +48,10 @@ export const UNFORWARDED_TOOLS: ReadonlySet<string>;
 export const DEFAULT_WINDOWS: FakeWindow[];
 export const DEFAULT_APPS: Array<Record<string, unknown>>;
 export const DEFAULT_ELEMENTS: FakeElementRow[];
+/** A dialog with an echo text row the driver keeps in `elements` but omits from `tree_markdown`. */
+export const ECHO_ROW_ELEMENTS: FakeElementRow[];
+/** The same dialog after that unrendered row vanished, shifting later indices. */
+export const ECHO_ROW_PRUNED_ELEMENTS: FakeElementRow[];
 
 export function toolListEntries(names: readonly string[]): Array<Record<string, unknown>>;
 export function toolListResult(names: readonly string[]): Record<string, unknown>;

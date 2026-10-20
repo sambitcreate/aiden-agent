@@ -53,8 +53,10 @@ Return or Tab with the `key` action as its own step. Capture by app sends
 `list_windows({app})`, which the driver filters by app-name substring or exact
 bundle identifier. An optional `changes_only` capture (not with `vision`) sends
 `since` with the window's previous snapshot and returns the driver's diff rows
-or `no_change` without element numbers; `no_change` keeps the previous numbers
-valid, and after a diff the model takes a full capture before acting; on
+or `no_change` without element numbers. Either way the previous numbers are
+cleared and the model takes a full capture before acting by number, because
+upstream prunes unrendered echo text rows while keeping their indices and its
+`no_change` ignores reindexing, so indices can shift under `no_change`. On
 `no_change` the driver's `focused_element` row is passed through. Of the 0.36
 refusal codes, the macOS 0.36.0 driver sends `write_not_applied` (the control
 read back unchanged, so choose another route), `window_not_key` (focus not

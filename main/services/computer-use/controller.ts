@@ -1222,9 +1222,6 @@ export class ComputerUseController {
     signal: AbortSignal,
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     const requestedMode = args.mode ?? "som";
-    // A changes_only read may keep the previous element map (no_change), so
-    // remember it before the new capture clears the target.
-    const previous = this.target;
     this.clearTarget();
     try {
       const target =
@@ -1236,13 +1233,7 @@ export class ComputerUseController {
         args.changes_only === true &&
         baseline?.pid === target.pid &&
         baseline.windowId === target.windowId
-          ? {
-              since: baseline.snapshotId,
-              previous:
-                previous?.pid === target.pid && previous.windowId === target.windowId
-                  ? previous
-                  : null,
-            }
+          ? { since: baseline.snapshotId }
           : undefined;
       const result = await this.captureWindow(
         target,
@@ -1271,7 +1262,7 @@ export class ComputerUseController {
     maximumElements: number,
     signal: AbortSignal,
     maxImageDimension?: number,
-    changes?: { since: string; previous: ActiveTarget | null },
+    changes?: { since: string },
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     // A new snapshot invalidates every prior index/token even if the driver
     // subsequently reports an error.
@@ -1333,8 +1324,6 @@ export class ComputerUseController {
         requestedMode,
         result,
         sinceStatus === "no_change",
-        snapshotId,
-        changes,
       );
     }
     const elements = effectiveMode === "vision" ? [] : normalizeElements(result, maximumElements);
@@ -1389,39 +1378,20 @@ export class ComputerUseController {
 
   /**
    * A `since` read the driver answered with a diff or "no change". It never
-   * mints element numbers: with no change the previous capture's rows and
-   * indices still hold (upstream: "Rows and indices are as before"), so they
-   * are rebound to the new snapshot's tokens; any change can shift indices,
-   * so the element map stays empty until a full capture.
+   * mints or keeps element numbers, so the element map stays empty until a
+   * full capture. Even "no change" cannot vouch for indices: 0.36 diffs only
+   * rendered rows keyed without their index (`window_state_view.rs`
+   * `identity_of`), `DiffReport::is_empty` ignores reindexed rows, and
+   * `tree.rs::prune_echo_text_rows` keeps indices for rows it never renders,
+   * so an unrendered row vanishing shifts later indices under "no change".
    */
   private captureChangesResult(
     window: WindowRecord,
     requestedMode: ComputerUseMode,
     result: ParsedDriverResult,
     noChange: boolean,
-    snapshotId: string | undefined,
-    { since, previous }: { since: string; previous: ActiveTarget | null },
   ): AgentToolResult<ComputerUseResultDetails> {
-    // The previous numbers carry over only when every token was minted by the
-    // `since` snapshot the driver compared against; otherwise they describe
-    // some other read and the model must take a full capture.
-    const previousElements = previous ? [...previous.elements.values()] : [];
-    const kept =
-      noChange &&
-      snapshotId &&
-      previousElements.length &&
-      previousElements.every((element) => !element.token || element.token.startsWith(`${since}:`))
-        ? previousElements.map((element) => {
-            const token = element.token ? `${snapshotId}:${element.index}` : undefined;
-            return {
-              ...element,
-              token: token && CUA_DRIVER_ELEMENT_TOKEN_PATTERN.test(token) ? token : undefined,
-              // This read took no screenshot; pixel geometry needs a full capture.
-              screenshotFrame: undefined,
-            };
-          })
-        : [];
-    const target = this.setTarget(window, kept);
+    const target = this.setTarget(window, []);
     const counts = asRecord(result.structured?.diff_counts);
     // window_state_view.rs: an unchanged read names the focused row, if any
     // (untrusted application text, like every row label).
@@ -1443,11 +1413,9 @@ export class ComputerUseController {
               removed: safeInteger(counts?.removed, 0) ?? 0,
             },
           }),
-      note: kept.length
-        ? "Nothing changed since the previous capture; its element numbers are still valid. This read carries no element numbers of its own and no screenshot."
-        : noChange
-          ? "Nothing changed since the previous capture, but no element numbers are current. A changes_only read carries no element numbers; take a full capture before acting by element number or pixel."
-          : "A changes_only read carries no element numbers; earlier element numbers are no longer valid. Take a full capture before acting by element number or pixel.",
+      note: noChange
+        ? "No visible rows changed since the previous capture, but element numbers may have shifted, so none are current. A changes_only read carries no element numbers; take a full capture before acting by element number or pixel."
+        : "A changes_only read carries no element numbers; earlier element numbers are no longer valid. Take a full capture before acting by element number or pixel.",
     };
     return textResult(payload, {
       action: "capture",

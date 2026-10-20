@@ -44,7 +44,7 @@ Status: implemented on this branch, 2026-10-19 (Tasks 1–6, 8 and 9). Task 7 (o
 - **Other-Space windows**: `get_window_state` screenshots (#4996) and `set_window_frame` (#4636) now work on windows on another Space.
 - **Screenshot cap 1366 px by default** (#4917) instead of 1568, with per-call override unchanged. Aiden passes `max_image_dimension` only when the model asks.
 - **Quiet actions return after 300 ms** instead of the full 1 s window watch (#4915).
-- **`get_window_state since: <snapshot_id>`** returns only added, changed and removed rows or `no change` (#4743); `query` searches the whole window (#4855).
+- **`get_window_state since: <snapshot_id>`** returns only added, changed and removed rows or `no change` (#4743); `query` searches the whole window (#4855). `no change` does not mean the element indices held: the diff ignores index shifts of rendered rows, and rows pruned from the rendering keep their indices, so Aiden never keeps element numbers across a `since` read.
 - **`list_windows({app})`** filters host-side (#4916) and lists window rows in text content (#5211).
 - **Background delivery fixes** on macOS: user's key window kept (#4943, #4955), user keystrokes not dropped (#5091), popups and context menus stay open (#5129), Electron background scroll through AX (#4861, #5079), right click posted once (#4690), middle-click routing (#5137), explicit modifier flags (#5051), pixel `type_text`/`press_key`/`scroll` refocus their target (#5062), TextEdit and Finder silent failures fixed (#5057), keyboard into editor surfaces and multi-window apps (#5306), menu/format controls on another Space (#5307), Chrome no longer raised by background actions (#5334).
 - **`set_value`** selects AppKit and Chromium pop-up options (#4740) and marks a document edited after an AX text write so it saves (#4989, one extra undo step).
@@ -182,10 +182,11 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 - Test: `main/services/computer-use/computer-use-tool.test.ts`
 
 **Interfaces:**
-- Produces: capture by `app` calls `list_windows({ app })` instead of the host-wide list; a new optional capture field `changes_only: boolean` sends `since: <previous snapshot_id of the same window>` and returns the driver's diff rows plus `no_change: true` when the driver reports no change. Tokens are still minted only from a full capture, so `changes_only` results never carry element numbers; the result says so.
+- Produces: capture by `app` calls `list_windows({ app })` instead of the host-wide list; a new optional capture field `changes_only: boolean` sends `since: <previous snapshot_id of the same window>` and returns the driver's diff rows plus `no_change: true` when the driver reports no change. Tokens are still minted only from a full capture, so `changes_only` results never carry or keep element numbers, `no_change` included; the element map is cleared and the result says to take a full capture before acting by number.
 
 - [x] **Step 1: Write failing tests**: `capture by app filters list_windows host-side`; `changes_only capture sends since and reports no_change`.
 - [x] **Step 2: Run**; FAIL. **Step 3: Implement.** **Step 4: Run**; PASS. Commit `feat(computer-use): app-filtered discovery and snapshot diffs`.
+- [x] **Review fix (PR 558)**: the first implementation rebound the previous element numbers to the new snapshot on `no_change`. Upstream 0.36.0 makes that unsafe: `tree.rs::prune_echo_text_rows` omits echo text rows from the rendering while they keep their indices, and `window_state_view.rs::diff_markdown` keys rows without their index, with `DiffReport::is_empty` ignoring `reindexed`, so an unrendered row vanishing reports `no change` while later indices shift. Aiden now clears the element map on every `changes_only` diff or `no_change` read. The fake driver keys diff rows without the index and models an unrendered echo row; test `a no_change read after an unrendered row vanished never keeps the old element numbers`.
 
 ### Task 7 (optional): `hover` action
 

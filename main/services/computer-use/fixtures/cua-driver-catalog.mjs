@@ -898,6 +898,24 @@ export const DEFAULT_ELEMENTS = [
 ];
 
 /**
+ * A dialog whose static-text leaf echoes its parent's title. Like
+ * `tree.rs::prune_echo_text_rows`, the fake keeps such a row (`echo: true`)
+ * in `elements` with its index but omits it from `tree_markdown`.
+ */
+export const ECHO_ROW_ELEMENTS = [
+  { role: "AXGroup", label: "Discard changes?", frame: { x: 110, y: 50, w: 200, h: 80 }, depth: 1 },
+  { role: "AXStaticText", label: "Discard changes?", echo: true, frame: { x: 120, y: 55, w: 120, h: 16 }, depth: 2 },
+  { role: "AXButton", label: "Cancel", frame: { x: 130, y: 100, w: 60, h: 20 }, depth: 2 },
+  { role: "AXButton", label: "Delete", frame: { x: 220, y: 100, w: 60, h: 20 }, depth: 2 },
+];
+
+/**
+ * The same dialog after the unrendered echo row disappeared: the rendered
+ * markdown rows are unchanged but every later element index shifted down by one.
+ */
+export const ECHO_ROW_PRUNED_ELEMENTS = ECHO_ROW_ELEMENTS.filter((row) => row.echo !== true);
+
+/**
  * Stateful 0.36.0 driver behaviour for Aiden's allowlisted tools: closed
  * argument schemas, per-window snapshot tokens that the next capture stales,
  * same-session screenshot context for pixels, background drag, and
@@ -908,9 +926,11 @@ export const DEFAULT_ELEMENTS = [
  */
 /**
  * A row-level stand-in for `window_state_view.rs::diff_markdown`: rows match
- * by text; an unmatched new row whose index held a different old row is `~`
- * (changed), otherwise `+`; unmatched old rows are `-`. Rendered like
- * `DiffReport::render`.
+ * by their text without the `[N]` index (upstream `identity_of` carries no
+ * index, so a shift alone is never a change); an unmatched new row whose
+ * index held a different old row is `~` (changed), otherwise `+`; unmatched
+ * old rows are `-`. Rendered like `DiffReport::render`, whose empty report
+ * says "no change" even when indices shifted.
  */
 function diffRows(oldMarkdown, newMarkdown, since, snapshotId) {
   const parse = (markdown) =>
@@ -919,27 +939,31 @@ function diffRows(oldMarkdown, newMarkdown, since, snapshotId) {
       .filter((line) => line.trim().startsWith("- "))
       .map((line) => {
         const text = line.trim().slice(2);
-        const index = /^\[(\d+)\]/u.exec(text)?.[1];
-        return { text, index: index === undefined ? undefined : Number(index) };
+        const match = /^\[(\d+)\]\s*/u.exec(text);
+        return {
+          text,
+          key: match ? text.slice(match[0].length) : text,
+          index: match ? Number(match[1]) : undefined,
+        };
       });
   const oldRows = parse(oldMarkdown);
   const newRows = parse(newMarkdown);
-  const oldTexts = new Set(oldRows.map((row) => row.text));
-  const newTexts = new Set(newRows.map((row) => row.text));
+  const oldKeys = new Set(oldRows.map((row) => row.key));
+  const newKeys = new Set(newRows.map((row) => row.key));
   const added = [];
   const changed = [];
   const replaced = new Set();
   for (const row of newRows) {
-    if (oldTexts.has(row.text)) continue;
-    const old = oldRows.find((candidate) => candidate.index === row.index && !newTexts.has(candidate.text));
+    if (oldKeys.has(row.key)) continue;
+    const old = oldRows.find((candidate) => candidate.index === row.index && !newKeys.has(candidate.key));
     if (old) {
-      replaced.add(old.text);
+      replaced.add(old.key);
       changed.push(row);
     } else {
       added.push(row);
     }
   }
-  const removed = oldRows.filter((row) => !newTexts.has(row.text) && !replaced.has(row.text));
+  const removed = oldRows.filter((row) => !newKeys.has(row.key) && !replaced.has(row.key));
   const counts = { added: added.length, changed: changed.length, removed: removed.length };
   const empty = !added.length && !changed.length && !removed.length;
   const text = empty
@@ -1144,6 +1168,7 @@ export class FakeCuaDriver {
     const withElements =
       args.tree_format === "elements" || args.tree_format === "both" || args.full_output === true;
     const treeMarkdown = elements
+      .filter((row) => row.echo !== true)
       .map((row) =>
         `${"  ".repeat(row.depth ?? 0)}- [${row.element_index}] ${row.role} ${row.label ?? ""}${
           row.value === undefined ? "" : ` = ${JSON.stringify(row.value)}`
