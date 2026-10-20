@@ -13,6 +13,7 @@ import {
   type BotLiveSnapshot,
   type BotPendingQuestion,
 } from "../../../renderer/shared/bot-live.js";
+import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
 import {
@@ -26,10 +27,12 @@ import {
   type BotLiveProjectionDeps,
 } from "./live-projection.js";
 import { createBotQuestions } from "./bot-questions.js";
+import { createBotHandoffs } from "./bot-handoffs.js";
 import { createBotTurnIntents, stopWithIntents, wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
+import { HANDOFF_ARGS, HANDOFF_TOOL_NAME, handoffEntries } from "./test-support/handoff-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -711,6 +714,105 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
     stopListening();
     await live.close();
   }
+});
+
+test("a waiting hand-off reaches subscribers and late joiners, reads as waiting, and Done becomes the person's line before the reply", async () => {
+  const handoffs = createBotHandoffs();
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Thanks, the transfer is through."),
+  ]);
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: handoffEntries(handoffs, "bot:a") }) },
+    projection: { handoff: (botId) => handoffs.pending(botId)[0] ?? null },
+  });
+  const stopListening = handoffs.onChange((botId) => void live.projection.refreshHandoff(botId));
+  try {
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    assert.equal(first.snapshot.handoff, null);
+    await live.service.send("bot:a", { text: "move the savings", requestId: "desk-1" });
+    await waitFor(() => tape.view?.handoff != null, { what: "the hand-off event" });
+    const card = tape.view!.handoff!;
+    assert.equal(card.action, "Enter the 2FA code for your bank");
+    assert.equal(card.open?.url, "https://bank.example/verify");
+    await waitFor(() => tape.view?.activity?.phase === "waiting", { what: "the waiting line" });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "the Bot list shows it needs the person");
+
+    const late = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(late.snapshot.handoff?.waitId, card.waitId, "a window opened later sees the same card");
+    late.unsubscribe();
+
+    assert.equal(handoffs.answer("bot:a", card.waitId, { outcome: "done", note: "Code entered." }), "answered");
+    await waitFor(
+      () => tape.view?.handoff === null && visibleText(tape.view).includes("assistant:Thanks, the transfer is through."),
+      { what: "the answer and the reply" },
+    );
+    assert.equal(tape.gaps, 0);
+    const shown = visibleText(tape.view);
+    assert.ok(shown.indexOf("handoff_result") < shown.indexOf("assistant:Thanks, the transfer is through."), shown.join(" | "));
+    const result = tape.view!.entries.find((entry) => entry.type === "handoff_result");
+    assert.deepEqual(result?.type === "handoff_result" ? [result.kind, result.outcome, result.action, result.note] : undefined, [
+      "action",
+      "done",
+      "Enter the 2FA code for your bank",
+      "Code entered.",
+    ]);
+    const rows = botTranscriptRows(tape.view!.entries, null, { running: false, level: "summary" });
+    assert.ok(rows.some((row) => row.kind === "handoff_result" && row.text === "You did this: Enter the 2FA code for your bank"));
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false);
+    first.unsubscribe();
+  } finally {
+    stopListening();
+    await live.close();
+  }
+});
+
+test("only a settled hand-off becomes the person's line; a stopped or refused one stays a tool result", () => {
+  const call = (id: string, name: string) => ({ type: "toolCall", id, name, arguments: { action: "Pay the invoice" } });
+  const result = (id: number, toolCallId: string, toolName: string, isError: boolean, details: unknown) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: isError ? [{ severity: "error", code: "aborted", message: "stopped" }] : [] },
+    model: [{ role: "toolResult", toolCallId, toolName, isError, details, content: [{ type: "text", text: "…" }], timestamp: 2_000 + id }],
+  });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Pay it" }], timestamp: 900 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{
+        role: "assistant",
+        stopReason: "toolUse",
+        timestamp: 1_000,
+        content: [call("h1", "hand_off"), call("h2", "hand_off"), call("h3", "hand_off"), call("h4", "sign_in")],
+      }],
+    },
+    result(3, "h1", "hand_off", false, { kind: "action", outcome: "skipped", action: "Pay the invoice" }),
+    result(4, "h2", "hand_off", true, { kind: "action", outcome: "done", action: "Pay the invoice" }),
+    result(5, "h3", "hand_off", false, { answerText: "not a hand-off" }),
+    result(6, "h4", "sign_in", false, {
+      kind: "sign_in",
+      outcome: "done",
+      action: "Sign in to github.com",
+      origin: "https://github.com",
+    }),
+  ] as never);
+  const lines = entries.flatMap((entry) =>
+    entry.type === "handoff_result"
+      ? [`${entry.id} ${entry.outcome}`]
+      : entry.type === "tool_result"
+        ? [`tool ${entry.toolCallId} ${entry.status}`]
+        : [],
+  );
+  assert.deepEqual(lines, ["handoff:h1 skipped", "tool h2 stopped", "tool h3 ok", "handoff:h4 done"]);
+  const signIn = entries.find((entry) => entry.id === "handoff:h4");
+  assert.equal(signIn?.type === "handoff_result" ? signIn.origin : undefined, "https://github.com");
+  assert.deepEqual(
+    botTranscriptRows(entries, null, { running: false, level: "summary" }).flatMap((row) => (row.kind === "handoff_result" ? [row.text] : [])),
+    ["You skipped this: Pay the invoice", "You signed in to github.com"],
+  );
 });
 
 test("Stop pressed while a slow tool runs ends the chat with the person's stopped line", async () => {
@@ -1561,11 +1663,12 @@ test("a list summary says when the last reply arrived and whether the Bot is wai
   }
 });
 
-test("a list summary reads a waiting question and approval whether or not a chat is open", async () => {
+test("a list summary reads a waiting question, hand-off and approval whether or not a chat is open", async () => {
   let question: BotPendingQuestion | null = null;
+  let handoff: BotPendingHandoff | null = null;
   let approval = false;
   const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
-    projection: { question: () => question, approvalPending: () => approval },
+    projection: { question: () => question, handoff: () => handoff, approvalPending: () => approval },
   });
   try {
     const closed = async () => (await live.projection.summary("bot:a")).needsYou;
@@ -1573,6 +1676,9 @@ test("a list summary reads a waiting question and approval whether or not a chat
     question = { botId: "bot:a", waitId: "w1", toolCallId: "t1", questions: [] };
     assert.equal(await closed(), true, "a question waits with no chat open");
     question = null;
+    handoff = { botId: "bot:a", waitId: "w2", toolCallId: "t2", kind: "action", action: "Pay the invoice", source: "tool" };
+    assert.equal(await closed(), true, "a hand-off waits with no chat open");
+    handoff = null;
     approval = true;
     assert.equal(await closed(), true, "an approval waits with no chat open");
     approval = false;

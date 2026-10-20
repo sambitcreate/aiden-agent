@@ -20,6 +20,7 @@ import { SHARE_IMAGE_TOOL_NAME } from "../share-image-tool.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
+import { BOT_HANDOFF_TOOL_NAME } from "../../../renderer/shared/bot-handoffs.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 
 export const WEB_SEARCH_TOOL = "web_search";
@@ -45,7 +46,7 @@ export interface BotToolFacts {
 export interface BotToolTurn {
   /** Telegram turns get no routine tool, as on the legacy path. */
   telegram?: boolean;
-  /** Routine runs get no question card: nobody is waiting on the other end. */
+  /** Routine runs get no question or hand-off card: nobody is waiting on the other end. */
   routine?: boolean;
 }
 
@@ -60,12 +61,17 @@ export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> 
   };
 }
 
-const UNATTENDED_WITHHELD = new Set<string>([ASK_USER_QUESTION_TOOL_NAME, ROUTINE_TOOL, SUBAGENT_TOOL]);
+const UNATTENDED_WITHHELD = new Set<string>([
+  ASK_USER_QUESTION_TOOL_NAME,
+  ROUTINE_TOOL,
+  SUBAGENT_TOOL,
+  BOT_HANDOFF_TOOL_NAME,
+]);
 
 /**
  * Whether an input from this ingress may use `name`, whatever the Bot's
  * access: the self-intro uses no tools, and routine and Telegram turns get no
- * question card, routine tool or subagents. A run that serves several inputs
+ * question or hand-off card, routine tool or subagents. A run that serves several inputs
  * (a steer joined it) may use a tool only when every input allows it.
  */
 export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
@@ -111,6 +117,9 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
   }
   if (name === ASK_USER_QUESTION_TOOL_NAME) {
     return verdict(turn.telegram !== true && turn.routine !== true, "Questions are off for this Bot.");
+  }
+  if (name === BOT_HANDOFF_TOOL_NAME) {
+    return verdict(turn.telegram !== true && turn.routine !== true, "Hand-offs are off for this Bot.");
   }
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
   // Writes only the routine's own notes; ingress (`botIngressAllowsTool`) keeps it to routine runs.
