@@ -1455,6 +1455,102 @@ function isDesktopDevice(device: Pick<AidenRemoteRouterAuthenticatedDevice, "typ
   return device.type === "mac" || device.type === "linux";
 }
 
+/** What this host has wired, one flag per `/server.features` token it can announce. */
+export interface AidenRemoteServerFeatureSupport {
+  appControls: boolean;
+  appControlsEnabled: boolean;
+  peerRoutes: boolean;
+  providers: boolean;
+  readAloud: boolean;
+  speech: boolean;
+  chatSummaries: boolean;
+  readState: boolean;
+  tasks: boolean;
+  agents: boolean;
+  agentInterrupt: boolean;
+  runInput: boolean;
+  questionPrompts: boolean;
+  skills: boolean;
+  messagesWindow: boolean;
+  visuals: boolean;
+  visualViewer: boolean;
+  fork: boolean;
+  forkSummary: boolean;
+  hostEvents: boolean;
+  runs: boolean;
+  pairingRequests: boolean;
+  botDelete: boolean;
+  botSessions: boolean;
+  botRoutines: boolean;
+  botConnectionRequests: boolean;
+  botPresets: boolean;
+  botMemory: boolean;
+  botProactive: boolean;
+  botActivity: boolean;
+  botAttachments: boolean;
+  mobileSimulators: boolean;
+}
+
+/**
+ * The `/server.features` one device is told about. Every client, shipped
+ * phones and desktops alike, refuses a list longer than
+ * `AIDEN_REMOTE_MAX_SERVER_FEATURES`, so each audience hears only the tokens
+ * its clients can use: app controls, read aloud, speech upload and provider
+ * creation are phone surfaces, and the host-wide run vocabulary is desktop-only.
+ */
+export function aidenRemoteServerFeatures(
+  device: Pick<AidenRemoteRouterAuthenticatedDevice, "type">,
+  support: AidenRemoteServerFeatureSupport,
+): string[] {
+  const desktop = isDesktopDevice(device);
+  const phone = !desktop;
+  return [
+    ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
+    ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
+    ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
+    ...(phone && support.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
+    ...(phone && support.readAloud ? [REMOTE_TTS_FEATURE] : []),
+    ...(phone && support.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
+    ...(support.chatSummaries ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE] : []),
+    ...(support.readState ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE] : []),
+    ...(support.tasks ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE] : []),
+    ...(support.agents ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE] : []),
+    ...(support.agentInterrupt ? [AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE] : []),
+    ...(support.runInput ? [AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE] : []),
+    ...(support.questionPrompts ? [AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE] : []),
+    ...(support.skills ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE] : []),
+    ...(support.messagesWindow
+      ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE, AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE]
+      : []),
+    ...(support.visuals ? [AIDEN_REMOTE_CHAT_VISUALS_FEATURE] : []),
+    ...(support.visualViewer ? [AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE] : []),
+    ...(support.fork ? [AIDEN_REMOTE_CHAT_FORK_FEATURE] : []),
+    ...(support.forkSummary ? [AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE] : []),
+    // Host-wide features are announced to desktops only.
+    ...(desktop && support.hostEvents ? [AIDEN_REMOTE_HOST_EVENTS_FEATURE] : []),
+    ...(desktop && support.runs ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE] : []),
+    ...(desktop && support.pairingRequests ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE] : []),
+    // Phones get only the phone-scoped run subset (contract revision 24).
+    ...(phone && support.runs ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE] : []),
+    // Bots rework (contract revision 25): each token is announced only
+    // while the route it gates is wired.
+    ...(support.botDelete ? [AIDEN_REMOTE_BOT_DELETE_FEATURE] : []),
+    ...(support.botSessions ? [AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE] : []),
+    ...(support.botRoutines ? [AIDEN_REMOTE_BOT_ROUTINES_FEATURE] : []),
+    ...(support.botConnectionRequests ? [AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE] : []),
+    ...(support.botPresets ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
+    // Bot memory and proactivity (contract revision 27).
+    ...(support.botMemory ? [AIDEN_REMOTE_BOT_MEMORY_FEATURE] : []),
+    ...(support.botProactive ? [AIDEN_REMOTE_BOT_PROACTIVE_FEATURE] : []),
+    // Bot chat activity on phones (contract revision 30).
+    ...(support.botActivity ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
+    // Bot message attachments (contract revision 33).
+    ...(support.botAttachments ? [AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE] : []),
+    // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
+    ...(phone && support.mobileSimulators ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE] : []),
+  ];
+}
+
 /**
  * A phone's run grants never widen what it may already do in a chat (contract
  * revision 24): each run route also requires the phone's own per-chat grant.
@@ -1892,85 +1988,40 @@ export function createAidenRemoteRequestHandler(
               }
             : {}),
           connectionMode: dependencies.connectionMode(),
-          features: [
-            ...(dependencies.appControls ? ["chat-ui-panels-v1"] : []),
-            ...(await dependencies.appControls?.enabled() ? ["chat-ui-panels-enabled-v1"] : []),
-            ...(peerRoutes === undefined ? [] : ["peer-routes-v1"]),
-            ...(dependencies.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
-            ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
-            ...(dependencies.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
-            ...(dependencies.chats?.listSummaries
-              ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
-              : []),
-            ...(dependencies.chats?.markRead && dependencies.chats.supportsReadMarkers === true
-              ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE]
-              : []),
-            ...(progressCapabilitySupported(dependencies, "tasks:read")
-              ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE]
-              : []),
-            ...(progressCapabilitySupported(dependencies, "agents:read")
-              ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE]
-              : []),
-            ...(agentInterruptSupported(dependencies)
-              ? [AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE]
-              : []),
-            ...(dependencies.streams?.supportsRunInput?.() === true
-              ? [AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE]
-              : []),
-            ...(dependencies.streams?.supportsQuestionPrompts?.() === true
-              ? [AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE]
-              : []),
-            ...(progressCapabilitySupported(dependencies, "skills:invoke")
-              ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE]
-              : []),
-            ...(dependencies.chats?.messagesWindow
-              ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE, AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE]
-              : []),
-            ...(dependencies.chats ? [AIDEN_REMOTE_CHAT_VISUALS_FEATURE] : []),
-            ...(dependencies.chats?.visualDocument && dependencies.chats.supportsVisualViewer === true
-              ? [AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE]
-              : []),
-            ...(dependencies.chats?.fork && dependencies.chats.supportsForks === true
-              ? [AIDEN_REMOTE_CHAT_FORK_FEATURE]
-              : []),
-            ...(dependencies.chats?.fork && dependencies.chats.supportsForkSummaries === true
-              ? [AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE]
-              : []),
-            // Host-wide features are announced to desktops only.
-            ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "host:events")
-              ? [AIDEN_REMOTE_HOST_EVENTS_FEATURE]
-              : []),
-            ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
-              ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE]
-              : []),
-            ...(isDesktopDevice(device) && dependencies.pairingRequests
-              ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE]
-              : []),
-            // Phones get only the phone-scoped run subset (contract revision 24).
-            ...(!isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
-              ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE]
-              : []),
-            // Bots rework (contract revision 25): each token is announced only
-            // while the route it gates is wired.
-            ...(dependencies.bots?.delete ? [AIDEN_REMOTE_BOT_DELETE_FEATURE] : []),
-            ...(dependencies.botSessions ? [AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE] : []),
-            ...(dependencies.botSessions?.supportsRoutines === true ? [AIDEN_REMOTE_BOT_ROUTINES_FEATURE] : []),
-            ...(dependencies.botSessions?.supportsConnectionRequests === true
-              ? [AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE]
-              : []),
-            ...(dependencies.botSessions?.supportsPresets === true ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
-            // Bot memory and proactivity (contract revision 27).
-            ...(dependencies.botSessions?.supportsMemory === true ? [AIDEN_REMOTE_BOT_MEMORY_FEATURE] : []),
-            ...(dependencies.botSessions?.supportsProactive === true ? [AIDEN_REMOTE_BOT_PROACTIVE_FEATURE] : []),
-            // Bot chat activity on phones (contract revision 30).
-            ...(botActivityWired(dependencies) ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
-            // Bot message attachments (contract revision 33).
-            ...(botAttachmentsWired(dependencies) ? [AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE] : []),
-            // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
-            ...(!isDesktopDevice(device) && dependencies.simulators?.host("mobile")
-              ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE]
-              : []),
-          ],
+          features: aidenRemoteServerFeatures(device, {
+            appControls: Boolean(dependencies.appControls),
+            appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
+            peerRoutes: peerRoutes !== undefined,
+            providers: Boolean(dependencies.providers),
+            readAloud: Boolean(dependencies.readAloud),
+            speech: Boolean(dependencies.speech),
+            chatSummaries: Boolean(dependencies.chats?.listSummaries),
+            readState: Boolean(dependencies.chats?.markRead) && dependencies.chats?.supportsReadMarkers === true,
+            tasks: progressCapabilitySupported(dependencies, "tasks:read"),
+            agents: progressCapabilitySupported(dependencies, "agents:read"),
+            agentInterrupt: agentInterruptSupported(dependencies),
+            runInput: dependencies.streams?.supportsRunInput?.() === true,
+            questionPrompts: dependencies.streams?.supportsQuestionPrompts?.() === true,
+            skills: progressCapabilitySupported(dependencies, "skills:invoke"),
+            messagesWindow: Boolean(dependencies.chats?.messagesWindow),
+            visuals: Boolean(dependencies.chats),
+            visualViewer: Boolean(dependencies.chats?.visualDocument) && dependencies.chats?.supportsVisualViewer === true,
+            fork: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForks === true,
+            forkSummary: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForkSummaries === true,
+            hostEvents: hostCapabilitySupported(dependencies, "host:events"),
+            runs: hostCapabilitySupported(dependencies, "runs:observe"),
+            pairingRequests: Boolean(dependencies.pairingRequests),
+            botDelete: Boolean(dependencies.bots?.delete),
+            botSessions: Boolean(dependencies.botSessions),
+            botRoutines: dependencies.botSessions?.supportsRoutines === true,
+            botConnectionRequests: dependencies.botSessions?.supportsConnectionRequests === true,
+            botPresets: dependencies.botSessions?.supportsPresets === true,
+            botMemory: dependencies.botSessions?.supportsMemory === true,
+            botProactive: dependencies.botSessions?.supportsProactive === true,
+            botActivity: botActivityWired(dependencies),
+            botAttachments: botAttachmentsWired(dependencies),
+            mobileSimulators: Boolean(dependencies.simulators?.host("mobile")),
+          }),
           serverTime: new Date(dependencies.now()).toISOString(),
         };
         writeJson(response, 200, projection);

@@ -544,6 +544,35 @@ test("verification persists refreshed grants and negotiates advertised host gran
   assert.equal(requests.filter((request) => request.path === "/server").length, 2);
 });
 
+test("a Mac opts into a host's Bot activity frames only when the host serves them", async () => {
+  const negotiated = async (features: string[]) => {
+    const { store, requests } = scripted(
+      {
+        capabilities: ["chat:read", "bot:read", "bot:write"],
+        features,
+        serverCapabilities: ["chat:read", "bot:read", "bot:write", "bot:cards", "bot:activity"],
+      },
+      (input) => (input.path === "/device/capabilities" ? { capabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"] } : { ok: true }),
+    );
+    await store.request("host_a", { path: "/bots" });
+    return requests.filter((request) => request.path === "/device/capabilities").map((request) => request.body);
+  };
+  assert.deepEqual(await negotiated(["bot-durable-session-v1", "bot-activity-v1"]), [{ accepts: ["bot:activity"] }]);
+  assert.deepEqual(await negotiated(["bot-durable-session-v1"]), []);
+});
+
+test("a malformed route hint is ignored instead of failing the connection", async () => {
+  const { store } = scripted(
+    { capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: [{ endpoint: "not a url" }] },
+    () => ({ ok: true }),
+  );
+  assert.deepEqual(await store.request("host_a", { path: "/chats" }), { ok: true });
+  assert.equal((await store.list())[0]?.state, "connected");
+  // The wake-time identity probe reads the same hint and must not fail on it either.
+  await store.probe("host_a");
+  assert.equal((await store.list())[0]?.state, "connected");
+});
+
 test("an older host without negotiation keeps its grants and still serves requests", async () => {
   const { store, stored } = scripted(
     { capabilities: ["chat:read"], features: ["host-events-v1"] },

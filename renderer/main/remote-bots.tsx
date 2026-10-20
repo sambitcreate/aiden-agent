@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "../components/ui";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { remoteBotGroups, type RemoteBotGroup } from "../lib/hosts/new-chat-targets";
+import { hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import { RemoteNewChatControl } from "../lib/hosts/remote-new-chat";
 import type { PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } from "../shared/peer-host";
@@ -21,7 +22,8 @@ function grantsOf(view: PeerHostView): string {
 
 /**
  * The Bots on paired Macs, for the Bots sidebar. Bots come from each host's last-known
- * feed; opening one asks that host for the Bot's chat and opens it there.
+ * feed. Opening one shows its one durable conversation on that host; a host too
+ * old to share it gets the Bot's workspace chat instead.
  * One control per host is kept while the view is open, so a retry after a
  * lost answer reuses its key.
  */
@@ -74,6 +76,10 @@ export function useRemoteBots(): {
   const open = async (hostId: string, botId: string) => {
     const view = views.find((entry) => entry.id === hostId);
     if (!view || opening) return;
+    if (hostSharesBotSessions(view)) {
+      await navigate({ to: "/host/$hostId/bots/$botId/chat", params: { hostId, botId } });
+      return;
+    }
     setOpening(`${hostId}/${botId}`);
     try {
       const control = await controlFor(view);

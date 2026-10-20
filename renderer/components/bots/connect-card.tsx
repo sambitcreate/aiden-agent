@@ -41,7 +41,8 @@ export function ConnectionIconTile({
 export interface ConnectCardProps {
   card: ConnectCardEntry;
   onConnect: (pluginId: string) => void;
-  onDismiss: (pluginId: string) => void;
+  /** "Not now"; left out where the person cannot dismiss the card from this device. */
+  onDismiss?: (pluginId: string) => void;
   /** Visible Connect text; phones use "Finish on your Mac". The accessible name stays "Connect {name}". */
   connectLabel?: string;
   /** Setup or a connection request is in progress. */
@@ -89,14 +90,16 @@ export function ConnectCard({
         title={title}
         actions={
           <>
-            <Button
-              variant="transparent"
-              size="small"
-              aria-label={`Not now for ${suggestion.name}`}
-              onClick={() => onDismiss(card.pluginId)}
-            >
-              Not now
-            </Button>
+            {onDismiss ? (
+              <Button
+                variant="transparent"
+                size="small"
+                aria-label={`Not now for ${suggestion.name}`}
+                onClick={() => onDismiss(card.pluginId)}
+              >
+                Not now
+              </Button>
+            ) : null}
             <Button
               variant="accent"
               size="small"

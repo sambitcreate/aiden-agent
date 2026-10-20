@@ -127,6 +127,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "remote:approval-changed",
   "remote:host-feed",
   "remote:peer-run-frame",
+  "remote:peer-bot-session",
   "runs:local-frame",
   "remote:peer-host-state",
   "remote:pairing-requests-changed",

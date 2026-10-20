@@ -1060,6 +1060,10 @@ function requireRevision(expected: string, chat: Chat): void {
   }
 }
 
+/** What an older Mac sees when it sends to a Bot through the workspace chat routes. */
+export const AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE =
+  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the Mac that runs them.";
+
 export class AidenRemoteChatService {
   private readonly idempotency: AidenIdempotencyLedger;
   private readonly attachments: AidenRemoteAttachmentStore;
@@ -1119,6 +1123,13 @@ export class AidenRemoteChatService {
        * retained Bot-chat read and write even when device grants are present.
        */
       retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
+      /**
+       * True while this host serves Bots' durable sessions. Their workspace
+       * chat rows are then kept only for history, and a turn sent to one is
+       * refused: it would run outside the Bot's one conversation, where the
+       * host's app, phones and Telegram never show it.
+       */
+      durableBotSessions?: () => boolean;
       botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
@@ -2033,6 +2044,9 @@ export class AidenRemoteChatService {
     message: AidenRemoteMessageProjection;
   }> {
     const parsed = parseTurn(input);
+    if (this.options.durableBotSessions?.() && (await this.chat(chatId)).botId) {
+      throw new AidenRemoteServiceError("invalid_request", AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE, 400);
+    }
     if (
       parsed.skill &&
       (await this.options.deviceSupportsSkillInvocation?.(deviceId)) !== true

@@ -464,7 +464,7 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
   - Leave out a route whose listener is disabled by `connectionMode`.
   - LAN-paired clients hold the private CA; Tailscale-paired clients do not. Finalize the authenticated CA bootstrap described in the approved decisions before freezing this shape.
 - Bump `AIDEN_REMOTE_CONTRACT_REVISION` to **main's revision + 1 at merge time**. Update together: `docs/aiden-remote-api-v1.md` (§5 `/server`, §9 Transport identity, §10), `protocol/aiden-remote/v1/openapi.json`, `protocol/aiden-remote/v1/fixtures/contract.json`, and the Android test copy `app/src/test/resources/contract.json` if it mirrors it, `aiden-remote-protocol.ts` (+ test), and the iOS/Android revision assertions (`AidenRemotePhase0Tests.swift`, `AidenBotContractTest.kt` / `AidenRemotePhase0Test.kt`). Mobile ignores the field. Verify Android's decoder tolerates unknown `/server` keys. iOS looked tolerant; Android wasn't checked.
-- `features` is capped at 32 by the peer client's parser. Count the current list before adding.
+- `features` is capped at 32 by the peer client's parser. Count the current list before adding. (After 0.59.0 the desktop parser accepts up to 64, but hosts still send at most 32 per device; see the `/server` notes in `docs/aiden-remote-api-v1.md`.)
 
 **1b: desktop route store, selection, failover**
 - `StoredPeerHost` gets an optional bounded `routes?: PeerRoute[]` (≤ 4): `{id, kind: "lan"|"tailscale", endpoint, trust: "private-ca"|"system", serverSpkiSha256, origin: "paired"|"learned", addressHints: {address, lastOkAt?, lastFailAt?}[] (≤ 4), lastOkAt?, lastFailAt?, cooldownUntil?}`.
