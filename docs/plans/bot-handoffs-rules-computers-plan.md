@@ -21,7 +21,7 @@ Five features for Aiden Bots:
 | A Hand-off | yes | yes | follow-up (the CLI Bot runtime has no durable waits yet) | yes (Remote rev 36) |
 | B Sign-in | yes | yes | no (no browser) | "Finish on your Mac" |
 | C Rules | yes | yes | follow-up (same reason) | read-only list, later |
-| D Pause | yes | yes | `aiden bots pause/resume` | yes (Remote rev 36) |
+| D Pause | yes | yes | `aiden bots pause/unpause` | yes (Remote rev 36) |
 | E Bot computers | Apple silicon only | no (later: QEMU/Docker) | no | status only; live view later |
 
 Bots already run on `darwin` and `linux` (`main/services/host-platform-capabilities.ts:22`). Bot computers add a separate `botComputers` flag that is true only on `darwin` + `arm64`.
@@ -48,7 +48,7 @@ Every feature below plugs into an existing piece:
 1. **Enforced, not just instructed.** Cua's rules are only text in the bot's instructions. Aiden checks every rule in `beforeTool`, and also renders the rules into the prompt so the model can plan around them.
 2. **Rules only tighten.** A rule can turn *allowed* into *ask*, or *ask* into *hand off*, never the other way. The one place Aiden relaxes anything is the Bot's own computer, and that relaxation comes from the VM boundary, not from a rule (§8.7).
 3. **Durable like questions.** Every new wait (a hand-off or a sign-in) stores its `waitId` in a tool-task memo and is asked again after a restart. An answer is applied exactly once.
-4. **Manual-only network.** Lume, the macOS restore image and the guest driver are downloaded only after an explicit **Set up** action. Lume telemetry and update checks are off in every child process. No `lume serve`, no installer, no `PATH` lookup. Same posture as `cua-driver` and Antigravity.
+4. **Manual-only network.** Lume ships inside the app and the guest driver is copied from Aiden's own pinned `cua-driver`; only the macOS restore image is downloaded, and only after an explicit **Set up** action. Lume telemetry and update checks are off in every child process. No `lume serve`, no installer, no `PATH` lookup. Same posture as `cua-driver` and Antigravity.
 5. **One Remote revision** (36) for hand-offs and pause, gated per device (see §9 for why it can't be a new `/server` feature token).
 
 ## 4. A: Hand-off cards
@@ -218,11 +218,11 @@ Property test: for every rule set and every call, `ruled >= baseline`.
 
 ### 7.2 Code
 
-- `bot-session-service.ts`: `pause(botId)` and `resume(botId)`. Pausing needs a way to close one Bot's harness while a task is live. `harness-host.ts` only idle-closes today ("only with no live task"), so add a forced per-Bot close with the same bounded abort used at quit, and test that the turn comes back `interrupted`.
+- `bot-session-service.ts`: `pause(botId)` and `unpause(botId)`. `resume` is already the method for an interrupted turn, so the code, IPC (`bots:pause`, `bots:unpause`) and Remote names say *unpause*, even though the button reads **Resume**. Pausing needs a way to close one Bot's harness while a task is live. `harness-host.ts` only idle-closes today ("only with no live task"), so add a forced per-Bot close with the same bounded abort used at quit, and test that the turn comes back `interrupted`.
 - `BotSessionState` gains `{ kind: "paused"; interrupted?: string }`. `bot-status-line.tsx` and `bot-sidebar-rows.ts` show "Paused".
 - `scheduled-bot-routines.ts`: check the pause store before the state switch, and add `paused_by_person` to `ScheduledRunSkipReason` (`main/services/types.ts:497`). `createBotRoutineCatchUp` ignores it.
 - Telegram ingress (`telegram/bot-reply-outbox.ts` path): reply with the fixed line instead of submitting.
-- CLI: `aiden bots pause <id>` and `aiden bots resume <id>` through the running `aiden serve`. Update `packages/cli/README.md`.
+- CLI: `aiden bots pause <id>` and `aiden bots unpause <id>` through the running `aiden serve`. Update `packages/cli/README.md`.
 
 ### 7.3 Tests
 
@@ -232,7 +232,7 @@ Property test: for every rule set and every call, `ruled >= baseline`.
 
 ### 8.1 What the person sees
 
-- Settings → **Bot computers** (Apple silicon only): what it is, disk and memory needs, **Set up** (downloads Lume and the macOS restore image, about 17 GB, with progress and size up front), maximum running computers, an idle stop time, disk used, and **Remove everything**.
+- Settings → **Bot computers** (Apple silicon only): what it is, disk and memory needs, **Set up** (downloads the macOS restore image, about 17 GB, with progress and size up front; Lume itself is bundled), maximum running computers, an idle stop time, disk used, and **Remove everything**.
 - Bot profile → **Computer**: **Give Ada a computer** (per Bot, decision 9). Creating it is a near-instant APFS clone of the shared base.
 - The Bot side panel gains a **Computer** tab: the live screen with the Bot's avatar at its pointer, a status line ("Ada is using Safari"), and **Take over** / **Give back**. **Float over chat** reuses the device floating player.
 - The computer starts only when the Bot needs it (a `computer` tool call, the person opening the tab, or a routine that uses it), and stops after the idle time. A banner shows "Starting Ada's computer…".
@@ -318,7 +318,7 @@ Claim 36 (the next after `main`'s 35) at merge time, and update the fixture, Ope
   - `POST /bots/{id}/handoffs/{waitId}/answer` (`bot:read` + `bot:write`, Idempotency-Key, body `{ outcome, note? }`, `handoff_expired` once nothing waits);
   - `POST /bots/{id}/handoffs/{waitId}/open-on-mac` for sign-in;
   - `paused` on Bot detail and summary;
-  - `POST /bots/{id}/pause` and `/resume`;
+  - `POST /bots/{id}/pause` to pause and `DELETE /bots/{id}/pause` to unpause (`POST /bots/{id}/resume` already exists for resuming an interrupted turn, so unpausing must not reuse it);
   - error `bot_paused`;
 - devices without it get a `state` frame and a text notice "Ada needs you on your Mac", the same fallback pattern as `bot:cards`.
 
