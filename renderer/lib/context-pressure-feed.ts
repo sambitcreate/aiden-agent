@@ -8,6 +8,11 @@ export interface ContextPressureFeedOptions<Draft> {
   ): Promise<ChatContextPressureV1 | null>;
   /** Render a reading; null means the quiet "unknown" meter. */
   publish(pressure: ChatContextPressureV1 | null): void;
+  /**
+   * The shown chat's reading without the composer draft, refreshed on every
+   * trigger except draft typing. Null while it is unknown.
+   */
+  publishHistory?(pressure: ChatContextPressureV1 | null, chatId: string | null): void;
   draftDelayMs?: number;
   schedule?(run: () => void, delayMs: number): unknown;
   cancel?(handle: unknown): void;
@@ -28,6 +33,7 @@ export interface ContextPressureFeedOptions<Draft> {
 export class ContextPressureFeed<Draft> {
   private chatId: string | null = null;
   private request = 0;
+  private historyRequest = 0;
   private live = false;
   private draftTimer: unknown = null;
   private draft: Draft | undefined;
@@ -54,7 +60,7 @@ export class ContextPressureFeed<Draft> {
     // changes, so it stays the baseline across chats in the same workspace.
     this.draft = undefined;
     this.invalidate();
-    this.options.publish(null);
+    this.publishBoth(null);
   }
 
   /**
@@ -69,7 +75,7 @@ export class ContextPressureFeed<Draft> {
     this.scope = scope;
     if (previous === undefined || previous === scope) return;
     this.invalidate();
-    this.options.publish(null);
+    this.publishBoth(null);
   }
 
   /** While live, only pushed readings reach the meter. */
@@ -78,22 +84,52 @@ export class ContextPressureFeed<Draft> {
     if (live) this.invalidate();
   }
 
-  /** Ambient refresh priced with the composer's current draft. */
+  /** Ambient refresh priced with the composer's current draft, plus the draft-free history. */
   async refresh(): Promise<void> {
+    await this.read(true);
+  }
+
+  private async read(withHistory: boolean): Promise<void> {
     const chatId = this.chatId;
     if (chatId === null || this.live) return;
     const draft = this.draft;
     const request = ++this.request;
+    // Every request that can publish history takes a ticket, so an older one never overwrites a newer reading.
+    const historyTicket = draft === undefined ? ++this.historyRequest : undefined;
+    const reading = this.options.fetch(chatId, draft);
+    const history = withHistory && draft !== undefined && this.options.publishHistory ? this.readHistory(chatId) : undefined;
     let pressure: ChatContextPressureV1 | null;
     try {
-      pressure = await this.options.fetch(chatId, draft);
+      pressure = await reading;
     } catch {
       // Best-effort: keep the last good reading.
+      await history;
       return;
     }
     if (request === this.request && !this.live && chatId === this.chatId) {
       this.options.publish(pressure);
+      if (historyTicket === this.historyRequest) this.options.publishHistory?.(pressure, chatId);
     }
+    await history;
+  }
+
+  private async readHistory(chatId: string): Promise<void> {
+    const request = ++this.historyRequest;
+    let pressure: ChatContextPressureV1 | null;
+    try {
+      pressure = await this.options.fetch(chatId, undefined);
+    } catch {
+      return;
+    }
+    if (request === this.historyRequest && !this.live && chatId === this.chatId) {
+      this.options.publishHistory?.(pressure, chatId);
+    }
+  }
+
+  private publishBoth(pressure: ChatContextPressureV1 | null): void {
+    this.historyRequest += 1;
+    this.options.publish(pressure);
+    this.options.publishHistory?.(pressure, this.chatId);
   }
 
   /** Debounced refresh for composer typing and attachment changes. */
@@ -102,7 +138,7 @@ export class ContextPressureFeed<Draft> {
     this.cancelDraft();
     this.draftTimer = this.schedule(() => {
       this.draftTimer = null;
-      void this.refresh();
+      void this.read(false);
     }, this.draftDelayMs);
   }
 
@@ -114,7 +150,7 @@ export class ContextPressureFeed<Draft> {
    */
   pushed(chatId: string, pressure: ChatContextPressureV1 | null): void {
     if (chatId !== this.chatId) return;
-    if (this.live) this.options.publish(pressure);
+    if (this.live) this.publishBoth(pressure);
     else void this.refresh();
   }
 
@@ -124,6 +160,7 @@ export class ContextPressureFeed<Draft> {
 
   private invalidate(): void {
     this.request += 1;
+    this.historyRequest += 1;
     this.cancelDraft();
   }
 
