@@ -32,6 +32,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
 ## Session service (`aiden-remote-bot-session.ts`)
 - `Audience.handoffs`. The broadcast cache key is `cards:activity:handoffs`.
 - The projector reads `handoffOf(botId)`: the first pending card, plus the Bot's name for the notice. A card the wire can't carry stays on the Mac.
+- The constructor refreshes projectors on `questions`, `approvals` and `handoffs` `onChange`, and on the new `stateChanges` option (service-main: `onBotSessionStateChange` from `bot-session-main.ts`, imported lazily; `close()` unsubscribes). A pause or unpause on the Mac commits nothing to the conversation, so without it an open phone stream never saw it until its next refresh. Covered by "a pause and unpause made on the Mac reach open phone streams at once…".
 - A `handoff` frame (payload `{handoff}`, deliberately wrapped) is published after `approval` when the waitId changes. At that seq:
   - a legacy device gets an `entry` frame carrying the notice when the card opens;
   - it gets a no-op `state` frame when the card settles.

@@ -778,7 +778,8 @@ A Bot can hand a step back to the person ("Your turn: Enter the 2FA code your ba
 **Before revision 36, and for every device without `bot:handoffs`.**
 - A Bot the person paused reads as `unavailable` (`interrupted: false`); the snapshot keeps its transcript. Messages, Resume and Dismiss for it return `409 operation_stale`. Bot summaries and details carry `sessionState: "unavailable"` and no `paused`.
 - A waiting hand-off is the newest entry of the snapshot: an assistant `message` with id `handoff-notice:<waitId>` and text `<Bot name> needs you on your Mac: <action>`, without `createdAt`. On the stream it arrives as an `entry` frame at the seq a holder's `handoff` frame uses; when the hand-off settles that seq is a no-op `state` frame. The person must answer it on the Mac.
-- Writes to a paused Bot from the legacy `/chats/{chatId}/turns` route are `409 operation_stale` for every device.
+- Writes to a paused Bot from the legacy `/chats/{chatId}/turns` route are `409 operation_stale` for every device. They record nothing, so the same `Idempotency-Key` runs once the Bot is unpaused.
+- A pause or unpause made on the Mac or from a phone reaches every open session stream at once as a `state` frame, at the same seq for every device. A pause reads `unavailable` to these devices and `paused` to holders.
 
 **Session stream, for devices holding `bot:handoffs`.**
 - `state` may be `paused` (`interrupted: false`). `interrupted` still means a turn that stopped part-way and waits for Resume or Dismiss; a Bot can be paused with such a turn, and reads `interrupted` again after unpause.

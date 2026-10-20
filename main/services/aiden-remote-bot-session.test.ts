@@ -830,19 +830,24 @@ after(() => {
   for (const root of durableRoots) rmSync(root, { recursive: true, force: true });
 });
 
-async function interruptedDurableBot(options: { handoffs?: boolean } = {}) {
+async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges?: boolean } = {}) {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-session-"));
   durableRoots.push(profileDir);
   const child = spawnHarnessChild("stream", [profileDir, "bot:killed", "req-killed"]);
   await child.waitFor("STREAMING");
   await child.kill();
   const fauxModels = createFauxModels([fauxAssistantMessage("resumed answer"), fauxAssistantMessage("extra")]);
+  // The runtime's own state bridge, as the desktop exposes it (`onBotSessionStateChange`).
+  const stateListeners = new Set<(botId: string) => void>();
   const runtime = await createBotSessionService({
     profileDir,
     models: fauxModels.models,
     extension: recordingDeps(),
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set(["bot:killed"]),
+    onStateChange: (botId) => {
+      for (const listener of stateListeners) listener(botId);
+    },
   });
   await runtime.initialize();
   let exists = true;
@@ -858,8 +863,16 @@ async function interruptedDurableBot(options: { handoffs?: boolean } = {}) {
     runtime: async () => runtime,
     // Revision 36: a host wired for hand-offs and pause on phones.
     ...(options.handoffs ? { handoffs: createBotHandoffs(), openHandoffOnMac: async () => "focused" as const } : {}),
+    ...(options.stateChanges
+      ? {
+          stateChanges: (listener: (botId: string) => void) => {
+            stateListeners.add(listener);
+            return () => void stateListeners.delete(listener);
+          },
+        }
+      : {}),
   });
-  return { runtime, service, fauxModels, markDeleted: () => { exists = false; } };
+  return { runtime, service, fauxModels, stateListeners, markDeleted: () => { exists = false; } };
 }
 
 test("two phones tapping Resume at once on a turn killed mid-stream make one provider request", async () => {
@@ -3048,6 +3061,36 @@ test("a phone's pause holds a real Bot: holders read paused and bot_paused, othe
     await service.close();
     await runtime.shutdown();
   }
+});
+
+test("a pause and unpause made on the Mac reach open phone streams at once, as each device names them", async () => {
+  const { runtime, service, stateListeners } = await interruptedDurableBot({ handoffs: true, stateChanges: true });
+  const holder = await openAudienceStream(service, HOLDER, "bot:killed");
+  const legacy = await openAudienceStream(service, {}, "bot:killed");
+  const statesOf = (frames: Frame[]) => frames.flatMap((frame) => (frame.type === "state" ? [frame.payload.state] : []));
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    // The Mac pauses: no phone route runs and the conversation does not change.
+    await runtime.pause("bot:killed", "mac");
+    await holder.until(() => statesOf(holder.frames).includes("paused"), "the paused frame");
+    await legacy.until(() => statesOf(legacy.frames).includes("unavailable"), "the unavailable frame");
+    assert.equal(statesOf(legacy.frames).includes("paused"), false);
+
+    // The Mac unpauses: the interrupted turn is back, waiting for Resume, on both.
+    await runtime.unpause("bot:killed");
+    await holder.until(() => last(statesOf(holder.frames)) === "interrupted", "the holder's interrupted frame");
+    await legacy.until(() => last(statesOf(legacy.frames)) === "interrupted", "the legacy interrupted frame");
+    assert.deepEqual(statesOf(holder.frames), ["paused", "interrupted"]);
+    assert.deepEqual(statesOf(legacy.frames), ["unavailable", "interrupted"]);
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+  assert.equal(stateListeners.size, 0, "a closed service stops listening");
 });
 
 test("a hand-off holds a running turn at Waiting for you on bot:activity phones, after the hand-off frame", async () => {

@@ -878,6 +878,21 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   const { openBotHandoffById } = await import("./bot-runtime/bot-handoff-open-main.js");
                   return openBotHandoffById(botId, waitId, "phone");
                 },
+                // A pause or unpause on the Mac commits nothing to the conversation:
+                // open phone streams hear it through the runtime's state bridge.
+                stateChanges: (listener) => {
+                  let stopped = false;
+                  let unsubscribe: (() => void) | undefined;
+                  void import("./bot-runtime/bot-session-main.js")
+                    .then(({ onBotSessionStateChange }) => {
+                      if (!stopped) unsubscribe = onBotSessionStateChange((botId) => listener(botId));
+                    })
+                    .catch((error: unknown) => logger.warn("aiden-remote", "Bot state changes are unavailable to phones.", error));
+                  return () => {
+                    stopped = true;
+                    unsubscribe?.();
+                  };
+                },
                 turnIntents: botTurnIntents,
                 // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
                 runStarts: botRunStarts,

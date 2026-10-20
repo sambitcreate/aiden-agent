@@ -235,6 +235,13 @@ export interface AidenRemoteBotSessionServiceOptions {
   /** Revision 36: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
   openHandoffOnMac?(botId: string, waitId: string): Promise<BotHandoffOpened>;
   /**
+   * Hear a Bot's session state change on any surface (`onBotSessionStateChange`);
+   * returns the unsubscribe. A pause or unpause on the Mac commits nothing to the
+   * conversation, so without it an open stream reads the change only at its next
+   * refresh (a holder of `bot:handoffs` as `paused`, any other device as `unavailable`).
+   */
+  stateChanges?(listener: (botId: string) => void): () => void;
+  /**
    * Stop and Resume from any surface (`botTurnIntents`). A phone's Stop is
    * announced here, and taken back if it fails, so open desktop chats read
    * "Stopping" too. Resume is announced by the session itself (`onResumed`).
@@ -1405,6 +1412,7 @@ export class AidenRemoteBotSessionService {
   /** Bot approval ids answered here recently, so a retried request replays its receipt. */
   private readonly answeredApprovals = new Set<string>();
   private readonly stopIntents: (() => void) | undefined;
+  private readonly stopStateChanges: (() => void) | undefined;
   private readonly runStarts: BotRunStarts;
 
   constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
@@ -1416,6 +1424,8 @@ export class AidenRemoteBotSessionService {
     options.questions?.onChange(refresh);
     options.approvals?.onChange(refresh);
     options.handoffs?.onChange(refresh);
+    // A pause or unpause on the Mac changes only the state; open streams hear it here.
+    this.stopStateChanges = options.stateChanges?.(refresh);
     // A Stop or Resume from the Mac or any phone reaches every open session stream.
     this.stopIntents = this.supportsActivity
       ? options.turnIntents!.onIntent((botId, intent) => {
@@ -1971,6 +1981,7 @@ export class AidenRemoteBotSessionService {
 
   async close(): Promise<void> {
     this.stopIntents?.();
+    this.stopStateChanges?.();
     for (const deviceId of [...this.subscriptions.keys()]) this.revokeDevice(deviceId);
     const projectors = await Promise.allSettled([...this.projectors.values()]);
     for (const result of projectors) if (result.status === "fulfilled") await result.value.close();
