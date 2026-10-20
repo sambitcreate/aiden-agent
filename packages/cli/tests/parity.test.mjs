@@ -885,6 +885,7 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
   const paused = await runtime.command(["pause", bot.id]);
   assert.deepEqual(Object.keys(paused).sort(), ["botId", "paused", "since"]);
   assert.equal(paused.paused, true); assert.equal(typeof paused.since, "number");
+  assert.equal(await runtime.isPaused(bot.id), true);
   const stopped = await running.idle();
   assert.equal(stopped.filter((event) => event.channel === "chat:done").length, 0, "the held reply never finishes");
   held.end();
@@ -898,6 +899,7 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
   assert.equal(requests.length, 1, "a paused Bot makes no provider request");
 
   assert.deepEqual(await runtime.command(["unpause", bot.id]), { botId: bot.id, paused: false });
+  assert.equal(await runtime.isPaused(bot.id), false);
   await runtime.preflight(preflight);
   const resumed = await (await runTurn("after-unpause")).idle();
   assert.equal(resumed.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(resumed));

@@ -49,7 +49,9 @@ import type { createDaemonChats } from "./daemon-chats.ts";
 
 export interface CliBotGenerationRuntime {
   authority: ReturnType<typeof createBotRuntimeAuthorityResolver>;
-  /** Refuses a turn for a Bot the person paused (`aiden bots pause`), or when the pause file is unreadable. */
+  /** Whether the person paused the Bot (`aiden bots pause`). Throws when the pause file is unreadable. */
+  isPaused(botId: string): Promise<boolean>;
+  /** Refuses a turn for a Bot the person paused, or when the pause file is unreadable (fail closed). */
   assertNotPaused(botId: string): Promise<void>;
   instructions(admission: BotRuntimeAuthorityAdmission): Promise<string>;
   tools(admission: BotRuntimeAuthorityAdmission): Promise<import("../../../main/services/bot-tool-authority.js").BotToolCandidate["tool"][]>;
@@ -94,8 +96,9 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   const capabilities = createBotCapabilityStore({ root, checkpoint });
   // The same file shape as the desktop's, under this agent directory (plan §7).
   const pauses = createBotPauseStore({ root });
+  const isPaused = async (botId: string) => (await pauses.get(botId)) !== undefined;
   async function assertNotPaused(botId: string) {
-    if (!(await pauses.get(botId))) return;
+    if (!(await isPaused(botId))) return;
     const name = (await botStore.get(botId))?.name ?? "This Bot";
     throw new AidenRemoteServiceError("operation_stale", `${name} is paused.`, 409);
   }
@@ -237,7 +240,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     await admission.revalidateBeforeEffect();
     return selected.map((tool) => protectAdmittedBotTool(tool, admission));
   }
-  return { application, botStore, capabilities, catalog, managedWorkspace, mutationGate, inventoryLeases, authority, tools, assertNotPaused,
+  return { application, botStore, capabilities, catalog, managedWorkspace, mutationGate, inventoryLeases, authority, tools, isPaused, assertNotPaused,
     async instructions(admission: BotRuntimeAuthorityAdmission) {
       await admission.revalidateBeforeEffect();
       const bot = await botStore.get(admission.authority.botId);
