@@ -164,7 +164,12 @@ export function applyRemoteBotSessionEvent(
     case "entry": {
       const entry = remoteBotTranscriptEntry(event.payload.entry);
       if (!entry) return next({});
-      return next({ entries: [...snapshot.entries.filter((current) => current.id !== entry.id), entry] });
+      // An updated entry keeps its place; only a new one goes at the end.
+      const index = snapshot.entries.findIndex((current) => current.id === entry.id);
+      if (index < 0) return next({ entries: [...snapshot.entries, entry] });
+      const entries = [...snapshot.entries];
+      entries[index] = entry;
+      return next({ entries });
     }
     case "state":
       return next({ state: remoteBotSessionState(event.payload) });

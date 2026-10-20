@@ -86,6 +86,33 @@ test("a paired Mac's Bot opens its one conversation there and sends to it with a
   assert.equal(peerCalls().some((call) => call.operation === "createBotChat" || call.operation === "send"), false);
 });
 
+test("a send whose acknowledgement was lost keeps the draft and retries with the same key", async () => {
+  let sends = 0;
+  const { peerCalls } = await mount(HOST, {
+    "remote:peerCall": (_hostId, operation) => {
+      const { operation: name } = operation as PeerOperation;
+      if (name === "botSession") return { ok: true, value: SESSION };
+      if (name === "botSend") {
+        sends += 1;
+        return sends === 1
+          ? { ok: false, error: { code: "outcome_unknown", message: "No answer." } }
+          : { ok: true, value: { submissionId: "s1", deduped: true, state: "running", interrupted: false } };
+      }
+      return { ok: false, error: { code: "failed", message: `unexpected ${name}` } };
+    },
+  });
+  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Move the dentist" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(sends, 1));
+  await waitFor(() => assert.equal(box.value, "Move the dentist"));
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(sends, 2));
+  const keys = peerCalls().filter((call) => call.operation === "botSend").map((call) => call.idempotencyKey);
+  assert.equal(keys.length, 2);
+  assert.equal(keys[0], keys[1], "the host can tell the retry is the same message");
+});
+
 test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
   const { peerCalls } = await mount();
   await screen.findByText("Two meetings and a dentist.");

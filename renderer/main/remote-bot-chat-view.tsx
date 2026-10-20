@@ -56,6 +56,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const [answered, setAnswered] = React.useState<ReadonlySet<string>>(new Set());
   const [statusLayout, setStatusLayout] = React.useState("");
+  // A send whose acknowledgement was lost keeps its key and staged photos, so
+  // sending the same thing again is deduplicated by the host, not repeated.
+  const unsettledSend = React.useRef<{ fingerprint: string; key: string; attachmentIds: string[] } | null>(null);
 
   const view = live.view;
   const snapshot = view?.snapshot ?? null;
@@ -71,7 +74,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     const outcome = await peerHostsApi.call(hostId, operation);
     if (outcome.ok) return outcome;
     toast.error(outcome.error.code === "outcome_unknown" ? `${hostName} may not have received that. Check the chat before trying again.` : outcome.error.message || failure);
-    throw new Error(outcome.error.message || failure);
+    throw Object.assign(new Error(outcome.error.message || failure), { code: outcome.error.code });
   };
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
@@ -181,40 +184,54 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const send = async (text: string, attachments: Attachment[], whenBusy?: "steer" | "followUp"): Promise<void> => {
     const images = attachments.filter((attachment) => attachment.kind === "image" && attachment.data);
+    // Throwing keeps the draft in the composer.
     if (attachments.some((attachment) => attachment.kind !== "image" && attachment.kind !== "text")) {
       toast.error("Bots take photos and text files for now.");
-      return;
+      throw new Error("unsupported attachment");
     }
     if (images.length > 0 && !photos) {
       toast.error(`Update Aiden on ${hostName} to send photos to ${name}.`);
-      return;
+      throw new Error("photos unsupported");
     }
-    const attachmentIds: string[] = [];
-    for (const image of images) {
-      const uploaded = await call(
+    const body = {
+      text: `${text}${attachmentText(attachments)}`,
+      ...(whenBusy && steerAndQueue ? { whenBusy: whenBusy === "steer" ? ("steer" as const) : ("queue" as const) } : {}),
+    };
+    const fingerprint = JSON.stringify([body, images.map((image) => [image.name, image.mimeType, image.data?.length ?? 0])]);
+    const retry = unsettledSend.current?.fingerprint === fingerprint ? unsettledSend.current : null;
+    unsettledSend.current = null;
+    const attachmentIds: string[] = retry ? [...retry.attachmentIds] : [];
+    if (!retry) {
+      for (const image of images) {
+        const uploaded = await call(
+          {
+            operation: "uploadBotAttachment",
+            resourceId: botId,
+            body: { name: image.name, mimeType: image.mimeType, kind: "image", data: image.data },
+          },
+          "Aiden couldn’t send that photo.",
+        );
+        const id = (uploaded.value as { id?: unknown } | null)?.id;
+        if (typeof id === "string") attachmentIds.push(id);
+      }
+    }
+    const key = retry?.key ?? mintPeerIdempotencyKey();
+    try {
+      await call(
         {
-          operation: "uploadBotAttachment",
+          operation: "botSend",
           resourceId: botId,
-          body: { name: image.name, mimeType: image.mimeType, kind: "image", data: image.data },
+          idempotencyKey: key,
+          body: { ...body, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) },
         },
-        "Aiden couldn’t send that photo.",
+        `Aiden couldn’t send to ${name}.`,
       );
-      const id = (uploaded.value as { id?: unknown } | null)?.id;
-      if (typeof id === "string") attachmentIds.push(id);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "outcome_unknown") {
+        unsettledSend.current = { fingerprint, key, attachmentIds };
+      }
+      throw error;
     }
-    await call(
-      {
-        operation: "botSend",
-        resourceId: botId,
-        idempotencyKey: mintPeerIdempotencyKey(),
-        body: {
-          text: `${text}${attachmentText(attachments)}`,
-          ...(whenBusy && steerAndQueue ? { whenBusy: whenBusy === "steer" ? "steer" : "queue" } : {}),
-          ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
-        },
-      },
-      `Aiden couldn’t send to ${name}.`,
-    );
   };
 
   const keyed = (operation: "botResume" | "botDismiss" | "botStop") =>

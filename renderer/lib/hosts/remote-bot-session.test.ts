@@ -123,6 +123,20 @@ test("a follower reads the session, then applies live events in order", async ()
   assert.equal(fake.listening(), false);
 });
 
+test("an entry the host updates keeps its place in the transcript", async () => {
+  const fake = fakeTransport([session()]);
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.push(event(5, { type: "entry", payload: { entry: { type: "message", id: "m1", role: "user", text: "Plan my whole week" } } }));
+  fake.push(event(6, { type: "entry", payload: { entry: { type: "message", id: "m3", role: "assistant", text: "Done." } } }));
+  const entries = follower.getState().view?.snapshot.entries ?? [];
+  assert.deepEqual(entries.map((entry) => entry.id), ["m1", "m2", "m3"]);
+  const first = entries[0];
+  assert.equal(first?.type === "user" && first.text, "Plan my whole week");
+  follower.stop();
+});
+
 test("a gap or a new epoch makes the follower read the session again; a snapshot replaces it outright", async () => {
   const fake = fakeTransport([session(), session({ seq: 12, entries: [] })]);
   const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
