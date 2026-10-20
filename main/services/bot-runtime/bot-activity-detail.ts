@@ -8,9 +8,9 @@
 // Arguments of connection tools are never shown.
 
 import {
-  botStepPhrase,
   botToolApp,
   botToolPhase,
+  botToolStepLabel,
   type BotToolPhase,
 } from "../../../renderer/shared/bot-activity.js";
 import { sanitizeDiagnosticText } from "../diagnostics-contract.js";
@@ -96,7 +96,7 @@ export function botStepDescriptor(toolName: string, args: unknown): BotStepDescr
   const detail = bounded(rawDetail(toolName, kind, record(args)));
   return {
     kind,
-    label: botStepPhrase(kind, 1, app),
+    label: botToolStepLabel(toolName, kind, app),
     ...(detail ? { detail } : {}),
     ...(app ? { app } : {}),
   };

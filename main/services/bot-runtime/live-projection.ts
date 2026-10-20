@@ -24,6 +24,12 @@ import type { Conversation, ConversationWatch, EntryRecord } from "@earendil-wor
 import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shared/bot-connections.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import {
+  BOT_HANDOFF_TOOL_NAME,
+  BOT_SIGN_IN_TOOL_NAME,
+  botHandoffResultOf,
+  type BotPendingHandoff,
+} from "../../../renderer/shared/bot-handoffs.js";
+import {
   BOT_SILENT_REPLY,
   botFailedTurnId,
   botQuestionAnswerText,
@@ -205,6 +211,9 @@ function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultS
  * - `pi.assistant` / `pi.tool-result` → assistant text and tool activity. A
  *   reply that ended in an error becomes a `failed_turn` (after any text it
  *   wrote), carrying the turn's typed message for Retry.
+ * - A settled `ask_user_question` → `question_answer`; a settled `hand_off` or
+ *   `sign_in` → `handoff_result` (id `handoff:<toolCallId>`). Their error
+ *   results (stopped, refused) stay tool results.
  * - `aiden.connect-card` → a connect card; `aiden.bot-shared-image` → an image.
  * - A successful `bot_memory` result that changed something, or an
  *   `aiden.memory-review` entry that added something → `memory_update`.
@@ -354,6 +363,27 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
           : undefined;
       if (answerText !== undefined) {
         mapped.push({ entry: { id, type: "question_answer", text: answerText, at: message.timestamp }, turn });
+        continue;
+      }
+      // The person's Done or Skip on a hand-off card reads as their side of the chat.
+      const handoff =
+        (message.toolName === BOT_HANDOFF_TOOL_NAME || message.toolName === BOT_SIGN_IN_TOOL_NAME) && !message.isError
+          ? botHandoffResultOf(message.details)
+          : undefined;
+      if (handoff !== undefined) {
+        mapped.push({
+          entry: {
+            id: `handoff:${message.toolCallId}`,
+            type: "handoff_result",
+            kind: handoff.kind,
+            outcome: handoff.outcome,
+            action: handoff.action,
+            ...(handoff.note === undefined ? {} : { note: handoff.note }),
+            ...(handoff.origin === undefined ? {} : { origin: handoff.origin }),
+            at: message.timestamp,
+          },
+          turn,
+        });
         continue;
       }
       const startedAt = callStartedAt.get(message.toolCallId);
@@ -682,6 +712,8 @@ export interface BotLiveProjectionDeps {
   state(botId: string): Promise<BotSessionState>;
   /** The question the Bot is waiting on right now, if any. */
   question?(botId: string): BotPendingQuestion | null;
+  /** The hand-off card the Bot is waiting on right now, if any. */
+  handoff?(botId: string): BotPendingHandoff | null;
   /**
    * Classify queued submission ids: `true` for a routine's input or the hidden
    * self-intro, `false` for the person's own message. Decided from durable
@@ -725,6 +757,8 @@ export interface BotLiveProjection {
   refresh(botId: string): Promise<void>;
   /** The Bot's pending question changed (asked, answered, withdrawn): push a `question` event. */
   refreshQuestion(botId: string): Promise<void>;
+  /** The Bot's pending hand-off changed (opened, answered, withdrawn): push a `handoff` event. */
+  refreshHandoff(botId: string): Promise<void>;
   /** The person pressed Stop: the running turn reads "Stopping" until it ends. Ignored when nothing runs. */
   notifyStopping(botId: string): void;
   /**
@@ -759,6 +793,7 @@ interface Feed {
   partial: string | null;
   state: BotSessionState;
   question: BotPendingQuestion | null;
+  handoff: BotPendingHandoff | null;
   activity: BotLiveActivity | null;
   queued: BotQueuedMessage[];
   /** Which queued inputs are the person's own (fail closed, throttled retries). */
@@ -811,6 +846,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       partial: feed.partial,
       state: feed.state,
       question: feed.question,
+      handoff: feed.handoff,
       activity: feed.activity,
       queued: feed.queued,
     };
@@ -873,7 +909,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   }
 
   function waitingOn(feed: Feed): boolean {
-    return feed.question !== null || deps.approvalPending?.(feed.botId) === true;
+    return feed.question !== null || feed.handoff !== null || deps.approvalPending?.(feed.botId) === true;
   }
 
   /** Null unless the session is running: a paused Bot keeps `pi.live.run` but is not working. */
@@ -1042,6 +1078,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         partial: livePartialText(initial.docs),
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
+        handoff: deps.handoff?.(botId) ?? null,
         activity: null,
         queued: [],
         classifier,
@@ -1123,14 +1160,26 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     });
   }
 
+  /** Push a `handoff` event when the Bot's waiting hand-off differs from the feed's. */
+  function syncHandoff(feed: Feed): Promise<void> {
+    return enqueueWork(feed, async () => {
+      const handoff = deps.handoff?.(feed.botId) ?? null;
+      if (handoff?.waitId === feed.handoff?.waitId) return;
+      feed.handoff = handoff;
+      emit(feed, { type: "handoff", handoff });
+      updateActivity(feed);
+    });
+  }
+
   return {
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
       const feed = await openFeed(botId);
       // A new subscriber gets current connect-card statuses, not the feed's last view.
       await reproject(feed).catch((error) => report(botId, error));
-      // A question asked or settled while no feed was open is caught up here.
+      // A question or hand-off asked or settled while no feed was open is caught up here.
       await syncQuestion(feed).catch((error) => report(botId, error));
+      await syncHandoff(feed).catch((error) => report(botId, error));
       let set = subscribers.get(botId);
       if (!set) subscribers.set(botId, (set = new Set()));
       set.add(subscriber);
@@ -1203,10 +1252,19 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       await syncQuestion(feed);
     },
 
+    async refreshHandoff(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      await syncHandoff(feed);
+    },
+
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYouNow = () => (deps.question?.(botId) ?? null) !== null || deps.approvalPending?.(botId) === true;
+      const needsYouNow = () =>
+        (deps.question?.(botId) ?? null) !== null ||
+        (deps.handoff?.(botId) ?? null) !== null ||
+        deps.approvalPending?.(botId) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;

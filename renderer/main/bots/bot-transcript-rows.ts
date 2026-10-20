@@ -1,7 +1,7 @@
 // What a Bot chat shows, row by row, from the durable projection.
 //
 // A reply's turn starts at the person's message (or a routine, or their answer
-// to a question) and ends at the next one. Everything the Bot writes is a
+// to a question or a hand-off card) and ends at the next one. Everything the Bot writes is a
 // bubble, including the narration it writes alongside tool calls (spec
 // decision 9); tool steps themselves never become rows. With Summary or
 // Detailed chat activity, a turn that used tools also gets one recap of its
@@ -10,6 +10,7 @@
 // and never stored.
 
 import { botRetryableFailedTurn, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
+import { botHandoffResultLine, type BotHandoffOutcome } from "../../shared/bot-handoffs";
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
@@ -25,6 +26,8 @@ export interface BotTranscriptRowOptions {
 
 export type BotTranscriptRow =
   | { kind: "user"; id: string; text: string }
+  /** The person's answer to a hand-off card, on their side: "You did this: …" with their note below. */
+  | { kind: "handoff_result"; id: string; outcome: BotHandoffOutcome; signedIn: boolean; text: string; note?: string }
   | { kind: "routine"; id: string; label: string; text: string }
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
   /** One turn's steps; `live` while the turn runs (Detailed only). */
@@ -82,6 +85,16 @@ export function botTranscriptRows(
         case "question_answer":
           // Every message starts a turn: a steer is placed after the round's tool results, so it never splits a step from its result.
           rows.push({ kind: "user", id: entry.id, text: entry.text });
+          break;
+        case "handoff_result":
+          rows.push({
+            kind: "handoff_result",
+            id: entry.id,
+            outcome: entry.outcome,
+            signedIn: entry.kind === "sign_in" && entry.outcome === "done",
+            text: botHandoffResultLine(entry),
+            ...(entry.note ? { note: entry.note } : {}),
+          });
           break;
         case "routine":
           rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });

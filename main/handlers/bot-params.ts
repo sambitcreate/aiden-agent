@@ -12,6 +12,7 @@ import {
   type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotMemoryEditInput, BotMemoryTarget } from "../../renderer/shared/bot-memory.js";
+import { BOT_HANDOFF_NOTE_MAX_CHARS, type BotHandoffOutcome } from "../../renderer/shared/bot-handoffs.js";
 import {
   ASK_USER_MAX_CUSTOM_ANSWER_LENGTH,
   ASK_USER_MAX_LABEL_LENGTH,
@@ -299,6 +300,39 @@ export function parseBotQuestionAnswer(input: unknown): { botId: string; waitId:
       answers: response.answers.map(questionAnswerItem),
     },
   };
+}
+
+const HANDOFF_ANSWER_KEYS = new Set(["botId", "waitId", "outcome", "note"]);
+const HANDOFF_OPEN_KEYS = new Set(["botId", "waitId"]);
+
+function handoffWaitId(value: unknown): string {
+  if (typeof value !== "string" || !BOT_APPROVAL_WAIT_ID.test(value)) throw new Error("Invalid bot hand-off id.");
+  return value;
+}
+
+/** A hand-off card answer: the Bot, the durable `waitId`, Done or Skip, and an optional note. */
+export function parseBotHandoffAnswer(input: unknown): {
+  botId: string;
+  waitId: string;
+  outcome: BotHandoffOutcome;
+  note?: string;
+} {
+  const fields = exact(input, HANDOFF_ANSWER_KEYS, "bot hand-off answer fields");
+  const waitId = handoffWaitId(fields.waitId);
+  if (fields.outcome !== "done" && fields.outcome !== "skipped") throw new Error("Invalid bot hand-off answer.");
+  const note = text(fields.note, "bot hand-off note", BOT_HANDOFF_NOTE_MAX_CHARS, true);
+  return {
+    botId: parseBotId(fields.botId),
+    waitId,
+    outcome: fields.outcome,
+    ...(note === undefined ? {} : { note }),
+  };
+}
+
+/** Open on a hand-off card: the Bot and the durable `waitId`. */
+export function parseBotHandoffOpen(input: unknown): { botId: string; waitId: string } {
+  const fields = exact(input, HANDOFF_OPEN_KEYS, "bot hand-off fields");
+  return { botId: parseBotId(fields.botId), waitId: handoffWaitId(fields.waitId) };
 }
 
 export function parseBotChatCreate(value: unknown) {

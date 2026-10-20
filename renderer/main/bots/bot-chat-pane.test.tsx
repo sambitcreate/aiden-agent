@@ -1001,3 +1001,159 @@ test("an open chat keeps its Bot read: a reply that finishes while it is open is
   assert.ok((stored().lastViewed["bot-1"] ?? 0) > opened, "leaving records when it was last open");
   assert.equal(stored().seenReplyAt["bot-1"], replyAt, "leaving never claims a reply the chat didn't show");
 });
+
+const BANK_HANDOFF = {
+  botId: "bot-1",
+  waitId: "wait-h",
+  toolCallId: "tool-h",
+  kind: "action" as const,
+  action: "Enter the 2FA code for your bank",
+  why: "Only you get the code on your phone.",
+  open: { url: "https://bank.example/verify" },
+  source: "tool" as const,
+};
+
+const RUNNING = { kind: "running", submissionId: "s1" } as const;
+
+/** The test DOM does not mount sonner's viewport, so observe the error toasts the person would be shown. */
+function captureErrorToasts() {
+  const shown: string[] = [];
+  const original = toast.error;
+  toast.error = ((message: unknown) => {
+    shown.push(String(message));
+    return "toast";
+  }) as typeof toast.error;
+  return { shown, restore: () => void (toast.error = original) };
+}
+
+const handoffAnswers = (calls: ReadonlyArray<{ channel: string; args: unknown[] }>) =>
+  calls.filter((call) => call.channel === "bots:answerHandoff").map((call) => call.args[0]);
+
+test("a hand-off card waits above the composer, Open asks for its page, and Done answers it once by wait id", async () => {
+  let release: (value: { answered: boolean }) => void = () => undefined;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+    "bots:openHandoff": () => ({ opened: "external" }),
+    "bots:answerHandoff": () => new Promise((resolve) => (release = resolve)),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(within(card).getByText("Your turn: Enter the 2FA code for your bank"));
+  assert.ok(within(card).getByText("Only you get the code on your phone."));
+  const note = screen.getByPlaceholderText("Add a note and send to mark it done");
+  assert.ok(
+    within(card).getByRole("button", { name: "Done" }).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the composer stays, for a note, and Tab reaches it after the card's buttons",
+  );
+
+  fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:openHandoff")?.args, [{ botId: "bot-1", waitId: "wait-h" }]),
+  );
+  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "Done" }) as HTMLButtonElement).disabled, false));
+
+  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+  assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done" }], "a second press waits for the first");
+  await act(async () => release({ answered: true }));
+
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "handoff", handoff: null }));
+  await waitFor(() => assert.equal(document.body.textContent?.includes("Your turn:"), false));
+  act(() =>
+    emitBotTestNotification("bots:live:event", {
+      botId: "bot-1",
+      epoch: "epoch-1",
+      seq: 2,
+      type: "entry",
+      entry: { id: "handoff:tool-h", type: "handoff_result", kind: "action", outcome: "done", action: BANK_HANDOFF.action },
+    }),
+  );
+  await waitFor(() => assert.equal(document.body.textContent?.includes("You did this: Enter the 2FA code for your bank"), true));
+  assert.ok(screen.getByPlaceholderText("Ask Planner"), "the composer asks the Bot again");
+});
+
+test("Skip answers the card as skipped, and a card answered elsewhere says so", async () => {
+  const errors = captureErrorToasts();
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: { ...BANK_HANDOFF, open: undefined } }),
+      "bots:answerHandoff": () => ({ answered: false }),
+    });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    assert.equal(within(card).queryByRole("button", { name: /^Open/u }), null, "no page, no Open");
+    fireEvent.click(within(card).getByRole("button", { name: "Skip" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."]));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "skipped" }]);
+  } finally {
+    errors.restore();
+  }
+});
+
+test("typing while a hand-off waits answers it Done with that note, never as a queued or steering message", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+    "bots:answerHandoff": () => ({ answered: true }),
+    "bots:stop": () => ({ kind: "idle" }),
+  });
+  const box = await screen.findByPlaceholderText("Add a note and send to mark it done");
+  assert.equal(screen.queryByRole("button", { name: "Queue message" }), null, "the note answers the card, so there is no Queue or Steer");
+  fireEvent.change(box, { target: { value: "  Code entered, it said 'verified'.  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+  assert.deepEqual(handoffAnswers(calls), [
+    { botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Code entered, it said 'verified'." },
+  ]);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false, "the note never reaches the Bot as a message of its own");
+
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
+});
+
+test("a note the card could not take stays in the composer", async () => {
+  const errors = captureErrorToasts();
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:answerHandoff": () => ({ answered: false }),
+    });
+    const box = (await screen.findByPlaceholderText("Add a note and send to mark it done")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "Done on my phone." } });
+    fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."], "said once"));
+    assert.equal(handoffAnswers(calls).length, 1);
+    await waitFor(() => assert.equal(box.value, "Done on my phone."));
+  } finally {
+    errors.restore();
+  }
+});
+
+test("a photo sent while a hand-off waits is refused and kept with the note, and the card stays unanswered", async () => {
+  const errors = captureErrorToasts();
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:answerHandoff": () => ({ answered: true }),
+    });
+    // The pasted image reaches the composer the way the preload's attachment reader returns it.
+    (window as unknown as { aidenAPI: Record<string, unknown> }).aidenAPI.attachments = {
+      readClipboardImages: async () => [
+        { id: "img-1", name: "verified.png", mimeType: "image/png", kind: "image", size: 4, data: "AAECAw==" },
+      ],
+    };
+    const box = (await screen.findByPlaceholderText("Add a note and send to mark it done")) as HTMLTextAreaElement;
+    const image = new File([new Uint8Array([0, 1, 2, 3])], "verified.png", { type: "image/png" });
+    fireEvent.paste(box, {
+      clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => image }], getData: () => "" },
+    });
+    await waitFor(() => assert.equal(document.body.textContent?.includes("1 attachment is ready."), true));
+    fireEvent.change(box, { target: { value: "It said verified." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["Send photos after you answer the card."]));
+    assert.equal(handoffAnswers(calls).length, 0, "the card is not answered without the photo");
+    assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+    await waitFor(() => assert.equal(box.value, "It said verified."));
+    assert.ok(screen.getByRole("group", { name: "Planner needs you" }), "the card still waits");
+  } finally {
+    errors.restore();
+  }
+});

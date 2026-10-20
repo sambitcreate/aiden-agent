@@ -5,11 +5,12 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, FileText, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleSlash, FileText, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { HandoffCard } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
@@ -25,6 +26,11 @@ import { queryKeys, useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import { BOT_FAILED_TURN_TEXT, botLastReplyAt, type BotPendingQuestion, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
+import {
+  BOT_HANDOFF_NOTE_MAX_CHARS,
+  type BotHandoffOutcome,
+  type BotPendingHandoff,
+} from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
@@ -292,6 +298,32 @@ function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
   );
 }
 
+/** The person's answer to a hand-off card, on their side of the chat: what they did, then their note. */
+function BotHandoffResultBubble({
+  outcome,
+  signedIn,
+  text,
+  note,
+}: {
+  outcome: BotHandoffOutcome;
+  signedIn: boolean;
+  text: string;
+  note?: string;
+}) {
+  const Icon = outcome === "skipped" ? CircleSlash : signedIn ? LogIn : CircleCheck;
+  return (
+    <div className="flex justify-end" data-bot-handoff-result={outcome}>
+      <div className="flex max-w-[80%] select-text items-start gap-2 rounded-2xl bg-control px-4 py-2.5">
+        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-secondary" />
+        <div className="min-w-0 [overflow-wrap:anywhere]">
+          <p className="text-regular text-primary">{text}</p>
+          {note ? <p className="mt-0.5 whitespace-pre-wrap text-small text-secondary">{note}</p> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const QUEUED_PREVIEW_CHARS = 40;
 
 /** A follow-up waiting for the running turn: a faded bubble surface, "Queued", and Remove. */
@@ -376,6 +408,23 @@ function TranscriptEntries({
             return (
               <BotMessageActions key={row.id} text={row.text} from="You" align="end" onReply={onReply}>
                 <SafeMessageBubble role="user" content={row.text} showCopy={false} />
+              </BotMessageActions>
+            );
+          case "handoff_result":
+            return (
+              <BotMessageActions
+                key={row.id}
+                text={row.note ? `${row.text}\n${row.note}` : row.text}
+                from="You"
+                align="end"
+                onReply={onReply}
+              >
+                <BotHandoffResultBubble
+                  outcome={row.outcome}
+                  signedIn={row.signedIn}
+                  text={row.text}
+                  {...(row.note ? { note: row.note } : {})}
+                />
               </BotMessageActions>
             );
           case "routine":
@@ -510,6 +559,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
+  const [handoffBusy, setHandoffBusy] = React.useState(false);
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
@@ -555,6 +605,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         state?.kind,
         approvals.prompts.length,
         snapshot?.question?.waitId,
+        snapshot?.handoff?.waitId,
         snapshot?.activity?.phase,
         snapshot?.queued?.length ?? 0,
         statusLayout,
@@ -614,6 +665,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   }
 
   const question = snapshot.question;
+  const handoff = snapshot.handoff ?? null;
   const chatActivity = resolveBotChatActivity(current.chatActivity);
   // While the reply's visible words stream, the words are the signal (§5.2). The
   // partial text can outlast narration into a tool call, so a running step keeps the line.
@@ -683,6 +735,62 @@ export function BotChatPane({ botId }: { botId: string }) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
     } finally {
       setAnswering(false);
+    }
+  };
+
+  /** Send Done or Skip for the hand-off card: null once main recorded it, else what to tell the person. */
+  const sendHandoffAnswer = async (
+    pending: BotPendingHandoff,
+    outcome: BotHandoffOutcome,
+    note?: string,
+  ): Promise<string | null> => {
+    setHandoffBusy(true);
+    try {
+      const { answered } = await botsApi.answerHandoff(current.id, pending.waitId, outcome, note);
+      return answered ? null : "That card was already answered or closed.";
+    } catch (error) {
+      return userFacingErrorMessage(error, "Aiden couldn’t send that answer.");
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
+
+  /** The card's Done or Skip. */
+  const answerHandoff = async (pending: BotPendingHandoff, outcome: BotHandoffOutcome) => {
+    const problem = await sendHandoffAnswer(pending, outcome);
+    if (problem) toast.error(problem);
+  };
+
+  /**
+   * What the person types while a hand-off card waits answers it as Done, with
+   * their words as the note, whichever way the composer sends. A throw keeps
+   * the draft in the composer, which shows the error's message.
+   */
+  const answerHandoffWithNote = async (pending: BotPendingHandoff, text: string, attachments: Attachment[]) => {
+    if (attachments.length > 0) {
+      throw new Error(
+        attachments.some((attachment) => attachment.kind === "image")
+          ? "Send photos after you answer the card."
+          : "Send files after you answer the card.",
+      );
+    }
+    const note = text.trim();
+    if ([...note].length > BOT_HANDOFF_NOTE_MAX_CHARS) {
+      throw new Error(`Keep the note under ${BOT_HANDOFF_NOTE_MAX_CHARS.toLocaleString()} characters.`);
+    }
+    const problem = await sendHandoffAnswer(pending, "done", note || undefined);
+    if (problem) throw new Error(problem);
+  };
+
+  const openHandoff = async (pending: BotPendingHandoff) => {
+    setHandoffBusy(true);
+    try {
+      const { opened } = await botsApi.openHandoff(current.id, pending.waitId);
+      if (opened === "none") toast.error("Aiden couldn’t open that page.");
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t open that page."));
+    } finally {
+      setHandoffBusy(false);
     }
   };
 
@@ -762,8 +870,20 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const footer = (
     <div className="flex flex-col">
-      {approvals.prompts.length > 0 ? (
+      {approvals.prompts.length > 0 || handoff ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
+          {handoff ? (
+            <HandoffCard
+              key={handoff.waitId}
+              botId={current.id}
+              name={current.name}
+              avatar={current.avatar}
+              handoff={handoff}
+              busy={handoffBusy}
+              onOpen={() => void openHandoff(handoff)}
+              onAnswer={(outcome) => void answerHandoff(handoff, outcome)}
+            />
+          ) : null}
           {approvals.prompts.map((prompt) => (
             <BotApprovalCard
               key={prompt.waitId}
@@ -804,17 +924,33 @@ export function BotChatPane({ botId }: { botId: string }) {
           readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
           hasMessages={snapshot.entries.length > 0}
           chatId={`bot:${current.id}`}
-          placeholder={`Ask ${current.name}`}
-          onSend={(text, attachments) => send(text, attachments)}
-          onQueue={(text, attachments) => send(text, attachments, "followUp")}
-          onSteer={(text, attachments) => send(text, attachments, "steer")}
+          placeholder={handoff ? "Add a note and send to mark it done" : `Ask ${current.name}`}
+          onSend={(text, attachments) =>
+            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments)
+          }
+          onQueue={(text, attachments) =>
+            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments, "followUp")
+          }
+          onSteer={(text, attachments) =>
+            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments, "steer")
+          }
           onStop={stop}
-          isGenerating={running}
+          // While a hand-off waits, sending answers the card: a plain Send, never Queue or Steer.
+          isGenerating={running && !handoff}
           canStopGeneration={running}
           inputRef={composerRef}
           surfaces={BOT_CHAT_COMPOSER_SURFACES}
         />
       )}
+      {/* The composer's send answers the card, so Stop lives here while it waits. */}
+      {handoff && !question && running ? (
+        <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
+          <Button variant="filled" size="small" onClick={stop}>
+            <Square aria-hidden="true" />
+            Stop
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 
