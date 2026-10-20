@@ -111,7 +111,12 @@ CLI Bots (`packages/cli/src/bots.ts`) run on their own runtime, without the desk
 3. **Where tabs live.** Bot tabs belong to the Bot's managed workspace (`resolveManagedWorkspace(botId)`). Add a **Browser** tab to the Bot side panel (`bot-workbench.tsx` `TAB_META`) that hosts the existing browser surface bound to that workspace. It stays hidden until the Bot has a tab, like workspace Artifacts.
 4. **Tools.** `createBrowserAgentTools` needs `workspaceId`, `chatId` and `generationId`. Bots pass the managed workspace, the canonical Bot chat, and the run's submission id. Allow `canUseBrowserTools` for Bots only with the capability. The discovery gateway (`browser`) stays the first-offered tool. All tools are `replay: "unsafe"` except snapshot and status.
 5. **Approvals.** Bot browser interaction and evaluation follow the Bot's approval path (§2). Ask-mode approvals bind to tab, revision and arguments, as they do in workspaces (`browser/approval.ts`). Navigation and reads don't ask.
-6. **Secrets never reach the model.** Verify that `browser_snapshot` never includes the values of `input[type=password]`, `autocomplete="one-time-code"` or `cc-*` fields, and redact them if it does. `browser_type` into such a field is the locked credentials rule (§6), so the Bot can't even attempt it.
+6. **Secrets never reach the model.** "Sensitive fields" are `input[type=password]` and any field whose `autocomplete` names a credential, one-time code or card (`current-password`, `new-password`, `one-time-code`, `cc-*`). Every model-visible output is covered, not just snapshot text:
+   - **No arbitrary script.** Bots don't get `browser_evaluate`, because a script can read a field's `.value` directly. They don't get `browser_recording_start` or `browser_recording_stop` either. Workspace chats keep both.
+   - **Snapshot text.** Sensitive field values are dropped from the snapshot.
+   - **Snapshot images.** After capture, main gets the bounding boxes of sensitive fields in every frame and paints over them in the PNG before the image reaches the model. Doing this in main means a page's own CSS can't undo it. If a frame's boxes can't be read (for example a cross-origin iframe), that snapshot goes out without an image, and its text says why.
+   - **During sign-in.** While a sign-in card or human takeover holds the tab, Bot snapshots of that tab are refused. After release, masking applies as above.
+   - **Typing.** `browser_type` into a sensitive field is the locked credentials rule (§6), so the Bot can't even attempt it.
 
 ### 5.2 B2: `sign_in`
 
@@ -125,7 +130,7 @@ CLI Bots (`packages/cli/src/bots.ts`) run on their own runtime, without the desk
 
 - Inventory test (the Browser capability becomes available), the policy verdict, and the ingress rules for the browser tools.
 - Partition isolation: a Bot tab's cookies aren't visible to a workspace tab, as a Playwright e2e in `tests/e2e/` alongside `browser-agent.spec.ts`. Bot delete removes the partition.
-- Snapshot redaction with a fixture page (password, OTP, card fields).
+- Credential boundary, against a fixture page with password, OTP and card fields, both before a sign-in and after takeover is released: no sensitive value appears in snapshot text; the image's sensitive-field boxes are painted over (pixel check); a cross-origin frame drops the image; and `browser_evaluate` and the recording tools aren't offered to Bots.
 - `sign_in` origin normalization (rejects `http:`, userinfo, IP literals and `localhost`) and the tab lock while the card waits.
 
 ## 6. C: Plain-language rules
@@ -220,13 +225,14 @@ Property test: for every rule set and every call, `ruled >= baseline`.
 
 - `bot-session-service.ts`: `pause(botId)` and `unpause(botId)`. `resume` is already the method for an interrupted turn, so the code, IPC (`bots:pause`, `bots:unpause`) and Remote names say *unpause*, even though the button reads **Resume**. Pausing needs a way to close one Bot's harness while a task is live. `harness-host.ts` only idle-closes today ("only with no live task"), so add a forced per-Bot close with the same bounded abort used at quit, and test that the turn comes back `interrupted`.
 - `BotSessionState` gains `{ kind: "paused"; interrupted?: string }`. `bot-status-line.tsx` and `bot-sidebar-rows.ts` show "Paused".
+- **Legacy wire projection (in this PR, before Remote rev 36).** Shipped iOS (`AidenBotSessionStateKind`) and Android (`AidenBot.kt`) clients decode Bot state as a closed enum, and `projectBotSessionState` (`aiden-remote-bot-session.ts`) passes kinds straight through. So it must map `paused` to `{ state: "unavailable", interrupted: false }` everywhere a state goes out: session snapshots, `state` frames, list and detail `sessionState`, and mutation responses. Only devices holding `bot:handoffs` (rev 36) see `paused`. Phone writes to a paused Bot (messages, resume, dismiss, running a routine) are refused with an error code shipped clients already know, picked from `AIDEN_REMOTE_ERROR_CODES` in this PR. `bot_paused` goes only to `bot:handoffs` devices.
 - `scheduled-bot-routines.ts`: check the pause store before the state switch, and add `paused_by_person` to `ScheduledRunSkipReason` (`main/services/types.ts:497`). `createBotRoutineCatchUp` ignores it.
 - Telegram ingress (`telegram/bot-reply-outbox.ts` path): reply with the fixed line instead of submitting.
 - CLI: `aiden bots pause <id>` and `aiden bots unpause <id>` through the running `aiden serve`. Update `packages/cli/README.md`.
 
 ### 7.3 Tests
 
-`bot-session-service.test.ts` (pause while running → interrupted; send while paused refused; resume restores the interrupted card), `scheduled-bot-routines` tests (skip reason, no catch-up), the Telegram ingress test, render tests for the paused composer and sidebar row, and the Remote route tests.
+Cross-version decoding: a paused Bot's snapshot, frames, list and detail responses decode with the current (rev 35) contract fixture and native parsers. `bot-session-service.test.ts` (pause while running → interrupted; send while paused refused; resume restores the interrupted card), `scheduled-bot-routines` tests (skip reason, no catch-up), the Telegram ingress test, render tests for the paused composer and sidebar row, and the Remote route tests.
 
 ## 8. E: Bot computers (Lume)
 
@@ -245,7 +251,7 @@ Property test: for every rule set and every call, `ruled >= baseline`.
   - Run only the vendored path, with `LUME_TELEMETRY_ENABLED=false` and `LUME_UPDATE_CHECK=false`.
   - Never run `lume serve`: its HTTP API on `localhost:7777` has no authentication.
   - Never run the installer, `lume update` or `lume pull` from a registry.
-  - Always pass `--storage <userData>/bot-computers/vms` (a direct path) so Aiden never touches the person's own `~/.lume` VMs or configuration.
+  - Every command names Aiden's storage path (`<userData>/bot-computers/vms`) explicitly: `--storage` where a command takes it, and `--source-storage` plus `--dest-storage` for `clone`, which has no `--storage` flag. That way Aiden never touches the person's own `~/.lume` VMs or configuration.
 - **Entitlement check (E0).** Lume needs `com.apple.security.virtualization`, which its own signature carries. Confirm that a vendored, upstream-signed `lume` launched from Aiden's helper keeps working inside the notarized Aiden bundle, as `CuaDriver.app` does.
 
 ### 8.3 The base image and clones
@@ -255,7 +261,7 @@ Property test: for every rule set and every call, `ruled >= baseline`.
    - installs an Aiden SSH key (ed25519, `0600` in userData), disables password SSH, and sets a random `lume` password kept in the encrypted credential store;
    - turns off guest telemetry prompts and automatic updates (updates come with a new base);
    - creates `~/Shared` (the shared folder mount point, §8.6).
-3. **Per Bot.** `lume clone aiden-base bot-<dir>` copies disk and NVRAM together. Disks are sparse, so a clone costs only what the Bot writes. A **Reset computer** action deletes and re-clones it.
+3. **Per Bot.** `lume clone aiden-base bot-<dir> --source-storage <path> --dest-storage <path>` copies disk and NVRAM together. Disks are sparse, so a clone costs only what the Bot writes. A **Reset computer** action deletes and re-clones it.
 4. **New base.** When a new Aiden release pins a newer IPSW, Set up offers **Update base**. Existing Bot clones keep running on the old base until the person resets them (shown in the Computer section).
 
 ### 8.4 Lifecycle and limits
@@ -273,7 +279,7 @@ Property test: for every rule set and every call, `ruled >= baseline`.
   - (b) a small RFB client in main that turns frames into the existing flat device viewer's MJPEG path.
   - *Lean: (b)*, because it keeps the VNC password and socket in main and reuses the device viewer, floating player and phone viewer pipeline later.
 - **VNC binding.** E0 must confirm Lume's VNC listener binds only to loopback. If it doesn't, Aiden must not use it.
-- **Take over.** It interrupts the Bot's current `computer` call (the turn stays alive and waits), switches the viewer to interactive, and shows **Give back**. Giving back resumes with a tool result note: `The person used the computer; take a fresh capture first.` Any physical input in the viewer also counts as Take over.
+- **Take over.** It interrupts the Bot's current `computer` call (the turn stays alive and waits), switches the viewer to interactive, and shows **Give back**. Giving back resumes with a tool result note: `The person used the computer; take a fresh capture first.` Any physical input in the viewer also counts as Take over. While the person has control, `computer` captures are refused, so the model never sees a sign-in in progress. After Give back, macOS secure fields show only dots, but a plaintext one-time code left on screen is not masked in the VNC lane. That gap is listed in §13.
 - **Pointer avatar.** Draw the Bot's avatar at the last action point the Bot used (from the action arguments). That needs no guest cursor query.
 
 ### 8.6 How the Bot drives it
@@ -302,7 +308,7 @@ v1 shows the computer's state on Bot detail ("Ada's computer is running"). A liv
 
 ### 8.10 Tests and acceptance
 
-- `tests/e2e/lume-fake.mjs`: a fake `lume` CLI (like `agent-device-fake.mjs`) that records arguments and emulates `create`, `clone`, `run`, `get` and `delete`, including the stale and limit errors. Host tests cover pinning, the environment (telemetry off, `--storage` always set), lifecycle, the concurrency cap, idle stop, and delete idempotence.
+- `tests/e2e/lume-fake.mjs`: a fake `lume` CLI (like `agent-device-fake.mjs`) that records arguments and emulates `create`, `clone`, `run`, `get` and `delete`, including the stale and limit errors. Host tests cover pinning, the environment (telemetry off), storage isolation (the fake fails any call without Aiden's `--storage`, or for `clone` without both `--source-storage` and `--dest-storage`), lifecycle, the concurrency cap, idle stop, and delete idempotence.
 - RFB client tests against recorded frame fixtures.
 - Packaged acceptance script `scripts/bot-computers-packaged-acceptance.mjs` (owner Mac only, like `computer-use-packaged-acceptance.mjs`): create the base, clone, run, capture, click, take over, then delete.
 
@@ -320,7 +326,7 @@ Claim 36 (the next after `main`'s 35) at merge time, and update the fixture, Ope
   - `paused` on Bot detail and summary;
   - `POST /bots/{id}/pause` to pause and `DELETE /bots/{id}/pause` to unpause (`POST /bots/{id}/resume` already exists for resuming an interrupted turn, so unpausing must not reuse it);
   - error `bot_paused`;
-- devices without it get a `state` frame and a text notice "Ada needs you on your Mac", the same fallback pattern as `bot:cards`.
+- devices without it get a `state` frame and a text notice "Ada needs you on your Mac", the same fallback pattern as `bot:cards`, and see a paused Bot as `unavailable` (the legacy projection that ships in PR 2, §7.2).
 
 Clients:
 
@@ -347,7 +353,7 @@ Answer in shorthand ("1a 2a …"). **Bold** marks the recommendation that work p
 | # | PR | Depends on | Size |
 |---|---|---|---|
 | 1 | **Hand-off core + desktop** (§4 without Remote) | — | M |
-| 2 | **Pause core + desktop + CLI** (§7 without Remote) | — | M |
+| 2 | **Pause core + desktop + CLI**, including the legacy wire projection (§7.2) so shipped phones keep decoding | — | M |
 | 3 | **Rules** (§6: classifier, corpus, store, enforcement for Computer Use and MCP, editor, prompt) | 1 | M–L |
 | 4 | **Remote rev 36 + iOS + Android** for hand-offs and pause (§9) | 1, 2 | L |
 | 5 | **Bot browser** (§5.1, plus browser signals in the rules classifier) | 3 | L |
@@ -374,5 +380,6 @@ PRs 1 and 2 can start right away and in parallel. The E0 spike needs the owner's
 - **Classifier misses.** Keyword and label matching will miss some purchases or messages. Mitigations: the locked classes use structured signals (secure fields, card autocomplete), rules only tighten, today's approvals stay as the baseline, and the editor says what rules don't cover (shell).
 - **VM resource cost.** macOS guests are heavy (RAM, about 50 GB base). Mitigations: per-Bot opt-in, on-demand start, idle stop, a cap of two, and clear checks before Set up.
 - **Upstream churn.** Lume is young (0.6.x) and every `cua-driver-rs` release is marked pre-release. Mitigations: exact pins, a reviewed upgrade per Aiden release, and a fake-CLI test suite.
+- **Codes on a Bot computer's screen.** In the VNC lane, a one-time code shown in plain text after the person gives control back is visible to the model's next capture. Mitigations: the guidance tells the Bot to hand off codes, and the guest driver lane can mask secure elements by role.
 - **Apple licensing.** macOS guests are allowed only on Apple hardware, two at a time. This is why the feature is Apple-silicon-only and the cap is enforced.
 - **Remote budget.** Any future Bot feature also has to use negotiated capabilities until the clients' 32-token `/server` cap is raised in a coordinated client release.
