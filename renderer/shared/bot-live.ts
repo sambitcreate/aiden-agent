@@ -12,6 +12,12 @@ import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
 import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "./bot-routine-proposals.js";
+import {
+  botHandoffResultLine,
+  type BotHandoffKind,
+  type BotHandoffOutcome,
+  type BotPendingHandoff,
+} from "./bot-handoffs.js";
 
 export type { BotSessionState };
 
@@ -113,6 +119,21 @@ export type BotTranscriptEntry =
       id: string;
       type: "question_answer";
       text: string;
+      at?: number;
+    }
+  /**
+   * The person's answer to a hand-off card, shown on their side of the chat:
+   * "You did this: …", "You skipped this: …" or "You signed in to …".
+   * Id `handoff:<toolCallId>`.
+   */
+  | {
+      id: string;
+      type: "handoff_result";
+      kind: BotHandoffKind;
+      outcome: BotHandoffOutcome;
+      action: string;
+      note?: string;
+      origin?: string;
       at?: number;
     }
   /**
@@ -219,6 +240,11 @@ export interface BotLiveSnapshot {
   state: BotSessionState;
   /** The question the Bot is waiting on, or null. */
   question: BotPendingQuestion | null;
+  /**
+   * The hand-off card the Bot is waiting on, or null. Main always sets it;
+   * read it as `snapshot.handoff ?? null`.
+   */
+  handoff?: BotPendingHandoff | null;
   /** What the Bot is doing in the running turn, or null. */
   activity: BotLiveActivity | null;
   /** Messages waiting for the running turn, oldest first. */
@@ -230,6 +256,7 @@ export type BotLiveEventBody =
   | { type: "partial"; text: string | null }
   | { type: "state"; state: BotSessionState }
   | { type: "question"; question: BotPendingQuestion | null }
+  | { type: "handoff"; handoff: BotPendingHandoff | null }
   | { type: "activity"; activity: BotLiveActivity | null }
   | { type: "queued"; queued: BotQueuedMessage[] }
   /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
@@ -243,7 +270,7 @@ export interface BotLiveSummary {
   preview: string | null;
   updatedAt: number | null;
   state: BotSessionState;
-  /** An approval or an A–E question is waiting on the person ("Needs you"). */
+  /** An approval, an A–E question or a hand-off card is waiting on the person ("Needs you"). */
   needsYou: boolean;
   /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
   lastReplyAt: number | null;
@@ -271,6 +298,9 @@ export function botTranscriptPreview(entries: readonly BotTranscriptEntry[]): { 
     }
     if (entry.type === "question_answer") {
       return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
+    }
+    if (entry.type === "handoff_result") {
+      return { text: oneLine(botHandoffResultLine(entry)), ...(entry.at === undefined ? {} : { at: entry.at }) };
     }
     if (entry.type === "routine") {
       return { text: entry.label, ...(entry.at === undefined ? {} : { at: entry.at }) };
@@ -306,6 +336,8 @@ export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent
       return { ...snapshot, seq: event.seq, state: event.state };
     case "question":
       return { ...snapshot, seq: event.seq, question: event.question };
+    case "handoff":
+      return { ...snapshot, seq: event.seq, handoff: event.handoff };
     case "activity":
       return { ...snapshot, seq: event.seq, activity: event.activity };
     case "queued":
