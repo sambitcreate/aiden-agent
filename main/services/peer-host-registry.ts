@@ -494,8 +494,11 @@ export class PeerHostRegistry {
           features,
           current,
         );
-    } catch {
+    } catch (error) {
       // An older host without the route, or a refusal, leaves the existing grants in place.
+      // A lost answer is tried again on the next reconnect.
+      const answered = error instanceof PeerTransportError && error.code === "request_failed" && (error.status ?? 500) < 500;
+      if (!answered) this.negotiated.delete(host.id);
     }
   }
   /** Persist the grants and features a host reports, so views and gates stay current. */

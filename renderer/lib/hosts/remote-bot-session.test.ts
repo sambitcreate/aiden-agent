@@ -59,6 +59,7 @@ function fakeTransport(reads: AidenRemoteBotSession[] | ((attempt: number) => Pe
     unsubscribed,
     push: (body: AidenRemoteBotSessionEvent) => handler?.({ kind: "event", hostId: "host_a", botId: "bot_1", event: body }),
     state: (state: "waiting" | "streaming" | "gone") => handler?.({ kind: "state", hostId: "host_a", botId: "bot_1", state }),
+    resync: () => handler?.({ kind: "resync", hostId: "host_a", botId: "bot_1" }),
     listening: () => handler !== null,
   };
 }
@@ -223,4 +224,16 @@ test("only hosts that serve durable Bot sessions to this Mac get the Bot convers
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: grants }), true);
   assert.equal(hostSharesBotSessions({ features: [], capabilities: grants }), false);
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: ["bot:read", "chat:read"] }), false);
+});
+
+test("something newer than this Mac reads makes the follower read the session again", async () => {
+  const fake = fakeTransport([session(), session({ seq: 9, state: "unavailable" })]);
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.resync();
+  await settle();
+  assert.equal(fake.reads(), 2);
+  assert.equal(follower.getState().view?.snapshot.seq, 9);
+  follower.stop();
 });

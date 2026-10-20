@@ -5,6 +5,7 @@ const BOT_CHAT_ROUTE = /^\/bots\/([^/]+)\/chat\/?$/u;
 const BOT_ROUTE = /^\/bots\/([^/]+)(?:\/chat)?\/?$/u;
 
 const HOST_BOT_ROUTE = /^\/host\/[^/]+\/bots\/[^/]+(?:\/|$)/u;
+const HOST_BOT_CHAT_ROUTE = /^\/host\/([^/]+)\/bots\/([^/]+)\/chat\/?$/u;
 
 /** The Bots surface: `/bots`, everything under it, and a paired Mac's Bot chat. */
 export function isBotsPath(pathname: string): boolean {
@@ -28,6 +29,14 @@ export function botChatRouteBotId(pathname: string): string | null {
 /** The Bot a `/bots/$botId` or `/bots/$botId/chat` page belongs to, or null. */
 export function botRouteBotId(pathname: string): string | null {
   return decodedSegment(BOT_ROUTE.exec(pathname)?.[1]);
+}
+
+/** The paired host's Bot whose chat is open, as `hostId/botId`, or null. */
+export function hostBotChatRouteKey(pathname: string): string | null {
+  const match = HOST_BOT_CHAT_ROUTE.exec(pathname);
+  const hostId = decodedSegment(match?.[1]);
+  const botId = decodedSegment(match?.[2]);
+  return hostId && botId ? `${hostId}/${botId}` : null;
 }
 
 type EnvironmentToggleTarget = "bot-panel" | "workspace" | "none";

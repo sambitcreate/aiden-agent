@@ -143,6 +143,10 @@ export class RemoteBotSessionFollower {
       this.publish({ stream: message.state, ...(message.state === "gone" ? { gone: true } : {}) });
       return;
     }
+    if (message.kind === "resync") {
+      void this.read();
+      return;
+    }
     const { event } = message;
     if (event.type === "snapshot") {
       // A connection's opening snapshot supersedes any read still in flight.
@@ -152,11 +156,13 @@ export class RemoteBotSessionFollower {
       this.publish({ view: remoteBotSessionView(event.payload.session), failed: null, gone: false });
       return;
     }
-    const current = this.state.view;
-    if (current === null || this.inFlight) {
+    if (this.inFlight) {
       this.buffered.push(event);
       return;
     }
+    // With no read in flight and nothing shown, the next read replaces everything.
+    const current = this.state.view;
+    if (current === null) return;
     const next = applyRemoteBotSessionEvent(current, event);
     if (next === null) void this.read();
     else if (next !== current) this.publish({ view: next });

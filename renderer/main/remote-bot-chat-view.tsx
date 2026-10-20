@@ -86,7 +86,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const state = snapshot?.state;
   const running = state?.kind === "running";
   const features = new Set(host?.features ?? []);
-  const steerAndQueue = features.has("bot-activity-v1");
+  // Queued messages only show here when the host sends this Mac its activity frames.
+  const steerAndQueue = features.has("bot-activity-v1") && (host?.capabilities ?? []).includes("bot:activity");
   const photos = features.has("bot-attachments-v1");
   const connections = features.has("bot-connection-requests-v1");
 
@@ -133,12 +134,31 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const centered = (content: React.ReactNode) => <div className="flex min-h-full items-center justify-center">{content}</div>;
 
+  if (list.data && !host) {
+    return shell(
+      centered(
+        <EmptyState
+          title="This device isn't paired anymore"
+          description="Pair it again in Settings to use its Bots here."
+          action={
+            <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
+              All Bots
+            </Button>
+          }
+        />,
+      ),
+    );
+  }
   if (!shared) {
     return shell(
       centered(
         <EmptyState
           title="This Bot's chat isn't shared"
-          description={`Update Aiden on ${hostName}, and check that it lets this Mac use its Bots.`}
+          description={
+            features.has("bot-durable-session-v1")
+              ? `This device can see ${hostName}'s Bots but can't chat with them. Pair it again from ${hostName} to update its access.`
+              : `Update Aiden on ${hostName} to chat with its Bots here.`
+          }
           action={
             <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
               All Bots

@@ -159,7 +159,7 @@ test("windows following one host Bot share a single session stream and get its p
   }
 });
 
-test("a closed session reconnects after a pause and adopts the new epoch's snapshot", async () => {
+test("a closed session reopens at once and adopts the new epoch's snapshot; a host that keeps closing backs off", async () => {
   const { manager, timers, streams, messages } = harness();
   try {
     await manager.whenReady();
@@ -170,15 +170,27 @@ test("a closed session reconnects after a pause and adopts the new epoch's snaps
     streams[0]!.send(frame("closed", 1, {}));
     streams[0]!.end();
     await settle();
-    assert.equal(streams.length, 1, "no reconnect before the backoff");
-    timers.advance(PEER_BACKOFF_STEPS_MS[0]);
-    await settle();
-    assert.equal(streams.length, 2);
+    assert.equal(streams.length, 2, "a reset or reopen needs no backoff");
+    assert.equal(
+      messages.some((message) => message.kind === "state" && message.state === "waiting"),
+      false,
+      "no Reconnecting flash",
+    );
     streams[1]!.send(snapshot("e2", "after"));
     const seen = events(messages);
     const last = seen[seen.length - 1];
     assert.equal(last?.type, "snapshot");
     assert.equal(last?.epoch, "e2");
+
+    for (const index of [1, 2]) {
+      streams[index]!.send(frame("closed", 1, {}));
+      streams[index]!.end();
+      await settle();
+    }
+    assert.equal(streams.length, 3, "the third close in a row waits");
+    timers.advance(PEER_BACKOFF_STEPS_MS[0] * 2);
+    await settle();
+    assert.equal(streams.length, 4);
   } finally {
     manager.close();
   }
@@ -229,6 +241,70 @@ test("a host that does not share its Bots' sessions refuses the subscription", a
     await manager.whenReady();
     await assert.rejects(manager.botSessionSubscribe("host_a", "bot_1", "window-a"), /does not share/);
     assert.equal(streams.length, 0);
+  } finally {
+    manager.close();
+  }
+});
+
+test("a newer host's session opens here: unknown states, entries and events degrade instead of failing", async () => {
+  const { manager, streams, messages } = harness();
+  try {
+    await manager.whenReady();
+    await settle();
+    await manager.botSessionSubscribe("host_a", "bot_1", "window-a");
+    await settle();
+    streams[0]!.send(
+      frame("snapshot", 0, {
+        session: {
+          botId: "bot_1",
+          epoch: "e1",
+          seq: 0,
+          state: "paused",
+          interrupted: false,
+          entries: [
+            { type: "message", id: "m1", role: "user", text: "Book the flight" },
+            { type: "hand_off", id: "h1", text: "Sign in for me" },
+          ],
+          hasOlder: false,
+          question: null,
+          approval: null,
+          pausedBy: "person",
+        },
+      }),
+    );
+    streams[0]!.send(frame("hand_off", 1, { handOff: { id: "h1" } }));
+    streams[0]!.send(frame("partial", 2, { text: "Still here" }));
+    await settle();
+    const seen = events(messages);
+    const opened = seen[0];
+    assert.equal(opened?.type, "snapshot");
+    if (opened?.type === "snapshot") {
+      assert.equal(opened.payload.session.state, "unavailable", "an unknown state reads as unavailable");
+      assert.deepEqual(opened.payload.session.entries.map((entry) => entry.id), ["m1"], "an unreadable entry is left out");
+    }
+    assert.ok(
+      messages.some((message) => message.kind === "resync"),
+      "an unreadable event asks the windows to read the session again",
+    );
+    assert.equal(seen[seen.length - 1]?.type, "partial", "the stream carries on");
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0]!.aborted, false);
+  } finally {
+    manager.close();
+  }
+});
+
+test("a frame that is not a Bot session event at all still fails the stream", async () => {
+  const { manager, streams } = harness();
+  try {
+    await manager.whenReady();
+    await settle();
+    await manager.botSessionSubscribe("host_a", "bot_1", "window-a");
+    await settle();
+    streams[0]!.send(snapshot("e1", "hello"));
+    streams[0]!.send(`event: partial\ndata: ${JSON.stringify({ protocolVersion: 2, botId: "bot_1", epoch: "e1", seq: 1, type: "partial", payload: { text: "x" } })}`);
+    await settle();
+    assert.equal(streams[0]!.aborted, true);
   } finally {
     manager.close();
   }
