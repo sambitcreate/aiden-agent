@@ -586,6 +586,8 @@ interface ActiveGeneration {
   releaseBotAuthority: () => void;
   /** Runs that take no mid-flight input (Design Studio). */
   inputClosed: boolean;
+  /** A steered send stops this run's still-running subagents. */
+  stopSubagentsForGuidance?: () => void;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -625,12 +627,22 @@ const geminiContextCache = new GeminiContextCache({
   onWarning: (message, error) => logger.warn("pi", message, error),
 });
 
+/**
+ * Work that holds the chat's turn. A cancelled subagent that is still draining
+ * is left out: its parent already settled it, so it must not trap queued sends
+ * or new turns behind a stuck provider stream.
+ */
 function chatHasGenerationOwnership(chatId: string): boolean {
   return (
     [...initializing.values()].some((entry) => entry.chatId === chatId) ||
     [...active.values()].some((entry) => entry.chatId === chatId) ||
-    subagentRuntimeRegistry.hasChatChildren(chatId)
+    subagentRuntimeRegistry.hasLiveChatChildren(chatId)
   );
+}
+
+/** A started turn, or the chat's turn is held by live generation work. */
+function chatTurnIsHeld(chatId: string): boolean {
+  return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
 }
 
 function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
@@ -4415,6 +4427,7 @@ export const llmClient = {
         }
       }
     };
+    subagentSupervisor?.observePendingUserGuidance(() => agent.hasUndeliveredSteer());
     const activeGeneration: ActiveGeneration = {
       agent,
       chatId: params.chatId,
@@ -4428,6 +4441,13 @@ export const llmClient = {
       computerUse,
       formFill,
       inputClosed: designWiring?.inputClosed ?? false,
+      ...(subagentSupervisor
+        ? {
+            stopSubagentsForGuidance: () => {
+              subagentSupervisor.stopLiveChildrenForGuidance();
+            },
+          }
+        : {}),
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -4748,6 +4768,9 @@ export const llmClient = {
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
+          // A run that ended for any reason (failure included) owns no more
+          // child work; nothing may keep acting for it after it settles.
+          subagentRuntimeRegistry.abortGeneration(streamId);
           unregisterAcpHost?.();
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
@@ -4899,8 +4922,13 @@ export const llmClient = {
     return runInputAdmission.admit(input);
   },
 
+  /**
+   * Any work on the chat, including a cancelled subagent still draining (it
+   * may be inside a tool call), so deletion, copy, export and workspace moves
+   * wait for it.
+   */
   isChatBusy(chatId: string): boolean {
-    return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+    return chatTurnIsHeld(chatId) || subagentRuntimeRegistry.hasChatChildren(chatId);
   },
 
   /** Whether this exact generation is still starting or running, whoever owns it. */
@@ -4920,10 +4948,14 @@ export const llmClient = {
     );
   },
 
-  /** Wait for terminal persistence without cancelling work owned by another document. */
+  /**
+   * Wait for terminal persistence without cancelling work owned by another
+   * document. Only the turn matters here, so a draining child never holds the
+   * queue or a waiting send.
+   */
   async waitForChatIdle(chatId: string): Promise<boolean> {
     const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
-    while (this.isChatBusy(chatId)) {
+    while (chatTurnIsHeld(chatId)) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) return false;
       const completions = [...active.values()]

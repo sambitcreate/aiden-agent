@@ -252,14 +252,30 @@ function safeTimedOutResult(request: SubagentTaskRequest): SubagentTaskResult {
 
 function safeInterruptedResult(
   request: SubagentTaskRequest,
+  reason?: unknown,
 ): SubagentTaskResult {
   return {
     role: request.role,
     label: request.label,
     status: "interrupted",
     summary: "",
-    warning: "The child was interrupted before completion.",
+    warning:
+      reason instanceof SubagentUserGuidanceStop
+        ? "The child was stopped because the user sent new guidance. Read it before relaunching this task."
+        : "The child was interrupted before completion.",
   };
+}
+
+/**
+ * Stop reason for children cut short by user guidance (a steered send). The
+ * parent turn stays live: each stopped child returns an interrupted result so
+ * Pi can deliver the guidance as soon as the subagent tool call returns.
+ */
+export class SubagentUserGuidanceStop extends Error {
+  constructor() {
+    super("The user sent new guidance.");
+    this.name = "SubagentUserGuidanceStop";
+  }
 }
 
 function quoteUntrustedReport(text: string): string {
@@ -378,6 +394,8 @@ export class SubagentSupervisor {
   private readonly terminalHealthRuns = new Set<string>();
   /** Depth-1 child models, so a depth-2 child inherits from its own parent. */
   private readonly childModels = new Map<string, SubagentChildModel<ResolvedModelRuntime>>();
+  private readonly liveBatchStops = new Set<(reason: Error) => number>();
+  private pendingUserGuidance?: () => boolean;
 
   constructor(private readonly input: SubagentSupervisorInput) {
     this.input = { ...input, compactionModelOverrides: input.compactionModelOverrides
@@ -422,6 +440,27 @@ export class SubagentSupervisor {
 
   flush(): Promise<void> {
     return this.input.projector?.flush() ?? Promise.resolve();
+  }
+
+  /**
+   * Stop every top-level child still running for this parent because the user
+   * sent new guidance. Nested children stop with their parent child. The
+   * parent generation is not cancelled. Returns how many children were stopped.
+   */
+  stopLiveChildrenForGuidance(): number {
+    const reason = new SubagentUserGuidanceStop();
+    let stopped = 0;
+    for (const stop of [...this.liveBatchStops]) stopped += stop(reason);
+    return stopped;
+  }
+
+  /**
+   * Report whether user guidance is accepted but not yet delivered to the
+   * parent. Pi delivers it only after the whole tool batch, so a subagent call
+   * that launches meanwhile stops at once instead of running to completion.
+   */
+  observePendingUserGuidance(probe: () => boolean): void {
+    this.pendingUserGuidance = probe;
   }
 
   /**
@@ -972,6 +1011,12 @@ export class SubagentSupervisor {
         : new Error("Parent generation cancelled.");
     }
     const request = parseSubagentToolRequest(input);
+    if (this.pendingUserGuidance?.()) {
+      // The user's guidance lands when this tool call returns. Launch nothing
+      // and charge no budget, so a retry after reading it can still run.
+      const reason = new SubagentUserGuidanceStop();
+      return formatResults(request.tasks.map((task) => safeInterruptedResult(task, reason)));
+    }
     if (this.treeExpired) {
       throw new Error("Subagent tree deadline elapsed.");
     }
@@ -1023,6 +1068,23 @@ export class SubagentSupervisor {
     const childSignals = childControllers.map((controller) =>
       AbortSignal.any([executionController.signal, controller.signal]),
     );
+    const settledChildren = new Set<number>();
+    let childrenLaunched = false;
+    const interruptedResult = (task: SubagentTaskRequest, index: number) =>
+      safeInterruptedResult(task, childControllers[index]?.signal.reason);
+    // Before launch, the pending-guidance check at launch covers a steer.
+    const stopLiveForGuidance = (reason: Error) => {
+      if (!childrenLaunched) return 0;
+      let stopped = 0;
+      childControllers.forEach((controller, index) => {
+        if (controller.signal.aborted || settledChildren.has(index)) return;
+        // Abort only. A queued child still dispatches and settles through
+        // runPreparedTask, so its run and control records reach a terminal state.
+        controller.abort(reason);
+        stopped += 1;
+      });
+      return stopped;
+    };
     let cancellationKind: "timed_out" | "interrupted" | undefined;
     let treeTimer: ReturnType<typeof setTimeout> | undefined;
     let settlementTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1211,6 +1273,11 @@ export class SubagentSupervisor {
       // already be canonical. The bounded child settlement below observes the
       // same cancellation immediately after the initial write settles.
       await this.input.projector?.flush();
+      childrenLaunched = true;
+      this.liveBatchStops.add(stopLiveForGuidance);
+      if (this.pendingUserGuidance?.()) {
+        stopLiveForGuidance(new SubagentUserGuidanceStop());
+      }
 
       const runPreparedTask = async (
         task: SubagentTaskRequest,
@@ -1229,6 +1296,10 @@ export class SubagentSupervisor {
         }> => {
           let result: SubagentTaskResult;
           try {
+            // A child stopped while it waited for capacity never starts work.
+            if (childControllers[index]!.signal.aborted) {
+              throw childControllers[index]!.signal.reason;
+            }
             const revalidated = await preparedRun?.revalidateAuthority?.();
             if (
               preparedRun?.authority &&
@@ -1481,12 +1552,13 @@ export class SubagentSupervisor {
                 : signal?.aborted ||
                     childControllers[index]?.signal.aborted ||
                     cancellationKind === "interrupted"
-                  ? safeInterruptedResult(task)
+                  ? interruptedResult(task, index)
                   : safeFailedResult(task);
           }
           return { kind: "result", result };
         })();
         const outcome = await Promise.race([childOperation, settlementSeal]);
+        settledChildren.add(index);
         if (outcome.kind === "sealed") recordCleanupFailure(identity.runId);
         if (
           !cancellationKind &&
@@ -1506,9 +1578,12 @@ export class SubagentSupervisor {
             : cancellationKind === "timed_out"
               ? safeTimedOutResult(task)
               : signal?.aborted ||
-                  childControllers[index]?.signal.aborted ||
+                  // A child that returned its own result keeps it when user
+                  // guidance stopped it: the work is done, not lost.
+                  (childControllers[index]?.signal.aborted &&
+                    !(childControllers[index]?.signal.reason instanceof SubagentUserGuidanceStop)) ||
                   cancellationKind === "interrupted"
-                ? safeInterruptedResult(task)
+                ? interruptedResult(task, index)
                 : outcome.result;
         const disposition = await preparedRun?.complete(result);
         if (disposition !== "stopped") this.finishRun(identity.runId, result);
@@ -1726,6 +1801,7 @@ export class SubagentSupervisor {
       );
       throw error;
     } finally {
+      this.liveBatchStops.delete(stopLiveForGuidance);
       clearTimeout(treeTimer);
       clearTimeout(settlementTimer);
       removeParentAbort();
