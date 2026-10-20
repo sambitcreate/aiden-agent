@@ -253,6 +253,19 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       else if (notice.notice === "hidden_input") pendingHidden = true;
       else if (notice.notice === "interrupted" || notice.notice === "session_reset") {
         mapped.push({ entry: { id, type: "notice", notice: notice.notice }, turn });
+      } else if (notice.notice === "routines_skipped" && typeof notice.since === "number" && Array.isArray(notice.routines)) {
+        // Written on unpause, between turns: no turn owns it, so a [SILENT] turn never hides it.
+        const routines = notice.routines.flatMap((routine) =>
+          typeof routine?.routineId === "string" &&
+          typeof routine.name === "string" &&
+          Number.isSafeInteger(routine.count) &&
+          routine.count > 0
+            ? [{ routineId: routine.routineId, name: routine.name, count: routine.count }]
+            : [],
+        );
+        if (routines.length > 0) {
+          mapped.push({ entry: { id, type: "routines_skipped", since: notice.since, routines }, turn: null });
+        }
       }
       continue;
     }

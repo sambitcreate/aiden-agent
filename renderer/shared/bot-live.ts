@@ -182,6 +182,15 @@ export type BotTranscriptEntry =
       status: BotRoutineProposalStatus;
       routineId?: string;
       at?: number;
+    }
+  /** Shown on unpause: the routines that fired while the Bot was paused, each with Run now. */
+  | {
+      id: string;
+      type: "routines_skipped";
+      /** When the pause began. */
+      since: number;
+      routines: { routineId: string; name: string; count: number }[];
+      at?: number;
     };
 
 /** What a failed turn says, on every client. */

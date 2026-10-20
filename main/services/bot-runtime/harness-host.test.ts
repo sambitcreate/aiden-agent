@@ -212,6 +212,81 @@ test("(c) destroy during a live stream aborts it and removes the Bot directory",
   }
 });
 
+test("(c2) suspend during a live stream leaves the turn placed and paused, with no further provider calls", async () => {
+  const profile = tempProfile();
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("after resume")], { tokensPerSecond: 40 });
+  const host = await hostFor(profile, fauxModels);
+  try {
+    const { conversation } = await host.open("bot-suspended");
+    await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
+    const submission = await conversation.submit({ type: "input", content: "go" }, ctx);
+    await waitFor(async () => (await submission.status(ctx)).status === "placed" && fauxModels.calls() === 1, {
+      what: "stream start",
+    });
+
+    assert.equal(await host.suspend("bot-suspended"), "closed");
+    assert.equal(host.isOpen("bot-suspended"), false);
+
+    const inspection = await host.inspect("bot-suspended");
+    assert.equal(inspection.scheduling, "paused");
+    assert.deepEqual(
+      inspection.submissions.filter((record) => record.type === "input").map((record) => record.id),
+      [submission.id],
+      "the interrupted turn is still there for Resume",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(fauxModels.calls(), 1, "a suspended Bot makes no provider request");
+    assert.equal(existsSync(path.join(profile, "bots", "bot-suspended", BOT_SESSION_FILE)), true);
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(c3) suspend of a Bot that is not open reports not_open", async () => {
+  const host = await hostFor(tempProfile(), createFauxModels());
+  try {
+    assert.equal(await host.suspend("bot-cold"), "not_open");
+    assert.equal(host.isOpen("bot-cold"), false);
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(c4) suspend gives up within its bound when a close hangs, and the close keeps going", async () => {
+  const profile = tempProfile();
+  const reports: unknown[] = [];
+  const host = await hostFor(profile, createFauxModels(), { onReport: (_botId, error) => reports.push(error) });
+  const first = await host.open("bot-stuck");
+  const originalClose = first.harness.close.bind(first.harness);
+  let finishClose!: () => void;
+  const gate = new Promise<void>((resolve) => { finishClose = resolve; });
+  first.harness.close = async (context) => {
+    await gate;
+    return originalClose(context);
+  };
+  try {
+    const started = Date.now();
+    assert.equal(await host.suspend("bot-stuck", 150), "timed_out");
+    assert.ok(Date.now() - started < 2_000, "suspend returned within its bound");
+    assert.equal(reports.length, 1, "the hung close is reported");
+
+    let reopened = false;
+    const reopening = host.open("bot-stuck").then((result) => {
+      reopened = true;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(reopened, false, "a reopen waits for the close that is still running");
+    finishClose();
+    const second = await reopening;
+    assert.notEqual(second.harness, first.harness);
+    assert.equal(second.conversation.id, first.conversation.id);
+  } finally {
+    finishClose();
+    await host.shutdown();
+  }
+});
+
 test("(d) sweepOrphans removes directories with no known Bot", async () => {
   const profile = tempProfile();
   const host = await hostFor(profile, createFauxModels());

@@ -27,8 +27,9 @@ import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { botApplicationService } from "../bot-application-service-main.js";
-import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
+import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
+import { createBotPauseStore, type BotPauseRecord } from "../bot-pause-store.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
@@ -77,6 +78,12 @@ const profileDir = () => app.getPath("userData");
 setBotFileToolProtectedRoots(() => [path.join(profileDir(), "bots")]);
 const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
+/** The one pause store in this process (`<userData>/bot-service/bot-pauses.json`). */
+const botPauses = createBotPauseStore({ root: botServiceRoot });
+/** Whether the person paused this Bot; throws when the pause file is unreadable, so callers refuse. */
+export async function isBotPaused(botId: string): Promise<boolean> {
+  return (await botPauses.get(botId)) !== undefined;
+}
 const resolvedModels = new Map<string, { ref: ModelRef; imageInput: boolean; at: number }>();
 
 let runtime: Promise<BotSessionRuntime> | undefined;
@@ -295,6 +302,46 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
   }
 }
 
+/**
+ * Pause steps outside the Bot's harness, run once its running turn is closed.
+ * Waits inside the turn (questions, approvals and hand-offs, whether a tool or
+ * a rule opened them) need no step: the close signals their calls, which
+ * withdraws the cards, and Resume asks again under the same wait ids. Add a
+ * step here for anything that keeps going on its own, such as the Bot's
+ * computer.
+ */
+const botPauseEffects: ReadonlyArray<(botId: string) => void | Promise<void>> = [];
+
+async function afterBotPaused(botId: string): Promise<void> {
+  for (const effect of botPauseEffects) {
+    try {
+      await effect(botId);
+    } catch (error) {
+      logger.warn("bots", `Bot ${botId} pause step failed.`, error);
+    }
+  }
+}
+
+/**
+ * Unpause: background memory review picks up again, and when routines fired
+ * while the Bot was paused, a notice lists them with Run now (decision 4a:
+ * nothing catches up on its own). Appended, so it never starts the Bot.
+ */
+async function afterBotUnpaused(botId: string, record: BotPauseRecord): Promise<void> {
+  memoryReview.afterReply(botId);
+  const [{ countSkippedWhilePaused }, { scheduleStore }] = await Promise.all([
+    import("../scheduled-bot-routines.js"),
+    import("../schedule-store.js"),
+  ]);
+  const routines = await countSkippedWhilePaused(scheduleStore, botId, record.since);
+  if (routines.length === 0) return;
+  await (await botSessionRuntime()).appendEntry(botId, BOT_NOTICE_ENTRY_KIND, {
+    notice: "routines_skipped",
+    since: record.since,
+    routines,
+  });
+}
+
 async function deleteRoutines(botId: string): Promise<void> {
   const { botRoutineService } = await import("../scheduled-bot-routines-main.js");
   await botRoutineService.deleteRoutinesForBot(botId);
@@ -422,6 +469,11 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     // Each harness open is a new session: the prompt re-reads memory.
     onSessionOpen: (botId) => memory.beginSession(botId),
     compactionInstructions: BOT_COMPACTION_FOCUS,
+    pauses: botPauses,
+    // No memory review runs or writes its marker while the Bot is paused.
+    onPaused: (botId) => memoryReview.cancel(botId),
+    afterPaused: afterBotPaused,
+    onUnpaused: afterBotUnpaused,
     deleteEffects: [
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),
@@ -436,6 +488,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
         resolvedModels.delete(botId);
       },
       deleteRoutines,
+      (botId) => botPauses.forgetBot(botId),
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
       eraseBotData,

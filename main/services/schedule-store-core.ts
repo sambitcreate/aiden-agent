@@ -332,7 +332,7 @@ function isRunResult(value: unknown): value is ScheduledRunResult {
 }
 
 function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
-  return value === "bot_paused" || value === "duplicate";
+  return value === "bot_paused" || value === "duplicate" || value === "paused_by_person";
 }
 
 function normalizeStoredTask(value: unknown): ScheduledTask | null {

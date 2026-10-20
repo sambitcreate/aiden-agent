@@ -542,6 +542,9 @@ export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSe
   // A model that exists but cannot run right now is `unavailable` on the wire;
   // its message stays on the Mac.
   if (state.kind === "model_error") return { state: "unavailable", interrupted: false };
+  // Shipped phones decode a closed set of states: a Bot the person paused
+  // reads as unavailable to them (plan §7.2), and its writes are refused.
+  if (state.kind === "paused") return { state: "unavailable", interrupted: false };
   return { state: state.kind as AidenRemoteBotSessionStateKind, interrupted: false };
 }
 
@@ -1100,6 +1103,7 @@ const REFUSED_BEFORE_RUNNING: ReadonlySet<BotSessionErrorReason> = new Set([
   "model_error",
   "unavailable",
   "bot_paused",
+  "paused_by_person",
 ]);
 
 /**
@@ -1134,6 +1138,8 @@ function mapSessionError(error: unknown): never {
       case "model_error":
       case "unavailable":
       case "bot_paused":
+      case "paused_by_person":
+        // A person's pause uses a code shipped clients already know.
         throw new AidenRemoteServiceError("operation_stale", error.message, 409);
     }
   }
@@ -1626,8 +1632,10 @@ export class AidenRemoteBotSessionService {
     const bot = await this.options.bots.bot(botId);
     const audience = this.audience(options);
     try {
-      const state = await this.stateView(bot.id);
-      if (state.state === "unavailable") {
+      const raw = await (await this.options.runtime()).state(bot.id);
+      const state = projectBotSessionState(raw);
+      // A paused Bot reads as unavailable but still shows its transcript.
+      if (state.state === "unavailable" && raw.kind !== "paused") {
         // Bots are held by another Aiden process: nothing can be opened.
         return parseAidenRemoteBotSession({
           botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false, question: null, approval: null,

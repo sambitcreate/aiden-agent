@@ -843,6 +843,71 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
   finally { await resumed.stop(); }
 });
 
+test("a paused Bot stops its running turn, refuses new ones and runs again once unpaused", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir), requests = [];
+  let holdFirst = true, held;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const chunk = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: "bot", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    chunk({ role: "assistant", content: "Working" });
+    // The first reply never finishes on its own: only the pause ends it.
+    if (holdFirst) { holdFirst = false; held = response; return; }
+    chunk({}, "stop"); response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliBots(dir, daemon); daemon.setBots(runtime);
+  t.after(async () => { await runtime.stop(); await daemon.stop(); });
+  const audienceId = "cli:local", app = runtime.application;
+  const notice = await app.noticeStatus(audienceId);
+  await app.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await app.capabilityCatalog(audienceId);
+  const provider = catalog.providers.find((item) => item.label === "cli-test"); assert.ok(provider);
+  const custom = { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] };
+  const bot = await app.createBot({ audienceId, bot: { name: "Ada", instructions: "Help briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom } });
+  const chat = await app.createChat({ audienceId, botId: bot.id, providerId: "cli-test", model: "test" });
+  const preflight = { audienceId, botId: bot.id, chatId: chat.id, providerId: "cli-test", model: "test" };
+  const runTurn = async (streamId) => {
+    const events = [], turn = daemon.llmClient.beginChatTurn(chat.id, streamId, "bot-owner"); assert.ok(turn);
+    const owner = { id: 0, documentId: "bot-owner", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+    await daemon.chatStore.appendMessage(chat.id, { role: "user", content: "Hello" }); turn.settleAsyncWork();
+    assert.equal(await daemon.llmClient.start(streamId, { chatId: chat.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] }, owner, { usageSource: "chat", botAudienceId: audienceId }), true);
+    return { events, idle: async () => { await daemon.llmClient.waitForChatIdle(chat.id); turn.release(); return events; } };
+  };
+
+  // Pausing while a reply streams stops it where it is.
+  const running = await runTurn("before-pause");
+  for (let tries = 0; requests.length === 0 && tries < 200; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(requests.length, 1);
+  const paused = await runtime.command(["pause", bot.id]);
+  assert.deepEqual(Object.keys(paused).sort(), ["botId", "paused", "since"]);
+  assert.equal(paused.paused, true); assert.equal(typeof paused.since, "number");
+  assert.equal(await runtime.isPaused(bot.id), true);
+  const stopped = await running.idle();
+  assert.equal(stopped.filter((event) => event.channel === "chat:done").length, 0, "the held reply never finishes");
+  held.end();
+  assert.equal(statSync(join(dir, "bot-service", "bot-pauses.json")).mode & 0o777, 0o600);
+  assert.deepEqual(await runtime.command(["pause", bot.id]), paused, "pausing again keeps the first time");
+
+  // While paused: phones are refused before anything runs, and so is a CLI turn.
+  await assert.rejects(runtime.preflight(preflight), (error) => error.code === "operation_stale" && error.status === 409 && /Ada is paused/u.test(error.message));
+  const refused = await (await runTurn("while-paused")).idle();
+  assert.equal(refused.filter((event) => event.channel === "chat:error").length, 1, JSON.stringify(refused));
+  assert.equal(requests.length, 1, "a paused Bot makes no provider request");
+
+  assert.deepEqual(await runtime.command(["unpause", bot.id]), { botId: bot.id, paused: false });
+  assert.equal(await runtime.isPaused(bot.id), false);
+  await runtime.preflight(preflight);
+  const resumed = await (await runTurn("after-unpause")).idle();
+  assert.equal(resumed.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(resumed));
+  assert.equal(requests.length, 2);
+  await assert.rejects(runtime.command(["pause", "missing-bot"]), /no longer exists/u);
+  await assert.rejects(runtime.command(["pause"]), /Usage: bots pause/u);
+});
+
 test("isolated subagent inference executes only parent-owned tools with immutable fork context", async (t) => {
   const dir = temporary(t), requests = [], original = process.env.AIDEN_CLI_ENTRY;
   let terminalReason;

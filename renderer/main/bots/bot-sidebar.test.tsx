@@ -270,15 +270,38 @@ test("a Needs-you change re-reads only that Bot, and an older answer that arrive
   assert.deepEqual(reads, ["bots:live:summary bot-1", "bots:live:summary bot-1"], "no other Bot and no list re-read");
 });
 
-test("a paused Bot says so, and one without a model says it needs one", async () => {
-  sidebarIpc([PLANNER, INBOX], {
+test("an interrupted Bot and a paused one read differently, and one without a model says it needs one", async () => {
+  sidebarIpc([PLANNER, INBOX, SCOUT], {
     "bot-1": summary("bot-1", { preview: "Reading your calendar", state: { kind: "interrupted", submissionId: "s1" } }),
     "bot-2": summary("bot-2", { state: { kind: "needs_model" } }),
+    "bot-3": summary("bot-3", { preview: "Found three cafés", state: { kind: "paused", since: 1, by: "phone", interrupted: "s9" } }),
   });
   await mountSidebar();
-  await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Paused — tap to resume")));
+  await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Interrupted — tap to resume")));
   assert.equal(within(rowButton("Planner")).queryByText("Reading your calendar") === null, true);
   assert.ok(within(rowButton("Inbox Helper")).getByText("Needs an AI model"));
+  assert.ok(within(rowButton("Scout")).getByText("Paused"), "a pause outranks the reply it cut short");
+  assert.equal(within(rowButton("Scout")).queryByText("Found three cafés"), null);
+});
+
+test("a row's menu pauses its Bot, and a paused Bot's menu resumes it", async () => {
+  const calls = sidebarIpc([PLANNER, INBOX], {
+    "bot-2": summary("bot-2", { state: { kind: "paused", since: 1, by: "mac" } }),
+  }, {
+    "bots:pause": () => ({ kind: "paused", since: 1, by: "mac" }),
+    "bots:unpause": () => ({ kind: "idle" }),
+  });
+  await mountSidebar();
+  await waitFor(() => assert.ok(within(rowButton("Inbox Helper")).getByText("Paused")));
+
+  fireEvent.contextMenu(rowButton("Planner"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:pause").map((call) => call.args), [["bot-1"]]));
+
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Inbox Helper" }), { key: "Enter" });
+  assert.equal(screen.queryByRole("menuitem", { name: "Pause Bot" }), null);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Resume Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:unpause").map((call) => call.args), [["bot-2"]]));
 });
 
 test("tapping a row opens that Bot's chat, and its context menu and ••• offer the Bot menu", async () => {
@@ -289,7 +312,7 @@ test("tapping a row opens that Bot's chat, and its context menu and ••• of
 
   fireEvent.contextMenu(rowButton("Planner"));
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Delete Bot"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Advanced" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
   assert.equal((router.state.location.search as { page?: string }).page, "advanced");
@@ -506,7 +529,7 @@ test("Shift+F10 on a focused row opens its menu from the keyboard", async () => 
   row.focus();
   fireEvent.keyDown(row, { key: "F10", shiftKey: true });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Delete Bot"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Profile" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2"));
 });

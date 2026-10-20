@@ -24,6 +24,7 @@ import {
   type AidenRemoteBotAvatarUploadRequest,
 } from "../services/aiden-remote-protocol.js";
 import { registerBotLiveHandlers } from "./bot-live.js";
+import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotMemoryHandlers } from "./bot-memory.js";
@@ -131,6 +132,12 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:dismiss", async (_event, input: unknown) => {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
+  });
+  // Pause / Resume (plan §7): the pause is the Mac's, and survives a restart.
+  registerBotPauseHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    runtime: botSessionRuntime,
+    getBot: (botId) => botApplicationService.get(botId),
   });
   ipcMain.handle("bots:withdraw", async (_event, input: unknown) => {
     const { botId, submissionId } = parseBotWithdraw(input);

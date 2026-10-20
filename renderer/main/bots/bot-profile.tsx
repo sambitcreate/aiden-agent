@@ -24,7 +24,9 @@ import type { BotMemoryView } from "../../shared/bot-memory";
 import { BotCharacterCard } from "./bot-character-card";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
+import { setBotPaused } from "./bot-menu";
 import { BotRoutines } from "./bot-routines";
+import { useBotLiveSummary } from "./bot-sidebar-rows";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
 
 /** The file's bytes as base64 (no data: prefix). */
@@ -204,6 +206,7 @@ export function BotProfile({
     }
   };
   const preview = instructionsPreview(bot.instructions);
+  const paused = useBotLiveSummary(bot.id).data?.state.kind === "paused";
   return (
     <BotPageShell
       scrollId={`bot-profile:${bot.id}`}
@@ -219,6 +222,9 @@ export function BotProfile({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={onOpenAdvanced}>Advanced</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void setBotPaused(bot, !paused)}>
+              {paused ? "Resume Bot" : "Pause Bot"}
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem color="status-red" onSelect={onDelete}>
               Delete Bot

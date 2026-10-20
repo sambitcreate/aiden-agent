@@ -494,7 +494,7 @@ export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
 /** Why a run was recorded without doing work. Only Bot routines skip today. */
-export type ScheduledRunSkipReason = "bot_paused" | "duplicate";
+export type ScheduledRunSkipReason = "bot_paused" | "duplicate" | "paused_by_person";
 
 export interface ScheduledMcpServerBinding {
   id: string;

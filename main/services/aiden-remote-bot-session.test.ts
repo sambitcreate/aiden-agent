@@ -33,10 +33,12 @@ import {
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   parseAidenRemoteBotApproval,
+  parseAidenRemoteBotList,
   parseAidenRemoteBotQuestion,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
+  parseAidenRemoteBotSummary,
   parseAidenSseFrames,
 } from "./aiden-remote-protocol.js";
 import {
@@ -862,6 +864,84 @@ test("two phones tapping Resume at once on a turn killed mid-stream make one pro
     await service.close();
     await runtime.shutdown();
   }
+});
+
+test("a paused Bot reads as unavailable to phones on every surface the shipped contract decodes, and its writes are stale", async () => {
+  const { runtime, service, fauxModels } = await interruptedDurableBot();
+  const stream = await openStream(service, "bot:killed");
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const paused = await runtime.pause("bot:killed", "mac");
+    assert.equal(paused.kind, "paused");
+
+    // Snapshot: the shipped (revision 35) parser decodes it, as unavailable, with its transcript.
+    const session = parseAidenRemoteBotSession(JSON.parse(JSON.stringify(await service.session("bot:killed"))));
+    assert.deepEqual([session.state, session.interrupted], ["unavailable", false]);
+    assert.ok(session.entries.some((entry) => entry.type === "message" && entry.text === "hello"), "the transcript still shows");
+
+    // Stop has nothing to stop; its answer is the same unavailable view.
+    assert.deepEqual(await service.stop("device_a", "bot:killed", "stop-request-00p1", {}), {
+      state: "unavailable",
+      interrupted: false,
+    });
+    // Frames: every frame already went through the shipped event parser in `openStream`.
+    await stream.until(
+      () => stream.frames.some((frame) => (frame.type === "snapshot" ? frame.payload.session.state : frame.payload?.state) === "unavailable"),
+      "the paused state on the stream",
+    );
+    const views = stream.frames.flatMap((frame) =>
+      frame.type === "state" ? [frame.payload.state] : frame.type === "snapshot" ? [frame.payload.session.state] : [],
+    );
+    assert.equal(views.includes("paused"), false, "no frame names a state shipped clients cannot decode");
+
+    // Writes: refused with a code shipped clients know, and nothing runs.
+    for (const write of [
+      () => service.send("device_a", "bot:killed", "send-request-00p1", { text: "are you there?" }),
+      () => service.resume("device_a", "bot:killed", "resume-request-0p1", {}),
+      () => service.dismiss("device_a", "bot:killed", "dismiss-request-0p1", {}),
+    ]) {
+      await assert.rejects(write(), isError("operation_stale", 409));
+    }
+    assert.equal(fauxModels.calls(), 0);
+
+    // The refusals left no ledger record: once unpaused, the same request runs.
+    await runtime.unpause("bot:killed");
+    assert.equal((await service.session("bot:killed")).state, "interrupted");
+    assert.equal((await service.resume("device_a", "bot:killed", "resume-request-0p1", {})).state, "running");
+    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
+    assert.equal(fauxModels.calls(), 1);
+  } finally {
+    await stream.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+test("a paused Bot's list row and summary decode with the shipped parsers and read unavailable", async () => {
+  const pausedState = projectBotSessionState({ kind: "paused", since: 1, by: "phone", interrupted: "sub_1" }).state;
+  const bots = new AidenRemoteBotService({
+    application: {
+      async get(botId: string) {
+        return botId === BOT_ID ? bot() : null;
+      },
+      async list() {
+        return [bot()];
+      },
+    } as never,
+    chatStore: { get: async () => null },
+    sessionStates: async (ids) => new Map(ids.map((id) => [id, pausedState] as const)),
+  });
+  const list = parseAidenRemoteBotList(JSON.parse(JSON.stringify(await bots.list())));
+  assert.deepEqual(list.bots.map((summary) => summary.sessionState), ["unavailable"]);
+  assert.equal(parseAidenRemoteBotSummary(JSON.parse(JSON.stringify(await bots.summaryOf(BOT_ID)))).sessionState, "unavailable");
+});
+
+test("a paused state is unavailable on the wire, whatever turn waits underneath", () => {
+  assert.deepEqual(projectBotSessionState({ kind: "paused", since: 1, by: "phone", interrupted: "sub_1" }), {
+    state: "unavailable",
+    interrupted: false,
+  });
+  assert.deepEqual(projectBotSessionState({ kind: "paused", since: 1, by: "mac" }), { state: "unavailable", interrupted: false });
 });
 
 test("deleting a durable Bot while a phone streams its chat closes the stream", async () => {

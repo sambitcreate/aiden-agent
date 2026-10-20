@@ -1498,6 +1498,10 @@ export const botsApi = {
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
   stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Pause the Bot (its turn, routines and replies) until `unpause`; the button reads Resume. */
+  pause: (botId: string) => invoke<BotSessionState>("bots:pause", botId),
+  /** Clear the pause. An interrupted turn then shows its Resume card again. */
+  unpause: (botId: string) => invoke<BotSessionState>("bots:unpause", botId),
   /** Remove a queued message before its turn starts. */
   withdraw: (botId: string, submissionId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>("bots:withdraw", {
@@ -1577,6 +1581,13 @@ export const botsApi = {
       invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
     delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
       invoke<void>("bots:routines:delete", input),
+    /** Start one run now (Run now on the "skipped while paused" notice). */
+    runNow: (botId: string, routineId: string, expectedUpdatedAt?: number) =>
+      invoke<{ runId: string }>("bots:routines:runNow", {
+        botId,
+        routineId,
+        ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
+      }),
   },
   /** What a Bot remembers (USER.md and MEMORY.md), and the person's edits to it. */
   memory: {
