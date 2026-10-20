@@ -6,7 +6,9 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
+import { DEFAULT_BOT_AVATAR } from "../../renderer/shared/bots.js";
 import { BOT_PAUSES_FILE, createBotPauseStore } from "../services/bot-pause-store.js";
+import { createBotStore } from "../services/bot-store-core.js";
 import { createBotSessionService, type BotSessionRuntime } from "../services/bot-runtime/bot-session-service.js";
 import { recordingDeps } from "../services/bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF } from "../services/bot-runtime/test-support/faux.js";
@@ -31,11 +33,14 @@ async function setup(now = () => 1_000) {
     knownBotIds: async () => new Set([BOT]),
     pauses: createBotPauseStore({ root: () => storeRoot, now }),
   });
+  // The real Bot store: it answers `null` for a Bot it does not hold.
+  const bots = createBotStore({ root: () => path.join(profile, "bot-store") });
+  await bots.createWithId(BOT, { name: "Ada", instructions: "Help.", avatar: { ...DEFAULT_BOT_AVATAR } });
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   registerBotPauseHandlers({
     handle: (channel, handler) => handlers.set(channel, handler),
     runtime: async () => service,
-    botExists: async (botId) => botId === BOT,
+    getBot: (botId) => bots.get(botId),
   });
   const invoke = (channel: string, ...args: unknown[]) => Promise.resolve(handlers.get(channel)!({}, ...args));
   const onDisk = () => createBotPauseStore({ root: () => storeRoot }).get(BOT);

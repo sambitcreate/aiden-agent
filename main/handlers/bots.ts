@@ -134,7 +134,7 @@ export function registerBotHandlers(): void {
   registerBotPauseHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     runtime: botSessionRuntime,
-    botExists: async (botId) => (await botApplicationService.get(botId)) !== undefined,
+    getBot: (botId) => botApplicationService.get(botId),
   });
   ipcMain.handle("bots:withdraw", async (_event, input: unknown) => {
     const { botId, submissionId } = parseBotWithdraw(input);

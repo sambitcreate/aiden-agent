@@ -17,14 +17,17 @@ export const BOT_UNPAUSE_CHANNEL = "bots:unpause";
 export interface BotPauseHandlerDependencies {
   handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void;
   runtime: () => Promise<Pick<BotSessionService, "pause" | "unpause">>;
-  /** Whether the Bot exists, so a stray id never leaves a pause behind. */
-  botExists(botId: string): Promise<boolean>;
+  /**
+   * The Bot's stored record, or `null`/`undefined` when there is none (the Bot
+   * store answers `null`), so a stray id never leaves a pause behind.
+   */
+  getBot(botId: string): Promise<object | null | undefined>;
 }
 
 export function registerBotPauseHandlers(dependencies: BotPauseHandlerDependencies): void {
   dependencies.handle(BOT_PAUSE_CHANNEL, async (_event, id): Promise<BotSessionState> => {
     const botId = parseBotId(id);
-    if (!(await dependencies.botExists(botId))) throw new Error("This Bot no longer exists.");
+    if ((await dependencies.getBot(botId)) == null) throw new Error("This Bot no longer exists.");
     return (await dependencies.runtime()).pause(botId, "mac");
   });
   dependencies.handle(BOT_UNPAUSE_CHANNEL, async (_event, id): Promise<BotSessionState> => {
