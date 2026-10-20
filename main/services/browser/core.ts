@@ -119,12 +119,46 @@ export function browserPartition(profileId: string, incognito: boolean): string 
   return `${incognito ? "" : "persist:"}aiden-browser-${incognito ? "private-" : "profile-"}${digest}`;
 }
 
-/** Guest pages must look like Chromium, not Electron or Aiden, or Google rejects sign-in. */
+/**
+ * Guest pages must look like Chromium, not Electron or Aiden. Shipping Chrome
+ * reports only its major version (`Chrome/150.0.0.0`, User-Agent reduction), so
+ * a full build number is itself an embedded-browser tell.
+ */
 export function browserGuestUserAgent(raw: string): string {
   const mozilla = raw.match(/^Mozilla\/[\d.]+/u)?.[0] ?? "Mozilla/5.0";
   const platform = raw.match(/\([^)]*\)/u)?.[0] ?? "(Macintosh; Intel Mac OS X 10_15_7)";
-  const chrome = raw.match(/Chrome\/[\d.]+/u)?.[0] ?? "Chrome/142.0.0.0";
-  return `${mozilla} ${platform} AppleWebKit/537.36 (KHTML, like Gecko) ${chrome} Safari/537.36`;
+  const major = raw.match(/Chrome\/(\d+)/u)?.[1] ?? "142";
+  return `${mozilla} ${platform} AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
+const FIREFOX_91_RELEASED_AT = Date.UTC(2021, 7, 10);
+// Firefox ships every four weeks; a slightly longer step never claims an unreleased version.
+const FIREFOX_RELEASE_STEP_MS = 4.1 * 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * accounts.google.com rejects embedded Chromium ("This browser or app may not
+ * be secure") even with a clean Chrome User-Agent, but accepts a current
+ * Firefox one. Other Electron browsers (Min) send this header only to that
+ * host; every other request keeps the Chromium identity.
+ */
+export function browserGoogleSignInUserAgent(
+  platform: NodeJS.Platform = process.platform,
+  now = Date.now(),
+): string {
+  const version = 91 + Math.max(0, Math.floor((now - FIREFOX_91_RELEASED_AT) / FIREFOX_RELEASE_STEP_MS));
+  const os = platform === "darwin"
+    ? "Macintosh; Intel Mac OS X 10.15"
+    : platform === "win32" ? "Windows NT 10.0; Win64; x64" : "X11; Linux x86_64";
+  return `Mozilla/5.0 (${os}; rv:${version}.0) Gecko/20100101 Firefox/${version}.0`;
+}
+
+function browserGoogleSignInRequest(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "accounts.google.com";
+  } catch {
+    return false;
+  }
 }
 
 const BROWSER_GREASE_CHARS = [" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"];
@@ -174,11 +208,17 @@ export function applyBrowserGuestIdentityHeaders(
   userAgent: string,
   requestUrl: string,
   platform: NodeJS.Platform = process.platform,
+  now = Date.now(),
 ): Record<string, string> {
   const next: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const name = key.toLowerCase();
     if (name !== "user-agent" && !name.startsWith("sec-ch-ua")) next[key] = value;
+  }
+  // Firefox sends no UA Client Hints, so the Google sign-in host gets none.
+  if (browserGoogleSignInRequest(requestUrl)) {
+    next["User-Agent"] = browserGoogleSignInUserAgent(platform, now);
+    return next;
   }
   next["User-Agent"] = userAgent;
   if (!browserTrustworthyRequestUrl(requestUrl)) return next;
