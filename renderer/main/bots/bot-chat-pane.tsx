@@ -136,10 +136,13 @@ export function BotApprovalCard({
   name,
   prompt,
   onAnswer,
+  allowElsewhere,
 }: {
   name: string;
   prompt: BotApprovalPrompt;
   onAnswer(decision: "allow" | "deny"): void;
+  /** Set when this device may only deny: where the person can allow it instead. */
+  allowElsewhere?: string;
 }) {
   return (
     <BotNoticeCard
@@ -153,12 +156,15 @@ export function BotApprovalCard({
           <Button variant="transparent" size="small" onClick={() => onAnswer("deny")}>
             Deny
           </Button>
-          <Button variant="accent" size="small" onClick={() => onAnswer("allow")}>
-            Allow
-          </Button>
+          {allowElsewhere ? null : (
+            <Button variant="accent" size="small" onClick={() => onAnswer("allow")}>
+              Allow
+            </Button>
+          )}
         </>
       }
     >
+      {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
       {prompt.summary ? (
         <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
           {prompt.summary}
@@ -294,7 +300,7 @@ function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
 
 const QUEUED_PREVIEW_CHARS = 40;
 
-/** A follow-up waiting for the running turn: a faded bubble surface, "Queued", and Remove. */
+/** A follow-up waiting for the running turn: a faded bubble surface, "Queued", and Remove when it can be withdrawn. */
 function BotQueuedBubble({
   text,
   removing,
@@ -302,7 +308,7 @@ function BotQueuedBubble({
 }: {
   text: string;
   removing: boolean;
-  onRemove(button: HTMLButtonElement): void;
+  onRemove?(button: HTMLButtonElement): void;
 }) {
   const oneLine = text.replace(/\s+/gu, " ").trim();
   const preview = oneLine.length > QUEUED_PREVIEW_CHARS ? `${oneLine.slice(0, QUEUED_PREVIEW_CHARS).trimEnd()}…` : oneLine;
@@ -313,23 +319,28 @@ function BotQueuedBubble({
       </div>
       <div className="flex items-center gap-2 text-small text-tertiary">
         <span>Queued</span>
-        <Button
-          variant="transparent"
-          size="small"
-          disabled={removing}
-          aria-label={`Remove queued message: ${preview}`}
-          data-bot-queued-remove
-          onClick={(event) => onRemove(event.currentTarget)}
-        >
-          Remove
-        </Button>
+        {onRemove ? (
+          <Button
+            variant="transparent"
+            size="small"
+            disabled={removing}
+            aria-label={`Remove queued message: ${preview}`}
+            data-bot-queued-remove
+            onClick={(event) => onRemove(event.currentTarget)}
+          >
+            Remove
+          </Button>
+        ) : null}
       </div>
     </div>
   );
 }
 
-/** Chat transcript rows: bubbles, recaps, chips, cards. */
-function TranscriptEntries({
+/**
+ * Chat transcript rows: bubbles, recaps, chips, cards. A paired host's Bot
+ * chat leaves out the actions its host does not offer remotely.
+ */
+export function TranscriptEntries({
   name,
   entries,
   partial,
@@ -346,6 +357,8 @@ function TranscriptEntries({
   onRetry,
   onOpenMemory,
   onRespondToProposal,
+  connectLabel,
+  connecting,
 }: {
   name: string;
   entries: readonly BotTranscriptEntry[];
@@ -355,17 +368,21 @@ function TranscriptEntries({
   queued: readonly BotQueuedMessage[];
   removing: ReadonlySet<string>;
   retrying: boolean;
-  onRemoveQueued(submissionId: string, button: HTMLButtonElement): void;
+  onRemoveQueued?(submissionId: string, button: HTMLButtonElement): void;
   onConnect(pluginId: string): void;
-  onDismissConnection(pluginId: string): void;
-  onOpenFile(path: string): void;
+  onDismissConnection?(pluginId: string): void;
+  onOpenFile?(path: string): void;
   onReply(text: string): void;
   onRetry(text: string): void;
-  onOpenMemory(): void;
-  onRespondToProposal(
+  onOpenMemory?(): void;
+  onRespondToProposal?(
     proposalId: string,
     decision: BotRoutineProposalDecision,
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
+  /** Connect cards' button text, e.g. where the connection is finished. */
+  connectLabel?: string;
+  /** A connection request is being sent. */
+  connecting?: boolean;
 }) {
   const rows = botTranscriptRows(entries, partial, { running, level, queued });
   return (
@@ -403,7 +420,7 @@ function TranscriptEntries({
                 key={row.id}
                 text={row.text}
                 removing={removing.has(row.submissionId)}
-                onRemove={(button) => onRemoveQueued(row.submissionId, button)}
+                {...(onRemoveQueued ? { onRemove: (button: HTMLButtonElement) => onRemoveQueued(row.submissionId, button) } : {})}
               />
             );
           case "stopped":
@@ -413,7 +430,9 @@ function TranscriptEntries({
               </Text>
             );
           case "file":
-            return <BotFileChip key={row.id} path={row.path} operation={row.operation} onOpen={() => onOpenFile(row.path)} />;
+            return onOpenFile ? (
+              <BotFileChip key={row.id} path={row.path} operation={row.operation} onOpen={() => onOpenFile(row.path)} />
+            ) : null;
           case "image":
             return (
               <MessageAttachments
@@ -429,7 +448,16 @@ function TranscriptEntries({
               </Text>
             );
           case "connect":
-            return <ConnectCard key={row.id} card={row.card} onConnect={onConnect} onDismiss={onDismissConnection} />;
+            return (
+              <ConnectCard
+                key={row.id}
+                card={row.card}
+                onConnect={onConnect}
+                {...(onDismissConnection ? { onDismiss: onDismissConnection } : {})}
+                {...(connectLabel ? { connectLabel } : {})}
+                busy={connecting ?? false}
+              />
+            );
           case "failed":
             return (
               <BotFailedTurnCard
@@ -442,16 +470,16 @@ function TranscriptEntries({
               />
             );
           case "memory_update":
-            return <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} />;
+            return onOpenMemory ? <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} /> : null;
           case "routine_proposal":
-            return (
+            return onRespondToProposal ? (
               <RoutineProposalCard
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
                 onRespond={(decision) => onRespondToProposal(row.proposal.proposalId, decision)}
               />
-            );
+            ) : null;
         }
       })}
     </>

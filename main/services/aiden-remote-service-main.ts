@@ -553,6 +553,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             ...(botsSupported
               ? {
                   retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
+                  durableBotSessions: () => activeBotSessions !== undefined,
                   botTurnAuthorityPreflight: preflightBotTurnAuthority,
                 }
               : {}),

@@ -58,6 +58,15 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
+    [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
+    [{ operation: "botSend", resourceId: "bot_1", idempotencyKey: KEY, body: { text: "hi" } }, "sendBotMessage"],
+    [{ operation: "botResume", resourceId: "bot_1", idempotencyKey: KEY }, "resumeBotSession"],
+    [{ operation: "botDismiss", resourceId: "bot_1", idempotencyKey: KEY }, "dismissBotSession"],
+    [{ operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY }, "stopBotSession"],
+    [{ operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }, "answerBotQuestion"],
+    [{ operation: "botConnectionRequest", resourceId: "bot_1", idempotencyKey: KEY, body: { pluginId: "notion" } }, "requestBotConnection"],
+    [{ operation: "uploadBotAttachment", resourceId: "bot_1", body: { name: "a.png" } }, "uploadBotAttachment"],
+    [{ operation: "removeBotAttachment", resourceId: "bot_1", itemId: `att_${"A".repeat(43)}` }, "removeBotAttachment"],
   ];
   for (const [operation, expected] of cases) {
     const request = peerOperationRequest(operation);
@@ -90,6 +99,12 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     "runRespondQuestion",
     "runInputs",
     "createBotChat",
+    "botSend",
+    "botResume",
+    "botDismiss",
+    "botStop",
+    "botAnswerQuestion",
+    "botConnectionRequest",
   ])
     assert.throws(
       () =>
@@ -108,6 +123,8 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     { operation: "botConversations", limit: 51 },
     { operation: "botConversations", query: "q".repeat(201) },
     { operation: "attachmentContent", resourceId: "chat_1", itemId: "a/b" },
+    { operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait/1", idempotencyKey: KEY },
+    { operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY, body: { force: true } },
     { operation: "runCancel", resourceId: "../../server", idempotencyKey: KEY },
     { operation: "bots", url: "https://elsewhere" },
     { operation: "removeAttachment", resourceId: "chat_1", itemId: "att_short" },

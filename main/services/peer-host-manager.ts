@@ -18,12 +18,16 @@ import {
   type PeerSupervisorState,
 } from "../../renderer/shared/peer-host.js";
 import {
+  AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
   AIDEN_REMOTE_RUN_STREAMS_FEATURE,
 } from "./aiden-remote-protocol.js";
+import type { PeerBotSessionSubscription } from "../../renderer/shared/peer-bot-session.js";
+import { PeerBotSessionStreams } from "./peer-bot-sessions.js";
 import { PeerHostFeedCache } from "./peer-host-feed-cache.js";
 import type { PeerRequestPartition } from "./peer-host-registry.js";
 import {
+  PEER_BOT_SESSION_MUTATIONS,
   PEER_CHAT_MUTATIONS,
   PEER_RUN_OPERATIONS,
   peerOperationRequest,
@@ -173,6 +177,11 @@ function shares(view: PeerHostView, capability: string, feature: string): boolea
   return view.capabilities.includes(capability) && view.features.includes(feature);
 }
 
+/** The host serves its durable Bot conversations and lets this Mac read them. */
+function sharesBotSessions(view: PeerHostView): boolean {
+  return shares(view, "bot:read", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE) && view.capabilities.includes("chat:read");
+}
+
 /** A stable digest of the non-internal addresses, to notice network changes. */
 export function peerNetworkFingerprint(
   interfaces: Record<string, ReadonlyArray<{ address: string; internal: boolean }> | undefined>,
@@ -196,6 +205,7 @@ export class PeerHostManager {
   /** Per-host high-water mark, so statuses stay monotonic across supervisors. */
   private readonly generations = new Map<string, number>();
   private readonly runs: PeerRunSubscriptions;
+  private readonly botSessions: PeerBotSessionStreams;
   private readonly waiters = new Map<PeerRunStream, () => void>();
   private readonly dropped = new WeakSet<PeerRunStream>();
   /** The newest run the feed announced for a chat stream, kept until it probes. */
@@ -221,6 +231,27 @@ export class PeerHostManager {
         [...this.supervisors.values()].filter(
           (sup) => sup.feed === "syncing" || sup.feed === "live",
         ).length,
+    });
+    this.botSessions = new PeerBotSessionStreams({
+      connection: (hostId) => {
+        const sup = this.supervisors.get(hostId);
+        if (!sup || sup.state.kind !== "connected" || !sharesBotSessions(sup.view)) return undefined;
+        const generation = sup.generation;
+        return {
+          signal: sup.controller.signal,
+          current: () => this.current(sup, generation),
+          fail: (error) => {
+            if (!blockedReason(error)) return false;
+            this.fail(sup, generation, error);
+            return true;
+          },
+        };
+      },
+      request: (hostId, input, onFrame, requestOptions) =>
+        this.options.registry.request(hostId, input, onFrame, requestOptions),
+      broadcast: (channel, payload) => this.options.broadcast(channel, payload),
+      backoff: (failures) => peerBackoffDelay(failures, this.random),
+      timers: this.timers,
     });
     options.registry.attachConnectionState((id) => this.connectionState(id));
     this.detach = options.registry.onChanged(() => void this.sync());
@@ -419,9 +450,29 @@ export class PeerHostManager {
     return this.runs.release(subscriptionId, owner);
   }
 
+  /**
+   * Join (or open) the shared live stream of a host Bot's one durable
+   * conversation. Frames arrive on `remote:peer-bot-session`; each connection
+   * opens with a full snapshot.
+   */
+  async botSessionSubscribe(hostId: unknown, botId: unknown, owner: string): Promise<PeerBotSessionSubscription> {
+    const id = hostIdentifier(hostId);
+    await this.ready;
+    if (this.closed) throw new Error("Device connections are closed.");
+    const sup = this.supervisors.get(id);
+    if (!sup) throw new Error("This device is disabled or unavailable.");
+    if (!sharesBotSessions(sup.view)) throw new Error("This device does not share its Bots' chats.");
+    return this.botSessions.subscribe(id, botId, owner);
+  }
+
+  botSessionUnsubscribe(subscriptionId: unknown, owner: string): boolean {
+    return this.botSessions.unsubscribe(subscriptionId, owner);
+  }
+
   /** A window closed or navigated: release everything it held. */
   releaseOwner(owner: string): void {
     this.runs.releaseOwner(owner);
+    this.botSessions.releaseOwner(owner);
   }
 
   close(): void {
@@ -434,6 +485,7 @@ export class PeerHostManager {
       sup.controller.abort();
     }
     this.runs.close();
+    this.botSessions.close();
     for (const wake of [...this.waiters.values()]) wake();
   }
 
@@ -512,6 +564,7 @@ export class PeerHostManager {
     sup.controller.abort();
     for (const stream of this.runs.forHost(sup.hostId)) this.setStreamState(stream, "gone");
     this.runs.dropHost(sup.hostId);
+    this.botSessions.dropHost(sup.hostId);
     const generation = Math.max(this.generations.get(sup.hostId) ?? 0, sup.generation) + 1;
     this.generations.set(sup.hostId, generation);
     this.options.broadcast(PEER_HOST_STATE_CHANNEL, this.disabledStatus(sup.hostId));
@@ -827,6 +880,7 @@ export class PeerHostManager {
 
   private wakeHost(hostId: string): void {
     for (const stream of this.runs.forHost(hostId)) this.wakeStream(stream);
+    this.botSessions.wakeHost(hostId);
   }
 
   private streamDropped(stream: PeerRunStream): void {
@@ -987,6 +1041,19 @@ export class PeerHostManager {
     if (PEER_RUN_OPERATIONS.has(name)) {
       const run = this.supervisors.get(hostId)?.cache.run(resourceId);
       return run ? { run: { ...run } } : undefined;
+    }
+    if (PEER_BOT_SESSION_MUTATIONS.has(name)) {
+      const read = { operation: "botSession", resourceId };
+      try {
+        return {
+          session: await peerOperationResult(
+            read,
+            await this.options.registry.request(hostId, peerOperationRequest(read)),
+          ),
+        };
+      } catch (error) {
+        return answered(error, 404) ? { session: null } : undefined;
+      }
     }
     if (!PEER_CHAT_MUTATIONS.has(name)) return undefined;
     const read = { operation: "chat", resourceId };

@@ -1591,6 +1591,146 @@ test("parent cancellation aborts the complete supervisor call", async () => {
   assert.ok(projector.snapshot().every((snapshot) => snapshot.state === "interrupted"));
 });
 
+test("user guidance stops running children but returns the parent call normally", async () => {
+  const slowStarted = deferred();
+  const projector = new SubagentEventProjector({
+    generationId: "guidance",
+    chatId: "chat-guidance",
+    workspaceId: "workspace-guidance",
+    modelId: "phase2-model",
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "guidance",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    runChild: async ({ request: task, signal }) => {
+      if (task.label === "Fast") return completed(task.label);
+      slowStarted.resolve();
+      return await new Promise<SubagentTaskResult>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
+  });
+  const parent = new AbortController();
+  const running = supervisor.execute(request(["Fast", "Slow"]), parent.signal);
+  await slowStarted.promise;
+  assert.ok(supervisor.stopLiveChildrenForGuidance() >= 1);
+
+  const result = await running;
+  assert.equal(parent.signal.aborted, false);
+  assert.match(result, /## 1\. Fast[\s\S]*Status: completed/u);
+  assert.match(result, /## 2\. Slow[\s\S]*Status: interrupted[\s\S]*user sent new guidance/u);
+  const states = Object.fromEntries(
+    projector.snapshot().map((snapshot) => [snapshot.label, snapshot.state]),
+  );
+  assert.deepEqual(states, { Fast: "completed", Slow: "interrupted" });
+  // Nothing is left running, so a later call has nothing to stop.
+  assert.equal(supervisor.stopLiveChildrenForGuidance(), 0);
+});
+
+test("a subagent call made while guidance waits for delivery launches nothing", async () => {
+  let pendingGuidance = true;
+  let launched = 0;
+  const supervisor = new SubagentSupervisor({
+    generationId: "guidance-pending",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    policy: { launchBudget: 1 },
+    runChild: async ({ request: task }) => {
+      launched += 1;
+      return completed(task.label);
+    },
+  });
+  supervisor.observePendingUserGuidance(() => pendingGuidance);
+
+  const stopped = await supervisor.execute(request(["Late"]));
+  assert.match(stopped, /Status: interrupted[\s\S]*user sent new guidance/u);
+  assert.equal(launched, 0);
+
+  // Once the guidance is delivered, the same parent can still launch: the
+  // stopped call spent none of its one-child budget.
+  pendingGuidance = false;
+  assert.match(await supervisor.execute(request(["Next"])), /Status: completed/u);
+  assert.equal(launched, 1);
+});
+
+test("guidance settles a running and a capacity-queued V2 child as interrupted", async () => {
+  const firstStarted = deferred();
+  const localRuntime = runtime();
+  localRuntime.provider = { ...localRuntime.provider, deployment: "local" };
+  const projector = new SubagentEventProjector({
+    generationId: "generation-guidance-v2",
+    chatId: TEST_SUPERVISOR_SCOPE.chatId,
+    workspaceId: TEST_SUPERVISOR_SCOPE.workspaceId,
+    modelId: localRuntime.model.id,
+  });
+  const completedRuns: Array<{ label: string; status: string }> = [];
+  const started: string[] = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-guidance-v2",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: localRuntime,
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    prepareRun: async ({ identity, task, contextRevision }) => {
+      const prepared = phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false }),
+      );
+      return {
+        ...prepared,
+        complete: (result) => {
+          completedRuns.push({ label: task.label, status: result.status });
+          return "accepted";
+        },
+      };
+    },
+    runChild: async (child) => {
+      started.push(child.request.label);
+      firstStarted.resolve();
+      return await new Promise<SubagentTaskResult>((_resolve, reject) => {
+        child.signal?.addEventListener("abort", () => reject(child.signal?.reason), {
+          once: true,
+        });
+      });
+    },
+  });
+
+  const running = supervisor.execute(request(["Running", "Queued"]));
+  await firstStarted.promise;
+  supervisor.stopLiveChildrenForGuidance();
+  const result = await running;
+
+  // One local child runs at a time, so the second never started any work.
+  assert.deepEqual(started, ["Running"]);
+  assert.match(result, /## 2\. Queued[\s\S]*Status: interrupted[\s\S]*user sent new guidance/u);
+  assert.deepEqual(
+    completedRuns.sort((left, right) => left.label.localeCompare(right.label)),
+    [
+      { label: "Queued", status: "interrupted" },
+      { label: "Running", status: "interrupted" },
+    ],
+  );
+  assert.deepEqual(
+    projector.snapshot().map(({ label, state }) => ({ label, state })),
+    [
+      { label: "Running", state: "interrupted" },
+      { label: "Queued", state: "interrupted" },
+    ],
+  );
+});
+
 test("parent-first shutdown projects running and queued local children as interrupted", async () => {
   const firstStarted = deferred();
   const releaseFirst = deferred();
