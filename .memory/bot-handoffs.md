@@ -56,7 +56,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §4.1 (package P1: the h
   - It uses Electron `Notification`, so it also posts on Linux.
 
 ## Not yet
-- Remote and phones (P4): `projectBotSessionEntries` drops `handoff_result` through `default:`, so phones show no line for the person's answer until P4 maps it. There is no Remote endpoint yet.
+- Remote and phones: P4 (host side, `.memory/remote-rev36-bot-handoffs.md`) maps `handoff_result` to the person's message for every device and adds the revision-36 answer and open-on-Mac routes; phone UI is P5.
 - CLI: hand-offs are desktop-only. The CLI bundles `renderer/shared/bot-activity.ts`, which is why it names the `hand_off` literal instead of importing the constant.
 - Tests: `npm run test:bot-handoffs` (8 files), plus extensions in `live-projection` (including catch-up on subscribe with no refresh wired, and the list preview), `bot-attention`, `bot-chat-pane` (including a pasted photo refused while a card waits), `bot-transcript-rows`, `bot-activity-log`, `bot-params`, `bot-activity(-detail)` and `tests/e2e/bots-starter.spec.ts`.
 - Bot chat tests can paste an image by setting `window.aidenAPI.attachments.readClipboardImages` after `mountChat` (the Bot test IPC fake has no attachments bridge) and firing `paste` with `clipboardData.items`.
