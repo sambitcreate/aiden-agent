@@ -11,6 +11,7 @@ COPY renderer ./renderer
 COPY resources ./resources
 COPY native ./native
 COPY scripts ./scripts
+COPY patches ./patches
 COPY packages/cli ./packages/cli
 COPY THIRD_PARTY_NOTICES.md ./
 RUN npm run build --prefix packages/cli && npm run type-check --prefix packages/cli
