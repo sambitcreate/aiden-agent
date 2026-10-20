@@ -145,6 +145,7 @@ import {
   type ResolvedModelRuntime,
 } from "./model-runtime.js";
 import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admission-core.js";
+import { isBotPaused } from "./bot-pause-main.js";
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
@@ -643,6 +644,39 @@ function chatHasGenerationOwnership(chatId: string): boolean {
 /** A started turn, or the chat's turn is held by live generation work. */
 function chatTurnIsHeld(chatId: string): boolean {
   return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+}
+
+/**
+ * Wait until `busy()` is false, waking early once the chat's running
+ * generations complete. False when the settlement grace ran out first.
+ */
+async function waitForChatSettlement(chatId: string, busy: () => boolean): Promise<boolean> {
+  const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
+  while (busy()) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    const completions = [...active.values()]
+      .filter((entry) => entry.chatId === chatId && entry.completion)
+      .map((entry) => entry.completion!);
+    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    if (completions.length > 0) {
+      await Promise.race([Promise.allSettled(completions), pause]);
+    } else {
+      await pause;
+    }
+  }
+  return true;
+}
+
+/** Cancel every starting and running generation of the chat, and its subagents. */
+function cancelChatGenerations(chatId: string, origin: GenerationCancellationOrigin): void {
+  for (const [streamId, entry] of [...initializing.entries()]) {
+    if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
+  }
+  for (const [streamId, entry] of [...active.entries()]) {
+    if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
+  }
+  subagentRuntimeRegistry.abortChat(chatId);
 }
 
 function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
@@ -2281,6 +2315,12 @@ export const llmClient = {
         const canonical = selectCanonicalBotChat(await chatStore.listByBot(authoritativeBot.id));
         if (canonical?.id !== chat.id) {
           throw new Error("This historical Bot chat is read-only. Open the Bot's current chat.");
+        }
+        // A paused Bot runs no turn on this path either (plan §7). Checked once
+        // this generation is registered, so a pause recorded after the check
+        // finds it and stops it (`stopChatWork`).
+        if (await isBotPaused(authoritativeBot.id)) {
+          throw new Error("This Bot is paused. Resume it to continue.");
         }
         const providerId = chat.providerId;
         const model = chat.model;
@@ -4951,49 +4991,28 @@ export const llmClient = {
    * queue or a waiting send.
    */
   async waitForChatIdle(chatId: string): Promise<boolean> {
-    const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
-    while (chatTurnIsHeld(chatId)) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return false;
-      const completions = [...active.values()]
-        .filter((entry) => entry.chatId === chatId && entry.completion)
-        .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
-      if (completions.length > 0) {
-        await Promise.race([Promise.allSettled(completions), pause]);
-      } else {
-        await pause;
-      }
-    }
-    return true;
+    return waitForChatSettlement(chatId, () => chatTurnIsHeld(chatId));
   },
 
   /** Stop and drain foreground work before cross-store chat deletion begins. */
   async cancelChat(chatId: string): Promise<void> {
     await btwService.forget(chatId);
-    for (const [streamId, entry] of [...initializing.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
+    cancelChatGenerations(chatId, "chat_deletion");
+    if (!(await waitForChatSettlement(chatId, () => this.isChatBusy(chatId)))) {
+      throw new Error("Aiden could not stop this chat before deletion.");
     }
-    for (const [streamId, entry] of [...active.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
-    }
-    subagentRuntimeRegistry.abortChat(chatId);
-    const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
-    while (this.isChatBusy(chatId)) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        throw new Error("Aiden could not stop this chat before deletion.");
-      }
-      const completions = [...active.values()]
-        .filter((entry) => entry.chatId === chatId && entry.completion)
-        .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
-      if (completions.length > 0) {
-        await Promise.race([Promise.allSettled(completions), pause]);
-      } else {
-        await pause;
-      }
-    }
+  },
+
+  /**
+   * Stop a chat's foreground work and keep the chat, for a Bot the person
+   * paused (plan §7): its starting and running generations end as a Stop,
+   * with their tools and subagents, and this waits until nothing runs on the
+   * chat. Side questions are kept. Never throws: `false` means work was still
+   * settling when the grace ran out.
+   */
+  async stopChatWork(chatId: string): Promise<boolean> {
+    cancelChatGenerations(chatId, "user_stop");
+    return waitForChatSettlement(chatId, () => this.isChatBusy(chatId));
   },
 
   /** Close generation admission before chat deletion performs its first await. */

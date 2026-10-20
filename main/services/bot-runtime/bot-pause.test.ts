@@ -6,10 +6,18 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { build } from "esbuild";
+import { getCurrentSystemPrompt, type Message } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
+import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
 import { applyBotLiveEvent, type BotLiveEvent, type BotLiveSnapshot } from "../../../renderer/shared/bot-live.js";
+import { createBotMemoryReview } from "../bot-memory/review.js";
+import { createBotMemoryService } from "../bot-memory/service.js";
+import { createBotMemoryStore } from "../bot-memory/store.js";
 import { createBotPauseStore, type BotPauseRecord, type BotPauseStore } from "../bot-pause-store.js";
+import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { createBotQuestions } from "./bot-questions.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -21,8 +29,16 @@ import {
 } from "./bot-session-service.js";
 import { botDirectoryName } from "./harness-host.js";
 import { createBotLiveProjection, projectBotTranscript } from "./live-projection.js";
-import { countingTool, recordingDeps } from "./test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
+import { countingTool, fakeMemoryAuthority, recordingDeps } from "./test-support/fixtures.js";
+import {
+  createFauxModels,
+  FAUX_MODEL,
+  FAUX_MODEL_REF,
+  FAUX_PROVIDER,
+  slowAnswer,
+  waitFor,
+  type FauxModels,
+} from "./test-support/faux.js";
 import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
 
 const roots: string[] = [];
@@ -402,6 +418,241 @@ test("an unreadable pause file refuses to run turns instead of guessing", async 
     assert.ok(reports.length >= 1, "the unreadable file is reported");
     assert.equal(fauxModels.calls(), 0);
   } finally {
+    await service.shutdown();
+  }
+});
+
+/**
+ * Ten person turns, then a memory review that answers at once and is held at
+ * the conversation lookup for its watermark marker; while it is held, the
+ * person starts a long reply. The faux provider serves Bot turns and the
+ * review alike, so its request count covers both.
+ */
+async function reviewHeldAtItsMarker(cancelOnPause: boolean) {
+  const profile = tempProfile();
+  let holdLookup = false;
+  let lookupHeld!: () => void;
+  const held = new Promise<void>((resolve) => (lookupHeld = resolve));
+  let releaseLookup!: () => void;
+  const released = new Promise<void>((resolve) => (releaseLookup = resolve));
+  const lastUserText = (messages: Message[]) => {
+    const users = messages.filter((message) => message.role === "user");
+    const content = users[users.length - 1]?.content ?? "";
+    return typeof content === "string" ? content : content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  };
+  const answer: FauxResponseStep = (context) => {
+    if ((getCurrentSystemPrompt(context.messages) ?? "").includes("long-term memory up to date")) {
+      // The review is answered; its next step is the lookup for its marker.
+      holdLookup = true;
+      return fauxAssistantMessage("NOTHING");
+    }
+    return fauxAssistantMessage(lastUserText(context.messages) === "write a lot" ? "word ".repeat(2_000) : "ok");
+  };
+  const fauxModels = createFauxModels(Array.from({ length: 30 }, () => answer), { tokensPerSecond: 40 });
+  let service!: BotSessionRuntime;
+  const review = createBotMemoryReview({
+    memory: createBotMemoryService({ store: createBotMemoryStore({ profileDir: profile }) }),
+    conversation: async (botId) => {
+      if (holdLookup) {
+        holdLookup = false;
+        lookupHeld();
+        await released;
+      }
+      return service.conversation(botId);
+    },
+    isIdle: async (botId) => (await service.state(botId)).kind === "idle",
+    admit: async () => ({
+      ok: true,
+      model: { models: fauxModels.models, model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)! },
+      lease: fakeMemoryAuthority().lease,
+    }),
+  });
+  // As the desktop wires it, a pause cancels the Bot's memory review.
+  service = await serviceFor(profile, fauxModels, cancelOnPause ? { onPaused: (botId) => review.cancel(botId) } : {});
+  for (let index = 1; index <= 10; index += 1) {
+    const { submissionId } = await service.send(BOT, { text: `Person message ${index}`, requestId: `desk-${index}` });
+    assert.equal((await service.awaitReply(BOT, submissionId, never())).kind, "completed");
+  }
+  const reviewing = review.runNow(BOT);
+  await held;
+  const { submissionId } = await service.send(BOT, { text: "write a lot", requestId: "desk-long" });
+  await waitFor(async () => (await service.state(BOT)).kind === "running" && fauxModels.calls() === 12, {
+    what: "the long reply to start after the review's request",
+  });
+  const markers = async () => {
+    const page = await (await service.conversation(BOT)).entries({}, 500, undefined, BACKGROUND_CONTEXT);
+    return page.items.filter((entry) => entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND).map((entry) => entry.data);
+  };
+  return { service, review, reviewing, submissionId, fauxModels, markers, releaseLookup };
+}
+
+test("a memory review cancelled by the pause writes no marker and never restarts the interrupted turn", async () => {
+  const held = await reviewHeldAtItsMarker(true);
+  try {
+    assert.deepEqual(await held.service.pause(BOT, "mac"), pausedAt(held.submissionId));
+    held.releaseLookup();
+    const outcome = await held.reviewing;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(held.fauxModels.calls(), 12, "the paused turn makes no further provider request");
+    assert.deepEqual(await held.service.state(BOT), pausedAt(held.submissionId));
+    assert.deepEqual(outcome, { kind: "aborted" }, "the cancelled review stops before its marker");
+    assert.deepEqual(await held.markers(), []);
+  } finally {
+    held.releaseLookup();
+    held.review.shutdown();
+    await held.service.shutdown();
+  }
+});
+
+test("a review marker that lands while the Bot is paused is appended without starting its interrupted turn", async () => {
+  // Nothing cancels this review, so it reaches its marker after the pause.
+  const held = await reviewHeldAtItsMarker(false);
+  try {
+    assert.deepEqual(await held.service.pause(BOT, "mac"), pausedAt(held.submissionId));
+    held.releaseLookup();
+    assert.deepEqual(await held.reviewing, { kind: "reviewed", added: 0, targets: [] });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(held.fauxModels.calls(), 12, "the marker starts nothing");
+    assert.deepEqual(await held.service.state(BOT), pausedAt(held.submissionId));
+    assert.deepEqual(await held.markers(), [{ source: "review", added: 0, targets: [] }]);
+  } finally {
+    held.releaseLookup();
+    held.review.shutdown();
+    await held.service.shutdown();
+  }
+});
+
+interface LegacyGenerationEntry {
+  chatId: string;
+  owner: { documentId: string };
+  cancelRequested: boolean;
+  cancellationOrigin?: string;
+  stopCacheWarming: () => void;
+  agent: { abort: () => void };
+  completion: Promise<void> | null;
+}
+
+/**
+ * The real `llmClient` with controlled service ports (as the host test in
+ * `pi-cache-warming.test.ts` loads it): a test places running legacy
+ * generations in its registry and sees whose subagents were stopped.
+ */
+async function legacyChatHost() {
+  let active!: Map<string, LegacyGenerationEntry>;
+  const subagentsStopped: string[] = [];
+  class UnusedService {}
+  const mocks: Record<string, unknown> = {
+    "../platform.js": { logger: { info() {}, warn() {} } },
+    "./computer-use/generation-gate.js": { ComputerUseGenerationGate: UnusedService },
+    "./chat-deletion-gate.js": { ChatDeletionGate: UnusedService },
+    "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
+    "./chat-turn-admission.js": { ChatTurnAdmission: class { isAdmitted() { return false; } } },
+    "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
+    "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
+    "./chat-run-input-admission.js": {
+      createChatRunInputAdmission: (ports: { active: Map<string, LegacyGenerationEntry> }) => {
+        active = ports.active;
+        return {};
+      },
+    },
+    "./subagents/child-agent-runtime.js": {
+      subagentRuntimeRegistry: {
+        setHealthMetrics() {},
+        setRuntimeFaultReporter() {},
+        abortGeneration() {},
+        abortChat: (chatId: string) => void subagentsStopped.push(chatId),
+        hasChatChildren: () => false,
+        hasLiveChatChildren: () => false,
+      },
+    },
+    "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream() {} } },
+    "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
+  };
+  const bundle = await build({
+    entryPoints: [fileURLToPath(new URL("../llm-client.ts", import.meta.url))],
+    bundle: true,
+    write: false,
+    platform: "node",
+    format: "cjs",
+    external: ["*"],
+  });
+  const module = { exports: {} as typeof import("../llm-client.js") };
+  new Function("require", "module", "exports", bundle.outputFiles[0]!.text)(
+    (name: string) => mocks[name] ?? {},
+    module,
+    module.exports,
+  );
+  return { client: module.exports.llmClient, active, subagentsStopped };
+}
+
+/**
+ * A generation running on the legacy chat path (a paired desktop's or a
+ * phone's turn): every few milliseconds it streams a delta or takes a tool
+ * step, until its agent is aborted; its tool then takes a moment to unwind
+ * before the run settles and leaves the registry.
+ */
+function runLegacyGeneration(host: Awaited<ReturnType<typeof legacyChatHost>>, streamId: string, chatId: string) {
+  let effects = 0;
+  let finish!: () => void;
+  const completion = new Promise<void>((resolve) => (finish = resolve));
+  const ticking = setInterval(() => void (effects += 1), 5);
+  const settle = () => {
+    clearInterval(ticking);
+    host.active.delete(streamId);
+    finish();
+  };
+  const entry: LegacyGenerationEntry = {
+    chatId,
+    owner: { documentId: `owner-${streamId}` },
+    cancelRequested: false,
+    stopCacheWarming() {},
+    agent: {
+      abort() {
+        clearInterval(ticking);
+        setTimeout(settle, 50);
+      },
+    },
+    completion,
+  };
+  host.active.set(streamId, entry);
+  return { entry, effects: () => effects, settled: () => !host.active.has(streamId), end: settle };
+}
+
+test("pausing stops the Bot's legacy chat streams and tools and waits for them, leaving other chats running", async () => {
+  const host = await legacyChatHost();
+  const chatsByBot: Record<string, string[]> = { [BOT]: ["bot-chat", "bot-older-chat"], "bot:b": ["other-bot-chat"] };
+  const service = await serviceFor(tempProfile(), createFauxModels(), {
+    // As the desktop wires it (`botPauseEffects` in bot-session-main.ts).
+    afterPaused: (botId) =>
+      stopBotLegacyChatWork(botId, {
+        chatIds: async (id) => chatsByBot[id] ?? [],
+        stopChat: (chatId) => host.client.stopChatWork(chatId),
+      }),
+  });
+  const paired = runLegacyGeneration(host, "stream-paired", "bot-chat");
+  const otherBot = runLegacyGeneration(host, "stream-other-bot", "other-bot-chat");
+  const workspace = runLegacyGeneration(host, "stream-workspace", "workspace-chat");
+  try {
+    await waitFor(() => paired.effects() > 2 && otherBot.effects() > 2 && workspace.effects() > 2, {
+      what: "the legacy streams to run",
+    });
+
+    assert.deepEqual(await service.pause(BOT, "mac"), pausedAt());
+    assert.equal(paired.settled(), true, "the pause returns once the Bot's legacy run has settled");
+    assert.equal(paired.entry.cancellationOrigin, "user_stop", "it ends as a Stop, and the chat is kept");
+    assert.deepEqual(host.subagentsStopped, ["bot-chat", "bot-older-chat"], "only the paused Bot's chats lose their subagents");
+
+    const [pairedAt, otherBotAt, workspaceAt] = [paired.effects(), otherBot.effects(), workspace.effects()];
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(paired.effects(), pairedAt, "nothing more happens for the paused Bot");
+    assert.ok(otherBot.effects() > otherBotAt, "another Bot keeps running");
+    assert.ok(workspace.effects() > workspaceAt, "a workspace chat keeps running");
+    assert.equal(otherBot.entry.cancelRequested || workspace.entry.cancelRequested, false);
+    assert.deepEqual(await service.state(BOT), pausedAt());
+  } finally {
+    paired.end();
+    otherBot.end();
+    workspace.end();
     await service.shutdown();
   }
 });

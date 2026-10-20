@@ -1444,6 +1444,41 @@ test("a paused Bot's chat refuses a phone turn before anything is written, and t
   }
 });
 
+test("a pause that lands while a phone turn is being admitted refuses it before anything is written", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-remote-chat-pause-race-"));
+  try {
+    const pauses = createBotPauseStore({ root: () => root });
+    let pauseDuringPreflight = true;
+    const app = fixture(chat({ botId: "bot-1" }), {
+      retainedBotChatAuthorizer: () => true,
+      // The person pauses the Bot after the route's first check, while the turn is admitted.
+      botTurnAuthorityPreflight: async () => {
+        if (pauseDuringPreflight) await pauses.pause("bot-1", "mac");
+      },
+      botPaused: async (botId) => (await pauses.get(botId)) !== undefined,
+    });
+
+    await assert.rejects(
+      app.service.startTurn("device-1", "chat-1", "paused-mid-admission-0001", { text: "are you there?" }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "operation_stale" && error.status === 409,
+    );
+    assert.equal(app.appends(), 0);
+    assert.equal(app.starts(), 0, "a paused Bot makes no provider request");
+    assert.deepEqual(app.current()?.messages, []);
+
+    // Nothing ran, so the same key runs once the Bot is resumed.
+    pauseDuringPreflight = false;
+    await pauses.unpause("bot-1");
+    const accepted = await app.service.startTurn("device-1", "chat-1", "paused-mid-admission-0001", { text: "are you there?" });
+    assert.equal(accepted.status, "accepted");
+    assert.equal(app.appends(), 1);
+    assert.equal(app.starts(), 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("remote turns reject images for text-only models without consuming the attachment", async () => {
   let supportsImages = false;
   let supportsCompanionImages = false;

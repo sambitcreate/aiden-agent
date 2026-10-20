@@ -27,9 +27,10 @@ import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { botApplicationService } from "../bot-application-service-main.js";
-import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
+import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
-import { createBotPauseStore, type BotPauseRecord } from "../bot-pause-store.js";
+import { botPauses, isBotPaused } from "../bot-pause-main.js";
+import type { BotPauseRecord } from "../bot-pause-store.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
@@ -46,6 +47,7 @@ import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
+import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
@@ -78,12 +80,8 @@ const profileDir = () => app.getPath("userData");
 setBotFileToolProtectedRoots(() => [path.join(profileDir(), "bots")]);
 const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
-/** The one pause store in this process (`<userData>/bot-service/bot-pauses.json`). */
-const botPauses = createBotPauseStore({ root: botServiceRoot });
-/** Whether the person paused this Bot; throws when the pause file is unreadable, so callers refuse. */
-export async function isBotPaused(botId: string): Promise<boolean> {
-  return (await botPauses.get(botId)) !== undefined;
-}
+// The pause store is shared with the legacy chat path (`bot-pause-main.ts`).
+export { isBotPaused };
 const resolvedModels = new Map<string, { ref: ModelRef; imageInput: boolean; at: number }>();
 
 let runtime: Promise<BotSessionRuntime> | undefined;
@@ -204,10 +202,8 @@ const memoryReview = createBotMemoryReview({
 const compactionSteering = createBotCompactionSteering({
   memory,
   admit: admitMemoryWork,
-  appendEntry: async (botId, kind, data) => {
-    const conversation = await (await botSessionRuntime()).conversation(botId);
-    await conversation.submit({ type: "write", entry: { kind, data: { ...data } } }, BACKGROUND_CONTEXT);
-  },
+  // Appended, not submitted: a flush that ends as the Bot pauses must not restart its closed turn.
+  appendEntry: async (botId, kind, data) => (await botSessionRuntime()).appendEntry(botId, kind, { ...data }),
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
 });
 
@@ -302,6 +298,15 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
   }
 }
 
+/** Paired-desktop and Remote turns on the Bot's chat run on `llmClient`, which the harness close never reaches. */
+async function stopLegacyChatWork(botId: string): Promise<void> {
+  const [{ chatStore }, { llmClient }] = await Promise.all([import("../chat-store.js"), import("../llm-client.js")]);
+  await stopBotLegacyChatWork(botId, {
+    chatIds: async (id) => (await chatStore.listByBot(id)).map((chat) => chat.id),
+    stopChat: (chatId) => llmClient.stopChatWork(chatId),
+  });
+}
+
 /**
  * Pause steps outside the Bot's harness, run once its running turn is closed.
  * Waits inside the turn (questions, approvals and hand-offs, whether a tool or
@@ -310,7 +315,7 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
  * step here for anything that keeps going on its own, such as the Bot's
  * computer.
  */
-const botPauseEffects: ReadonlyArray<(botId: string) => void | Promise<void>> = [];
+const botPauseEffects: ReadonlyArray<(botId: string) => void | Promise<void>> = [stopLegacyChatWork];
 
 async function afterBotPaused(botId: string): Promise<void> {
   for (const effect of botPauseEffects) {
