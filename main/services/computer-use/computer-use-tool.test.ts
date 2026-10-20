@@ -56,8 +56,9 @@ class FakeSession implements CuaDriverSessionLike {
   readonly calls: Call[] = [];
   readonly results: Array<{ name: string; result: unknown }> = [];
   readonly toolCatalog = pinnedCatalog();
-  readonly driver = new FakeCuaDriver();
   handler?: (call: Call) => unknown | Promise<unknown>;
+
+  constructor(readonly driver = new FakeCuaDriver()) {}
 
   supports(tool: string, capability: string): boolean {
     return this.toolCatalog.get(tool)?.capabilities.has(capability) ?? false;
@@ -136,8 +137,12 @@ function fakeResponse(call: Call, driver: FakeCuaDriver): unknown {
 
 const SAFARI_TARGET = { kind: "window", pid: 42, window_id: 7 };
 
-function harness(supportsImages = true, createDelayMs = 0) {
-  const session = new FakeSession();
+function harness(
+  supportsImages = true,
+  createDelayMs = 0,
+  driver?: ConstructorParameters<typeof FakeCuaDriver>[0],
+) {
+  const session = new FakeSession(new FakeCuaDriver(driver));
   const host = new FakeHost(session, createDelayMs);
   let factoryCount = 0;
   const controller = new ComputerUseController("generation-test", supportsImages, async () => {
@@ -1928,10 +1933,10 @@ test("a durable Bot's input action whose grant is revoked while its card waits n
     { callId: "bot-click", args: click, signal: undefined },
     access,
   );
-  assert.ok(approval?.onAllow);
+  assert.ok(approval.approval?.onAllow);
   // Reset chat permissions runs while the card waits; then the person allows.
   granted = false;
-  await assert.rejects(async () => approval.onAllow?.(), new RegExp(BOT_COMPUTER_USE_REVOKED_REASON));
+  await assert.rejects(async () => approval.approval?.onAllow?.(), new RegExp(BOT_COMPUTER_USE_REVOKED_REASON));
   await assert.rejects(() => controller.execute("bot-click", click), /not approved/u);
   assert.equal(session.calls.some((call) => call.name === "click"), false);
   assert.equal(revoked, 1);
@@ -1942,6 +1947,106 @@ test("a durable Bot's input action whose grant is revoked while its card waits n
     new RegExp(BOT_COMPUTER_USE_REVOKED_REASON),
   );
   assert.equal(revoked, 2);
+  await controller.close();
+});
+
+/** A Safari sign-in and payment form (window bounds 100,50 200×100; screenshots at 2×). */
+const FORM_ELEMENTS = [
+  { role: "AXTextField", label: "Email", value: "ada@example.com", frame: { x: 110, y: 60, w: 80, h: 20 }, depth: 1 },
+  { role: "AXSecureTextField", label: "Password", value: "••••••••", frame: { x: 110, y: 90, w: 80, h: 20 }, depth: 1 },
+  { role: "AXTextField", label: "Card number", value: "4242 4242 4242 4242", frame: { x: 200, y: 60, w: 90, h: 20 }, depth: 1 },
+  { role: "AXButton", label: "Pay now", frame: { x: 210, y: 90, w: 60, h: 20 }, depth: 1 },
+];
+const ALWAYS_GRANTED = { granted: async () => true, revoke: async () => undefined };
+
+test("a Bot's approval names the element an action touches by role and label, never its value", async () => {
+  const { controller } = harness(true, 0, { elements: () => FORM_ELEMENTS });
+  await capture(controller, "som");
+  const setCard = { action: "set_value", element: 2, value: "5555 5555 5555 4444" } as const;
+  const descriptor = await controller.approvalFor(setCard);
+  assert.deepEqual(descriptor?.element, { role: "AXTextField", label: "Card number" });
+  assert.equal(descriptor?.secureFieldInCapture, true);
+
+  const live = await botComputerUseApproval(controller, { callId: "set-card", args: setCard, signal: undefined }, ALWAYS_GRANTED);
+  assert.deepEqual(live.action, {
+    surface: "computer_use",
+    action: "set_value",
+    app: "Safari",
+    windowTitle: "Example",
+    element: { role: "AXTextField", label: "Card number" },
+    secureFieldInCapture: true,
+  });
+  // Neither the value on screen nor the value being set reaches the classifier.
+  const action = JSON.stringify(live.action);
+  assert.equal(action.includes("4242"), false);
+  assert.equal(action.includes("5555"), false);
+
+  // A pixel click names the innermost element under it.
+  const payByPixel = { action: "click", coordinate: [230, 90] } as const;
+  assert.deepEqual((await controller.approvalFor(payByPixel))?.element, { role: "AXButton", label: "Pay now" });
+  // A menu names its path.
+  const menu = { action: "menu", menu_path: ["File", "Print…"] } as const;
+  assert.deepEqual((await controller.approvalFor(menu))?.menuPath, ["File", "Print…"]);
+  // Observations need no approval and are not classified.
+  assert.deepEqual(
+    await botComputerUseApproval(controller, { callId: "list", args: { action: "list_apps" }, signal: undefined }, ALWAYS_GRANTED),
+    { approval: null },
+  );
+  await controller.close();
+});
+
+test("typing carries the field an earlier click focused, since every action clears the capture", async () => {
+  const { controller } = harness(true, 0, { elements: () => FORM_ELEMENTS });
+  await capture(controller, "som");
+  await approved(controller, "focus-password", { action: "click", element: 1 });
+  const typePassword = { action: "type", text: "correct horse battery staple" } as const;
+  const typed = await botComputerUseApproval(controller, { callId: "type", args: typePassword, signal: undefined }, ALWAYS_GRANTED);
+  assert.deepEqual(typed.action, {
+    surface: "computer_use",
+    action: "type",
+    app: "Safari",
+    windowTitle: "Example",
+    focusedElement: { role: "AXSecureTextField", label: "Password" },
+    secureFieldInCapture: true,
+  });
+  assert.equal(JSON.stringify(typed.action).includes("horse"), false);
+  // The card still asks the person with exactly what will be typed.
+  assert.match(typed.approval?.summary ?? "", /correct horse battery staple/u);
+
+  // Typing one character keeps focus; Tab moves it somewhere Aiden can't see.
+  await approved(controller, "type-a", { action: "key", keys: "a" });
+  assert.deepEqual((await controller.approvalFor(typePassword))?.focusedElement, {
+    role: "AXSecureTextField",
+    label: "Password",
+  });
+  await approved(controller, "tab", { action: "key", keys: "tab" });
+  assert.equal((await controller.approvalFor(typePassword))?.focusedElement, undefined);
+
+  // A pixel click focuses the field under it.
+  await capture(controller, "som");
+  await approved(controller, "focus-card", { action: "click", coordinate: [200, 30] });
+  assert.deepEqual((await controller.approvalFor(typePassword))?.focusedElement, {
+    role: "AXTextField",
+    label: "Card number",
+  });
+  await controller.close();
+});
+
+test("what a window's capture showed doesn't follow the Bot to another window", async () => {
+  const { controller } = harness(true, 0, {
+    elements: (window: { app_name: string }) => (window.app_name === "Safari" ? FORM_ELEMENTS : [{ role: "AXButton", label: "Open", frame: { x: 10, y: 10, w: 40, h: 20 }, depth: 1 }]),
+  });
+  await capture(controller, "som");
+  await approved(controller, "focus-password", { action: "click", element: 1 });
+  await capture(controller, "som", { pid: 99, window_id: 9 });
+  const descriptor = await controller.approvalFor({ action: "type", text: "x" });
+  assert.equal(descriptor?.focusedElement, undefined);
+  assert.equal(descriptor?.secureFieldInCapture, undefined);
+  // Back on Safari, a fresh capture shows the secure field again; the focus Aiden saw there is gone.
+  await capture(controller, "som");
+  const back = await controller.approvalFor({ action: "type", text: "x" });
+  assert.equal(back?.secureFieldInCapture, true);
+  assert.equal(back?.focusedElement, undefined);
   await controller.close();
 });
 

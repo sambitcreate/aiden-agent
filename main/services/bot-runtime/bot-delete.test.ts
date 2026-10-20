@@ -25,6 +25,7 @@ import { createBotManagedWorkspaceService } from "../bot-managed-workspace.js";
 import { BotMutationGate } from "../bot-mutation-gate.js";
 import { createBotStore } from "../bot-store-core.js";
 import { createChatStore } from "../chat-store-core.js";
+import { BotRulesUnavailableError, createBotRuleStore, type BotRuleStore } from "../bot-rules/store.js";
 import { BotSessionError, createBotSessionService, type BotSessionRuntime } from "./bot-session-service.js";
 import { botDirectoryName } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
@@ -137,7 +138,7 @@ async function sessionFor(
   opened: Profile,
   fauxModels: FauxModels,
   routines: Map<string, string[]>,
-  options: { quitAfterSessionDestroyed?: boolean } = {},
+  options: { quitAfterSessionDestroyed?: boolean; rules?: BotRuleStore } = {},
 ): Promise<BotSessionRuntime> {
   return createBotSessionService({
     profileDir: profile,
@@ -151,6 +152,7 @@ async function sessionFor(
         if (options.quitAfterSessionDestroyed) throw new Error("Aiden quit right after erasing the session.");
         routines.delete(botId);
       },
+      async (botId) => options.rules?.forgetBot(botId),
       (botId) => opened.app.deleteBot({ botId }),
     ],
   });
@@ -409,4 +411,42 @@ test("legacy Bot transcripts are wiped once, and the Bot keeps working afterward
   await again.app.initialize();
   assert.equal((await again.chatStore.get(chat.id))?.messages.length, 1);
   assert.deepEqual(again.clearedJournals, []);
+});
+
+test("deleting a Bot erases its rules; a later edit is refused and never brings its directory back", async () => {
+  const profile = await tempProfile();
+  const opened = openProfile(profile);
+  await opened.app.initialize();
+  const doomed = await createBotWithData(opened, "Doomed");
+  const survivor = await createBotWithData(opened, "Survivor");
+  const knownBot = async (botId: string) => (await opened.botStore.get(botId)) != null;
+  const rules = createBotRuleStore({ profileDir: profile, knownBot });
+  assert.equal((await rules.update(doomed.bot.id, 0, { type: "add_custom", text: "order food", behavior: "hand_off" })).ok, true);
+  assert.equal(
+    (await rules.update(survivor.bot.id, 0, { type: "set_behavior", ruleId: "default.delete", behavior: "hand_off" })).ok,
+    true,
+  );
+  const doomedDirectory = path.join(profile, "bots", botDirectoryName(doomed.bot.id));
+  assert.equal(existsSync(path.join(doomedDirectory, "rules.json")), true);
+  const session = await sessionFor(profile, opened, createFauxModels([]), new Map(), { rules });
+  try {
+    await session.deleteBot(doomed.bot.id);
+    assert.equal(existsSync(doomedDirectory), false);
+    await assert.rejects(
+      rules.update(doomed.bot.id, 1, { type: "add_custom", text: "book a flight", behavior: "ask" }),
+      BotRulesUnavailableError,
+    );
+    // After a restart the Bot store no longer knows it, so a fresh store refuses too.
+    const restarted = createBotRuleStore({ profileDir: profile, knownBot });
+    await assert.rejects(
+      restarted.update(doomed.bot.id, 0, { type: "add_custom", text: "book a flight", behavior: "ask" }),
+      BotRulesUnavailableError,
+    );
+    assert.equal(existsSync(doomedDirectory), false, "no edit brings the deleted Bot's directory back");
+    await assertErased(profile, doomed.bot.id, doomed.homePath, doomed.chat.id);
+    const kept = await restarted.rules(survivor.bot.id);
+    assert.equal(kept.find((rule) => rule.id === "default.delete")?.behavior, "hand_off");
+  } finally {
+    await session.shutdown();
+  }
 });

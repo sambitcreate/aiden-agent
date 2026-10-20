@@ -15,9 +15,25 @@ import {
   type BotHandoffAnswer,
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
+import type { BotRuleHandoffRequest } from "./bot-extension.js";
 
 export interface BotHandoffRequest extends BotPendingHandoff {
   signal: AbortSignal | undefined;
+}
+
+/** The card a rule opens instead of running a call (plan §4.4): an action card naming its rule. */
+export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRequest {
+  return {
+    botId: request.botId,
+    waitId: request.waitId,
+    toolCallId: request.toolCallId,
+    kind: "action",
+    action: request.action,
+    why: request.why,
+    source: "rule",
+    rule: { id: request.rule.id, label: request.rule.label },
+    signal: request.signal,
+  };
 }
 
 /**

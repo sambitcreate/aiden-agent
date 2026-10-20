@@ -12,7 +12,11 @@ import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import type { ResolvedModelRuntime } from "../model-runtime.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { buildSkillTools } from "../skill-tools.js";
+import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
+import type { BotClassifiableAction } from "../bot-rules/classify.js";
 import { createBotApprovals, type BotApprovalPrompt } from "./bot-approvals.js";
+import { handoffSkippedText, ruleAskUnattendedBlock, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
+import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND, botImageReference } from "./bot-images.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
@@ -430,7 +434,7 @@ test("Computer Use asks with its live summary and binds the grant to the exact c
     candidates: () => [{ tool }],
     approvalFor: async (toolName, call) =>
       toolName === "computer_use"
-        ? { summary: "Click Save — TextEdit", onAllow: () => void authorized.push(call.callId) }
+        ? { approval: { summary: "Click Save — TextEdit", onAllow: () => void authorized.push(call.callId) } }
         : undefined,
   });
   const { harness, root } = await memoryHarness(deps, fauxModels);
@@ -684,5 +688,262 @@ test("quitting while an approval waits withdraws the prompt; Resume re-asks it u
     assert.equal(results[0]!.isError, false);
   } finally {
     await host.shutdown();
+  }
+});
+
+// --- Bot rules (plan §6.3, §4.4) ---------------------------------------
+
+const PURCHASE_LABEL = "Make a purchase or booking";
+
+/** The defaults with `purchase` switched to `behavior`. */
+function rulesWith(behavior: BotRule["behavior"], extra: BotRule[] = []): BotRule[] {
+  return [...defaultBotRules().map((rule) => (rule.actionClass === "purchase" ? { ...rule, behavior } : rule)), ...extra];
+}
+
+const PLACE_ORDER: BotClassifiableAction = {
+  surface: "computer_use",
+  action: "click",
+  app: "Safari",
+  windowTitle: "Checkout",
+  element: { role: "AXButton", label: "Place your order" },
+};
+
+/** A Computer Use turn whose calls the live source describes as `action`. */
+function ruledTurn(options: {
+  rules: () => readonly BotRule[];
+  calls?: number;
+  baseline?: boolean;
+  action?: BotClassifiableAction;
+  requestHandoff?: Parameters<typeof assemblyDeps>[1]["requestHandoff"];
+}) {
+  const state = assemblyState(full(botHome()));
+  const computer = countingTool("computer_use");
+  const allowed: string[] = [];
+  const calls = Array.from({ length: options.calls ?? 1 }, (_, index) =>
+    fauxToolCall("computer_use", { text: "click" }, { id: `call-${index + 1}` }),
+  );
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage(calls, { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: computer }],
+    rules: options.rules,
+    botName: "Ada",
+    approvalFor: async (_toolName, call) => ({
+      approval: options.baseline === false
+        ? null
+        : { summary: "Click Place your order — Safari", onAllow: () => void allowed.push(call.callId) },
+      action: options.action ?? PLACE_ORDER,
+    }),
+    ...(options.requestHandoff === undefined ? {} : { requestHandoff: options.requestHandoff }),
+  });
+  return { deps, computer, allowed, fauxModels };
+}
+
+test("a rule-made ask on a call that needs no approval creates exactly one card, prefixed with the rule and without remembered scopes", async () => {
+  const turn = ruledTurn({ rules: () => rulesWith("ask"), baseline: false });
+  const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "order it" }, ctx)).wait(ctx);
+    assert.deepEqual(turn.deps.approvals.map((request) => request.summary), [`Rule · ${PURCHASE_LABEL} — computer_use`]);
+    // Remembered approvals never cover a rule's ask: the request offers no scopes at all.
+    assert.equal("scopes" in turn.deps.approvals[0]!, false);
+    assert.equal(turn.computer.executions.length, 1);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a rule that also covers an existing Computer Use approval prefixes it and keeps its grant binding", async () => {
+  const turn = ruledTurn({ rules: () => rulesWith("ask") });
+  const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "order it" }, ctx)).wait(ctx);
+    assert.deepEqual(turn.deps.approvals.map((request) => request.summary), [
+      `Rule · ${PURCHASE_LABEL} — Click Place your order — Safari`,
+    ]);
+    assert.deepEqual(turn.allowed, ["call-1"]);
+    assert.equal(turn.computer.executions.length, 1);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("two identical rule-made calls each get their own card", async () => {
+  const turn = ruledTurn({ rules: () => rulesWith("ask"), baseline: false, calls: 2 });
+  const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "order twice" }, ctx)).wait(ctx);
+    assert.equal(turn.deps.approvals.length, 2);
+    assert.equal(new Set(turn.deps.approvals.map((request) => request.waitId)).size, 2);
+    assert.deepEqual(turn.deps.approvals.map((request) => request.toolCallId), ["call-1", "call-2"]);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a connection tool a built-in rule covers asks with the rule's name", async () => {
+  const state = assemblyState(full(botHome()));
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "hello" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, { candidates: () => [{ tool: send, mcp: true }], rules: () => defaultBotRules() });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "send it" }, ctx)).wait(ctx);
+    assert.deepEqual(deps.approvals.map((request) => request.summary), [
+      `Rule · Send a message or email to someone — ${SEND_EMAIL_TOOL}`,
+    ]);
+    assert.equal(send.executions.length, 1);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+/** A hand-off turn answered through the real hand-off bridge. */
+async function handoffTurn(
+  answer: { outcome: "done" | "skipped"; note?: string },
+  rules = () => rulesWith("hand_off"),
+  action = PLACE_ORDER,
+) {
+  const handoffs = createBotHandoffs();
+  const turn = ruledTurn({ rules, action, requestHandoff: (request) => handoffs.request(ruleHandoffRequest(request)) });
+  const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+  try {
+    const run = await root.submit({ type: "input", content: "order it" }, ctx);
+    await waitFor(() => handoffs.pending("bot-1").length === 1, { what: "the hand-off card" });
+    const card = handoffs.pending("bot-1")[0]!;
+    assert.equal(handoffs.answer("bot-1", card.waitId, answer), "answered");
+    await run.wait(ctx);
+    return { card, turn, results: await toolResults(root) };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("a hand-off rule never runs the call: the person's Done blocks it with what they did", async () => {
+  const { card, turn, results } = await handoffTurn({ outcome: "done", note: "Ordered the blue one" });
+  assert.equal(turn.computer.executions.length, 0);
+  assert.deepEqual(turn.deps.approvals, [], "a hand-off is not an approval");
+  assert.deepEqual(
+    { kind: card.kind, source: card.source, rule: card.rule, action: card.action, toolCallId: card.toolCallId },
+    {
+      kind: "action",
+      source: "rule",
+      rule: { id: "default.purchase", label: PURCHASE_LABEL },
+      action: PURCHASE_LABEL,
+      toolCallId: "call-1",
+    },
+  );
+  assert.equal(card.why, `Your rule “${PURCHASE_LABEL}” hands this to you. Ada was about to: Click Place your order — Safari`);
+  assert.equal(results[0]!.isError, true);
+  assert.ok(resultText(results[0]).includes(ruleHandoffDoneBlock("Click Place your order — Safari", "Ordered the blue one")));
+  assert.deepEqual(turn.deps.records, [
+    {
+      botId: "bot-1",
+      kind: "action",
+      outcome: "done",
+      action: PURCHASE_LABEL,
+      note: "Ordered the blue one",
+      toolCallId: "call-1",
+      rule: { id: "default.purchase", label: PURCHASE_LABEL },
+    },
+  ]);
+});
+
+test("Skip on a rule hand-off tells the Bot not to try another way", async () => {
+  const { turn, results } = await handoffTurn({ outcome: "skipped" });
+  assert.equal(turn.computer.executions.length, 0);
+  assert.ok(resultText(results[0]).includes(handoffSkippedText(PURCHASE_LABEL)));
+  assert.equal(turn.deps.records[0]?.outcome, "skipped");
+});
+
+test("the person's own rule hands off in their words", async () => {
+  const flights: BotRule = {
+    id: "custom.0b8a3f5e-2c11-4d5f-9b7a-0123456789ab",
+    text: "book a flight",
+    behavior: "hand_off",
+    locked: false,
+  };
+  const { card } = await handoffTurn({ outcome: "done" }, () => rulesWith("ask", [flights]), {
+    surface: "computer_use",
+    action: "click",
+    app: "Safari",
+    windowTitle: "Choose flights – United",
+    element: { role: "AXButton", label: "Book" },
+  });
+  // Purchase asks first, but the stricter custom rule wins.
+  assert.equal(card.rule?.id, flights.id);
+  assert.equal(card.action, botRuleLabel(flights));
+  assert.equal(card.action, "Book a flight");
+});
+
+test("on a routine or Telegram turn a rule never waits: it blocks with what the person needs to do", async () => {
+  for (const [requestId, behavior, baseline, expected] of [
+    ["routine:daily", "hand_off", true, ruleUnattendedBlock(PURCHASE_LABEL)],
+    ["tg:42", "hand_off", true, ruleUnattendedBlock(PURCHASE_LABEL)],
+    ["routine:daily", "ask", false, ruleAskUnattendedBlock(PURCHASE_LABEL)],
+  ] as const) {
+    let handoffAsked = false;
+    const turn = ruledTurn({
+      rules: () => rulesWith(behavior),
+      baseline,
+      requestHandoff: async () => {
+        handoffAsked = true;
+        return { outcome: "done" };
+      },
+    });
+    const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+    try {
+      await (await root.submit({ type: "input", content: "order it", requestId }, ctx)).wait(ctx);
+      const results = await toolResults(root);
+      assert.equal(turn.computer.executions.length, 0, requestId);
+      assert.deepEqual(turn.deps.approvals, [], requestId);
+      assert.equal(handoffAsked, false, requestId);
+      assert.ok(resultText(results[0]).includes(expected), `${requestId}: ${resultText(results[0])}`);
+    } finally {
+      await harness.close(ctx);
+    }
+  }
+});
+
+test("a locked rule hands off a card field even when no rules are configured", async () => {
+  const handoffs = createBotHandoffs();
+  const turn = ruledTurn({
+    rules: () => [],
+    action: { surface: "computer_use", action: "type", focusedElement: { role: "AXTextField", label: "Card number" } },
+    requestHandoff: (request) => handoffs.request(ruleHandoffRequest(request)),
+  });
+  const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+  try {
+    const run = await root.submit({ type: "input", content: "pay" }, ctx);
+    await waitFor(() => handoffs.pending("bot-1").length === 1, { what: "the hand-off card" });
+    assert.equal(handoffs.pending("bot-1")[0]!.rule?.id, "locked.money");
+    handoffs.answer("bot-1", handoffs.pending("bot-1")[0]!.waitId, { outcome: "done" });
+    await run.wait(ctx);
+    assert.equal(turn.computer.executions.length, 0);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("rules that can't be read fail the call closed", async () => {
+  const turn = ruledTurn({
+    rules: () => {
+      throw new Error("EACCES: permission denied");
+    },
+  });
+  const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "order it" }, ctx)).wait(ctx);
+    const results = await toolResults(root);
+    assert.equal(turn.computer.executions.length, 0);
+    assert.deepEqual(turn.deps.approvals, []);
+    assert.match(resultText(results[0]), /rules couldn't be read/u);
+  } finally {
+    await harness.close(ctx);
   }
 });

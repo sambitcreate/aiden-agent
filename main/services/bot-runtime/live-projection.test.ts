@@ -856,6 +856,60 @@ test("only a settled hand-off becomes the person's line; a stopped or refused on
   assert.deepEqual(botTranscriptPreview(entries), { text: "You signed in to github.com", at: 2_006 }, "the Bot list previews the person's answer");
 });
 
+test("a rule hand-off's answer reads right after the call it stopped; the last answer for a call wins and malformed ones never show", () => {
+  const rule = { id: "default.purchase", label: "Make a purchase or booking" };
+  const call = (id: string) => ({ type: "toolCall", id, name: "computer_use", arguments: { action: "click", element: 3 } });
+  const blocked = (id: number, toolCallId: string) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: [{ severity: "error", code: "blocked", message: "blocked" }] },
+    model: [{
+      role: "toolResult",
+      toolCallId,
+      toolName: "computer_use",
+      isError: true,
+      content: [{ type: "text", text: "Tool call blocked: The person did this themselves." }],
+      timestamp: 2_000 + id,
+    }],
+  });
+  const answer = (id: number, data: Record<string, unknown>) => ({ id, kind: "aiden.handoff-result", data });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Order it" }], timestamp: 900 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{ role: "assistant", stopReason: "toolUse", timestamp: 1_000, content: [call("r1"), call("r2")] }],
+    },
+    answer(3, { kind: "action", outcome: "skipped", action: rule.label, toolCallId: "r1", rule }),
+    answer(4, { kind: "action", outcome: "done", action: rule.label, note: "Booked for two", toolCallId: "r1", rule }),
+    blocked(5, "r1"),
+    // Not a rule entry (no rule), and one with an overlong action: neither shows.
+    answer(6, { kind: "action", outcome: "done", action: rule.label, toolCallId: "r2" }),
+    answer(7, { kind: "action", outcome: "done", action: "x".repeat(161), toolCallId: "r2", rule }),
+    // Its blocked result never landed (a crash after recording): it reads where it was written.
+    answer(8, { kind: "action", outcome: "done", action: rule.label, toolCallId: "r9", rule }),
+    blocked(9, "r2"),
+  ] as never);
+  const lines = entries.flatMap((entry) =>
+    entry.type === "handoff_result"
+      ? [`${entry.id} ${entry.outcome}`]
+      : entry.type === "tool_result"
+        ? [`tool ${entry.toolCallId} ${entry.status}`]
+        : [],
+  );
+  assert.deepEqual(lines, ["tool r1 blocked", "handoff:r1 done", "handoff:r9 done", "tool r2 blocked"]);
+  const r1 = entries.find((entry) => entry.id === "handoff:r1");
+  assert.deepEqual(
+    r1?.type === "handoff_result" ? { kind: r1.kind, note: r1.note, at: r1.at } : undefined,
+    { kind: "action", note: "Booked for two", at: 2_005 },
+  );
+  const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
+  assert.deepEqual(
+    rows.flatMap((row) => (row.kind === "handoff_result" ? [row.text] : [])),
+    ["You did this: Make a purchase or booking", "You did this: Make a purchase or booking"],
+  );
+});
+
 test("Stop pressed while a slow tool runs ends the chat with the person's stopped line", async () => {
   const reader = countingTool(
     "read_file",

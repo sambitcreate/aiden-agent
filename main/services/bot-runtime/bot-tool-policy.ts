@@ -15,6 +15,7 @@ import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
 import type { BotRuntimeEffectiveAuthority, BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
 import { isComputerUseCapabilityTool } from "../bot-tool-authority.js";
 import type { BotOrdinaryCapabilityKind } from "../bot-capability-catalog-core.js";
+import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import { summarizeToolCall } from "../coding-tools.js";
 import { SHARE_IMAGE_TOOL_NAME } from "../share-image-tool.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
@@ -40,6 +41,12 @@ export interface BotToolFacts {
   mcpTools(): Promise<ReadonlyMap<string, BotRuntimeMcpToolAuthority>>;
   /** Model-facing skill tool names, joined against the current catalog and registry. Throws on drift. */
   skillToolNames(): Promise<ReadonlySet<string>>;
+  /**
+   * The live tools/list entry of a granted MCP tool (its title, description
+   * and annotations), for the rules classifier. `undefined` when `name` is not
+   * a granted tool.
+   */
+  mcpToolDescriptor?(name: string): Promise<SubagentMcpRemoteTool | undefined>;
 }
 
 /** The turn being prepared, for offer-time rules. */

@@ -24,9 +24,11 @@ import type { Conversation, ConversationWatch, EntryRecord } from "@earendil-wor
 import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shared/bot-connections.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import {
+  BOT_HANDOFF_RESULT_ENTRY_KIND,
   BOT_HANDOFF_TOOL_NAME,
   BOT_SIGN_IN_TOOL_NAME,
   botHandoffResultOf,
+  type BotHandoffResultDetails,
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
 import {
@@ -239,11 +241,42 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   let turn: Turn | null = null;
   /** The newest decision on each proposal: cards show what is true now. */
   const proposalStatus = new Map<string, BotRoutineProposalStatusEntryData>();
+  /**
+   * The person's answer to each rule hand-off, by the call the rule stopped
+   * (the last entry for a call wins), and the calls whose blocked result is
+   * in the transcript: the answer reads right after that result.
+   */
+  const ruleHandoffs = new Map<string, { record: EntryRecord; result: BotHandoffResultDetails }>();
+  const resultCallIds = new Set<string>();
+  const emittedRuleHandoffs = new Set<string>();
   for (const record of entries) {
-    if (record.kind !== BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
-    const status = proposalStatusOf(record.data);
-    if (status) proposalStatus.set(status.proposalId, status);
+    if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
+      const status = proposalStatusOf(record.data);
+      if (status) proposalStatus.set(status.proposalId, status);
+    } else if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
+      const result = botHandoffResultOf(record.data);
+      if (result?.toolCallId !== undefined && result.rule !== undefined) ruleHandoffs.set(result.toolCallId, { record, result });
+    } else if (record.kind === "pi.tool-result") {
+      const message = firstMessage(record);
+      if (message?.role === "toolResult") resultCallIds.add(message.toolCallId);
+    }
   }
+  const ruleHandoffRow = (toolCallId: string, at: number | undefined): BotTranscriptEntry | undefined => {
+    const found = ruleHandoffs.get(toolCallId);
+    if (found === undefined || emittedRuleHandoffs.has(toolCallId)) return undefined;
+    emittedRuleHandoffs.add(toolCallId);
+    const { result } = found;
+    return {
+      id: `handoff:${toolCallId}`,
+      type: "handoff_result",
+      kind: result.kind,
+      outcome: result.outcome,
+      action: result.action,
+      ...(result.note === undefined ? {} : { note: result.note }),
+      ...(result.origin === undefined ? {} : { origin: result.origin }),
+      ...(at === undefined ? {} : { at }),
+    };
+  };
 
   for (const record of entries) {
     const id = String(record.id);
@@ -302,6 +335,16 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
+      // Read after the blocked call's result; here only when that result never landed.
+      const result = botHandoffResultOf(record.data);
+      const toolCallId = result?.toolCallId;
+      if (toolCallId !== undefined && !resultCallIds.has(toolCallId) && ruleHandoffs.get(toolCallId)?.record === record) {
+        const row = ruleHandoffRow(toolCallId, undefined);
+        if (row) mapped.push({ entry: row, turn });
+      }
+      continue;
+    }
     const message = firstMessage(record);
     if (record.kind === "pi.user" && message?.role === "user") {
       const content = message.content as UserContent;
@@ -414,6 +457,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         },
         turn,
       });
+      // A rule handed this call to the person: their Done or Skip reads next.
+      const ruleRow = ruleHandoffRow(message.toolCallId, at);
+      if (ruleRow) mapped.push({ entry: ruleRow, turn });
       // A file the Bot wrote in its folder, as the tool result confirms it.
       const produced =
         !message.isError && homeFileCalls.has(message.toolCallId)

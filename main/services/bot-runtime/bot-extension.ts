@@ -22,6 +22,11 @@
 // - Approvals: an approval-gated call asks through `requestApproval` with a
 //   `waitId` persisted in the tool task's memo, so a restart re-asks the same
 //   approval instead of minting a new one.
+// - Rule hand-offs (plan §4.4): when the Bot's rules hand a call to the person,
+//   the call never runs. A hand-off card opens under the same memo's `waitId`
+//   (kind "handoff"); the answer is kept in its own memo and applied exactly
+//   once, even across a crash: the transcript row (`recordHandoff`) and the
+//   block text the model reads.
 // - Authority: the first request after the harness opens re-admits the Bot and
 //   fails closed (no provider request) when its access changed.
 // - Memory: a final answer notifies the background review (`afterReply`)
@@ -53,6 +58,13 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
+import type {
+  BotHandoffAnswer,
+  BotHandoffOutcome,
+  BotHandoffResultDetails,
+  BotHandoffRule,
+} from "../../../renderer/shared/bot-handoffs.js";
+import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { withImageReferences } from "./bot-images.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 
@@ -62,6 +74,8 @@ export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority
 /** The tool whose offer decides how the memory section reads. */
 const MEMORY_TOOL_NAME = "bot_memory";
 const APPROVAL_MEMO = "aiden.approval";
+/** The person's answer to a rule hand-off, kept until the call's block is recorded. */
+const HANDOFF_ANSWER_MEMO = "aiden.handoff.answer";
 
 export interface BotApprovalRequirement {
   summary: string;
@@ -70,11 +84,40 @@ export interface BotApprovalRequirement {
    * bind a Computer Use grant to this call). A throw blocks the call.
    */
   onAllow?(): void | Promise<void>;
+  /** The rule that made (or also covers) this ask. */
+  rule?: BotHandoffRule;
+}
+
+/** A rule handed this call to the person: the call never runs. */
+export interface BotRuleHandoff {
+  rule: BotHandoffRule;
+  /** What the call was about to do, for the block text ("The person did this themselves: …"). */
+  summary: string;
+  /** The card's title after "Your turn: ". */
+  action: string;
+  why: string;
 }
 
 export type BotPolicyDecision =
-  | { allowed: true; approval?: BotApprovalRequirement }
+  | { allowed: true; approval?: BotApprovalRequirement; handoff?: undefined }
+  | { allowed: true; handoff: BotRuleHandoff; approval?: undefined }
   | { allowed: false; reason: string };
+
+export interface BotRuleHandoffRequest {
+  botId: string;
+  /** Stable across restarts for the same tool call. */
+  waitId: string;
+  toolCallId: string;
+  toolName: string;
+  action: string;
+  why: string;
+  rule: BotHandoffRule;
+  /** Aborted when the turn is stopped; the card is withdrawn. */
+  signal: AbortSignal | undefined;
+}
+
+/** A settled rule hand-off, for the transcript. `toolCallId` and `rule` are always set. */
+export type BotRuleHandoffRecord = { botId: string } & BotHandoffResultDetails & { toolCallId: string; rule: BotHandoffRule };
 
 /** The call being checked. */
 export interface BotToolCallCheck {
@@ -159,6 +202,14 @@ export interface BotExtensionDeps {
    * and is re-asked with the same `waitId` after Resume.
    */
   requestApproval(request: BotApprovalRequest): Promise<"allow" | "deny">;
+  /**
+   * Show a rule hand-off card. Resolves with the person's answer; rejects
+   * when `signal` aborts, so the call stays unanswered and Resume asks again
+   * under the same `waitId`. Absent (no one to ask): a rule hand-off blocks.
+   */
+  requestHandoff?(request: BotRuleHandoffRequest): Promise<BotHandoffAnswer>;
+  /** Write the transcript row for a settled rule hand-off. Must be idempotent per `toolCallId`. */
+  recordHandoff?(record: BotRuleHandoffRecord): Promise<void>;
   readmit(botId: string): Promise<BotReadmission>;
   /** Whether the Bot's model takes images. Defaults to true. */
   imageInput?(botId: string): Promise<boolean>;
@@ -193,6 +244,20 @@ interface ApprovalMemo {
   waitId: string;
   toolCallId: string;
   summary: string;
+  /** What the wait was opened as. Missing (memos written before rules): "approval". */
+  kind?: "approval" | "handoff";
+  /** The rule id that made it, if any. */
+  rule?: string;
+}
+
+/** Everything needed to apply a rule hand-off's answer without asking or re-deciding. */
+interface HandoffAnswerMemo {
+  [key: string]: JsonValue;
+  outcome: BotHandoffOutcome;
+  note?: string;
+  summary: string;
+  action: string;
+  rule: { id: string; label: string };
 }
 
 /**
@@ -234,6 +299,33 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   }
 
   let installedToolNames = new Set<string>();
+
+  /**
+   * Record the settled hand-off and block the call with what the person did.
+   * Recording is idempotent, so a crash after it re-applies the same answer
+   * without a second row.
+   */
+  async function applyHandoffAnswer(toolCallId: string, answer: HandoffAnswerMemo): Promise<{ block: string }> {
+    try {
+      await deps.recordHandoff?.({
+        botId,
+        kind: "action",
+        outcome: answer.outcome,
+        action: answer.action,
+        ...(answer.note === undefined ? {} : { note: answer.note }),
+        toolCallId,
+        rule: { id: answer.rule.id, label: answer.rule.label },
+      });
+    } catch {
+      // The model must still read what the person did; the row is only the transcript's copy.
+    }
+    return {
+      block:
+        answer.outcome === "done"
+          ? ruleHandoffDoneBlock(answer.summary, answer.note)
+          : handoffSkippedText(answer.action, answer.note),
+    };
+  }
 
   /** Request ids of the inputs the current run of this conversation serves, read from durable state. */
   async function runRequestIds(
@@ -304,6 +396,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     }),
     hook(ToolTask, {
       beforeTool: async (call, api, context) => {
+        // A rule hand-off the person already answered is applied as answered,
+        // whatever the rules say now: re-deciding could run a call the person
+        // already did themselves.
+        const answered = await api.memo<HandoffAnswerMemo>(HANDOFF_ANSWER_MEMO, context);
+        if (answered !== undefined) return applyHandoffAnswer(call.id, answered);
         // A throw here blocks the call, so an unreadable run fails closed.
         const requestIds = await runRequestIds(api, context);
         if (deps.turnAllows !== undefined && !deps.turnAllows(call.name, requestIds)) {
@@ -316,18 +413,60 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           requestIds,
         });
         if (!decision.allowed) return { block: decision.reason };
+        if (decision.handoff !== undefined) {
+          const handoff = decision.handoff;
+          // Nobody can answer a card here: block with what is needed.
+          if (deps.requestHandoff === undefined) return { block: ruleUnattendedBlock(handoff.rule.label) };
+          const memo = await api.memo<ApprovalMemo>(
+            APPROVAL_MEMO,
+            { waitId: randomUUID(), toolCallId: call.id, summary: handoff.summary, kind: "handoff", rule: handoff.rule.id },
+            context,
+          );
+          // The current decision wins; only the wait id carries over from an earlier ask.
+          const answer = await deps.requestHandoff({
+            botId,
+            waitId: memo.waitId,
+            toolCallId: call.id,
+            toolName: call.name,
+            action: handoff.action,
+            why: handoff.why,
+            rule: handoff.rule,
+            signal: context.abortSignal,
+          });
+          const stored = await api.memo<HandoffAnswerMemo>(
+            HANDOFF_ANSWER_MEMO,
+            {
+              outcome: answer.outcome,
+              ...(answer.note === undefined ? {} : { note: answer.note }),
+              summary: handoff.summary,
+              action: handoff.action,
+              rule: { id: handoff.rule.id, label: handoff.rule.label },
+            },
+            context,
+          );
+          return applyHandoffAnswer(call.id, stored);
+        }
         if (decision.approval === undefined) return undefined;
         const memo = await api.memo<ApprovalMemo>(
           APPROVAL_MEMO,
-          { waitId: randomUUID(), toolCallId: call.id, summary: decision.approval.summary },
+          {
+            waitId: randomUUID(),
+            toolCallId: call.id,
+            summary: decision.approval.summary,
+            kind: "approval",
+            ...(decision.approval.rule === undefined ? {} : { rule: decision.approval.rule.id }),
+          },
           context,
         );
+        // A wait first opened as a hand-off (the rules changed since) asks with
+        // today's summary under the same wait id.
+        const summary = (memo.kind ?? "approval") === "approval" ? memo.summary : decision.approval.summary;
         const answer = await deps.requestApproval({
           botId,
           waitId: memo.waitId,
           toolCallId: memo.toolCallId,
           toolName: call.name,
-          summary: memo.summary,
+          summary,
           signal: context.abortSignal,
         });
         if (answer !== "allow") return { block: "The person declined this action." };
