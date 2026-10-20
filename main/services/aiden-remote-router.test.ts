@@ -5682,6 +5682,34 @@ function recordingHandoffSessions(seen: string[], supportsHandoffs: boolean) {
       seen.push(`stop:${view(options)}`);
       return state;
     },
+    resume: async (_d: string, _b: string, _k: string, _body: unknown, options?: { handoffs?: boolean }) => {
+      seen.push(`resume:${view(options)}`);
+      return state;
+    },
+    dismiss: async (_d: string, _b: string, _k: string, _body: unknown, options?: { handoffs?: boolean }) => {
+      seen.push(`dismiss:${view(options)}`);
+      return state;
+    },
+    answerQuestion: async (_d: string, _b: string, waitId: string, _k: string, _body: unknown, options?: { handoffs?: boolean }) => {
+      seen.push(`question:${view(options)}`);
+      return { waitId };
+    },
+    // A preset tap that converges on an existing Bot returns it as the host stores it: the holder view.
+    createFromPreset: async () => ({
+      created: false,
+      bot: {
+        id: "bot-1",
+        name: "Planner",
+        purpose: "Keeps projects moving",
+        avatar: { semantic: { version: 1, shape: "orb", color: "sky" } },
+        health: "ready",
+        sessionState: "paused",
+        paused: true,
+        createdAt: new Date(1_000).toISOString(),
+        updatedAt: new Date(2_000).toISOString(),
+        revision: "bot_revision_1",
+      },
+    }),
     answerHandoff: async (_deviceId: string, botId: string, waitId: string, key: string, body: unknown) => {
       seen.push(`answer:${botId}:${waitId}:${key}:${JSON.stringify(body)}`);
       return { waitId };
@@ -5840,7 +5868,14 @@ test("a paused Bot reads paused only to a device holding bot:handoffs, on every 
     }), (body) => body],
     ["patch", () => fetch(`${base}/bots/bot-1`, { method: "PATCH", headers: write, body: JSON.stringify({ name: "Planner" }) }), (body) => body],
     ["avatar delete", () => fetch(`${base}/bots/bot-1/avatar`, { method: "DELETE", headers: write }), (body) => body],
+    // A preset tap that lands on the existing (paused) Bot.
+    ["from preset", () => fetch(`${base}/bots/from-preset`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "preset-create-key-00036" },
+      body: JSON.stringify({ presetId: "planner" }),
+    }), (body) => body.bot],
   ];
+  const routes = ["list", "get", "create", "patch", "avatar delete", "from preset"];
   const views: Record<string, string[]> = {};
   const seen: Record<string, string[]> = {};
   for (const [label, capabilities, wired] of [
@@ -5871,21 +5906,31 @@ test("a paused Bot reads paused only to a device holding bot:handoffs, on every 
         headers: { ...headers, "content-type": "application/json", "idempotency-key": "message-key-000000036" },
         body: JSON.stringify({ text: "hi" }),
       });
-      await fetch(`${app.base}/bots/bot-1/stop`, {
-        method: "POST",
-        headers: { ...headers, "content-type": "application/json", "idempotency-key": "stop-key-00000000036" },
-        body: "{}",
-      });
+      // Every other write that can meet a paused Bot names the pause in the device's own words.
+      for (const [path, key, body] of [
+        ["/bots/bot-1/stop", "stop-key-00000000036", {}],
+        ["/bots/bot-1/resume", "resume-key-000000036", {}],
+        ["/bots/bot-1/dismiss", "dismiss-key-00000036", {}],
+        [`/bots/bot-1/questions/${HANDOFF_WAIT}/answer`, "question-key-0000036", { answers: [] }],
+      ] as const) {
+        const response = await fetch(`${app.base}${path}`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json", "idempotency-key": key },
+          body: JSON.stringify(body),
+        });
+        assert.equal(response.status, 200, `${label} ${path}`);
+      }
     } finally {
       await app.close();
     }
   }
-  const plain = ["list", "get", "create", "patch", "avatar delete"].map((route) => `${route}:unavailable:-`);
+  const plain = routes.map((route) => `${route}:unavailable:-`);
   assert.deepEqual(views.plain, plain);
-  assert.deepEqual(views.holder, ["list", "get", "create", "patch", "avatar delete"].map((route) => `${route}:paused:true`));
+  assert.deepEqual(views.holder, routes.map((route) => `${route}:paused:true`));
   assert.deepEqual(views["holder on an unwired host"], plain, "a grant the host can't serve changes nothing");
-  assert.deepEqual(seen.plain, ["session:plain", "events:plain", "send:plain", "stop:plain"]);
-  assert.deepEqual(seen.holder, ["session:handoffs", "events:handoffs", "send:handoffs", "stop:handoffs"]);
+  const calls = ["session", "events", "send", "stop", "resume", "dismiss", "question"];
+  assert.deepEqual(seen.plain, calls.map((call) => `${call}:plain`));
+  assert.deepEqual(seen.holder, calls.map((call) => `${call}:handoffs`));
   assert.deepEqual(seen["holder on an unwired host"], seen.plain);
 });
 
