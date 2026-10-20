@@ -433,6 +433,13 @@ test("Run now starts one run of the Bot's own routine and refuses another Bot's"
     prompt: "Digest.",
   });
   await assert.rejects(h.routines.runNow({ botId: "bot-scout", routineId: routine.id }), /no longer exists/u);
+  // A routine edited since the card was drawn is refused, not reported as started.
+  await assert.rejects(
+    h.routines.runNow({ botId: "bot-chef", routineId: routine.id, expectedUpdatedAt: routine.updatedAt + 1 }),
+    /changed/u,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(await h.store.runs(routine.id), []);
   assert.deepEqual(h.session.sends, []);
 
   const { runId } = await h.routines.runNow({ botId: "bot-chef", routineId: routine.id });

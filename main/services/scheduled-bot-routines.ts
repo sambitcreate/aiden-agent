@@ -631,6 +631,11 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
     async runNow(input: BotRoutineRunNowInput): Promise<{ runId: string }> {
       await requireBot(input.botId);
       const existing = await owned(input.botId, input.routineId);
+      // Checked here: the scheduler checks it only once the run is under way,
+      // after this call has already answered with a run id.
+      if (input.expectedUpdatedAt !== undefined && existing.updatedAt !== input.expectedUpdatedAt) {
+        throw new Error("This routine changed. Refresh it before trying again.");
+      }
       const runId = randomUUID();
       // Throws at once when the routine is already running.
       const completion = dependencies.service.runNow(existing.id, {
