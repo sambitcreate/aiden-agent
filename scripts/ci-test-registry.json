@@ -479,6 +479,7 @@
         "main/services/bot-rules/decide.test.ts",
         "main/services/bot-rules/store.test.ts",
         "main/services/bot-rules/prompt.test.ts",
+        "main/services/bot-rules/mcp-action.test.ts",
         "main/services/bot-runtime/bot-session-service.test.ts",
         "main/services/bot-runtime/bot-tool-assembly.test.ts",
         "main/services/bot-runtime/harness-host.test.ts",

@@ -10,12 +10,16 @@
 // rejects the wait with the abort reason, so nothing is recorded. After a quit
 // or crash, Resume asks again under the same `waitId`.
 
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord";
+import type { Conversation } from "@earendil-works/pi-durable";
 import {
+  BOT_HANDOFF_RESULT_ENTRY_KIND,
   botHandoffAnswerOf,
   type BotHandoffAnswer,
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
-import type { BotRuleHandoffRequest } from "./bot-extension.js";
+import type { BotRuleHandoffRecord, BotRuleHandoffRequest } from "./bot-extension.js";
 
 export interface BotHandoffRequest extends BotPendingHandoff {
   signal: AbortSignal | undefined;
@@ -34,6 +38,30 @@ export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRe
     rule: { id: request.rule.id, label: request.rule.label },
     signal: request.signal,
   };
+}
+
+/**
+ * The transcript row for a settled rule hand-off, an `aiden.handoff-result`
+ * entry. `appendEntry` must append without submitting, so the row can't start
+ * the Bot. Written once per tool call: a crash after the row and before the
+ * call's block makes the extension apply the same answer again, and that
+ * second call finds the row and writes nothing. Returns whether it wrote.
+ */
+export async function recordRuleHandoffEntry(
+  conversation: Pick<Conversation, "context">,
+  appendEntry: (kind: string, data: JsonValue) => Promise<void>,
+  record: BotRuleHandoffRecord,
+): Promise<boolean> {
+  const { botId: _botId, ...details } = record;
+  const view = await conversation.context(BACKGROUND_CONTEXT);
+  const recorded = view.entries.some(
+    (entry) =>
+      entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND &&
+      (entry.data as { toolCallId?: unknown } | null)?.toolCallId === record.toolCallId,
+  );
+  if (recorded) return false;
+  await appendEntry(BOT_HANDOFF_RESULT_ENTRY_KIND, { ...details, rule: { ...details.rule } });
+  return true;
 }
 
 /**

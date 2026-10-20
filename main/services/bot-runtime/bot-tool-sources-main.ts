@@ -405,14 +405,21 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       };
     },
 
+    // A tool whose approval depends on live state, and what the call does for
+    // the Bot rules classifier. Other tools defer to the policy (`undefined`).
     async approvalFor(botId, toolName, call) {
-      if (toolName !== COMPUTER_USE_TOOL_NAME) return undefined;
-      const controller = controllers.get(botId);
-      if (!controller) throw new Error("Computer Use is not enabled for this response.");
-      return botComputerUseApproval(controller, call, {
-        granted: () => computerUseGranted(botId),
-        revoke: () => closeController(botId),
-      });
+      switch (toolName) {
+        case COMPUTER_USE_TOOL_NAME: {
+          const controller = controllers.get(botId);
+          if (!controller) throw new Error("Computer Use is not enabled for this response.");
+          return botComputerUseApproval(controller, call, {
+            granted: () => computerUseGranted(botId),
+            revoke: () => closeController(botId),
+          });
+        }
+        default:
+          return undefined;
+      }
     },
 
     async shutdown() {

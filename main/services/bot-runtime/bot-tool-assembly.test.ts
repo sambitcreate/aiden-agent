@@ -13,15 +13,17 @@ import type { ResolvedModelRuntime } from "../model-runtime.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { buildSkillTools } from "../skill-tools.js";
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
+import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
 import { createBotApprovals, type BotApprovalPrompt } from "./bot-approvals.js";
 import { handoffSkippedText, ruleAskUnattendedBlock, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
-import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
+import { createBotHandoffs, recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND, botImageReference } from "./bot-images.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { shareImageCandidate, visionCandidate } from "./bot-tool-candidates.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
+import { projectBotTranscript } from "./live-projection.js";
 import {
   assemblyDeps,
   assemblyState,
@@ -798,6 +800,76 @@ test("a connection tool a built-in rule covers asks with the rule's name", async
       `Rule · Send a message or email to someone — ${SEND_EMAIL_TOOL}`,
     ]);
     assert.equal(send.executions.length, 1);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("what the connection's server says a tool does reaches the rules, not only its name", async () => {
+  // send_email's name makes it a message (Ask first); its server also says it publishes.
+  const state = assemblyState(full(botHome()));
+  state.liveMailTools = state.liveMailTools.map((tool) =>
+    tool.name === "send_email" ? { ...tool, description: "Publishes the message on the team's public blog. Use it for announcements." } : tool,
+  );
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "We shipped" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  const publishHandsOff = defaultBotRules().map((rule) => (rule.actionClass === "publish" ? { ...rule, behavior: "hand_off" as const } : rule));
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: send, mcp: true }],
+    rules: () => publishHandsOff,
+    requestHandoff: async () => ({ outcome: "skipped" }),
+  });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "announce it" }, ctx)).wait(ctx);
+    assert.deepEqual(deps.handoffs.map((request) => request.rule.id), ["default.publish"]);
+    assert.deepEqual(deps.approvals, []);
+    assert.deepEqual(send.executions, []);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a rule hand-off's answer is written once into the Bot's conversation from inside the call, and reads as the person's line", async () => {
+  const handoffs = createBotHandoffs();
+  const turn = ruledTurn({
+    rules: () => rulesWith("hand_off"),
+    requestHandoff: (request) => handoffs.request(ruleHandoffRequest(request)),
+  });
+  let conversation: Conversation | undefined;
+  const writes: boolean[] = [];
+  // As production does: append (never submit) on the Bot's own conversation while its call waits in beforeTool.
+  turn.deps.recordHandoff = async (record) => {
+    const target = conversation!;
+    const append = async (kind: string, data: Parameters<Parameters<typeof recordRuleHandoffEntry>[1]>[1]) => {
+      await target.commit((tx) => tx.appendEntry(target.id, { kind, data }), ctx);
+    };
+    writes.push(await recordRuleHandoffEntry(target, append, record));
+    // A crash between the row and the block applies the same answer again: no second row.
+    writes.push(await recordRuleHandoffEntry(target, append, record));
+  };
+  const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
+  conversation = root;
+  try {
+    const run = await root.submit({ type: "input", content: "order it" }, ctx);
+    await waitFor(() => handoffs.pending("bot-1").length === 1, { what: "the hand-off card" });
+    handoffs.answer("bot-1", handoffs.pending("bot-1")[0]!.waitId, { outcome: "done", note: "Ordered the blue one" });
+    assert.equal((await run.wait(ctx)).status, "done");
+    assert.deepEqual(writes, [true, false]);
+    const entries = (await root.context(ctx)).entries;
+    assert.equal(entries.filter((entry) => entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND).length, 1);
+    const lines = projectBotTranscript(entries).flatMap((entry) =>
+      entry.type === "handoff_result"
+        ? [`${entry.id} ${entry.outcome}: ${entry.action} (${entry.note ?? ""})`]
+        : entry.type === "tool_result"
+          ? [`tool ${entry.toolCallId} ${entry.status}`]
+          : [],
+    );
+    assert.deepEqual(lines, ["tool call-1 blocked", `handoff:call-1 done: ${PURCHASE_LABEL} (Ordered the blue one)`]);
+    assert.equal(turn.computer.executions.length, 0);
   } finally {
     await harness.close(ctx);
   }

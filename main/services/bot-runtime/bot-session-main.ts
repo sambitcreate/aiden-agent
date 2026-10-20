@@ -32,7 +32,6 @@ import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
-import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import { defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
@@ -54,7 +53,7 @@ import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
-import { ruleHandoffRequest } from "./bot-handoffs.js";
+import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
@@ -189,15 +188,12 @@ async function promptRules(botId: string) {
  * extension apply the same answer again.
  */
 async function recordRuleHandoff(record: BotRuleHandoffRecord): Promise<void> {
-  const { botId, ...details } = record;
   const runtime = await botSessionRuntime();
-  const view = await (await runtime.conversation(botId)).context(BACKGROUND_CONTEXT);
-  const recorded = view.entries.some(
-    (entry) =>
-      entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND &&
-      (entry.data as { toolCallId?: unknown } | null)?.toolCallId === record.toolCallId,
+  await recordRuleHandoffEntry(
+    await runtime.conversation(record.botId),
+    (kind, data) => runtime.appendEntry(record.botId, kind, data),
+    record,
   );
-  if (!recorded) await runtime.appendEntry(botId, BOT_HANDOFF_RESULT_ENTRY_KIND, { ...details, rule: { ...details.rule } });
 }
 
 /**
