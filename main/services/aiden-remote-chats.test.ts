@@ -25,7 +25,6 @@ import {
   AidenRemoteAttachmentStore,
 } from "./aiden-remote-attachments.js";
 import { BotMutationGate } from "./bot-mutation-gate.js";
-import { createBotPauseStore } from "./bot-pause-store.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { SkillInvocationError, type SkillCatalogEntry } from "../../renderer/shared/slash-commands.js";
 import type { PreparedSkillInvocation } from "./skill-invocation-turn.js";
@@ -65,7 +64,6 @@ function fixture(
     botAvailable?: boolean;
     retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
-    botPaused?: (botId: string) => Promise<boolean>;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -264,7 +262,6 @@ function fixture(
       : {}),
     botTurnAuthorityPreflight:
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
-    ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
@@ -1407,41 +1404,6 @@ test("remote Bot turn preflights protected runtime authority before reserving or
   assert.equal(app.appends(), 1);
   assert.equal(app.begins(), 1);
   assert.equal(app.starts(), 1);
-});
-
-test("a paused Bot's chat refuses a phone turn before anything is written, and the same request runs once it is resumed", async () => {
-  const root = await mkdtemp(join(tmpdir(), "aiden-remote-chat-pause-"));
-  try {
-    const pauses = createBotPauseStore({ root: () => root });
-    let preflights = 0;
-    const app = fixture(chat({ botId: "bot-1" }), {
-      retainedBotChatAuthorizer: () => true,
-      botTurnAuthorityPreflight: async () => {
-        preflights += 1;
-      },
-      botPaused: async (botId) => (await pauses.get(botId)) !== undefined,
-    });
-    await pauses.pause("bot-1", "mac");
-
-    await assert.rejects(
-      app.service.startTurn("device-1", "chat-1", "paused-bot-turn-0001", { text: "are you there?" }),
-      (error: unknown) =>
-        error instanceof AidenRemoteServiceError && error.code === "operation_stale" && error.status === 409,
-    );
-    assert.equal(app.appends(), 0);
-    assert.equal(app.begins(), 0);
-    assert.equal(app.starts(), 0, "a paused Bot makes no provider request");
-    assert.deepEqual(app.current()?.messages, []);
-
-    // Nothing ran, so the refusal is not replayed: the same key runs after Resume.
-    await pauses.unpause("bot-1");
-    const accepted = await app.service.startTurn("device-1", "chat-1", "paused-bot-turn-0001", { text: "are you there?" });
-    assert.equal(accepted.status, "accepted");
-    assert.equal(app.starts(), 1);
-    assert.equal(preflights, 1, "the refused turn never reached the Bot's authority");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
 });
 
 test("remote turns reject images for text-only models without consuming the attachment", async () => {

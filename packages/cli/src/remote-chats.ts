@@ -66,8 +66,6 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     streams, models: modelService, bots: bots.botStore, botMutations: bots.mutationGate,
     retainedBotChatAuthorizer: (input) => bots.application.authorizeRetainedChat({ ...input, audienceId: input.deviceId }),
     botTurnAuthorityPreflight: (input) => bots.preflight(input),
-    // Refused before the ledger records anything, so the same key runs after `aiden bots unpause`.
-    botPaused: (botId) => bots.isPaused(botId),
     idempotency, persistIdempotency, activeChatIds: () => daemon.activity.snapshot().activeChatIds,
     // Plain forks only: the daemon has no summarizer, so it never advertises chat-fork-summary-v1.
     forks: createCliChatForks(daemon, workspace),

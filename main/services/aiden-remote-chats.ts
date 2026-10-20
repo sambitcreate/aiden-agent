@@ -55,7 +55,6 @@ import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
   AidenOperationContractError,
-  AidenOperationNotExecutedError,
   AidenOperationUnknownOutcomeError,
   assertDurableOperationResult,
   assertRevision,
@@ -1121,11 +1120,6 @@ export class AidenRemoteChatService {
        */
       retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
       botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
-      /**
-       * Whether the person paused this Bot (plan §7). A paused Bot's chat
-       * refuses turns; a throw (an unreadable pause record) refuses too.
-       */
-      botPaused?: (botId: string) => Promise<boolean>;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -2055,12 +2049,6 @@ export class AidenRemoteChatService {
         parsed,
         async () => {
           const authoritative = await this.chat(chatId);
-          if (authoritative.botId && (await this.options.botPaused?.(authoritative.botId)) === true) {
-            // Nothing ran, so the ledger keeps no refusal: the same key runs once the Bot is resumed.
-            throw new AidenOperationNotExecutedError(
-              new AidenRemoteServiceError("operation_stale", "This Bot is paused. Resume it to continue.", 409),
-            );
-          }
           const requestedProviderId = parsed.providerId ?? authoritative.providerId;
           const requestedModelId = parsed.modelId ?? authoritative.model;
           const preservesPinnedGemini =

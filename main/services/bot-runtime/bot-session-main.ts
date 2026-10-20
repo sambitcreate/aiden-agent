@@ -77,10 +77,6 @@ const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 /** The one pause store in this process (`<userData>/bot-service/bot-pauses.json`). */
 const botPauses = createBotPauseStore({ root: botServiceRoot });
-/** Whether the person paused this Bot; throws when the pause file is unreadable, so callers refuse. */
-export async function isBotPaused(botId: string): Promise<boolean> {
-  return (await botPauses.get(botId)) !== undefined;
-}
 const resolvedModels = new Map<string, { ref: ModelRef; imageInput: boolean; at: number }>();
 
 let runtime: Promise<BotSessionRuntime> | undefined;
