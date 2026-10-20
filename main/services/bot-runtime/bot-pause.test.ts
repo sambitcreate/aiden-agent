@@ -7,8 +7,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { getCurrentSystemPrompt, type Message } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
+import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
 import { applyBotLiveEvent, type BotLiveEvent, type BotLiveSnapshot } from "../../../renderer/shared/bot-live.js";
+import { createBotMemoryReview } from "../bot-memory/review.js";
+import { createBotMemoryService } from "../bot-memory/service.js";
+import { createBotMemoryStore } from "../bot-memory/store.js";
 import { createBotPauseStore, type BotPauseRecord, type BotPauseStore } from "../bot-pause-store.js";
 import { createBotQuestions } from "./bot-questions.js";
 import {
@@ -21,8 +26,16 @@ import {
 } from "./bot-session-service.js";
 import { botDirectoryName } from "./harness-host.js";
 import { createBotLiveProjection, projectBotTranscript } from "./live-projection.js";
-import { countingTool, recordingDeps } from "./test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
+import { countingTool, fakeMemoryAuthority, recordingDeps } from "./test-support/fixtures.js";
+import {
+  createFauxModels,
+  FAUX_MODEL,
+  FAUX_MODEL_REF,
+  FAUX_PROVIDER,
+  slowAnswer,
+  waitFor,
+  type FauxModels,
+} from "./test-support/faux.js";
 import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
 
 const roots: string[] = [];
@@ -403,5 +416,105 @@ test("an unreadable pause file refuses to run turns instead of guessing", async 
     assert.equal(fauxModels.calls(), 0);
   } finally {
     await service.shutdown();
+  }
+});
+
+/**
+ * Ten person turns, then a memory review that answers at once and is held at
+ * the conversation lookup for its watermark marker; while it is held, the
+ * person starts a long reply. The faux provider serves Bot turns and the
+ * review alike, so its request count covers both.
+ */
+async function reviewHeldAtItsMarker(cancelOnPause: boolean) {
+  const profile = tempProfile();
+  let holdLookup = false;
+  let lookupHeld!: () => void;
+  const held = new Promise<void>((resolve) => (lookupHeld = resolve));
+  let releaseLookup!: () => void;
+  const released = new Promise<void>((resolve) => (releaseLookup = resolve));
+  const lastUserText = (messages: Message[]) => {
+    const users = messages.filter((message) => message.role === "user");
+    const content = users[users.length - 1]?.content ?? "";
+    return typeof content === "string" ? content : content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  };
+  const answer: FauxResponseStep = (context) => {
+    if ((getCurrentSystemPrompt(context.messages) ?? "").includes("long-term memory up to date")) {
+      // The review is answered; its next step is the lookup for its marker.
+      holdLookup = true;
+      return fauxAssistantMessage("NOTHING");
+    }
+    return fauxAssistantMessage(lastUserText(context.messages) === "write a lot" ? "word ".repeat(2_000) : "ok");
+  };
+  const fauxModels = createFauxModels(Array.from({ length: 30 }, () => answer), { tokensPerSecond: 40 });
+  let service!: BotSessionRuntime;
+  const review = createBotMemoryReview({
+    memory: createBotMemoryService({ store: createBotMemoryStore({ profileDir: profile }) }),
+    conversation: async (botId) => {
+      if (holdLookup) {
+        holdLookup = false;
+        lookupHeld();
+        await released;
+      }
+      return service.conversation(botId);
+    },
+    isIdle: async (botId) => (await service.state(botId)).kind === "idle",
+    admit: async () => ({
+      ok: true,
+      model: { models: fauxModels.models, model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)! },
+      lease: fakeMemoryAuthority().lease,
+    }),
+  });
+  // As the desktop wires it, a pause cancels the Bot's memory review.
+  service = await serviceFor(profile, fauxModels, cancelOnPause ? { onPaused: (botId) => review.cancel(botId) } : {});
+  for (let index = 1; index <= 10; index += 1) {
+    const { submissionId } = await service.send(BOT, { text: `Person message ${index}`, requestId: `desk-${index}` });
+    assert.equal((await service.awaitReply(BOT, submissionId, never())).kind, "completed");
+  }
+  const reviewing = review.runNow(BOT);
+  await held;
+  const { submissionId } = await service.send(BOT, { text: "write a lot", requestId: "desk-long" });
+  await waitFor(async () => (await service.state(BOT)).kind === "running" && fauxModels.calls() === 12, {
+    what: "the long reply to start after the review's request",
+  });
+  const markers = async () => {
+    const page = await (await service.conversation(BOT)).entries({}, 500, undefined, BACKGROUND_CONTEXT);
+    return page.items.filter((entry) => entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND).map((entry) => entry.data);
+  };
+  return { service, review, reviewing, submissionId, fauxModels, markers, releaseLookup };
+}
+
+test("a memory review cancelled by the pause writes no marker and never restarts the interrupted turn", async () => {
+  const held = await reviewHeldAtItsMarker(true);
+  try {
+    assert.deepEqual(await held.service.pause(BOT, "mac"), pausedAt(held.submissionId));
+    held.releaseLookup();
+    const outcome = await held.reviewing;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(held.fauxModels.calls(), 12, "the paused turn makes no further provider request");
+    assert.deepEqual(await held.service.state(BOT), pausedAt(held.submissionId));
+    assert.deepEqual(outcome, { kind: "aborted" }, "the cancelled review stops before its marker");
+    assert.deepEqual(await held.markers(), []);
+  } finally {
+    held.releaseLookup();
+    held.review.shutdown();
+    await held.service.shutdown();
+  }
+});
+
+test("a review marker that lands while the Bot is paused is appended without starting its interrupted turn", async () => {
+  // Nothing cancels this review, so it reaches its marker after the pause.
+  const held = await reviewHeldAtItsMarker(false);
+  try {
+    assert.deepEqual(await held.service.pause(BOT, "mac"), pausedAt(held.submissionId));
+    held.releaseLookup();
+    assert.deepEqual(await held.reviewing, { kind: "reviewed", added: 0, targets: [] });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(held.fauxModels.calls(), 12, "the marker starts nothing");
+    assert.deepEqual(await held.service.state(BOT), pausedAt(held.submissionId));
+    assert.deepEqual(await held.markers(), [{ source: "review", added: 0, targets: [] }]);
+  } finally {
+    held.releaseLookup();
+    held.review.shutdown();
+    await held.service.shutdown();
   }
 });

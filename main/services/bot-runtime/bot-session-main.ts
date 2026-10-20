@@ -204,10 +204,8 @@ const memoryReview = createBotMemoryReview({
 const compactionSteering = createBotCompactionSteering({
   memory,
   admit: admitMemoryWork,
-  appendEntry: async (botId, kind, data) => {
-    const conversation = await (await botSessionRuntime()).conversation(botId);
-    await conversation.submit({ type: "write", entry: { kind, data: { ...data } } }, BACKGROUND_CONTEXT);
-  },
+  // Appended, not submitted: a flush that ends as the Bot pauses must not restart its closed turn.
+  appendEntry: async (botId, kind, data) => (await botSessionRuntime()).appendEntry(botId, kind, { ...data }),
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
 });
 
