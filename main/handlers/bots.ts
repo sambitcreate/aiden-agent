@@ -25,11 +25,14 @@ import {
 } from "../services/aiden-remote-protocol.js";
 import { registerBotLiveHandlers } from "./bot-live.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
+import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotMemoryHandlers } from "./bot-memory.js";
 import { botMemoryService } from "../services/bot-memory/bot-memory-main.js";
 import { registerBotFileHandlers } from "./bot-files.js";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
 import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
+import { botHandoffs } from "../services/bot-runtime/bot-handoffs-main.js";
+import { openBotHandoffById } from "../services/bot-runtime/bot-handoff-open-main.js";
 import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
 import {
   telegramBotBindingAuthority,
@@ -185,6 +188,15 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
   registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
+  // Bot hand-off cards: any desktop window may answer; the first answer wins. Open needs the app's own document.
+  registerBotHandoffHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handoffs: botHandoffs,
+    open: async (botId, waitId, event) => {
+      rendererDocumentOwner(event, () => new Error("Opening a hand-off requires the active application document."));
+      return openBotHandoffById(botId, waitId, "desktop");
+    },
+  });
   // Profile → Memory: view, edit, delete and erase what the Bot remembers.
   registerBotMemoryHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

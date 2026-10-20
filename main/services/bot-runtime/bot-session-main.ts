@@ -20,7 +20,8 @@
 
 import * as path from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { app, ipcMain, logger } from "../../platform.js";
+import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
+import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
@@ -43,6 +44,8 @@ import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/te
 import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
+import { botHandoffs } from "./bot-handoffs-main.js";
+import { createBotHandoffNotifier } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
@@ -337,6 +340,34 @@ botQuestions.onChange((botId) => {
   );
 });
 
+// A hand-off card opening or settling reaches open desktop chats the same way.
+botHandoffs.onChange((botId) => {
+  void liveProjection?.refreshHandoff(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} hand-off view report.`, error),
+  );
+});
+
+// A card that opens while no Aiden window is focused also says so in a Mac
+// notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
+const handoffNotifier = createBotHandoffNotifier({
+  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  show: ({ title, body, onClick }) => {
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({ title, body });
+    notification.on("click", onClick);
+    notification.show();
+  },
+  botName: async (botId) => (await botStore.get(botId))?.name,
+  onClick: async (botId) => {
+    await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
+  },
+  isPending: (botId, waitId) => botHandoffs.get(botId, waitId) !== undefined,
+  onError: (stage) => logger.warn("bots", `Hand-off notification ${stage} failed.`),
+});
+botHandoffs.onChange((botId) => {
+  for (const prompt of botHandoffs.pending(botId)) void handoffNotifier.opened(prompt);
+});
+
 // An approval appearing or settling changes the line to and from "Waiting for you".
 botApprovals.onChange((botId) => {
   void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
@@ -344,11 +375,12 @@ botApprovals.onChange((botId) => {
   );
 });
 
-// "Needs you" in the Bots sidebar follows questions and approvals as they
-// appear and settle; the renderer re-reads that Bot's summary.
+// "Needs you" in the Bots sidebar follows questions, approvals and hand-offs
+// as they appear and settle; the renderer re-reads that Bot's summary.
 wireBotAttention({
   questions: botQuestions,
   approvals: botApprovals,
+  handoffs: botHandoffs,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
 
@@ -365,6 +397,7 @@ export function botLiveProjection(): BotLiveProjection {
     state: async (botId) => (await botSessionRuntime()).state(botId),
     quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
+    handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     connectCardStatus,
     runStarts: botRunStarts,

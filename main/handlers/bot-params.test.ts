@@ -6,6 +6,8 @@ import {
   parseBotChatCreate,
   parseBotCreate,
   parseBotCreateWithAccess,
+  parseBotHandoffAnswer,
+  parseBotHandoffOpen,
   parseBotSend,
   parseBotSessionAction,
   parseBotUpdate,
@@ -188,6 +190,23 @@ test("a Bot approval answer names its waitId and allow or deny, nothing else", (
   assert.throws(() => parseBotApprovalDecision({ waitId: "x".repeat(65), decision: "allow" }), /approval id/u);
   assert.throws(() => parseBotApprovalDecision({ waitId, decision: "allow", scope: "always" }), /fields/u);
   assert.throws(() => parseBotApprovalDecision(null), /fields/u);
+});
+
+test("a hand-off answer names its Bot, its waitId and Done or Skip, with a bounded note, and says which part is wrong", () => {
+  const waitId = "3f1c2b9a-7d4e-4a1b-9c2d-5e6f7a8b9c0d";
+  assert.deepEqual(parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "skipped" }), {
+    botId: "bot:ada",
+    waitId,
+    outcome: "skipped",
+  });
+  assert.equal(parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", note: "x".repeat(4_000) }).note?.length, 4_000);
+  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId: "a/b", outcome: "done" }), /hand-off id/u);
+  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "allow" }), /hand-off answer\./u);
+  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", note: "x".repeat(4_001) }), /hand-off note/u);
+  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", url: "https://x" }), /fields/u);
+  assert.throws(() => parseBotHandoffAnswer({ botId: "", waitId, outcome: "done" }), /bot id/u);
+  assert.deepEqual(parseBotHandoffOpen({ botId: "bot:ada", waitId }), { botId: "bot:ada", waitId });
+  assert.throws(() => parseBotHandoffOpen({ botId: "bot:ada", waitId: "x".repeat(65) }), /hand-off id/u);
 });
 
 test("a Bot update may carry an exact chat activity choice, and nothing else new", () => {

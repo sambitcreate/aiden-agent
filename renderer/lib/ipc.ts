@@ -1513,6 +1513,28 @@ export const botsApi = {
    */
   answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
     invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  /**
+   * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
+   * optional note; `answered` is false once the card is no longer waiting.
+   */
+  answerHandoff: (
+    botId: string,
+    waitId: string,
+    outcome: import("../shared/bot-handoffs").BotHandoffOutcome,
+    note?: string,
+  ) =>
+    invoke<{ answered: boolean }>("bots:answerHandoff", {
+      botId,
+      waitId,
+      outcome,
+      ...(note === undefined ? {} : { note }),
+    }),
+  /** Open on a hand-off card: its page in the Bot's browser or the system browser. */
+  openHandoff: (botId: string, waitId: string) =>
+    invoke<{ opened: import("../../main/services/bot-runtime/bot-handoff-open").BotHandoffOpened }>("bots:openHandoff", {
+      botId,
+      waitId,
+    }),
   pendingApprovals: (botId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
       "bots:pendingApprovals",
