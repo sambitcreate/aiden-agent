@@ -9,6 +9,7 @@ import {
   applyBotLiveEvent,
   botLastReplyAt,
   botRetryableFailedTurn,
+  botTranscriptPreview,
   type BotLiveEvent,
   type BotLiveSnapshot,
   type BotPendingQuestion,
@@ -769,6 +770,45 @@ test("a waiting hand-off reaches subscribers and late joiners, reads as waiting,
   }
 });
 
+test("a hand-off that opens or settles without a refresh reaching the open chat is caught up when the next window subscribes", async () => {
+  const handoffs = createBotHandoffs();
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Thanks, the transfer is through."),
+  ]);
+  // No `refreshHandoff` wiring: only a subscribe can bring the open feed up to date.
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: handoffEntries(handoffs, "bot:a") }) },
+    projection: { handoff: (botId) => handoffs.pending(botId)[0] ?? null },
+  });
+  try {
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    await live.service.send("bot:a", { text: "move the savings", requestId: "desk-1" });
+    await waitFor(() => handoffs.pending("bot:a").length === 1, { what: "the hand-off card" });
+    const [card] = handoffs.pending("bot:a");
+    assert.equal(tape.view?.handoff ?? null, null, "nothing told the open chat yet");
+
+    const opened = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(opened.snapshot.handoff?.waitId, card!.waitId, "the new window shows the waiting card");
+    await waitFor(() => tape.view?.handoff?.waitId === card!.waitId, { what: "the catch-up event in the open chat" });
+    opened.unsubscribe();
+
+    assert.equal(handoffs.answer("bot:a", card!.waitId, { outcome: "done" }), "answered");
+    await waitFor(() => visibleText(tape.view).includes("assistant:Thanks, the transfer is through."), { what: "the reply" });
+    assert.equal(tape.view?.handoff?.waitId, card!.waitId, "the settled card has not reached the open chat yet");
+    const settled = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(settled.snapshot.handoff, null, "a window opened after the answer shows no card");
+    await waitFor(() => tape.view?.handoff === null, { what: "the open chat losing the card" });
+    settled.unsubscribe();
+    assert.equal(tape.gaps, 0);
+    first.unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
 test("only a settled hand-off becomes the person's line; a stopped or refused one stays a tool result", () => {
   const call = (id: string, name: string) => ({ type: "toolCall", id, name, arguments: { action: "Pay the invoice" } });
   const result = (id: number, toolCallId: string, toolName: string, isError: boolean, details: unknown) => ({
@@ -813,6 +853,7 @@ test("only a settled hand-off becomes the person's line; a stopped or refused on
     botTranscriptRows(entries, null, { running: false, level: "summary" }).flatMap((row) => (row.kind === "handoff_result" ? [row.text] : [])),
     ["You skipped this: Pay the invoice", "You signed in to github.com"],
   );
+  assert.deepEqual(botTranscriptPreview(entries), { text: "You signed in to github.com", at: 2_006 }, "the Bot list previews the person's answer");
 });
 
 test("Stop pressed while a slow tool runs ends the chat with the person's stopped line", async () => {

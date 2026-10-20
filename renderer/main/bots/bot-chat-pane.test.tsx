@@ -1039,7 +1039,11 @@ test("a hand-off card waits above the composer, Open asks for its page, and Done
   const card = await screen.findByRole("group", { name: "Planner needs you" });
   assert.ok(within(card).getByText("Your turn: Enter the 2FA code for your bank"));
   assert.ok(within(card).getByText("Only you get the code on your phone."));
-  assert.ok(screen.getByPlaceholderText("Add a note and send to mark it done"), "the composer stays, for a note");
+  const note = screen.getByPlaceholderText("Add a note and send to mark it done");
+  assert.ok(
+    within(card).getByRole("button", { name: "Done" }).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the composer stays, for a note, and Tab reaches it after the card's buttons",
+  );
 
   fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
   await waitFor(() =>
@@ -1118,6 +1122,37 @@ test("a note the card could not take stays in the composer", async () => {
     await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."], "said once"));
     assert.equal(handoffAnswers(calls).length, 1);
     await waitFor(() => assert.equal(box.value, "Done on my phone."));
+  } finally {
+    errors.restore();
+  }
+});
+
+test("a photo sent while a hand-off waits is refused and kept with the note, and the card stays unanswered", async () => {
+  const errors = captureErrorToasts();
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:answerHandoff": () => ({ answered: true }),
+    });
+    // The pasted image reaches the composer the way the preload's attachment reader returns it.
+    (window as unknown as { aidenAPI: Record<string, unknown> }).aidenAPI.attachments = {
+      readClipboardImages: async () => [
+        { id: "img-1", name: "verified.png", mimeType: "image/png", kind: "image", size: 4, data: "AAECAw==" },
+      ],
+    };
+    const box = (await screen.findByPlaceholderText("Add a note and send to mark it done")) as HTMLTextAreaElement;
+    const image = new File([new Uint8Array([0, 1, 2, 3])], "verified.png", { type: "image/png" });
+    fireEvent.paste(box, {
+      clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => image }], getData: () => "" },
+    });
+    await waitFor(() => assert.equal(document.body.textContent?.includes("1 attachment is ready."), true));
+    fireEvent.change(box, { target: { value: "It said verified." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["Send photos after you answer the card."]));
+    assert.equal(handoffAnswers(calls).length, 0, "the card is not answered without the photo");
+    assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+    await waitFor(() => assert.equal(box.value, "It said verified."));
+    assert.ok(screen.getByRole("group", { name: "Planner needs you" }), "the card still waits");
   } finally {
     errors.restore();
   }

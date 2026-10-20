@@ -39,7 +39,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §4.1 (package P1: the h
   - `bots:answerHandoff({botId, waitId, outcome, note?})` returns `{answered}` and throws "That answer doesn’t match the card." on an invalid answer.
   - `bots:openHandoff({botId, waitId})` returns `{opened}`. It requires `rendererDocumentOwner`, and the handler is generic over the event type.
   - The pure open table is in `bot-handoff-open.ts`:
-    - From the Mac: a link opens in the Bot's browser (when P7 adds `botBrowser`), else in the system browser.
+    - From the Mac: a link opens in the Bot's browser (once P6 adds the `botBrowser` opener), else in the system browser.
     - From a phone: the Bot's chat comes forward.
     - A sign-in opens only in the Bot's own browser or computer, never the system browser.
 - Chat (`bot-chat-pane.tsx`, `renderer/components/bots/handoff-card.tsx`):
@@ -51,10 +51,12 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §4.1 (package P1: the h
 - Mac notification (`bot-handoff-notifications.ts`, wired in `bot-session-main.ts`):
   - Posted only when no Aiden window is focused. The title is the Bot's name; the body is "Ada needs you to: …", one line of at most 120 characters.
   - Each waitId is announced at most once; the id is claimed before any await, and the set is capped at 256.
+  - `watchBotHandoffs(botHandoffs, notifier)` is the production wiring: on each change it offers that Bot's waiting cards to the notifier. Its test uses the real bridge.
   - A click opens `/bots/<id>/chat` through `requestAppPath`, which restores and focuses the main window.
   - It uses Electron `Notification`, so it also posts on Linux.
 
 ## Not yet
 - Remote and phones (P4): `projectBotSessionEntries` drops `handoff_result` through `default:`, so phones show no line for the person's answer until P4 maps it. There is no Remote endpoint yet.
 - CLI: hand-offs are desktop-only. The CLI bundles `renderer/shared/bot-activity.ts`, which is why it names the `hand_off` literal instead of importing the constant.
-- Tests: `npm run test:bot-handoffs` (8 files), plus extensions in `live-projection`, `bot-attention`, `bot-chat-pane`, `bot-transcript-rows`, `bot-activity-log`, `bot-params`, `bot-activity(-detail)` and `tests/e2e/bots-starter.spec.ts`.
+- Tests: `npm run test:bot-handoffs` (8 files), plus extensions in `live-projection` (including catch-up on subscribe with no refresh wired, and the list preview), `bot-attention`, `bot-chat-pane` (including a pasted photo refused while a card waits), `bot-transcript-rows`, `bot-activity-log`, `bot-params`, `bot-activity(-detail)` and `tests/e2e/bots-starter.spec.ts`.
+- Bot chat tests can paste an image by setting `window.aidenAPI.attachments.readClipboardImages` after `mountChat` (the Bot test IPC fake has no attachments bridge) and firing `paste` with `clipboardData.items`.
