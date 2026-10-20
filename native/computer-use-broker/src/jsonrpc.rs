@@ -233,6 +233,13 @@ mod tests {
             "get_screen_size",
             "get_accessibility_tree",
             "get_desktop_state",
+            // 0.35 batch/script tools (`run_actions` is run_steps' hidden
+            // alias): one call would run many actions past Aiden's per-action
+            // approval. Upstream main's skill-pack reader stays out as well.
+            "run_steps",
+            "run_actions",
+            "run_script",
+            "get_guide",
         ] {
             assert!(
                 !ALLOWED_TOOLS.contains(&forbidden),

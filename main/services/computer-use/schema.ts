@@ -42,7 +42,7 @@ const Modifier = Type.Union(
   ].map((modifier) => Type.Literal(modifier)),
 );
 
-/** One verify_state predicate: exactly one of element or window (cua-driver 0.34.1). */
+/** One verify_state predicate: exactly one of element or window (cua-driver 0.36.0). */
 const VerifyPredicate = Type.Object(
   {
     element: Type.Optional(
@@ -116,6 +116,12 @@ export const ComputerUseParameters = Type.Object(
         description: "Capture only: cap the screenshot's long edge in pixels for a cheaper image.",
       }),
     ),
+    changes_only: Type.Optional(
+      Type.Boolean({
+        description:
+          "Capture only (som or ax, never vision): the cheap verification read. Re-reads the same window and returns just the accessibility rows added, changed or removed since its previous capture, or no_change, without a screenshot. It never carries or keeps element numbers, even after no_change: take a full capture before acting by number. Falls back to a full capture when there is no previous capture of that window.",
+      }),
+    ),
     element: Type.Optional(
       Type.Integer({
         minimum: 0,
@@ -141,8 +147,21 @@ export const ComputerUseParameters = Type.Object(
     ),
     amount: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 3 })),
     value: Type.Optional(Type.String({ maxLength: 4_000 })),
-    text: Type.Optional(Type.String({ maxLength: 4_000 })),
-    keys: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    text: Type.Optional(
+      Type.String({
+        maxLength: 4_000,
+        description:
+          "type only: text to insert. It can never contain line breaks or tabs; send Return or Tab with the key action as its own step.",
+      }),
+    ),
+    keys: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "cmd+s".',
+      }),
+    ),
     seconds: Type.Optional(Type.Number({ minimum: 0, maximum: 30, default: 1 })),
     raise_window: Type.Optional(
       Type.Boolean({
@@ -152,7 +171,7 @@ export const ComputerUseParameters = Type.Object(
     delivery_mode: Type.Optional(
       Type.Union([Type.Literal("background"), Type.Literal("foreground")], {
         description:
-          "Background is non-intrusive. Foreground may visibly change focus. drag and clicks with modifiers are foreground-only on macOS and default to it.",
+          "Background is non-intrusive and the default. Foreground may visibly change focus. Clicks with modifiers are foreground-only on macOS and default to it. drag runs in the background first; retry it with foreground only after a foreground_required error, or after drag_released once a fresh capture shows nothing changed, never after any other refusal.",
       }),
     ),
     bring_to_front: Type.Optional(

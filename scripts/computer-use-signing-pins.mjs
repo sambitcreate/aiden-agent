@@ -11,15 +11,15 @@ export const CUA_DRIVER_HELPER_EXECUTABLE = "aiden-cua-broker";
 export const CUA_DRIVER_ARTIFACT_PROVENANCE = Object.freeze({
   schemaVersion: 1,
   upstream: "https://github.com/trycua/cua",
-  tag: "cua-driver-rs-v0.34.1",
-  sourceCommit: "0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc",
-  version: "0.34.1",
+  tag: "cua-driver-rs-v0.36.0",
+  sourceCommit: "6d6c734c127025fb39ad5d585a10382808b39dc1",
+  version: "0.36.0",
   platform: "darwin",
   architecture: "universal",
-  asset: "cua-driver-rs-0.34.1-darwin-universal-binary.tar.gz",
-  url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.1/cua-driver-rs-0.34.1-darwin-universal-binary.tar.gz",
-  sha256: "52de49b5046df19245ad02ff9aa89ce9caf69e84988e1d0fac677611dd83e48c",
-  binarySha256: "56bc881744bfb956d44386e6f6ccb2f6fc7f5cef47be25cc056e08265cdf4c7d",
+  asset: "cua-driver-rs-0.36.0-darwin-universal-binary.tar.gz",
+  url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.36.0/cua-driver-rs-0.36.0-darwin-universal-binary.tar.gz",
+  sha256: "584e44435a26f5aa90c2f0097242307efbd63e843fc3f61072147c1963b0e592",
+  binarySha256: "87c7e782e69703d95524e4ceb7ceba03c8a159caabf1f1ce2c118eade7d2a5ec",
   upstreamSigningIdentifier: "cua-driver",
   upstreamSigningTeamId: "YCK386LBJ7",
   license: "MIT",
@@ -37,8 +37,8 @@ export const CUA_DRIVER_SIGNING_TEAM_ID = CUA_DRIVER_ARTIFACT_PROVENANCE.upstrea
 // it runs, and scripts/generate-cua-launch-requirement.mjs embeds both in the
 // kernel launch constraint. Order is significant for byte-exact DER output.
 export const CUA_DRIVER_CDHASHES = Object.freeze({
-  arm64: "6553145ad98e84d4b70d223c94a74403f389dc99",
-  x86_64: "17dcdcfd6ed7084835d9d16c36192a488c92c850",
+  arm64: "9b58dbca984a8acacb84f541a78e7231ca7af6c5",
+  x86_64: "34a6b2ee034a5e4707891a0ed29e3fa67ab6dadb",
 });
 
 // Upstream publishes a cosign (Sigstore) bundle next to each release asset.
@@ -46,7 +46,7 @@ export const CUA_DRIVER_CDHASHES = Object.freeze({
 // the explicit, optional `--verify-sigstore` vendor step (requires `cosign`).
 export const CUA_DRIVER_SIGSTORE_BUNDLE = Object.freeze({
   url: `${CUA_DRIVER_ARTIFACT_PROVENANCE.url}.sigstore.json`,
-  sha256: "414237a66ee436df0947420d026f103a2a3a8426daf71120b7e7d39d44e8f0f2",
+  sha256: "717a5652bae371ea81565b55e31a8d646c97523a958d4e22d2846b8a6ca3f55a",
   certificateIdentity: `https://github.com/trycua/cua/.github/workflows/cd-rust-cua-driver.yml@refs/tags/${CUA_DRIVER_ARTIFACT_PROVENANCE.tag}`,
   certificateOidcIssuer: "https://token.actions.githubusercontent.com",
 });
