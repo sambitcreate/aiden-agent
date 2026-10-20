@@ -37,6 +37,7 @@ import {
   type PeerTrust,
 } from "./peer-transport.js";
 import {
+  AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
   AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
@@ -103,8 +104,10 @@ export interface PeerClient {
 
 /**
  * Grants a desktop controller asks for after pairing, each gated by the
- * feature that proves the host serves it. Bot grants stay pairing-bound
- * (contract revision 19) and are never negotiated.
+ * feature that proves the host serves it. Bot authority (`bot:read`,
+ * `bot:write`) stays pairing-bound (contract revision 19) and is never
+ * negotiated; `bot:activity` is an opt-in that only adds the session's
+ * activity and queued frames to what this Mac is sent.
  */
 const NEGOTIATED_GRANTS: ReadonlyArray<readonly [string, string]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
@@ -114,6 +117,7 @@ const NEGOTIATED_GRANTS: ReadonlyArray<readonly [string, string]> = [
   ["host:events", AIDEN_REMOTE_HOST_EVENTS_FEATURE],
   ["runs:observe", AIDEN_REMOTE_RUN_STREAMS_FEATURE],
   ["runs:control", AIDEN_REMOTE_RUN_CONTROL_FEATURE],
+  ["bot:activity", AIDEN_REMOTE_BOT_ACTIVITY_FEATURE],
 ];
 
 /** Unary requests and streams (feed plus live runs) have separate budgets. */
@@ -449,10 +453,19 @@ export class PeerHostRegistry {
       : undefined;
     await this.refreshGrants(host.id, capabilities, features, current);
     if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined) {
-      const routes = parsePeerRoutes(server.peerRoutes).map((route) => route.endpoint === host.endpoint
-        ? { ...route, serverSpkiSha256: host.serverSpkiSha256, caCertificateDerBase64: host.caCertificateDerBase64 }
-        : route);
-      await this.learnRoutes(host.id, routes, current);
+      // Route hints are optional: a malformed one is ignored, never a reason to drop the host.
+      let hinted: ReturnType<typeof parsePeerRoutes> | undefined;
+      try {
+        hinted = parsePeerRoutes(server.peerRoutes);
+      } catch {
+        hinted = undefined;
+      }
+      if (hinted) {
+        const routes = hinted.map((route) => route.endpoint === host.endpoint
+          ? { ...route, serverSpkiSha256: host.serverSpkiSha256, caCertificateDerBase64: host.caCertificateDerBase64 }
+          : route);
+        await this.learnRoutes(host.id, routes, current);
+      }
     }
     this.verified.add(verificationKey);
     if (this.negotiated.has(host.id)) return;

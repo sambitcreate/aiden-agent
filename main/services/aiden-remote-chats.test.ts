@@ -63,6 +63,7 @@ function fixture(
     botArchived?: boolean;
     botAvailable?: boolean;
     retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
+    durableBotSessions?: () => boolean;
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
@@ -257,6 +258,7 @@ function fixture(
             },
     },
     botMutations: new BotMutationGate(),
+    ...(fixtureOptions.durableBotSessions ? { durableBotSessions: fixtureOptions.durableBotSessions } : {}),
     ...(fixtureOptions.retainedBotChatAuthorizer
       ? { retainedBotChatAuthorizer: fixtureOptions.retainedBotChatAuthorizer }
       : {}),
@@ -1327,6 +1329,31 @@ test("remote turn atomically appends once, owns its stream, and replays the acce
     () => app.streams.status("device-2", first.streamId),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
+});
+
+test("once Bots run in their durable session, a workspace-chat turn to a Bot is refused with an update hint", async () => {
+  let durable = true;
+  const app = fixture(chat({ botId: "bot-1" }), {
+    retainedBotChatAuthorizer: () => true,
+    durableBotSessions: () => durable,
+  });
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "legacy-bot-turn-0001", { text: "Hello" }),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "invalid_request" &&
+      (error as { status?: number }).status === 400 &&
+      /Update Aiden/u.test((error as Error).message),
+  );
+  assert.equal(app.appends(), 0);
+  assert.equal(app.starts(), 0);
+
+  // Ordinary chats are untouched, and a host without durable sessions still runs Bot turns.
+  const ordinary = fixture(chat(), { durableBotSessions: () => true });
+  await ordinary.service.startTurn("device-1", "chat-1", "ordinary-turn-0001", { text: "Hello" });
+  assert.equal(ordinary.appends(), 1);
+  durable = false;
+  await app.service.startTurn("device-1", "chat-1", "legacy-bot-turn-0002", { text: "Hello" });
+  assert.equal(app.appends(), 1);
 });
 
 test("remote Bot turn rejects a provider-model override before durable append", async () => {
