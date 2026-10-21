@@ -6,8 +6,11 @@
  * - `capture` asks the server for the whole screen and waits for a full
  *   picture, so what the Bot sees is never a half-painted frame.
  * - While a viewer watches, incremental updates keep the framebuffer
- *   current, at most one request per `frameIntervalMs`.
- * - A dropped connection is reopened by the next capture, input or viewer.
+ *   current, at most one request per `frameIntervalMs`. The first request
+ *   on a new connection asks for everything, so a viewer never starts black.
+ * - A dropped connection is reopened by the next capture, input or frame,
+ *   and on its own while anyone watches (after `reconnectDelayMs`, backing
+ *   off to `maxReconnectDelayMs`).
  *
  * Encoding is injected (Electron's `nativeImage` in production), so this
  * module runs under plain Node in tests.
@@ -49,6 +52,8 @@ export interface BotComputerLiveScreen extends BotComputerScreen {
   jpeg(options: { quality: number; maxWidth: number }): Promise<BotComputerLiveFrame>;
   /** Runs when the VNC connection drops; the next use reconnects. */
   onDisconnect(listener: () => void): () => void;
+  /** True once `close()` ran (the computer's run ended); a closed screen never reconnects. */
+  closed(): boolean;
 }
 
 export function isLiveScreen(screen: BotComputerScreen): screen is BotComputerLiveScreen {
@@ -61,6 +66,8 @@ export interface RfbScreenOptions {
   encode: BotComputerImageEncoder;
   captureTimeoutMs?: number;
   frameIntervalMs?: number;
+  reconnectDelayMs?: number;
+  maxReconnectDelayMs?: number;
   schedule?(callback: () => void, ms: number): () => void;
 }
 
@@ -80,6 +87,8 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
     });
   const frameIntervalMs = options.frameIntervalMs ?? 100;
   const captureTimeoutMs = options.captureTimeoutMs ?? 15_000;
+  const reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
+  const maxReconnectDelayMs = options.maxReconnectDelayMs ?? 10_000;
   const watchers = new Set<(update: { version: number; resized: boolean; width: number; height: number }) => void>();
   const disconnectListeners = new Set<() => void>();
   let client: RfbClient | undefined;
@@ -88,6 +97,10 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
   let version = 0;
   let lastRequestAt = 0;
   let cancelPump: (() => void) | undefined;
+  let cancelReconnect: (() => void) | undefined;
+  let reconnectWait = reconnectDelayMs;
+  /** Whether this connection has received the whole screen yet. */
+  let pictured = false;
 
   const pump = () => {
     cancelPump?.();
@@ -99,15 +112,40 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
       cancelPump = undefined;
       if (client !== current || current.closed || watchers.size === 0) return;
       lastRequestAt = Date.now();
-      void current.requestUpdate(true).catch(() => undefined);
+      void current.requestUpdate(pictured).catch(() => undefined);
+    }, wait);
+  };
+
+  const stopReconnecting = () => {
+    cancelReconnect?.();
+    cancelReconnect = undefined;
+    reconnectWait = reconnectDelayMs;
+  };
+
+  /** While anyone watches, a dropped connection comes back without waiting for a capture. */
+  const reconnectWatched = () => {
+    if (closed || watchers.size === 0 || client || cancelReconnect) return;
+    const wait = reconnectWait;
+    reconnectWait = Math.min(maxReconnectDelayMs, reconnectWait * 2);
+    cancelReconnect = schedule(() => {
+      cancelReconnect = undefined;
+      if (closed || watchers.size === 0 || client) return;
+      void live().then(
+        () => {
+          reconnectWait = reconnectDelayMs;
+        },
+        () => reconnectWatched(),
+      );
     }, wait);
   };
 
   const adopt = (next: RfbClient): RfbClient => {
     client = next;
+    pictured = false;
     version += 1;
     next.onUpdate((update: RfbUpdate) => {
       if (client !== next) return;
+      if (update.full) pictured = true;
       version += 1;
       for (const watcher of [...watchers]) {
         try {
@@ -130,6 +168,7 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
           // Advisory.
         }
       }
+      reconnectWatched();
     });
     if (watchers.size > 0) pump();
     return next;
@@ -176,8 +215,18 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
   // The first connection follows the opener's signal: an abandoned open leaves nothing behind.
   adopt(await options.connect(signal));
 
+  /** Waits for the whole screen once per connection, so no picture is taken of an unpainted framebuffer. */
+  const pictureOf = async (current: RfbClient, operationSignal?: AbortSignal) => {
+    if (pictured) return;
+    const full = current.nextUpdate({ full: true, signal: operationSignal, timeoutMs: captureTimeoutMs });
+    full.catch(() => undefined);
+    await current.requestUpdate(false);
+    await full;
+  };
+
   const snapshot = async (format: "png" | "jpeg", quality: number, maxWidth: number) => {
     const current = await live();
+    await pictureOf(current);
     const { data, width, height } = current.framebuffer();
     const at = version;
     // The framebuffer keeps changing underneath; encode a copy.
@@ -233,6 +282,7 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
       watchers.clear();
       cancelPump?.();
       cancelPump = undefined;
+      stopReconnecting();
       const current = client;
       client = undefined;
       current?.close();
@@ -248,13 +298,14 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
         // The first watcher starts the stream (at once, unless a request just went); later ones ride it.
         void live()
           .then(() => pump())
-          .catch(() => undefined);
+          .catch(() => reconnectWatched());
       }
       return () => {
         watchers.delete(listener);
         if (watchers.size === 0) {
           cancelPump?.();
           cancelPump = undefined;
+          stopReconnecting();
         }
       };
     },
@@ -269,5 +320,7 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
       disconnectListeners.add(listener);
       return () => void disconnectListeners.delete(listener);
     },
+
+    closed: () => closed,
   };
 }

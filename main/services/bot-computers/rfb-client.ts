@@ -323,7 +323,7 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
   let width = 0;
   let height = 0;
   let name = "";
-  let data = Buffer.alloc(0);
+  let data: Buffer = Buffer.alloc(0);
 
   const finish = (error: RfbError | undefined) => {
     if (closed) return;

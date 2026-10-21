@@ -4,7 +4,13 @@ import test from "node:test";
 
 import { connectRfb } from "./rfb-client.js";
 import { FakeRfbServer } from "./rfb-fake-server.js";
-import { createRfbScreen, isLiveScreen, type BotComputerImageEncoder, type BotComputerLiveScreen } from "./rfb-screen.js";
+import {
+  createRfbScreen,
+  isLiveScreen,
+  type BotComputerImageEncoder,
+  type BotComputerLiveScreen,
+  type RfbScreenOptions,
+} from "./rfb-screen.js";
 import { BotComputerTakenOverError } from "./types.js";
 
 interface Encoded {
@@ -35,7 +41,11 @@ async function until(condition: () => boolean, timeoutMs = 2_000): Promise<void>
   }
 }
 
-async function setup(serverOptions: ConstructorParameters<typeof FakeRfbServer>[0] = {}, frameIntervalMs = 20) {
+async function setup(
+  serverOptions: ConstructorParameters<typeof FakeRfbServer>[0] = {},
+  frameIntervalMs = 20,
+  extra: Partial<RfbScreenOptions> = {},
+) {
   const server = new FakeRfbServer({ width: 40, height: 30, password: "run-pass-1", ...serverOptions });
   const port = await server.listen();
   const encoder = fakeEncoder();
@@ -55,8 +65,9 @@ async function setup(serverOptions: ConstructorParameters<typeof FakeRfbServer>[
     },
     encode: encoder.encode,
     frameIntervalMs,
+    ...extra,
   });
-  return { server, screen, encoder, requested, connects: () => connects };
+  return { server, screen: screen as BotComputerLiveScreen, encoder, requested, connects: () => connects };
 }
 
 const pixelAt = (bgra: Buffer, width: number, x: number, y: number) => [...bgra.subarray((y * width + x) * 4, (y * width + x) * 4 + 4)];
@@ -198,10 +209,64 @@ test("a dropped VNC connection is reported, and the next capture reconnects", as
   }
 });
 
+test("a viewer's first frame is the whole screen, never an unpainted framebuffer", async () => {
+  const { server, screen, encoder, requested } = await setup({}, 20);
+  try {
+    server.paint({ x: 0, y: 0, width: 40, height: 30 }, [0, 200, 0]);
+    // Nothing has asked for the screen on this connection yet; the frame waits for it.
+    const frame = await screen.jpeg({ quality: 70, maxWidth: 40 });
+    assert.equal(frame.width, 40);
+    assert.deepEqual(pixelAt(encoder.calls[0].bgra, 40, 3, 3), [0, 200, 0, 255]);
+    assert.equal(requested[0]?.incremental, false);
+  } finally {
+    await screen.close();
+    await server.close();
+  }
+});
+
+test("watching a new connection asks for everything first, then only for changes", async () => {
+  const { server, screen, requested } = await setup({}, 20);
+  try {
+    const stop = screen.watch(() => undefined);
+    await until(() => requested.length >= 2);
+    assert.deepEqual(
+      requested.slice(0, 2).map((request) => request.incremental),
+      [false, true],
+    );
+    stop();
+  } finally {
+    await screen.close();
+    await server.close();
+  }
+});
+
+test("a watched screen reconnects on its own when the VNC connection drops, and an unwatched one waits", async () => {
+  const { server, screen, connects } = await setup({}, 20, { reconnectDelayMs: 10, maxReconnectDelayMs: 40 });
+  try {
+    const seen: number[] = [];
+    const stop = screen.watch((update) => seen.push(update.version));
+    await until(() => seen.length >= 1);
+    server.dropClients();
+    await until(() => connects() === 2 && screen.size() !== undefined);
+    const after = seen.length;
+    server.paint({ x: 1, y: 1, width: 1, height: 1 }, [5, 5, 5]);
+    await until(() => seen.length > after);
+    stop();
+    server.dropClients();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(connects(), 2, "nobody watches, so nothing reconnects until the next use");
+  } finally {
+    await screen.close();
+    await server.close();
+  }
+});
+
 test("closing the screen closes its connection and refuses later use", async () => {
   const { server, screen } = await setup();
   try {
+    assert.equal(screen.closed(), false);
     await screen.close();
+    assert.equal(screen.closed(), true);
     await until(() => server.connections[0].socket.destroyed);
     await assert.rejects(screen.capture({ format: "jpeg", maxWidth: 40 }), /closed/u);
     assert.equal(server.connections.length, 1, "a closed screen never reconnects");

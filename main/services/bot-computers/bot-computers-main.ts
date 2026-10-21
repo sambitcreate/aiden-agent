@@ -5,7 +5,7 @@
 
 import path from "node:path";
 import type { BotComputerHandlerDependencies } from "../../handlers/bot-computers.js";
-import { app, ipcMain, logger } from "../../platform.js";
+import { app, ipcMain, logger, nativeImage } from "../../platform.js";
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
@@ -14,14 +14,17 @@ import { createBotComputerControl, type BotComputerControlRegistry } from "./con
 import { createBotComputerHost } from "./host.js";
 import { resolveLumeInstallation } from "./lume-binary.js";
 import { hostMacosSupportsBotComputers } from "./release.js";
+import { createRfbScreenFactory, nativeImageEncoder } from "./rfb-screen-main.js";
 import { createBotComputerActivity, createBotComputerSessions, type BotComputerActivity } from "./sessions.js";
 import type { BotComputerHost, BotComputerSessions } from "./types.js";
+import { createBotComputerViewer, type BotComputerViewer } from "./viewer-main.js";
 
 export interface BotComputers {
   host: BotComputerHost;
   control: BotComputerControlRegistry;
   activity: BotComputerActivity;
   sessions: BotComputerSessions;
+  viewer: BotComputerViewer;
 }
 
 let singleton: BotComputers | undefined;
@@ -86,16 +89,39 @@ export function botComputers(): BotComputers {
     log,
   });
   const sessions = createBotComputerSessions({ host, control, activity, botName });
-  singleton = { host, control, activity, sessions };
+  // The screen is a VNC connection per run (P9); the Bot's `computer` tool and the viewer share it.
+  sessions.setScreenFactory(
+    createRfbScreenFactory({
+      encode: nativeImageEncoder(nativeImage),
+      // Owner-Mac fixture recording only (main/services/bot-computers/fixtures/rfb/README.md).
+      recordingsDir:
+        process.env.AIDEN_BOT_COMPUTERS_RECORD_RFB === "1"
+          ? path.join(app.getPath("userData"), "bot-computers", "rfb-recordings")
+          : undefined,
+      log,
+    }),
+  );
+  const viewer = createBotComputerViewer({ host, sessions, control, botName, log });
+  singleton = { host, control, activity, sessions, viewer };
   return singleton;
 }
 
 /** IPC wiring for `registerBotComputerHandlers`. */
 export function botComputerHandlerDependencies(): BotComputerHandlerDependencies {
-  const { host } = botComputers();
+  const { host, viewer, control, sessions } = botComputers();
   return {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     host,
+    viewer,
+    control,
+    sessions,
+    onSenderGone: (event, listener) => {
+      const sender = (event as { sender?: { once(name: "destroyed", fn: () => void): unknown; off(name: "destroyed", fn: () => void): unknown } })
+        .sender;
+      if (!sender) return () => undefined;
+      sender.once("destroyed", listener);
+      return () => void sender.off("destroyed", listener);
+    },
     broadcast: (channel, payload) => ipcMain.broadcast(channel as NotificationChannel, payload),
     botExists: async (botId) => {
       const { botStore } = await import("../bot-store.js");
@@ -126,5 +152,7 @@ export async function reconcileBotComputers(): Promise<void> {
 /** Quit: stop every running computer within the deadline. */
 export async function shutdownBotComputers(timeoutMs: number): Promise<void> {
   if (!singleton) return;
+  // Viewers end first, so no stream holds a computer the host is stopping.
+  await singleton.viewer.close().catch((error: unknown) => logger.warn("bot-computers", "The viewer did not close.", error));
   await singleton.host.shutdown(timeoutMs);
 }

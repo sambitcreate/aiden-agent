@@ -143,7 +143,7 @@ test("a DesktopSize resizes the framebuffer and asks again for the whole new scr
   await client.nextUpdate({ timeoutMs: 2_000 });
   assert.deepEqual(bgra(client, 799, 599), GREEN);
   const requests = clientMessages(written()).messages.filter((message) => message.type === 3);
-  const last = requests.at(-1)!.body;
+  const last = requests[requests.length - 1].body;
   assert.deepEqual([last[1], last.readUInt16BE(6), last.readUInt16BE(8)], [0, 800, 600]);
   client.close();
 });
