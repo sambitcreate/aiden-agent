@@ -520,7 +520,7 @@ export class PeerTransport {
           const frames = streaming ? new PeerEventFrames() : undefined;
           const frameBoundary = () => {
             clearTimeout(deadline);
-            deadline = setTimeout(abort, DEADLINE_MS);
+            deadline = setTimeout(timedOut, DEADLINE_MS);
           };
           if (streaming) {
             // The quiet time before the first frame starts once the stream is accepted,

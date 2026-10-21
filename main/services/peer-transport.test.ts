@@ -396,7 +396,11 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
       received = resolve;
     });
     const stalled = client.events({ path: "/live" }, () => received());
-    const stalledRejected = assert.rejects(stalled);
+    const stalledRejected = assert.rejects(stalled, (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.failure, "timeout");
+      return true;
+    });
     await nextFrame;
     liveResponse!.write("data: partial");
     t.mock.timers.tick(30_000);
