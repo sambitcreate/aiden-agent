@@ -36,6 +36,12 @@ export const botApplicationService = createBotApplicationService({
   deleteChatWithEffects: (chatId, assertCurrent, onDeletionRollForward) =>
     chatApplicationService.remove(chatId, { assertCurrent, onDeletionRollForward }),
   deleteBotPhoto: (botId) => botAvatarStore.deleteBot(botId),
+  // Its cookies and site data go with it; loaded lazily (Electron web contents).
+  deleteBotBrowserProfile: async (botId) => {
+    const managed = await botManagedWorkspace.resolve(botId).catch(() => undefined);
+    const { browserService } = await import("./browser/service.js");
+    await browserService.clearBotProfile(botId, managed?.workspaceId ?? "");
+  },
   legacyTranscriptWipe: {
     ...createBotLegacyTranscriptWipeMarker(() => app.getPath("userData")),
     clearChatJournal: (chatId) => piCompactionSessionStore.deleteChat(chatId),
