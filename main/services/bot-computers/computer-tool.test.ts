@@ -230,6 +230,7 @@ test("while the person has the computer nothing is captured; the call waits for 
   assert.equal(textOf(result), BOT_COMPUTER_GIVE_BACK_NOTE);
   assert.equal(images(result).length, 0);
   assert.equal(h.fake.captures.length, 0);
+  assert.equal(h.touches(), 1, "Give back restarts the idle timer, as any finished call does");
 });
 
 test("Take over interrupts the action, nothing stays held, and Give back returns the note", async () => {

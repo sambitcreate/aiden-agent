@@ -238,7 +238,9 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   may use its own computer on routine runs and Telegram turns, where nobody is
   watching. A rule that would ask or hand off on those turns never waits: the
   call is blocked with what the person needs to do, and the Bot tells them in
-  its reply.
+  its reply. Those turns have no `hand_off`, so there the tool's guidance tells
+  the Bot never to enter passwords, codes or payment details and to say in its
+  reply what the person needs to do instead.
 - **Network.** The computer uses Lume's default shared (NAT) network, so what
   the Bot does there can reach the open internet and services listening on the
   Mac's network interfaces. Aiden Remote on those interfaces still needs a

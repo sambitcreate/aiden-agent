@@ -383,7 +383,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         const computers = botComputers();
         const state = (botComputerToolState ??= createBotComputerToolState(computers.control));
         const botName = async (id: string) => (await deps.botName?.(id).catch(() => undefined)) ?? "The Bot";
-        const computerTurn = { routine: routineRun };
+        // No one answers a card on routine and Telegram runs, so there is no hand_off there.
+        const computerTurn = { routine: routineRun, unattended: routineRun || telegram };
         if (facts.supportsImages) {
           tools.push({
             tool: createBotComputerTool(

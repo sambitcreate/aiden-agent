@@ -80,6 +80,34 @@ test("the computer needs the Bot computer capability and the Bot's own computer,
   assert.equal((await botToolVerdict("computer_use", facts(["computer"], true))).allowed, false);
 });
 
+test("the computer's guidance sends secrets to hand_off only on turns that have hand_off", async () => {
+  const control = createBotComputerControl();
+  const state = createBotComputerToolState(control);
+  const unused = async (): Promise<never> => {
+    throw new Error("not called");
+  };
+  for (const turn of [{}, { routine: true }, { telegram: true }] as const) {
+    const routine = "routine" in turn;
+    const unattended = routine || "telegram" in turn;
+    // As production's sources build it for that turn.
+    const tool = createBotComputerTool(
+      BOT,
+      {
+        host: { ensureRunning: unused, touch: () => undefined },
+        sessions: { screen: unused, recordPointer: () => undefined, setActivity: () => undefined },
+        control,
+        state,
+        botName: async () => "Ada",
+      },
+      { routine, unattended },
+    );
+    const handOffOffered = (await botToolVerdict("hand_off", facts(["computer"], true), turn)).allowed;
+    assert.equal(tool.description.includes("hand_off"), handOffOffered, `${JSON.stringify(turn)}: never a tool the turn lacks`);
+    // Either way the Bot is kept away from passwords, codes and payments.
+    assert.match(tool.description, /passwords, codes/u);
+  }
+});
+
 test("the rules read a computer step's stated intent; looking and invalid calls classify nothing", () => {
   assert.deepEqual(botComputerAction({ args: { action: "click", coordinate: [1, 2], intent: "  Click‮ Place order " } }), {
     approval: null,

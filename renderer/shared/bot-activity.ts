@@ -126,8 +126,12 @@ const TOOL_APPS: ReadonlyMap<string, string> = new Map<string, string>([
   ["browser", "its browser"],
 ]);
 
-/** The Bot browser's tools (`browser_snapshot`, `browser_click`, …) behind its `browser` gateway. */
-const BROWSER_TOOL = /^browser_[a-z_]+$/u;
+/**
+ * The Bot browser's tools (`browser_snapshot`, `browser_click`, …) behind its
+ * `browser` gateway. Single underscores only: a connection tool always has a
+ * `__`, so a server named "Browser Base" (`browser_base__search`) keeps its own app.
+ */
+const BROWSER_TOOL = /^browser_[a-z]+(?:_[a-z]+)*$/u;
 
 /** The app label of a tool: the Bot's own computer or browser, or an MCP or Composio tool's connection; else undefined. */
 export function botToolApp(toolName: string): string | undefined {

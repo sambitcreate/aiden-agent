@@ -75,6 +75,11 @@ test("the Bot's own computer reads as Using its computer, never as the person's 
   // The Bot's own browser likewise, rather than a bare "Working".
   assert.equal(botActivityDisplay(botToolPhase("browser_click", botToolApp("browser_click")), "follows", botToolApp("browser_click")).word, "Using its browser");
   assert.equal(botStepPhrase("app", 2, botToolApp("browser_snapshot")), "Used its browser 2 times");
+  assert.equal(botToolApp("browser_wait_for"), "its browser");
+  // A connection whose server name starts with "browser" or "computer" keeps its own app.
+  assert.equal(botToolApp("browser_base__search"), "Browser Base");
+  assert.equal(botToolApp("browser__open_tab"), "Browser");
+  assert.equal(botToolApp("computer__list_files"), "Computer");
 });
 
 test("when tools run in parallel, the most recently started one wins", () => {
