@@ -586,7 +586,9 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [pendingSends, setPendingSends] = React.useState<readonly BotPendingSend[]>([]);
   const unsettledSend = React.useRef<{ text: string; images: string; requestId: string } | null>(null);
   const retryRequestIds = React.useRef(new Map<string, string>());
-  const [hiddenFailedTurn, setHiddenFailedTurn] = React.useState<string | null>(null);
+  // Failed turns whose Retry was sent: main keeps the failed entry in the view, so the card
+  // stays hidden here once its retry left; a retry that fails to leave shows it again.
+  const [hiddenFailedTurns, setHiddenFailedTurns] = React.useState<ReadonlySet<string>>(() => new Set());
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
@@ -614,10 +616,6 @@ export function BotChatPane({ botId }: { botId: string }) {
       return next.length === current.length ? current : next;
     });
   }, [snapshot]);
-  // A failed turn that was retried comes back if the snapshot still has it once the retry settled.
-  React.useEffect(() => {
-    if (hiddenFailedTurn && !snapshot?.entries.some((entry) => entry.id === hiddenFailedTurn)) setHiddenFailedTurn(null);
-  }, [hiddenFailedTurn, snapshot]);
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
   React.useEffect(() => {
@@ -814,6 +812,10 @@ export function BotChatPane({ botId }: { botId: string }) {
         action === "resume"
           ? await botsApi.resume(current.id, pausedRequestId(action, submissionId))
           : await botsApi.dismiss(current.id, pausedRequestId(action, submissionId));
+      // Main answered, so the id is spent: main remembers its answer (even a refusal) per id,
+      // and the next click after, say, fixing access must be a new request. Only a thrown
+      // IPC error keeps the id for a replay.
+      pausedRequestIds.current.delete(`${action}:${submissionId}`);
       // Main's answer is the state now: a turn still paused (for example, blocked) shows its card again.
       if (after.kind === "interrupted") setHiddenPausedSubmission(null);
     } catch (error) {
@@ -853,14 +855,18 @@ export function BotChatPane({ botId }: { botId: string }) {
       retryRequestIds.current.set(failedId, requestId);
     }
     setRetrying(true);
-    setHiddenFailedTurn(failedId);
+    setHiddenFailedTurns((hidden) => new Set(hidden).add(failedId));
     echoSend(requestId, text);
     try {
       await botsApi.send({ botId: current.id, text, requestId });
       settleEchoLater(requestId);
     } catch (error) {
       dropEcho(requestId);
-      setHiddenFailedTurn((hidden) => (hidden === failedId ? null : hidden));
+      setHiddenFailedTurns((hidden) => {
+        const next = new Set(hidden);
+        next.delete(failedId);
+        return next;
+      });
       toast.error(userFacingErrorMessage(error, `Aiden couldn’t send to ${current.name}.`));
     } finally {
       setRetrying(false);
@@ -1002,7 +1008,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       <MessageAttachmentPreviewProvider>
         <TranscriptEntries
           name={current.name}
-          entries={hiddenFailedTurn ? snapshot.entries.filter((entry) => entry.id !== hiddenFailedTurn) : snapshot.entries}
+          entries={hiddenFailedTurns.size ? snapshot.entries.filter((entry) => !hiddenFailedTurns.has(entry.id)) : snapshot.entries}
           partial={snapshot.partial}
           running={running}
           level={chatActivity.level}

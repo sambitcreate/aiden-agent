@@ -201,7 +201,13 @@ test("an interrupted Bot offers Resume and Dismiss, each sent once with a reques
   assert.equal(resumeInput.botId, "bot-1");
   assert.match(resumeInput.requestId, UUID);
   const back = await screen.findByRole("group", { name: "Planner was interrupted" });
-  fireEvent.click(within(back).getByRole("button", { name: "Dismiss" }));
+  // Main answered (and remembers that answer per id), so the next Resume is a new request.
+  fireEvent.click(within(back).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 2));
+  const secondResume = calls.filter((call) => call.channel === "bots:resume")[1]!.args[0] as { requestId: string };
+  assert.notEqual(secondResume.requestId, resumeInput.requestId);
+  const backAgain = await screen.findByRole("group", { name: "Planner was interrupted" });
+  fireEvent.click(within(backAgain).getByRole("button", { name: "Dismiss" }));
   assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null);
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 1));
   const dismissInput = calls.find((call) => call.channel === "bots:dismiss")!.args[0] as { botId: string; requestId: string };

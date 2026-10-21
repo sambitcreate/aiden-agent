@@ -57,19 +57,14 @@ export function removeBotFromCache(qc: QueryClient, botId: string): () => void {
   };
 }
 
-function isRevisionConflict(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  // Main's BotIdentityRevisionConflictError, as it reads once it crossed IPC.
-  return /changed on another surface/iu.test(message);
-}
-
 /**
  * Applies only the edited identity fields onto the latest stored Bot, so a
  * change made on another device to a different field is kept.
  *
  * The change shows at once: the Bot's query and the Bots list take the patched
  * Bot before main answers, and go back to what they held if the save fails.
- * The cached Bot's revision is tried first; a conflict rereads and retries once.
+ * The write itself still rereads the Bot first, so it patches the latest
+ * revision rather than the one this window happens to have cached.
  */
 export async function updateBotIdentity(
   qc: QueryClient,
@@ -77,15 +72,25 @@ export async function updateBotIdentity(
   patch: BotIdentityPatch,
 ): Promise<BotDefinition> {
   const cached = qc.getQueryData<BotDefinition>(queryKeys.bot(botId));
-  const previousLists = qc.getQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots });
-  if (cached) placeBotInCache(qc, patchedBot(cached, patch));
+  const optimistic = cached ? patchedBot(cached, patch) : null;
+  if (optimistic) placeBotInCache(qc, optimistic);
+  // Only this Bot's row goes back, and only where it still holds this edit's
+  // copy: a list reread or a later edit that landed meanwhile is kept. The
+  // query cache shares structure, so the copy is matched by value, not identity.
+  const holdsOptimistic = (row: BotDefinition | undefined) =>
+    row !== undefined && optimistic !== null && JSON.stringify(row) === JSON.stringify(optimistic);
   const rollback = () => {
-    if (cached) qc.setQueryData(queryKeys.bot(botId), cached);
-    for (const [key, list] of previousLists) qc.setQueryData(key, list);
+    if (!cached || !optimistic) return;
+    if (holdsOptimistic(qc.getQueryData<BotDefinition>(queryKeys.bot(botId)))) qc.setQueryData(queryKeys.bot(botId), cached);
+    qc.setQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots }, (list) =>
+      list?.some(holdsOptimistic) ? list.map((row) => (holdsOptimistic(row) ? cached : row)) : list,
+    );
   };
-  const save = async (latest: BotDefinition) => {
+  try {
+    const latest = await botsApi.get(botId);
+    if (!latest) throw new Error("This Bot no longer exists.");
     const next = patchedBot(latest, patch);
-    return botsApi.update({
+    const saved = await botsApi.update({
       id: latest.id,
       expectedRevision: latest.revision,
       name: next.name,
@@ -94,23 +99,6 @@ export async function updateBotIdentity(
       avatar: next.avatar,
       ...(patch.chatActivity ? { chatActivity: resolveBotChatActivity(next.chatActivity) } : {}),
     });
-  };
-  try {
-    let saved: BotDefinition;
-    if (cached) {
-      try {
-        saved = await save(cached);
-      } catch (error) {
-        if (!isRevisionConflict(error)) throw error;
-        const latest = await botsApi.get(botId);
-        if (!latest) throw new Error("This Bot no longer exists.");
-        saved = await save(latest);
-      }
-    } else {
-      const latest = await botsApi.get(botId);
-      if (!latest) throw new Error("This Bot no longer exists.");
-      saved = await save(latest);
-    }
     placeBotInCache(qc, saved);
     void qc.invalidateQueries({ queryKey: queryKeys.bots });
     return saved;

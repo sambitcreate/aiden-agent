@@ -216,7 +216,12 @@ struct AidenBotRoutinesSection: View {
             .disabled(!canWrite)
             Toggle(routine.name, isOn: Binding(
                 get: { pendingEnabled[routine.id] ?? routine.enabled },
-                set: { enabled in Task { await setEnabled(routine, enabled) } }
+                set: { enabled in
+                    // Flipped in the setter itself, so the toggle never bounces for a frame.
+                    guard pendingEnabled[routine.id] == nil else { return }
+                    pendingEnabled[routine.id] = enabled
+                    Task { await setEnabled(routine, enabled) }
+                }
             ))
             .labelsHidden()
             .disabled(!canWrite || pendingEnabled[routine.id] != nil)
@@ -276,13 +281,12 @@ struct AidenBotRoutinesSection: View {
     /// The switch flips at once and stays put while the Mac answers; a failure
     /// puts it back and says so.
     @MainActor
+    /// Sends the flip `pendingEnabled` already shows; the stored routine takes over once the Mac answers.
     private func setEnabled(_ routine: AidenBotRoutine, _ enabled: Bool) async {
-        guard pendingEnabled[routine.id] == nil,
-              let context = try? coordinator.requestContext(),
+        defer { pendingEnabled[routine.id] = nil }
+        guard let context = try? coordinator.requestContext(),
               let client = try? coordinator.remoteClient(for: context),
               let request = try? AidenBotRoutineUpdateRequest(enabled: enabled) else { return }
-        pendingEnabled[routine.id] = enabled
-        defer { pendingEnabled[routine.id] = nil }
         do {
             let updated = try await client.updateBotRoutine(
                 botId: botID,

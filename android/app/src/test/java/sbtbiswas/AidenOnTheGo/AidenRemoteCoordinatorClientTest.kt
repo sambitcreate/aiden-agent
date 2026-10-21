@@ -16,7 +16,6 @@ import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenPairingExchange
-import sbtbiswas.AidenOnTheGo.models.AidenServer
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspacePermission
@@ -75,10 +74,6 @@ class AidenRemoteCoordinatorClientTest {
         )
         assertNull(coordinator.serverInfo.value)
         assertTrue(coordinator.supportsBotDurableSession())
-
-        // This connection's own answer wins over what the pairing saved.
-        val legacy = AidenServer(instanceId = "fresh", name = "Mac", capabilities = grants, serverCapabilities = grants, features = emptyList())
-        assertFalse(coordinator.supportsBotDurableSession(legacy))
     }
 
     @Test

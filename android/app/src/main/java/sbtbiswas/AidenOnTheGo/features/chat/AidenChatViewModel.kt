@@ -275,6 +275,8 @@ class AidenChatViewModel(
     private val attachmentImageLoads = mutableMapOf<String, Deferred<ByteArray?>>()
     private val instanceId: String = coordinator.installationStore.activeInstallation?.instanceId ?: ""
     private val deviceId: String = coordinator.installationStore.activeInstallation?.deviceId ?: ""
+    /** The pairing this chat was opened under; a re-pair of the same Mac is a different one. */
+    private val pairing = coordinator.activePairing
     private val modelPreferenceStore = coordinator.modelPreferenceStore
     private var hasExplicitModelSelection = false
     /** The client the transcript was last read with; a refreshed client rereads it. */
@@ -283,11 +285,11 @@ class AidenChatViewModel(
     /**
      * The coordinator's current client for this chat's pairing. A Retry or reconnect replaces
      * the client object for the same pairing, and this chat must keep loading and sending with
-     * the new one; a switched or removed pairing yields null, and a response from an earlier
-     * client (`activeClient() !== client`) is never applied.
+     * the new one; a switched, removed or re-paired installation yields null, and a response
+     * from an earlier client (`activeClient() !== client`) is never applied.
      */
     private fun activeClient(): AidenRemoteClient? =
-        coordinator.client.value?.takeIf { instanceId.isNotEmpty() && coordinator.activeInstanceId == instanceId }
+        coordinator.client.value?.takeIf { coordinator.holdsPairing(pairing) }
 
     val isReadOnlyPresentation: Boolean
         get() = coordinator.installationStore.activeInstallation == null
@@ -2106,7 +2108,7 @@ class AidenChatViewModel(
         val draftBeforeSend = _draft.value
         val draftAfterSend = if (retry) draftBeforeSend else AidenRunInputPresentation.consumedDraft(text, draftBeforeSend)
         if (!retry) consumeRunInputDraft(text)
-        fun restoreDraft() { if (!retry) restoreRunInputDraft(draftBeforeSend, draftAfterSend) }
+        fun restoreDraft() { if (!retry) restoreRunInputDraft(text, draftBeforeSend, draftAfterSend) }
         viewModelScope.launch {
             try {
                 val session = draftSession ?: error("The chat draft is not ready.")
@@ -2397,11 +2399,17 @@ class AidenChatViewModel(
         }
     }
 
-    /** Puts a draft back after a run input the Mac rejected or never confirmed, unless the person typed since. */
-    private fun restoreRunInputDraft(previous: String, remaining: String) {
-        if (_draft.value != remaining || previous == remaining) return
-        _draft.value = previous
-        draftWriter?.writeSoon(previous)
+    /**
+     * Puts a draft back after a run input the Mac rejected or never confirmed. Text typed since
+     * it was cleared is kept under the rejected text, as a failed send keeps it.
+     */
+    private fun restoreRunInputDraft(submitted: String, previous: String, remaining: String) {
+        if (previous == remaining) return
+        val current = _draft.value
+        val restored = if (current == remaining) previous else AidenDraftSendReconciliation.failedDraft(submitted, current)
+        if (restored == current) return
+        _draft.value = restored
+        draftWriter?.writeSoon(restored)
     }
 
     private fun showRunInputReceipt(text: String) {

@@ -926,7 +926,9 @@ struct AidenBotsHomeView: View {
 
         if coordinator.connectionState != .connected {
             loadError = snapshot == nil ? nil : "Offline — showing saved Bots"
-            isLoading = false
+            // Connecting with nothing saved stays unsettled (the skeleton, not
+            // "No saved Bots"); `loadID` reruns this once the Mac answers.
+            isLoading = coordinator.connectionState == .connecting && snapshot == nil
             return
         }
 

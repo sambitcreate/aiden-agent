@@ -960,18 +960,17 @@ final class AidenWorkspaceChatsModel {
         let instanceId = context.instanceId
         isMutating = true
         defer { isMutating = false }
-        // The new title shows in this list, Recents and the open chat at once,
-        // as a local override the admitted receipt replaces; a failed PATCH
-        // puts the stored row back unless another owner published since.
+        // The new title shows in this list at once, as a local override the
+        // admitted receipt replaces; Recents and the open chat take the receipt,
+        // since only an admitted write may be published. A failed PATCH puts the
+        // stored row back unless another owner published since.
         var optimistic = chat
         optimistic.localTitleOverride = cleaned
         upsert(optimistic)
-        onChatUpdated(optimistic)
         let optimisticGeneration = presentationGenerations[chat.id] ?? 0
         let rollBackTitle = { [self] in
             guard coordinator.isCurrent(context), optimisticGeneration == (presentationGenerations[chat.id] ?? 0) else { return }
             upsert(chat)
-            onChatUpdated(chat)
         }
         do {
             let canonical: AidenChat
@@ -985,8 +984,11 @@ final class AidenWorkspaceChatsModel {
             let updated = try await coordinator.remoteClient(for: context).updateChat(
                 id: chat.id, revision: canonical.revision, title: cleaned
             )
-            guard coordinator.isCurrent(context), updated.id == chat.id,
-                  updated.workspaceId == workspaceId, !updated.isBotChat else { return }
+            guard coordinator.isCurrent(context) else { return }
+            guard updated.id == chat.id, updated.workspaceId == workspaceId, !updated.isBotChat else {
+                rollBackTitle()
+                return
+            }
             let receiptCutoff = cache.reserveChatWrite()
             guard let admitted = await cache.acceptRename(updated, instanceId: instanceId, origin: origin, cutoff: receiptCutoff) else {
                 if coordinator.isCurrent(context), generation == (presentationGenerations[chat.id] ?? 0) {
@@ -3573,7 +3575,7 @@ final class AidenChatViewModel {
         if !retry { consumeRunInputDraft(text) }
         let restoreDraft = { [self] in
             guard !retry else { return }
-            restoreRunInputDraft(draftBeforeSend, consumedTo: draftAfterSend)
+            restoreRunInputDraft(submitted: text, previous: draftBeforeSend, consumedTo: draftAfterSend)
         }
         do {
             let session: AidenChatDraftStore.Session
@@ -3863,19 +3865,22 @@ final class AidenChatViewModel {
         }
     }
 
-    /// Puts a draft back after a run input the Mac rejected or never confirmed,
-    /// unless the person typed since it was cleared.
-    private func restoreRunInputDraft(_ previous: String, consumedTo remaining: String) {
-        guard draft == remaining, previous != remaining else { return }
+    /// Puts a draft back after a run input the Mac rejected or never confirmed.
+    /// Text typed since it was cleared is kept under the rejected text, as a
+    /// failed send keeps it.
+    private func restoreRunInputDraft(submitted: String, previous: String, consumedTo remaining: String) {
+        guard previous != remaining else { return }
+        let restored = draft == remaining ? previous : AidenDraftSendReconciliation.failedDraft(submitted: submitted, current: draft)
+        guard restored != draft else { return }
         draftPersistenceTask?.cancel()
         suppressesDraftPersistence = true
-        draft = previous
+        draft = restored
         suppressesDraftPersistence = false
         let restoredDraftGeneration = draftGeneration
         if let draftSession {
             Task { [weak self] in
-                guard let self, draftGeneration == restoredDraftGeneration, draft == previous else { return }
-                _ = try? await draftStore.save(previous, session: draftSession)
+                guard let self, draftGeneration == restoredDraftGeneration, draft == restored else { return }
+                _ = try? await draftStore.save(restored, session: draftSession)
             }
         }
     }
