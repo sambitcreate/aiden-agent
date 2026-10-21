@@ -33,6 +33,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
 - UI:
   - `remote-bot-chat-view.tsx` shows the shared hand-off card (`handoff-card.tsx`, new `finishOn` prop, "Finish on <Mac>") and `BotPausedNotice` (`renderer/main/bots/bot-paused-card.tsx`).
   - The chat's ••• menu has Pause Bot / Resume Bot.
+  - A settled card is hidden by the identity of the host's handoff object, not its wait id. Resume asks again under the same wait id, and the frame or snapshot carrying it is a new object, so the card shows again (adversarial review fix).
 - The host feed sends paired desktops the revision-35 rows, so the desktop sidebar never shows a paired Bot as Paused (it reads idle/unavailable). Only the open chat knows.
 - Merge watch with #565:
   - `peer-bot-session-compat.ts` `SESSION_KEYS` must gain `handoff`.

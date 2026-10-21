@@ -232,6 +232,14 @@ test("a card already settled on the other Mac goes away quietly", async () => {
   await waitFor(() => assert.equal(expired.handoffAnswers().length, 1));
   assert.deepEqual(expired.handoffAnswers()[0]!.body, { outcome: "skipped" });
   await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+
+  // A pause withdrew it; once the turn resumes, the host asks again under the same wait id.
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "handoff", { handoff: null }));
+    // Each frame crosses IPC as a fresh copy.
+    emitBotTestNotification("remote:peer-bot-session", event(5, "handoff", { handoff: structuredClone(BANK_HANDOFF) }));
+  });
+  assert.ok(await screen.findByRole("group", { name: "Planner needs you" }), "the card asked again can be answered here");
 });
 
 test("a lost hand-off answer is resent under its key", async () => {

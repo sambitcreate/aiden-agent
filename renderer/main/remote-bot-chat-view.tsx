@@ -110,6 +110,12 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // sending the same thing again is deduplicated by the host, not repeated.
   const unsettledSend = React.useRef<UnsettledBotSend | null>(null);
   const unsettledHandoff = React.useRef<UnsettledHandoffAnswer | null>(null);
+  // The hand-off card this Mac settled, hidden only while the host's view still
+  // holds that same card. Resume asks a hand-off again under the same wait id:
+  // the host's frame (or a fresh snapshot) for it is a new card, and it shows.
+  const [settledHandoff, setSettledHandoff] = React.useState<AidenRemoteBotHandoff | null>(null);
+  const shownHandoff = React.useRef<AidenRemoteBotHandoff | null>(null);
+  shownHandoff.current = live.view?.handoff ?? null;
 
   const view = live.view;
   const snapshot = view?.snapshot ?? null;
@@ -259,7 +265,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const statusActivity = snapshot.activity && !replyStreaming ? snapshot.activity : null;
   const question = snapshot.question && !answered.has(snapshot.question.waitId) ? snapshot.question : null;
   const approval = view.approval && !answered.has(view.approval.waitId) ? view.approval : null;
-  const handoff = view.handoff && !answered.has(view.handoff.waitId) ? view.handoff : null;
+  const handoff = view.handoff && view.handoff !== settledHandoff ? view.handoff : null;
   // A sign-in happens in the Bot's own browser on its Mac: typing here can't finish it.
   const signInElsewhere = handoff?.kind === "sign_in";
 
@@ -348,7 +354,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     }
   };
 
-  const hideCard = (waitId: string) => setAnswered((ids) => new Set(ids).add(waitId));
+  /** Hide a settled hand-off card, unless the host's view has already moved past it. */
+  const hideCard = (waitId: string) => {
+    const shown = shownHandoff.current;
+    if (shown?.waitId === waitId) setSettledHandoff(shown);
+  };
 
   /**
    * Done or Skip for the hand-off card, through the host's own route. Returns
