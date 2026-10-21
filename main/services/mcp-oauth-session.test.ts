@@ -10,6 +10,8 @@ import {
   sameMcpOAuthGrant,
   sessionForFreshMcpAuthorization,
   sessionForMcpAuthorizationAttempt,
+  MCP_REJECTED_REFRESH_RESTORE_MS,
+  sessionAfterTokenInvalidation,
   sessionWithRefreshedMcpTokens,
   sessionWithMcpClientInformation,
   sessionWithSavedMcpTokens,
@@ -674,6 +676,33 @@ test("a late refresh response neither overwrites newer tokens nor restores a sig
   const rotated = { authorizationBinding: binding, tokens: { access_token: "access-3", token_type: "Bearer", refresh_token: "refresh-3" } } as McpOAuthSession;
   assert.equal(sessionWithRefreshedMcpTokens(rotated, binding, presented, late), undefined);
   assert.equal(sessionWithRefreshedMcpTokens({ authorizationBinding: binding }, binding, presented, late), undefined);
+});
+
+test("a rotation of a refresh token another client gave up on is restored only for the same grant, in time", () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const presented = { access_token: "access-1", refresh_token: "refresh-1", grantId: "grant-1" };
+  const rotation = { access_token: "access-2", token_type: "Bearer", refresh_token: "refresh-2" };
+  const signedIn = { authorizationBinding: binding, grantId: "grant-1", tokens: { access_token: "access-1", refresh_token: "refresh-1", token_type: "Bearer" } } as McpOAuthSession;
+  const at = 1_000_000;
+  // Another client's refresh with the same token was rejected; it removed the pair. The marker survives a store round trip.
+  const rejected = parseMcpOAuthSession(JSON.parse(JSON.stringify(sessionAfterTokenInvalidation(signedIn, presented, at))));
+  assert.equal(rejected.tokens, undefined);
+  assert.doesNotMatch(JSON.stringify(rejected), /refresh-1/u, "the rejected token itself is not kept");
+  const restored = sessionWithRefreshedMcpTokens(rejected, binding, presented, rotation, undefined, at + 1_000);
+  assert.equal(restored?.tokens?.refresh_token, "refresh-2");
+  assert.equal(restored?.grantId, "grant-1");
+  assert.equal(restored?.rejectedRefresh, undefined, "a restored rotation clears the marker");
+  // Too late, another refresh token, or another grant: the response is stale.
+  assert.equal(sessionWithRefreshedMcpTokens(rejected, binding, presented, rotation, undefined, at + MCP_REJECTED_REFRESH_RESTORE_MS + 1), undefined);
+  assert.equal(sessionWithRefreshedMcpTokens(rejected, binding, { ...presented, refresh_token: "refresh-0" }, rotation, undefined, at + 1_000), undefined);
+  assert.equal(sessionWithRefreshedMcpTokens(rejected, binding, { ...presented, grantId: "grant-0" }, rotation, undefined, at + 1_000), undefined);
+  assert.equal(sessionWithRefreshedMcpTokens({ ...rejected, grantId: "grant-2" }, binding, presented, rotation, undefined, at + 1_000), undefined);
+  // Once anything newer is stored, it wins.
+  const newer = sessionWithSavedMcpTokens(rejected, binding, { access_token: "access-9", token_type: "Bearer", refresh_token: "refresh-9" });
+  assert.equal(newer.rejectedRefresh, undefined);
+  assert.equal(sessionWithRefreshedMcpTokens(newer, binding, presented, rotation, undefined, at + 1_000), undefined);
+  // A malformed marker is dropped rather than making the stored sign-in unreadable.
+  assert.equal(parseMcpOAuthSession({ ...rejected, rejectedRefresh: { refreshTokenHash: "nope", at } }).rejectedRefresh, undefined);
 });
 
 test("a 403 insufficient_scope on another path of the service origin is remembered for the server", async () => {

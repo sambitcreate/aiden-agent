@@ -4,7 +4,7 @@ import {
   type OAuthDiscoveryState,
   type OAuthTokens,
 } from "@earendil-works/pi-mcp/oauth";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 export interface McpOAuthSession {
   /** Normalized protected-resource URL this registration and tokens belong to. */
@@ -20,6 +20,36 @@ export interface McpOAuthSession {
    * access/refresh token pair currently represents it.
    */
   grantId?: string;
+  /**
+   * The refresh token a background connection saw rejected (`invalid_grant`)
+   * and removed, as a hash. Another client (a second CLI process) may have
+   * presented the same token a moment earlier and received its rotation; its
+   * late save may restore the new tokens while nothing newer is stored. See
+   * `sessionWithRefreshedMcpTokens`.
+   */
+  rejectedRefresh?: McpRejectedRefresh;
+}
+
+export interface McpRejectedRefresh {
+  /** SHA-256 (hex) of the rejected refresh token. */
+  refreshTokenHash: string;
+  /** The grant the rejected tokens belonged to. */
+  grantId?: string;
+  /** When the tokens were removed (ms since the epoch). */
+  at: number;
+}
+
+/** The tokens a provider last read or received, and the grant they belonged to. */
+export type McpObservedTokens = Pick<OAuthTokens, "access_token" | "refresh_token"> & { grantId?: string };
+
+/**
+ * How long after a rejected refresh a concurrent rotation of the same refresh
+ * token may still be restored. A token response older than this is stale.
+ */
+export const MCP_REJECTED_REFRESH_RESTORE_MS = 5 * 60_000;
+
+function refreshTokenHash(refreshToken: string): string {
+  return createHash("sha256").update(refreshToken).digest("hex");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -44,6 +74,18 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
   }
   if (session.grantId !== undefined && (typeof session.grantId !== "string" || !session.grantId)) {
     throw new Error("MCP OAuth grant id is malformed.");
+  }
+  if (session.rejectedRefresh !== undefined) {
+    const marker = session.rejectedRefresh;
+    // Advisory only: a malformed marker is dropped rather than failing the session.
+    if (
+      !isRecord(marker) ||
+      typeof marker.refreshTokenHash !== "string" || !/^[0-9a-f]{64}$/u.test(marker.refreshTokenHash) ||
+      (marker.grantId !== undefined && (typeof marker.grantId !== "string" || !marker.grantId)) ||
+      typeof marker.at !== "number" || !Number.isFinite(marker.at)
+    ) {
+      delete session.rejectedRefresh;
+    }
   }
   if (session.clientInformation !== undefined) {
     if (
@@ -183,8 +225,9 @@ export function sessionWithSavedMcpTokens(
   requestedScope?: string,
 ): McpOAuthSession {
   const grantedScope = tokens.scope || requestedScope || session.tokens?.scope || session.grantedScope;
+  const { rejectedRefresh: _supersededByNewTokens, ...rest } = session;
   return {
-    ...session,
+    ...rest,
     authorizationBinding: binding,
     tokens,
     ...(grantedScope ? { grantedScope } : {}),
@@ -192,21 +235,45 @@ export function sessionWithSavedMcpTokens(
 }
 
 /**
+ * Whether a refresh that presented `observed` may restore its response into a
+ * session whose tokens a concurrent client removed after its own attempt with
+ * the same refresh token was rejected (the server had just rotated it for
+ * this client). Only while nothing newer is stored, for the same grant, and
+ * within the restore window. A sign-out clears the whole session and a
+ * re-authorization mints a new grant, so neither leaves a matching marker.
+ */
+function mayRestoreRejectedRefresh(session: McpOAuthSession, observed: McpObservedTokens, nowMs: number): boolean {
+  const marker = session.rejectedRefresh;
+  return Boolean(
+    marker && !session.tokens && observed.refresh_token &&
+    marker.refreshTokenHash === refreshTokenHash(observed.refresh_token) &&
+    marker.grantId === observed.grantId && session.grantId === observed.grantId &&
+    nowMs >= marker.at && nowMs - marker.at <= MCP_REJECTED_REFRESH_RESTORE_MS,
+  );
+}
+
+/**
  * Compare-and-set for tokens a background refresh returned. The refresh
  * presented the tokens this client last observed; if the stored pair has since
  * changed (another client rotated, re-authorized or signed out), the response
- * is older than what is persisted and must not replace it. Returns undefined
- * when the stored session should be kept as is.
+ * is older than what is persisted and must not replace it. The one exception:
+ * a concurrent client presented the same refresh token after this one, was
+ * rejected because the server had already rotated it for this refresh, and
+ * removed the pair; this response is then the grant's only live tokens and
+ * is restored (see `mayRestoreRejectedRefresh`). Returns undefined when the
+ * stored session should be kept as is.
  */
 export function sessionWithRefreshedMcpTokens(
   session: McpOAuthSession,
   binding: string,
-  observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined,
+  observed: McpObservedTokens | undefined,
   tokens: OAuthTokens,
   requestedScope?: string,
+  nowMs: number = Date.now(),
 ): McpOAuthSession | undefined {
   const stored = session.tokens;
-  if (observed && (stored?.access_token !== observed.access_token || stored?.refresh_token !== observed.refresh_token)) {
+  if (observed && (stored?.access_token !== observed.access_token || stored?.refresh_token !== observed.refresh_token) &&
+      !mayRestoreRejectedRefresh(session, observed, nowMs)) {
     return undefined;
   }
   return sessionWithSavedMcpTokens(session, binding, tokens, requestedScope);
@@ -322,7 +389,8 @@ export function clearMcpStepUpScope(serviceUrl: string | undefined): void {
  */
 export function sessionAfterTokenInvalidation(
   session: McpOAuthSession,
-  observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined,
+  observed: McpObservedTokens | undefined,
+  nowMs: number = Date.now(),
 ): McpOAuthSession | undefined {
   const stored = session.tokens;
   if (!stored) return undefined;
@@ -332,6 +400,17 @@ export function sessionAfterTokenInvalidation(
   const next = structuredClone(session);
   if (stored.scope) next.grantedScope = stored.scope;
   delete next.tokens;
+  // Remember which refresh token was given up on, so a concurrent client's
+  // rotation of that same token can still land (sessionWithRefreshedMcpTokens).
+  if (stored.refresh_token) {
+    next.rejectedRefresh = {
+      refreshTokenHash: refreshTokenHash(stored.refresh_token),
+      ...(session.grantId ? { grantId: session.grantId } : {}),
+      at: nowMs,
+    };
+  } else {
+    delete next.rejectedRefresh;
+  }
   return next;
 }
 

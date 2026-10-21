@@ -48,6 +48,7 @@ import {
   sessionWithRefreshedMcpTokens,
   sessionWithSavedMcpTokens,
   usableMcpClientInformation,
+  type McpObservedTokens,
   type McpOAuthSession,
   type McpOAuthSignInState,
 } from "./mcp-oauth-session.js";
@@ -162,8 +163,8 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
   private readonly authorization: McpOAuthAuthorizationFlow;
   private readonly server?: McpServer;
   private readonly metadataSignal?: AbortSignal;
-  /** The tokens this provider last handed to (or received from) the OAuth flow. */
-  private lastTokens?: Pick<OAuthTokens, "access_token" | "refresh_token">;
+  /** The tokens this provider last handed to (or received from) the OAuth flow, with their grant. */
+  private lastTokens?: McpObservedTokens;
   /**
    * The flow reads the PKCE verifier only to exchange an authorization code and
    * reads tokens() before a refresh, so this tells the two saves apart.
@@ -225,19 +226,41 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
   }
 
   /**
-   * Flag a background sign-in loss (only one that had a stored grant) and
-   * build the error. With `dropPresentedTokens`, the tokens this flow found
-   * and could not use are compare-and-deleted (the grant id stays), so the
-   * stored session reads "needs sign-in" after a restart too.
+   * Read-modify-write of the stored session: under the store's own lock when
+   * it has one (other processes share the CLI's store), so a compare-and-set
+   * or compare-and-delete decides on the session it replaces. `mutate`
+   * returns undefined to keep the session; the result is what was written.
    */
-  private async signInRequired(dropPresentedTokens = false): Promise<McpOAuthSignInRequiredError> {
+  private async mutateSession(mutate: (session: McpOAuthSession) => McpOAuthSession | undefined): Promise<McpOAuthSession | undefined> {
+    const update = this.transaction ? undefined : this.runtime.store.update;
+    if (!update) {
+      const next = mutate(await this.boundSession());
+      if (next) await this.saveSession(next);
+      return next;
+    }
+    let next: McpOAuthSession | undefined;
+    this.assertCanMutate();
+    await update.call(this.runtime.store, this.serverId, (current) => {
+      next = mutate(sessionMatchesMcpBinding(current, this.binding) ? current : { authorizationBinding: this.binding });
+      return next;
+    }, this.mutationIsCurrent);
+    return next;
+  }
+
+  /**
+   * Flag a background sign-in loss (only one that had a stored grant) and
+   * build the error. With `presented`, the tokens this flow found and could
+   * not use are compare-and-deleted (the grant id stays, and newer tokens a
+   * concurrent client saved survive), so the stored session reads "needs
+   * sign-in" after a restart too.
+   */
+  private async signInRequired(presented?: McpObservedTokens): Promise<McpOAuthSignInRequiredError> {
     let hadStoredSignIn = false;
     try {
       const session = await this.boundSession();
       hadStoredSignIn = Boolean(session.tokens || session.grantId);
-      if (dropPresentedTokens && this.mode === "background" && this.lastTokens) {
-        const next = sessionAfterTokenInvalidation(session, this.lastTokens);
-        if (next) await this.saveSession(next);
+      if (presented && this.mode === "background") {
+        await this.mutateSession((current) => sessionAfterTokenInvalidation(current, presented));
       }
     } catch {
       // A superseded or unreadable session is not reported as expired.
@@ -258,7 +281,7 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     if (this.mode === "verify") return new McpOAuthVerificationRejectedError();
     // The stored tokens were rejected and could not be renewed (no refresh
     // token, or a refresh answered without an OAuth error). A step-up keeps them.
-    return this.signInRequired(this.flowReadTokens);
+    return this.signInRequired(this.flowReadTokens ? this.lastTokens : undefined);
   }
 
   /**
@@ -344,9 +367,12 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     const session = await this.boundSession();
     const usable = usableMcpClientInformation(session.clientInformation);
     if (usable || this.mode !== "background") return usable;
-    // An expired client secret, or no registration at all: registering is an
-    // attended step. A metadata-document client stores no registration.
-    if (session.clientInformation || !this.runtime.clientMetadataUrl) throw await this.signInRequired();
+    // The stored registration's secret expired: the grant cannot be renewed
+    // until the user signs in again (registering is an attended step). Drop
+    // the tokens this connection holds, so needs-sign-in is stored durably.
+    if (session.clientInformation) throw await this.signInRequired(this.lastTokens ?? observedTokens(session));
+    // No registration at all. A metadata-document client stores none.
+    if (!this.runtime.clientMetadataUrl) throw await this.signInRequired();
     return undefined;
   }
 
@@ -361,9 +387,10 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     this.exchangingCode = false;
     this.refreshFailure = undefined;
     this.flowReadTokens = true;
-    const tokens = (await this.boundSession()).tokens;
+    const session = await this.boundSession();
+    const tokens = session.tokens;
     if (tokens) this.observeTokens?.(tokens);
-    this.lastTokens = tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
+    this.lastTokens = observedTokens(session);
     return tokens;
   }
 
@@ -386,24 +413,12 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     const merge = (session: McpOAuthSession) => exchangedCode
       ? sessionWithSavedMcpTokens(session, this.binding, tokens, this.authorization.requestedScope)
       : sessionWithRefreshedMcpTokens(session, this.binding, this.lastTokens, tokens, this.authorization.requestedScope);
-    let next: McpOAuthSession | undefined;
-    const update = this.transaction ? undefined : this.runtime.store.update;
-    if (update) {
-      // Compare and set under the store's own lock (other processes share it).
-      this.assertCanMutate();
-      await update.call(this.runtime.store, this.serverId, (current) => {
-        next = merge(sessionMatchesMcpBinding(current, this.binding) ? current : { authorizationBinding: this.binding }) ?? undefined;
-        return next;
-      }, this.mutationIsCurrent);
-    } else {
-      next = merge(await this.boundSession()) ?? undefined;
-      if (next) await this.saveSession(next);
-    }
+    const next = await this.mutateSession(merge);
     if (!next) {
       this.runtime.log.info(`Kept newer stored tokens for "${this.serverId}" over a late refresh response.`);
       return;
     }
-    this.lastTokens = { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
+    this.lastTokens = { access_token: tokens.access_token, refresh_token: tokens.refresh_token, grantId: next.grantId };
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
@@ -434,8 +449,8 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     this.assertCanMutate();
     if (scope === "all" || scope === "discovery") this.authorization.clearDiscovery();
     if (scope === "discovery") return;
-    const session = await this.boundSession();
     if (this.mode !== "background") {
+      const session = await this.boundSession();
       // The private replacement only: after `invalid_client` the flow
       // registers a new client within this sign-in.
       const next = structuredClone(session);
@@ -452,23 +467,37 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     if (scope === "all" || scope === "tokens") {
       // Compare-and-delete: newer tokens a concurrent client saved survive.
       // The grant id stays, so Settings reads "needs sign-in" after restarts.
-      const next = sessionAfterTokenInvalidation(session, this.lastTokens);
-      if (!next) return;
-      if (scope === "all") {
-        // `invalid_client`: the stored registration is dead too. A new one
-        // is registered only by an attended sign-in.
-        delete next.clientInformation;
-        delete next.codeVerifier;
-      }
-      await this.saveSession(next);
-      if (this.mutationIsCurrent()) this.runtime.status.authFailure(this.serverId, "invalid-grant");
+      const next = await this.mutateSession((current) => {
+        // With no tokens stored there is nothing newer to protect, but the
+        // dead registration (and any rejected-refresh marker) still goes.
+        const invalidated = sessionAfterTokenInvalidation(current, this.lastTokens) ??
+          (scope === "all" && !current.tokens && (current.clientInformation || current.codeVerifier || current.rejectedRefresh)
+            ? structuredClone(current)
+            : undefined);
+        if (invalidated && scope === "all") {
+          // `invalid_client`: the stored registration is dead too. A new one
+          // is registered only by an attended sign-in, and no concurrent
+          // rotation is restored onto it.
+          delete invalidated.clientInformation;
+          delete invalidated.codeVerifier;
+          delete invalidated.rejectedRefresh;
+        }
+        return invalidated;
+      });
+      if (next && this.mutationIsCurrent()) this.runtime.status.authFailure(this.serverId, "invalid-grant");
       return;
     }
-    const next = structuredClone(session);
+    const next = structuredClone(await this.boundSession());
     if (scope === "verifier") delete next.codeVerifier;
     if (scope === "client") delete next.clientInformation;
     await this.saveSession(next);
   }
+}
+
+/** The stored tokens of a session as a provider observes them, with their grant. */
+function observedTokens(session: McpOAuthSession): McpObservedTokens | undefined {
+  const tokens = session.tokens;
+  return tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token, grantId: session.grantId };
 }
 
 /** Provider for a background connection (stored tokens only). */

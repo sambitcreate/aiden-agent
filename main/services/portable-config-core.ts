@@ -1,5 +1,6 @@
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
+import { withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
@@ -331,22 +332,7 @@ export function isSkill(value: unknown): value is Skill {
   return isConfiguredSkill(value);
 }
 
-/**
- * Legacy HTTP+SSE MCP servers are no longer supported. Pre-1.0 there is no
- * migration: saved entries are dropped so the rest of the list stays valid.
- */
-export function withoutRetiredMcpServers(value: unknown): unknown {
-  return Array.isArray(value)
-    ? value.filter((entry) => !(isRecord(entry) && entry.transport === "sse"))
-    : value;
-}
-
-/** Ids of saved legacy SSE servers, whose stored credentials still need cleanup. */
-export function retiredMcpServerIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) =>
-    isRecord(entry) && entry.transport === "sse" && typeof entry.id === "string" && entry.id ? [entry.id] : []);
-}
+export { retiredMcpServerIds, withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 
 export function isMcpServerList(value: unknown): value is McpServer[] {
   return Array.isArray(value) && value.every(isMcpServer) && hasUniqueIds(value);

@@ -88,6 +88,12 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     expiresIn: 3600 as unknown,
     /** Issue no refresh tokens. */
     withoutRefreshTokens: false,
+    /**
+     * Runs once a refresh was granted (the presented refresh token is consumed
+     * and the new tokens are issued), before the response is sent; a returned
+     * promise holds the response until it settles.
+     */
+    beforeRefreshResponse: undefined as ((tokens: { access_token: string; refresh_token?: string }) => Promise<void> | void) | undefined,
   };
   let issued = 0;
   let base = "";
@@ -174,7 +180,10 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
       if (!owner || owner.clientId !== clientId) return fail(400, "invalid_grant");
       refreshTokens.delete(presented);
       record(200);
-      return json(res, 200, issueTokens(clientId!, owner.scope));
+      const tokens = issueTokens(clientId!, owner.scope);
+      const hold = control.beforeRefreshResponse?.(tokens);
+      if (!hold) return json(res, 200, tokens);
+      return void hold.then(() => json(res, 200, tokens), () => json(res, 200, tokens));
     }
     return fail(400, "unsupported_grant_type");
   };

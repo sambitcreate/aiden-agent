@@ -7,6 +7,8 @@
 import assert from "node:assert/strict";
 import * as net from "node:net";
 import test from "node:test";
+import { authorizeMcp } from "@earendil-works/pi-mcp/oauth";
+import { isBotConnectionReady } from "./bot-runtime-tools/suggest-connection.js";
 import { createMcpClient, connectMcpClient } from "./mcp-client.js";
 import { McpOAuthOperationGate } from "./mcp-oauth-operation.js";
 import {
@@ -21,6 +23,7 @@ import {
 import { mcpOAuthBindingForServer } from "./mcp-oauth-identity.js";
 import { mcpScopeTokens, parseMcpOAuthSession, type McpOAuthSession } from "./mcp-oauth-session.js";
 import { startFakeOAuthServer, type FakeOAuthServer, type FakeOAuthServerOptions } from "./mcp-oauth-test-server.js";
+import { getMcpPreset, serverFromPreset } from "./mcp-presets.js";
 import { McpLiveStatusRegistry } from "./mcp-status-events.js";
 import type { McpServer } from "./types.js";
 
@@ -32,9 +35,13 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-function memoryStore() {
+/**
+ * `atomic` adds the locked read-modify-write the CLI's shared store offers
+ * (`McpOAuthSessionStore.update`); without it saves read, then write.
+ */
+function memoryStore(atomic = false) {
   const entries = new Map<string, string>();
-  return {
+  const store = {
     entries,
     async get(serverId: string): Promise<McpOAuthSession> {
       return parseMcpOAuthSession(JSON.parse(entries.get(serverId) ?? "{}"));
@@ -47,16 +54,26 @@ function memoryStore() {
       entries.delete(serverId);
     },
   };
+  if (!atomic) return store;
+  return {
+    ...store,
+    async update(serverId: string, mutate: (current: McpOAuthSession) => McpOAuthSession | undefined, isCurrent: () => boolean = () => true): Promise<void> {
+      if (!isCurrent()) throw new Error("MCP OAuth credentials changed while this operation was in progress.");
+      // Read, decide and write with no await in between: nothing interleaves.
+      const next = mutate(parseMcpOAuthSession(JSON.parse(entries.get(serverId) ?? "{}")));
+      if (next) entries.set(serverId, JSON.stringify(next));
+    },
+  };
 }
 
 async function setup(
   t: test.TestContext,
   options: FakeOAuthServerOptions = {},
-  extra: { server?: Partial<McpServer>; clientMetadataUrl?: string } = {},
+  extra: { server?: Partial<McpServer>; clientMetadataUrl?: string; atomicStore?: boolean } = {},
 ) {
   const fake = await startFakeOAuthServer(options);
   t.after(() => fake.close());
-  const store = memoryStore();
+  const store = memoryStore(extra.atomicStore);
   const status = new McpLiveStatusRegistry();
   const opened: URL[] = [];
   const pages: Promise<string>[] = [];
@@ -327,8 +344,60 @@ test("an expired client secret sends a background connection to sign-in without 
   await h.store.set(h.server.id, { ...session, clientInformation: { ...session.clientInformation!, client_secret_expires_at: 1 } });
   h.fake.expireAccessTokens();
   const before = registrationAndTokenTraffic(h.fake);
+  // A Bot's connect card reads the stored sign-in the way the desktop wires it.
+  const notion = serverFromPreset(getMcpPreset("notion")!);
+  const botSeesConnected = () => isBotConnectionReady("notion", {
+    listServers: async () => [notion],
+    hasPresetKey: async () => false,
+    hasOAuthTokens: async () => (await readMcpOAuthSignInState(h.store, h.server.id, h.server)).authorized,
+  });
+  assert.equal(await botSeesConnected(), true);
   await assert.rejects(h.backgroundConnect(), McpOAuthSignInRequiredError);
   assert.deepEqual(registrationAndTokenTraffic(h.fake), before);
+  // After a restart only the store is left: it reads needs-sign-in, the Bot
+  // sees the connector as not connected, and a new connection stops at once.
+  assert.deepEqual(await h.signInState(), { authorized: false, needsSignIn: true, hasSession: true });
+  assert.equal((await h.session()).grantId, session.grantId, "the grant id stays");
+  assert.equal(await botSeesConnected(), false);
+  const requests = h.fake.seen.requests.length;
+  await assert.rejects(h.backgroundConnect(), McpOAuthSignInRequiredError);
+  assert.deepEqual(h.fake.seen.requests.slice(requests).map((request) => request.path), ["/mcp"]);
+});
+
+test("an expired client secret keeps newer tokens another client saved meanwhile", async (t) => {
+  const h = await setup(t, { issueSecret: true, requireSecret: true, authMethods: ["client_secret_post"] });
+  await h.authorize();
+  const signedIn = await h.session();
+  const expired = { ...signedIn, clientInformation: { ...signedIn.clientInformation!, client_secret_expires_at: 1 } };
+  await h.store.set(h.server.id, expired);
+  const provider = createBackgroundMcpOAuthProvider(h.runtime, h.server);
+  await provider.tokens();
+  // Another client stores newer tokens after this connection read its own.
+  const newer = { ...expired, tokens: { access_token: "newer-access", token_type: "Bearer", refresh_token: "newer-refresh" } };
+  await h.store.set(h.server.id, newer);
+  await assert.rejects(provider.clientInformation(), McpOAuthSignInRequiredError);
+  assert.deepEqual(await h.session(), newer);
+});
+
+test("invalid_client with no tokens left still drops the dead registration and the rejected-refresh marker", async (t) => {
+  const h = await setup(t, { issueSecret: true, requireSecret: true, authMethods: ["client_secret_post"] });
+  await h.authorize();
+  h.fake.expireAccessTokens();
+  h.fake.revokeRefreshTokens();
+  // invalid_grant first: the tokens go, the registration and a marker stay.
+  await assert.rejects(h.backgroundConnect(), McpOAuthSignInRequiredError);
+  const afterGrant = await h.session();
+  assert.equal(afterGrant.tokens, undefined);
+  assert.ok(afterGrant.clientInformation && afterGrant.rejectedRefresh);
+  // Then the server rejects the client itself.
+  const provider = createBackgroundMcpOAuthProvider(h.runtime, h.server);
+  await provider.tokens();
+  await provider.invalidateCredentials("all");
+  const session = await h.session();
+  assert.equal(session.clientInformation, undefined);
+  assert.equal(session.rejectedRefresh, undefined);
+  assert.equal(session.grantId, afterGrant.grantId, "the grant id stays, so Settings still reads needs sign-in");
+  assert.deepEqual(await h.signInState(), { authorized: false, needsSignIn: true, hasSession: true });
 });
 
 test("a pre-registered client signs in without registration using its secret", async (t) => {
@@ -488,3 +557,99 @@ test("a negative token lifetime is dropped instead of making the stored sign-in 
   assert.equal(session.tokens.expires_in, undefined);
   assert.equal((await h.signInState()).authorized, true);
 });
+
+/**
+ * Hold the next refresh response after the server rotated the refresh token.
+ * Resolves with the rotated tokens once the rotation happened; `release` sends
+ * the held response.
+ */
+function holdNextRefresh(fake: FakeOAuthServer) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const rotated = new Promise<{ access_token: string; refresh_token?: string }>((resolve) => {
+    fake.control.beforeRefreshResponse = (tokens) => {
+      fake.control.beforeRefreshResponse = undefined;
+      resolve(tokens);
+      return released;
+    };
+  });
+  return { rotated, release: () => release() };
+}
+
+/**
+ * Client B as another process sees it: Pi's own refresh flow over a fetch that
+ * shares no in-process refresh flight with client A.
+ */
+function otherProcessRefresh(h: Awaited<ReturnType<typeof setup>>) {
+  return authorizeMcp(createBackgroundMcpOAuthProvider(h.runtime, h.server), { serverUrl: h.server.url!, fetch: globalThis.fetch });
+}
+
+function refreshVerdicts(fake: FakeOAuthServer) {
+  return fake.seen.tokenRequests.filter((request) => request.grant === "refresh_token").map((request) => [request.status, request.error ?? null]);
+}
+
+for (const atomicStore of [false, true]) {
+  const storeKind = atomicStore ? "a locked shared store" : "a read-then-write store";
+
+  test(`a refresh rejected because another client just rotated the token keeps that rotation (${storeKind})`, async (t) => {
+    const h = await setup(t, {}, { atomicStore });
+    await h.authorize();
+    const signedIn = await h.session();
+    h.fake.expireAccessTokens();
+    // A presents the stored refresh token; the server rotates it and the response is held.
+    const held = holdNextRefresh(h.fake);
+    const a = h.backgroundConnect();
+    const rotated = await held.rotated;
+    // B presents the same, now consumed, refresh token: invalid_grant, and the pair is removed.
+    await assert.rejects(otherProcessRefresh(h), McpOAuthSignInRequiredError);
+    assert.deepEqual(refreshVerdicts(h.fake), [[200, null], [400, "invalid_grant"]]);
+    assert.equal((await h.session()).tokens, undefined);
+    // A's rotation arrives and lands: it is the grant's only live refresh token.
+    held.release();
+    assert.equal((await a).length, 1);
+    const session = await h.session();
+    assert.equal(session.tokens?.refresh_token, rotated.refresh_token);
+    assert.equal(session.grantId, signedIn.grantId);
+    assert.deepEqual(await h.signInState(), { authorized: true, needsSignIn: false, hasSession: true });
+    // Both clients connect again on the rotated grant, without another refresh or sign-in.
+    assert.equal((await h.backgroundConnect()).length, 1);
+    assert.equal(await otherProcessRefresh(h), "AUTHORIZED");
+    assert.equal((await h.backgroundConnect()).length, 1);
+    assert.equal(refreshVerdicts(h.fake).length, 3, "B's flow refreshed the restored grant once");
+    assert.equal(h.opened.length, 1, "no new browser sign-in");
+  });
+
+  test(`a refresh that arrives after a sign-out does not sign back in (${storeKind})`, async (t) => {
+    const h = await setup(t, {}, { atomicStore });
+    await h.authorize();
+    h.fake.expireAccessTokens();
+    const held = holdNextRefresh(h.fake);
+    const a = h.backgroundConnect();
+    await held.rotated;
+    await assert.rejects(otherProcessRefresh(h), McpOAuthSignInRequiredError);
+    // Sign out from another process (this process's operation gate never hears of it).
+    await h.store.clear(h.server.id);
+    held.release();
+    await assert.rejects(a);
+    assert.deepEqual(await h.signInState(), { authorized: false, needsSignIn: false, hasSession: false });
+  });
+
+  test(`a refresh that arrives after a re-authorization keeps the new grant (${storeKind})`, async (t) => {
+    const h = await setup(t, {}, { atomicStore });
+    await h.authorize();
+    h.fake.expireAccessTokens();
+    const held = holdNextRefresh(h.fake);
+    const a = h.backgroundConnect();
+    const rotated = await held.rotated;
+    await assert.rejects(otherProcessRefresh(h), McpOAuthSignInRequiredError);
+    // Authorize again from another process (its own operation gate).
+    await authorizeMcpServerWithRuntime({ ...h.runtime, gate: new McpOAuthOperationGate() }, h.server);
+    const reauthorized = await h.session();
+    held.release();
+    await a.catch(() => undefined);
+    const session = await h.session();
+    assert.equal(session.grantId, reauthorized.grantId);
+    assert.deepEqual(session.tokens, reauthorized.tokens);
+    assert.notEqual(session.tokens?.refresh_token, rotated.refresh_token);
+  });
+}

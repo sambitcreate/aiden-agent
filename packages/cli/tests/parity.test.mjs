@@ -1235,6 +1235,86 @@ test("MCP remove and endpoint edits delete the server's stored credential", asyn
   assert.equal(await credentials.read(api.mcpCredentialId(moved)), undefined);
 });
 
+function retiredSseInventory() {
+  const local = { id: "local", name: "Local", enabled: true, transport: "stdio", command: "example" };
+  const hex = "ab".repeat(16);
+  const sse = [
+    { id: "old-disabled", name: "Old disabled", enabled: false, transport: "sse", url: "https://old.example/sse" },
+    { id: "old-oauth", name: "Old OAuth", enabled: true, transport: "sse", url: "https://older.example/sse", oauth: true, oauthClientId: "client", oauthClientSecret: `aiden-secret:v1:${hex}` },
+  ];
+  return { local, sse, servers: [sse[0], local, sse[1]], secretCredential: `mcp-oauth-client-secret-${hex}` };
+}
+
+async function storeRetiredCredentials(dir, inventory) {
+  const credentials = api.insightCredentials(dir);
+  for (const server of inventory.sse) await credentials.write(api.mcpCredentialId(server), JSON.stringify({ tokens: { access_token: `token-${server.id}`, token_type: "Bearer" } }));
+  await credentials.write(inventory.secretCredential, "old-client-secret");
+  return credentials;
+}
+
+async function assertRetiredCredentialsRemoved(credentials, inventory) {
+  for (const server of inventory.sse) assert.equal(await credentials.read(api.mcpCredentialId(server)), undefined, `${server.id} sign-in removed`);
+  assert.equal(await credentials.read(inventory.secretCredential), undefined, "the retired client secret is removed");
+}
+
+test("retired SSE entries in aiden-mcp.json are dropped with their credentials, and the remaining servers load", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.listServers()).map(({ id }) => id), ["local"]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [inventory.local], "the pruned list is persisted");
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["local"]);
+  await api.mcpCommand(dir, ["remove", "local"]);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
+test("retired SSE entries in a legacy mcp.json migrate away with their credentials", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify(inventory.servers));
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), [inventory.local]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [inventory.local]);
+  assert.equal(existsSync(join(dir, "mcp.json")), false);
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  await api.mcpCommand(dir, ["remove", "local"]);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
+test("a retired SSE entry whose credentials could not be deleted stays until a later read deletes them", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  const credentialDir = join(dir, "credentials");
+  chmodSync(credentialDir, 0o500);
+  t.after(() => { if (existsSync(credentialDir)) chmodSync(credentialDir, 0o700); });
+  const { value, stderr } = await captureStderr(() => api.mcpCommand(dir, ["list"]));
+  assert.deepEqual(value.map(({ id }) => id), ["local"], "the remaining servers still load");
+  assert.match(stderr, /could not remove retired SSE MCP servers yet/u);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), inventory.servers, "the entries wait for their cleanup");
+  // An ordinary write in the meantime keeps them too.
+  writeFileSync(join(dir, "other.json"), JSON.stringify({ id: "other", name: "Other", enabled: false, transport: "stdio", command: "example" }));
+  await captureStderr(() => api.mcpCommand(dir, ["add", join(dir, "other.json")]));
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).filter(({ transport }) => transport === "sse"), inventory.sse);
+  chmodSync(credentialDir, 0o700);
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["local", "other"]);
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).map(({ id }) => id), ["local", "other"]);
+});
+
+test("a remaining server that shares a retired entry's sign-in and client secret keeps them", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  const [, retired] = inventory.sse;
+  const live = { ...retired, transport: "http", name: "Same endpoint over HTTP" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [retired, live]);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id, transport }) => [id, transport]), [[live.id, "http"]]);
+  assert.ok(await credentials.read(api.mcpCredentialId(live)), "the shared sign-in stays");
+  assert.equal(await credentials.read(inventory.secretCredential), "old-client-secret", "the shared client secret stays");
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [live]);
+});
+
 test("MCP migration skips a malformed native mcp.json with a warning and leaves it untouched", async (t) => {
   const dir = temporary(t), legacy = join(dir, "mcp.json");
   writeFileSync(legacy, "{ not json");

@@ -31,9 +31,10 @@ import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
 import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "../../../main/services/mcp-tool-inventory.js";
-import { JsonStore, splitArgs } from "./state.ts";
+import { JsonStore, readJson, splitArgs } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
 
+import { isRetiredMcpServerEntry, withoutRetiredMcpServers } from "../../../renderer/shared/mcp-retired-servers.js";
 import { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
 
 const migratedDirectories = new Set<string>();
@@ -43,10 +44,78 @@ export function migrateAidenMcpConfigOnce(dir: string): void {
   migrateAidenMcpConfig(dir, validateMcpServer);
   migratedDirectories.add(dir);
 }
+
+/**
+ * aiden-mcp.json. Retired (SSE) entries are left out of every read. Ordinary
+ * writes keep them in the file; only `prune` drops them, after their stored
+ * credentials are gone, so none is ever orphaned.
+ */
+class AidenMcpServerStore extends JsonStore<McpServer[]> {
+  private pruning = false;
+  override async load(): Promise<McpServer[]> { return withoutRetiredMcpServers(await super.load()); }
+  /** The file as saved, retired entries included. */
+  async loadSaved(): Promise<unknown> { return readJson<unknown>(this.file, []); }
+  override update<R>(mutation: (draft: McpServer[]) => R | Promise<R>, isCurrent?: () => boolean, replace = false): Promise<R> {
+    const pruning = this.pruning;
+    return super.update(async (draft) => {
+      const result = await mutation(draft);
+      if (!pruning) {
+        const saved = await this.loadSaved();
+        const retired = Array.isArray(saved) ? saved.filter(isRetiredMcpServerEntry) as McpServer[] : [];
+        if (replace) return (Array.isArray(result) ? [...result, ...retired] : result) as R;
+        draft.push(...retired);
+      }
+      return result;
+    }, isCurrent, replace);
+  }
+  /** Under the lease: `cleanup` sees the remaining servers; the retired entries leave the file once it succeeded. */
+  prune(cleanup: (live: McpServer[]) => Promise<void>): Promise<void> {
+    this.pruning = true;
+    try { return this.update(cleanup); } finally { this.pruning = false; }
+  }
+}
+
 export const storeFor = (dir: string) => {
   migrateAidenMcpConfigOnce(dir);
-  return new JsonStore<McpServer[]>(join(dir, "aiden-mcp.json"), []);
+  return new AidenMcpServerStore(join(dir, "aiden-mcp.json"), []);
 };
+
+/**
+ * Remove retired (SSE) entries from aiden-mcp.json and delete their stored
+ * OAuth sign-in and client secret, as `mcp remove` would (the desktop's
+ * `cleanupRetiredMcpServerCredentials`). It runs under the configuration
+ * lease, so a concurrent `mcp add` cannot slip in a server whose credentials
+ * it would delete; credentials a remaining server shares are kept. The pruned
+ * list is written only after every delete succeeded, so a failure leaves the
+ * entries in the file and the next read tries again; it never blocks the
+ * remaining servers.
+ */
+async function pruneRetiredMcpServers(agentDir: string): Promise<void> {
+  const store = storeFor(agentDir);
+  const saved = await store.loadSaved();
+  if (!Array.isArray(saved) || !saved.some(isRetiredMcpServerEntry)) return;
+  try {
+    await store.prune(async (live) => {
+      const current = await store.loadSaved();
+      const retired = Array.isArray(current) ? current.filter(isRetiredMcpServerEntry) : [];
+      const credentials = insightCredentials(agentDir);
+      const liveCredentialIds = new Set(live.map((server) => mcpCredentialId(server)));
+      const liveSecrets = new Set(live.map(({ oauthClientSecret }) => oauthClientSecret));
+      for (const entry of retired) {
+        const server = entry as Partial<McpServer>;
+        if (typeof server.id !== "string" || !server.id) continue;
+        if (!live.some(({ id }) => id === server.id)) oauthOperations.invalidate(server.id);
+        const credentialId = mcpCredentialId(server as McpServer);
+        if (!liveCredentialIds.has(credentialId)) await credentials.delete(credentialId);
+        const marker = server.oauthClientSecret;
+        if (isMcpFieldSecretMarker(marker) && !liveSecrets.has(marker)) await credentials.delete(clientSecretCredentialId(marker!));
+      }
+    });
+  } catch (error) {
+    process.stderr.write(`aiden: could not remove retired SSE MCP servers yet (${errorText(error)}).\n`);
+  }
+}
+
 export function validateMcpServer(value: unknown): McpServer {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid MCP server.");
   const server = value as McpServer;
@@ -242,6 +311,7 @@ async function deleteClientSecret(agentDir: string, server: McpServer | undefine
 
 export async function mcpCommand(agentDir: string, args: string[]) {
   const [action = "list", value] = args, store = storeFor(agentDir);
+  await pruneRetiredMcpServers(agentDir);
   if (action === "presets") return MCP_PRESETS;
   if (action === "list") return (await store.load()).map(({ headers: _headers, env: _env, oauthClientSecret, ...server }) => ({ ...server, ...(oauthClientSecret === undefined ? {} : { hasOAuthClientSecret: true }) }));
   if (action === "login") {
@@ -351,6 +421,7 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
   const incarnation = createCredentialIncarnations(agentDir);
   let closed = false;
   async function listServers() {
+    await pruneRetiredMcpServers(agentDir);
     const servers = (await storeFor(agentDir).load()).map(validateMcpServer);
     if (servers.length > 32 || new Set(servers.map(({ id }) => id)).size !== servers.length) throw new Error("MCP inventory exceeds 32 unique servers.");
     return servers;
