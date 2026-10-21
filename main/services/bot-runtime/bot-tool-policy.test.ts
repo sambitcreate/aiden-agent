@@ -88,7 +88,26 @@ test("a sign-in needs the Browser in the Bot's access and a person there to sign
   }
   assert.deepEqual(await botToolVerdict(SIGN_IN, bareFacts(), {}), {
     allowed: false,
-    reason: "Sign-in needs the Browser in this Bot's access.",
+    reason: "Sign-in needs the Browser or a computer in this Bot's access.",
   });
   assert.equal(await botToolApprovalSummary(SIGN_IN, { site: "github.com" }, browserFacts()), undefined, "the card is the person's answer");
+});
+
+test("a Bot with its own computer and no browser can ask for a sign-in on the computer, on attended turns only", async () => {
+  const facts = bareFacts();
+  const computer = (hasComputer: boolean): BotToolFacts => ({
+    ...facts,
+    hasComputer,
+    authority: { ...facts.authority, otherCapabilities: [{ kind: "computer" }] } as unknown as BotRuntimeEffectiveAuthority,
+  });
+  for (const [label, requestIds, attended] of RUNS) {
+    if (requestIds.includes(INTRO)) continue;
+    const turns = requestIds.map(botTurnOf);
+    const turn = { telegram: turns.some((each) => each.telegram), routine: turns.some((each) => each.routine) };
+    assert.equal((await botToolVerdict(SIGN_IN, computer(true), turn)).allowed, attended, label);
+  }
+  // The computer in its access but none given yet (or Bot computers off on this Mac).
+  assert.equal((await botToolVerdict(SIGN_IN, computer(false), {})).allowed, false);
+  // A computer without the capability is not the Bot's to use.
+  assert.equal((await botToolVerdict(SIGN_IN, { ...bareFacts(), hasComputer: true }, {})).allowed, false);
 });

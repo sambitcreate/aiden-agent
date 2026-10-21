@@ -143,9 +143,10 @@ export function BotRules({ bot }: { bot: RuleBot }) {
         Rules don’t cover shell commands; the Shell setting does, and commands in a Bot’s own computer follow its Bot computer access.
       </Text>
       {botComputers ? (
-        // The VNC lane's known gap (plan §8.7): clicks are coordinates, so rules read the Bot's own words.
+        // The VNC lane's known gap (plan §8.7): clicks are coordinates, so rules read the Bot's own words,
+        // and with element control (the guest driver lane) the button or field it acts on too.
         <Text as="p" variant="small" color="secondary" className="mt-1 px-4 text-pretty">
-          On {bot.name}’s own computer, rules read {bot.name}’s stated intent; {bot.name} is told to hand off passwords and payments.
+          On {bot.name}’s own computer, rules read {bot.name}’s stated intent, and with element control the button or field it acts on; {bot.name} is told to hand off passwords and payments.
         </Text>
       ) : null}
       <BotRuleEditor

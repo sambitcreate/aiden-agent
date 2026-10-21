@@ -149,11 +149,12 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
     return verdict(turn.telegram !== true && turn.routine !== true, "Hand-offs are off for this Bot.");
   }
   if (name === BOT_SIGN_IN_TOOL_NAME) {
-    // The person signs in in the Bot's own browser, so the Bot needs it, and
-    // someone there to sign in.
+    // The person signs in in the Bot's own browser or on its own computer, so
+    // the Bot needs one of them, and someone there to sign in.
+    const where = hasCapability(facts, "browser") || (hasCapability(facts, "computer") && facts.hasComputer);
     return verdict(
-      hasCapability(facts, "browser") && turn.telegram !== true && turn.routine !== true,
-      "Sign-in needs the Browser in this Bot's access.",
+      where && turn.telegram !== true && turn.routine !== true,
+      "Sign-in needs the Browser or a computer in this Bot's access.",
     );
   }
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) {

@@ -10,7 +10,13 @@ import {
   type BotComputersStatus,
   type BotComputerStatus,
 } from "../../../renderer/shared/bot-computers.js";
+import { CUA_DRIVER_UPSTREAM_PIN } from "../computer-use/binary.js";
+import { CUA_DRIVER_VERSION } from "../computer-use/contract.js";
+import type { CuaDriverHostFactory, CuaDriverSessionLike } from "../computer-use/controller.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
+import { createGuestCuaDriverHostFactory, guestDriverSshBridge, type GuestDriverBridgeCommand } from "./guest-driver.js";
+import { guestDriverRestartScript, installGuestDriver, type GuestDriverLocation } from "./guest-driver-install.js";
+import { guestDriverPermissions, guestDriverReady, probeGuestDriver, type GuestDriverPermissions } from "./guest-driver-readiness.js";
 import { lumeEnvironment, runLume, type LumeCommand, type LumeInvocation, type LumeRunResult } from "./lume-cli.js";
 import { classifyLumeError, isLoopbackHost, parseLumeVmInfo, parseLumeVmList, type LumeErrorKind, type LumeVmInfo } from "./lume-output.js";
 import { buildBaseVm, generateGuestPassword, type ProvisionContext } from "./provision.js";
@@ -30,14 +36,21 @@ import {
   guestSshPaths,
   runGuestCommand as runSshCommand,
   writeKnownHost,
+  type GuestSshTarget,
   type ProcessRunner,
 } from "./ssh.js";
-import { createBotComputersStore, type BotComputerRecord, type BotComputersState } from "./store.js";
+import {
+  createBotComputersStore,
+  type BotComputerGuestDriverRecord,
+  type BotComputerRecord,
+  type BotComputersState,
+} from "./store.js";
 import {
   BOT_COMPUTER_GUEST_PASSWORD_SECRET,
   BOT_COMPUTER_SECRET_FAMILY,
   BotComputerError,
   type BotComputerConnection,
+  type BotComputerGuestCommandResult,
   type BotComputerHost,
   type BotComputerStartReason,
   type BotComputerStopReason,
@@ -80,6 +93,20 @@ export interface BotComputerHostDependencies {
   vncExposed?(port: number): Promise<boolean>;
   control?: BotComputerControlRegistry;
   activity?: BotComputerActivity;
+  /**
+   * The vendored cua-driver to copy into a base, verified against Aiden's pin
+   * (the guest driver lane). Without it, or when it can't be resolved, bases
+   * are made for the VNC lane only.
+   */
+  guestDriverExecutable?(signal: AbortSignal): Promise<string>;
+  /** cua-driver's licence notice from the same helper bundle, copied beside the driver in the guest. */
+  guestDriverNotice?(): string | undefined;
+  /** The guest lane's host factory over a bridge; tests swap in the fake driver. */
+  guestDriverHost?(bridge: () => Promise<GuestDriverBridgeCommand>): CuaDriverHostFactory;
+  /** How long setup waits for the person's grants before it finishes without element control. */
+  permissionWaitMs?: number;
+  /** Gap between grant checks while setup waits. */
+  permissionPollMs?: number;
   /** Setup finished: the Bot runtime may now offer computers. */
   onSetupReady?(): void;
   /** Remove everything finished. */
@@ -194,6 +221,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   let diskCache: { at: number; bytes: number } | undefined;
   /** A base being built boots as a VM too, so it holds one of the running places. */
   let baseHoldsSlot = false;
+  /** The base while setup waits for the person's grants: Settings shows its screen. */
+  let baseViewConnection: BotComputerConnection | undefined;
+  let permissionWait: { check(): void; skip(): void } | undefined;
+  /** Why the last element-control attempt ended without it; shown with the ready base. */
+  let elementControlNote: string | undefined;
+  const guestHostFor =
+    deps.guestDriverHost ?? ((bridge: () => Promise<GuestDriverBridgeCommand>) => createGuestCuaDriverHostFactory({ bridge }));
 
   const emit = (botId?: string) => {
     diskCache = undefined;
@@ -639,11 +673,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (!support.ok) return { kind: "unsupported", reason: support.reason };
     if (setupState) return setupState;
     if (state.setup.baseBuild) {
+      const elementControl = guestDriverReady(state.setup.guestDriver);
       return {
         kind: "ready",
         baseVersion: state.setup.baseVersion ?? image.version,
         baseBuild: state.setup.baseBuild,
         updateAvailable: state.setup.baseBuild !== image.build,
+        elementControl,
+        ...(!elementControl && elementControlNote ? { elementControlNote } : {}),
       };
     }
     return { kind: "not_set_up" };
@@ -670,7 +707,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await sharedDirFor(botId);
     await deleteVm(vmName);
     await lumeOrThrow({ op: "clone", source: BOT_COMPUTER_BASE_VM, target: vmName }, 600_000, "Aiden couldn't make the computer from the base. Try again.");
-    return { vmName, baseBuild: state.setup.baseBuild ?? image.build, createdAt: now() };
+    // The clone is a copy of the base's disk, its guest driver and grants with it.
+    const guestDriver = state.setup.guestDriver;
+    return {
+      vmName,
+      baseBuild: state.setup.baseBuild ?? image.build,
+      createdAt: now(),
+      ...(guestDriver ? { guestDriver: { ...guestDriver } } : {}),
+    };
   }
 
   function provisionContext(
@@ -679,11 +723,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     publicKey: string,
     guestPassword: string | undefined,
     signal: AbortSignal,
+    guestDriver?: ProvisionContext["guestDriver"],
   ): ProvisionContext {
     const sshEnv = guestSshEnvironment(deps.env ?? process.env, dirs.home);
     return {
       signal,
       publicKey,
+      ...(guestDriver ? { guestDriver } : {}),
       lumeSsh: (command, timeoutSeconds) =>
         lume({ op: "ssh", name: vmName, command, timeoutSeconds }, (timeoutSeconds + 15) * 1_000, signal),
       guestSsh: (command, options) =>
@@ -693,16 +739,231 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           { timeoutMs: options.timeoutMs, maxOutputBytes: 64 * 1024, signal, stdin: options.stdin },
           { paths: sshPaths, env: sshEnv, sshCommand: deps.sshCommand, run: deps.runProcess },
         ),
-      stopBase: async () => {
-        const result = await lume({ op: "stop", name: vmName, timeoutSeconds: 120 }, 180_000, signal);
-        if (result.exitCode !== 0) throw new BotComputerError("start_failed", "The base computer didn't shut down.");
-      },
+      stopBase: () => shutDownBase(vmName, signal),
       writeKnownHost: (line) => writeKnownHost(sshPaths, line),
       // Every base gets the one stored password, so the computers made from an
       // older base (and the working base, if this build fails) keep a known one.
       newPassword: () => guestPassword ?? generateGuestPassword(),
       storePassword: (password) => deps.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, password),
     };
+  }
+
+  /** A clean guest shutdown, so the disk every clone copies is consistent. */
+  async function shutDownBase(vmName: string, signal?: AbortSignal): Promise<void> {
+    const result = await lume({ op: "stop", name: vmName, timeoutSeconds: 120 }, 180_000, signal);
+    if (result.exitCode !== 0) throw new BotComputerError("start_failed", "The base computer didn't shut down.");
+  }
+
+  const setupCancelled = () => new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+
+  function guestSshTo(target: GuestSshTarget, signal: AbortSignal) {
+    return (command: string, options: { stdin?: string; stdinFile?: string; timeoutMs: number }): Promise<BotComputerGuestCommandResult> =>
+      runSshCommand(
+        target,
+        command,
+        { timeoutMs: options.timeoutMs, maxOutputBytes: 64 * 1024, signal, stdin: options.stdin, stdinFile: options.stdinFile },
+        { paths: sshPaths, env: guestSshEnvironment(deps.env ?? process.env, dirs.home), sshCommand: deps.sshCommand, run: deps.runProcess },
+      );
+  }
+
+  /** One guest driver session to a running VM, and the way to close it. */
+  async function openGuestDriver(
+    target: GuestSshTarget,
+    location: GuestDriverLocation,
+    signal: AbortSignal,
+  ): Promise<{ session: CuaDriverSessionLike; close(): Promise<void> }> {
+    const factory = guestHostFor(async () =>
+      guestDriverSshBridge(target, location, {
+        paths: sshPaths,
+        env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+        sshCommand: deps.sshCommand,
+      }),
+    );
+    const driverHost = await factory(signal);
+    try {
+      return { session: await driverHost.createSession(signal), close: () => driverHost.shutdown() };
+    } catch (error) {
+      await driverHost.shutdown().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  type GuestStep = "guest_driver" | "permissions";
+
+  /**
+   * "Allow Accessibility and Screen Recording for cua-driver": raise the
+   * guest's prompts, show the base's screen in Settings, and check until both
+   * are on, the person skips, or the wait runs out. Then restart the daemon
+   * and probe. Only a pass is recorded; everything else keeps the VNC lane.
+   */
+  async function awaitGrants(
+    base: BotComputerConnection,
+    location: GuestDriverLocation,
+    password: string,
+    signal: AbortSignal,
+    show: (step: GuestStep, permissions?: GuestDriverPermissions) => void,
+  ): Promise<BotComputerGuestDriverRecord | undefined> {
+    const target: GuestSshTarget = { host: base.ip, user: BOT_COMPUTER_GUEST_USER };
+    let wake: (() => void) | undefined;
+    let skipped = false;
+    permissionWait = {
+      check: () => wake?.(),
+      skip: () => {
+        skipped = true;
+        wake?.();
+      },
+    };
+    baseViewConnection = base;
+    let open: { session: CuaDriverSessionLike; close(): Promise<void> } | undefined;
+    try {
+      let permissions: GuestDriverPermissions = { accessibility: false, screenRecording: false };
+      show("permissions", permissions);
+      open = await openGuestDriver(target, location, signal);
+      permissions = await guestDriverPermissions(open.session, { prompt: true, signal });
+      const deadline = now() + (deps.permissionWaitMs ?? 30 * 60_000);
+      while (!(permissions.accessibility && permissions.screenRecording)) {
+        show("permissions", permissions);
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", done);
+            wake = undefined;
+            resolve();
+          };
+          const timer = setTimeout(done, deps.permissionPollMs ?? 3_000);
+          wake = done;
+          signal.addEventListener("abort", done, { once: true });
+        });
+        if (signal.aborted) throw setupCancelled();
+        if (skipped) {
+          elementControlNote = "Element control was skipped, so Bots act on the screen only.";
+          return undefined;
+        }
+        if (now() > deadline) {
+          elementControlNote = "The permissions weren't allowed in time, so Bots act on the screen only.";
+          return undefined;
+        }
+        permissions = await guestDriverPermissions(open.session, { prompt: false, signal });
+      }
+      show("permissions", permissions);
+      await open.close();
+      open = undefined;
+      // A daemon that started before the grants can keep refusing captures until it restarts.
+      const restarted = await guestSshTo(target, signal)(guestDriverRestartScript(location), {
+        stdin: `${password}\n`,
+        timeoutMs: 30_000,
+      });
+      if (restarted.exitCode !== 0 || restarted.timedOut) {
+        throw new BotComputerError("start_failed", "The guest driver didn't restart.");
+      }
+      open = await openGuestDriver(target, location, signal);
+      const probe = await probeGuestDriver(open.session, signal);
+      if (!probe.ready) {
+        log(`The guest driver probe did not pass (${probe.reason}).`);
+        elementControlNote = "Aiden's helper in the base computer didn't pass its check, so Bots act on the screen only.";
+        return undefined;
+      }
+      elementControlNote = undefined;
+      return { version: CUA_DRIVER_VERSION, home: location.home, uid: location.uid };
+    } catch (error) {
+      if (signal.aborted) throw setupCancelled();
+      log("Waiting for the guest driver's permissions did not finish.", error);
+      elementControlNote = "Aiden couldn't check the permissions in the base computer, so Bots act on the screen only.";
+      return undefined;
+    } finally {
+      await open?.close().catch(() => undefined);
+      permissionWait = undefined;
+      baseViewConnection = undefined;
+      emit();
+    }
+  }
+
+  /**
+   * The guest driver lane for one running base: install, then the grants.
+   * Never fails the base: a failure leaves it on the VNC lane, with a note.
+   */
+  function guestDriverSetup(base: BotComputerConnection, signal: AbortSignal) {
+    const target: GuestSshTarget = { host: base.ip, user: BOT_COMPUTER_GUEST_USER };
+    let location: GuestDriverLocation | undefined;
+    let result: BotComputerGuestDriverRecord | undefined;
+    const show = (step: GuestStep, permissions?: GuestDriverPermissions) => {
+      setupState = { kind: "building_base", step, ...(permissions ? { permissions } : {}) };
+      emit();
+    };
+    const hooks: NonNullable<ProvisionContext["guestDriver"]> = {
+      async install(password) {
+        elementControlNote = undefined;
+        if (!deps.guestDriverExecutable) return;
+        show("guest_driver");
+        try {
+          const driverPath = await deps.guestDriverExecutable(signal);
+          const noticePath = deps.guestDriverNotice?.();
+          location = await installGuestDriver({
+            guestSsh: guestSshTo(target, signal),
+            driverPath,
+            ...(noticePath === undefined ? {} : { noticePath }),
+            pin: CUA_DRIVER_UPSTREAM_PIN,
+            password,
+            signal,
+          });
+        } catch (error) {
+          if (signal.aborted) throw setupCancelled();
+          log("Installing the guest driver did not finish; Bot computers act on the screen only.", error);
+          elementControlNote = "Aiden couldn't install its helper in the base computer, so Bots act on the screen only.";
+        }
+      },
+      async grant(password) {
+        if (location) result = await awaitGrants(base, location, password, signal, show);
+      },
+    };
+    return { hooks, result: () => result };
+  }
+
+  /** Element control for a ready base made without it: boot it once, install, wait for the grants, shut it down. */
+  async function performElementControlSetup(signal: AbortSignal): Promise<void> {
+    const state = await store.read();
+    if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+    if (guestDriverReady(state.setup.guestDriver)) return;
+    const password = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+    if (password === null || !/^[A-Za-z0-9]{16,128}$/u.test(password)) {
+      throw new BotComputerError("start_failed", "Aiden doesn't have the base computer's password. Update the base to set up element control.");
+    }
+    setupState = { kind: "building_base", step: "guest_driver" };
+    emit();
+    let record: BotComputerGuestDriverRecord | undefined;
+    await acquireBaseSlot(signal);
+    try {
+      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+      await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
+      const { info, password: vncPassword } = await runAndWait(BOT_COMPUTER_BASE_VM, dirs.baseShared, "The base", signal, true);
+      const base: BotComputerConnection = {
+        vmName: BOT_COMPUTER_BASE_VM,
+        ip: info.ip,
+        vnc: { host: "127.0.0.1", port: info.vnc.port, password: vncPassword },
+        ssh: { host: info.ip, user: BOT_COMPUTER_GUEST_USER },
+      };
+      try {
+        const driver = guestDriverSetup(base, signal);
+        await driver.hooks.install(password);
+        await driver.hooks.grant(password);
+        record = driver.result();
+      } finally {
+        setupState = { kind: "building_base", step: "provision" };
+        emit();
+        await shutDownBase(BOT_COMPUTER_BASE_VM).catch(async (error: unknown) => {
+          log("The base didn't shut down cleanly after element control setup.", error);
+          await stopVm(BOT_COMPUTER_BASE_VM, true);
+        });
+      }
+    } finally {
+      releaseBaseSlot();
+    }
+    if (record) {
+      const stored = record;
+      await store.update((draft) => {
+        draft.setup.guestDriver = stored;
+      });
+    }
   }
 
   async function performSetup(mode: "setup" | "update", signal: AbortSignal): Promise<void> {
@@ -731,21 +992,27 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       draft.setup.ipswPath = ipsw;
     });
     await acquireBaseSlot(signal);
+    let guestDriver: BotComputerGuestDriverRecord | undefined;
     try {
       await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
-      await buildAndInstallBase(mode, target, ipsw, signal);
+      guestDriver = await buildAndInstallBase(mode, target, ipsw, signal);
     } finally {
       releaseBaseSlot();
     }
     await store.update((draft) => {
-      draft.setup = { baseBuild: image.build, baseVersion: image.version };
+      draft.setup = { baseBuild: image.build, baseVersion: image.version, ...(guestDriver ? { guestDriver } : {}) };
     });
     setupState = undefined;
     deps.onSetupReady?.();
   }
 
   /** Install macOS into `target`, provision it, and (for an update) swap it in as the base. */
-  async function buildAndInstallBase(mode: "setup" | "update", target: string, ipsw: string, signal: AbortSignal): Promise<void> {
+  async function buildAndInstallBase(
+    mode: "setup" | "update",
+    target: string,
+    ipsw: string,
+    signal: AbortSignal,
+  ): Promise<BotComputerGuestDriverRecord | undefined> {
     setupState = { kind: "building_base", step: "create" };
     emit();
     const keyEnv = guestSshEnvironment(deps.env ?? process.env, dirs.home);
@@ -759,6 +1026,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
     const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : undefined;
+    let driver: ReturnType<typeof guestDriverSetup> | undefined;
     await buildBaseVm({
       signal,
       deleteVm: () => deleteVm(target),
@@ -771,15 +1039,26 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         throw new BotComputerError("lume_failed", "Installing macOS on the base computer failed. Choose Set up to try again.");
       },
       start: async () => {
-        const { info } = await runAndWait(target, dirs.baseShared, "The base", signal, true);
+        const { info, password } = await runAndWait(target, dirs.baseShared, "The base", signal, true);
+        driver = guestDriverSetup(
+          {
+            vmName: target,
+            ip: info.ip,
+            vnc: { host: "127.0.0.1", port: info.vnc.port, password },
+            ssh: { host: info.ip, user: BOT_COMPUTER_GUEST_USER },
+          },
+          signal,
+        );
         return { ip: info.ip };
       },
-      provisionContext: (ip) => provisionContext(target, ip, publicKey, guestPassword, signal),
+      provisionContext: (ip) => provisionContext(target, ip, publicKey, guestPassword, signal, driver?.hooks),
       stop: () => stopVm(target, true),
       removeIpsw: async () => {
         await downloader.remove();
       },
-      onStep: (step) => {
+      onStep: (step, detail) => {
+        // The guest driver's steps show themselves, only when there is a driver to install.
+        if (detail === "guest_driver" || detail === "permissions") return;
         setupState = { kind: "building_base", step };
         emit();
       },
@@ -793,6 +1072,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       );
       await deleteVm(BOT_COMPUTER_STAGING_BASE_VM);
     }
+    return driver?.result();
   }
 
   function startSetup(mode: "setup" | "update"): Promise<void> {
@@ -819,6 +1099,33 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (!cancelled) log("Bot computer setup failed.", error);
         if (!cancelled) throw error;
       } finally {
+        setupTask = undefined;
+        setupAbort = undefined;
+        emit();
+      }
+    })();
+    setupTask = task;
+    return task;
+  }
+
+  function startElementControlSetup(): Promise<void> {
+    if (setupTask) return setupTask;
+    ensureSupported();
+    if (shuttingDown) return Promise.reject(new BotComputerError("busy", "Aiden is quitting."));
+    const controller = new AbortController();
+    setupAbort = controller;
+    const task = (async () => {
+      try {
+        await performElementControlSetup(controller.signal);
+      } catch (error) {
+        const cancelled = error instanceof BotComputerError && error.code === "cancelled";
+        // The base is still ready; say why element control isn't on next to it.
+        elementControlNote = cancelled
+          ? undefined
+          : `Element control wasn't set up: ${errorMessage(error)}`.slice(0, 300);
+        if (!cancelled) log("Setting up element control failed.", error);
+      } finally {
+        setupState = undefined;
         setupTask = undefined;
         setupAbort = undefined;
         emit();
@@ -1076,6 +1383,33 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         host.touch(botId);
       }
     },
+
+    async guestDriver(botId) {
+      const record = (await store.read()).computers[botId];
+      const driver = record?.guestDriver;
+      if (!driver || !guestDriverReady(driver)) return undefined;
+      const location: GuestDriverLocation = { home: driver.home, uid: driver.uid };
+      return guestHostFor(async () => {
+        const connection = await host.ensureRunning(botId, { reason: "tool" });
+        return guestDriverSshBridge(connection.ssh, location, {
+          paths: sshPaths,
+          env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+          sshCommand: deps.sshCommand,
+        });
+      });
+    },
+
+    setUpElementControl: () => startElementControlSetup(),
+
+    checkPermissions() {
+      permissionWait?.check();
+    },
+
+    skipPermissions() {
+      permissionWait?.skip();
+    },
+
+    baseView: () => (baseViewConnection ? { ...baseViewConnection, vnc: { ...baseViewConnection.vnc }, ssh: { ...baseViewConnection.ssh } } : undefined),
 
     async reconcile() {
       if (!deps.support().ok || !existsSync(dirs.vms)) return;

@@ -17,8 +17,9 @@ export interface BotHandoffActions {
   /** The card's Done or Skip; a problem shows as a toast. */
   answer(pending: BotPendingHandoff, outcome: BotHandoffOutcome): Promise<void>;
   /**
-   * The card's Open. A sign-in opens in the Bot's own browser, and its panel's
-   * Browser tab comes forward with focus, so the person can sign in there.
+   * The card's Open. A sign-in opens in the Bot's own browser, or on its own
+   * computer with the person in control, and the panel's Browser or Computer
+   * tab comes forward with focus, so the person can sign in there.
    */
   open(pending: BotPendingHandoff): Promise<void>;
 }
@@ -52,6 +53,7 @@ export function useBotHandoffActions(botId: string): BotHandoffActions {
       const { opened } = await botsApi.openHandoff(botId, pending.waitId);
       if (opened === "none") toast.error(failed);
       else if (signIn && opened === "browser") panel.show("browser");
+      else if (signIn && opened === "computer") panel.show("computer");
     } catch (error) {
       toast.error(userFacingErrorMessage(error, failed));
     } finally {

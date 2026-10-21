@@ -12,6 +12,11 @@
 //   cancelled if the asking window goes away), `takeOver` (a running
 //   computer only) / `giveBack` switch who drives it, and `pointer` reads the
 //   Bot's last action point.
+// - The guest driver lane (plan §8.6): `setUpElementControl()` starts element
+//   control on a ready base without it and returns at once; while setup waits
+//   for the person's grants, `baseViewerGrant()` lends Settings the base's
+//   screen, and `checkPermissions()` / `skipPermissions()` check again or
+//   finish without element control.
 
 import {
   BOT_COMPUTER_CHANNELS,
@@ -44,8 +49,11 @@ export interface BotComputerHandlerDependencies {
     | "stop"
     | "onChange"
     | "computer"
+    | "setUpElementControl"
+    | "checkPermissions"
+    | "skipPermissions"
   >;
-  viewer: Pick<BotComputerViewer, "grant">;
+  viewer: Pick<BotComputerViewer, "grant" | "grantBase">;
   control: Pick<BotComputerControl, "takeOver" | "giveBack">;
   sessions: Pick<BotComputerSessions, "lastPointer">;
   /** Runs `listener` once the window that invoked goes away; returns the unsubscribe. */
@@ -99,6 +107,21 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
   deps.handle(BOT_COMPUTER_CHANNELS.cancelSetUp, () => {
     deps.host.cancelSetUp();
   });
+
+  deps.handle(BOT_COMPUTER_CHANNELS.setUpElementControl, async (): Promise<BotComputersStatus> => {
+    start(() => deps.host.setUpElementControl(), "element control setup");
+    return deps.host.status();
+  });
+
+  deps.handle(BOT_COMPUTER_CHANNELS.checkPermissions, () => {
+    deps.host.checkPermissions();
+  });
+
+  deps.handle(BOT_COMPUTER_CHANNELS.skipPermissions, () => {
+    deps.host.skipPermissions();
+  });
+
+  deps.handle(BOT_COMPUTER_CHANNELS.baseViewerGrant, (): Promise<BotComputerViewerGrant> => deps.viewer.grantBase());
 
   deps.handle(BOT_COMPUTER_CHANNELS.removeEverything, async (): Promise<BotComputersStatus> => {
     await deps.host.removeEverything();

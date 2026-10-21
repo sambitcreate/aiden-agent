@@ -142,7 +142,7 @@
     "pretest:bot-browser": "npm run build:lease-flock",
     "test:bot-browser": "tsx --test main/services/bot-runtime/bot-browser-tools.test.ts main/services/bot-runtime/bot-browser-handoff.test.ts main/services/renderer-document-owner.test.ts main/handlers/bot-browser.test.ts renderer/main/bots/bot-browser-tab.test.tsx",
     "pretest:bot-sign-in": "npm run build:lease-flock",
-    "test:bot-sign-in": "tsx --test main/services/bot-runtime/bot-sign-in-tool.test.ts",
+    "test:bot-sign-in": "tsx --test main/services/bot-runtime/bot-sign-in-tool.test.ts main/services/bot-runtime/bot-computer-handoff.test.ts",
     "test:bots:coverage": "node scripts/run-registered-tests-with-coverage.mjs test:bots",
     "pretest:bot-pause": "npm run build:lease-flock",
     "test:bot-pause": "tsx --test main/services/bot-pause-store.test.ts main/services/bot-runtime/bot-pause.test.ts main/handlers/bot-pause.test.ts renderer/main/bots/bot-chat-pause.test.tsx",

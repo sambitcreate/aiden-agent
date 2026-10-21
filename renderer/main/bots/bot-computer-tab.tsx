@@ -23,6 +23,8 @@ import { DEVICE_SCREEN_CONTAINER_STYLE, fittedScreenStyle } from "../../lib/devi
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { useBotComputersCache, useBotComputersStatus } from "../../lib/use-bot-computers";
+import { useBotLive } from "../../lib/use-bot-live";
+import { useDeviceScreenWheel } from "../../lib/use-device-screen-wheel";
 import { useDeviceStream } from "../../lib/use-device-stream";
 import { cn } from "../../lib/ui-utils";
 import {
@@ -37,8 +39,6 @@ export type ComputerBot = Pick<BotDefinition, "id" | "name" | "avatar">;
 
 /** How often the Bot's last action point is read while it drives a computer on screen. */
 export const BOT_COMPUTER_POINTER_POLL_MS = 500;
-/** One wheel line, in pixels, for wheels that report lines rather than pixels. */
-const WHEEL_LINE_PX = 16;
 
 /** The Bot's computer, where this Mac has Bot computers. */
 export function useBotComputer(botId: string) {
@@ -112,6 +112,36 @@ export function useBotComputerStart(bot: Pick<ComputerBot, "id" | "name">): BotC
   return { pending, error, start };
 }
 
+/**
+ * A sign-in on the Bot's own computer (plan §8.8) that the person now holds
+ * brings the Computer tab forward, once per card, without moving focus. This
+ * is how the Mac's window shows the computer after Finish on your Mac on a
+ * phone, where nobody pressed Open here; an Open on this Mac shows the tab
+ * itself (`use-bot-handoff-actions.ts`). Renders nothing.
+ */
+export function BotComputerSignInReveal({
+  botId,
+  controller,
+  onReveal,
+}: {
+  botId: string;
+  /** Who drives the Bot's computer now, or undefined when it has none. */
+  controller: BotComputerStatus["controller"] | undefined;
+  onReveal(): void;
+}) {
+  const handoff = useBotLive(botId).snapshot?.handoff ?? null;
+  const waitId = handoff?.kind === "sign_in" && handoff.target === "computer" ? handoff.waitId : null;
+  const revealed = React.useRef<string | null>(null);
+  const onRevealRef = React.useRef(onReveal);
+  onRevealRef.current = onReveal;
+  React.useEffect(() => {
+    if (waitId === null || controller !== "person" || revealed.current === waitId) return;
+    revealed.current = waitId;
+    onRevealRef.current();
+  }, [waitId, controller]);
+  return null;
+}
+
 /** Take over and Give back, keeping the cached status in step with main's reply. */
 export function useBotComputerControl(bot: Pick<ComputerBot, "id" | "name">) {
   const cache = useBotComputersCache();
@@ -164,8 +194,6 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
   const owner = `${bot.name}'s computer`;
   const screenSize = stream.screen && stream.screen.width > 0 && stream.screen.height > 0 ? stream.screen : null;
   const aspect = (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).width / (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).height;
-  const clientRef = React.useRef(stream.client);
-  clientRef.current = stream.client;
   const onScreenRef = React.useRef(onScreen);
   onScreenRef.current = onScreen;
   const screenWidth = screenSize?.width ?? 0;
@@ -174,27 +202,8 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
     onScreenRef.current?.(screenWidth > 0 ? { width: screenWidth, height: screenHeight } : null);
   }, [screenWidth, screenHeight]);
 
-  // Wheel events scroll the computer, not the panel; React's wheel listener is passive, so this one is native.
-  React.useEffect(() => {
-    const element = screenRef.current;
-    if (!element) return;
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const rect = element.getBoundingClientRect();
-      const scale = event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? rect.height : 1;
-      const clamp = (value: number) => Math.min(1, Math.max(0, value));
-      clientRef
-        .current()
-        ?.sendScroll(
-          clamp((event.clientX - rect.left) / Math.max(1, rect.width)),
-          clamp((event.clientY - rect.top) / Math.max(1, rect.height)),
-          event.deltaX * scale,
-          event.deltaY * scale,
-        );
-    };
-    element.addEventListener("wheel", onWheel, { passive: false });
-    return () => element.removeEventListener("wheel", onWheel);
-  }, []);
+  // Wheel events scroll the computer, not the panel.
+  useDeviceScreenWheel(screenRef, stream.client);
 
   const streaming = stream.status === "streaming";
   // The avatar and the read-only hint show while connecting too; a lost stream covers them with Reconnect.

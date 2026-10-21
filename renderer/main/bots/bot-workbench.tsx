@@ -3,7 +3,8 @@
 // own browser has a tab (a stored Browser tab shows Activity until then; a tab
 // the Bot or a hand-off opens to show reveals it), and Computer while the Bot
 // has a computer on a Mac with Bot computers (plan §8.5; a stored Computer tab
-// shows Activity once the computer is known to be gone). The computer can also
+// shows Activity once the computer is known to be gone; a sign-in on the
+// computer that the person holds reveals it). The computer can also
 // float over the chat, in the Simulator's floating player. A tab's body mounts the first
 // time it is shown, then stays mounted like the workspace views. The panel has
 // its own state, id, surface name, width key, focus hand-off and Escape, so the
@@ -21,7 +22,7 @@ import { useBotLive } from "../../lib/use-bot-live";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { BotBrowserTab, useBotBrowserPresence } from "./bot-browser-tab";
 import { BotComputerFloat } from "./bot-computer-float";
-import { BotComputerTab, useBotComputer, useBotComputerStart } from "./bot-computer-tab";
+import { BotComputerSignInReveal, BotComputerTab, useBotComputer, useBotComputerStart } from "./bot-computer-tab";
 import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
 import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type BotPanelTab } from "./bot-panel-context";
@@ -74,6 +75,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   const { open, tab: storedTab, fileRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
   const bot = useBot(botId).data ?? null;
   const revealBrowser = React.useCallback(() => reveal("browser"), [reveal]);
+  const revealComputer = React.useCallback(() => reveal("computer"), [reveal]);
   const browser = useBotBrowserPresence(botId, revealBrowser);
   // Once shown, Browser stays while this chat is open, so closing the last tab doesn't move the panel.
   const [browserSeen, setBrowserSeen] = React.useState(false);
@@ -204,6 +206,15 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
 
   return (
     <div ref={containerRef} className="relative flex h-full min-h-0 w-full flex-1 overflow-clip">
+      {computer.computer ? (
+        // A computer sign-in the person holds (from a phone's Finish on your Mac, too) shows the computer,
+        // unless it already floats over the chat.
+        <BotComputerSignInReveal
+          botId={botId}
+          controller={computerFloating ? undefined : computer.computer.controller}
+          onReveal={revealComputer}
+        />
+      ) : null}
       <div className="h-full min-h-0 min-w-0 flex-1">{children}</div>
       <div
         aria-hidden="true"

@@ -783,7 +783,7 @@ export function BotChatPane({ botId }: { botId: string }) {
    */
   const answerHandoffWithNote = async (pending: BotPendingHandoff, text: string, attachments: Attachment[]) => {
     // Never a note for a sign-in: whatever is typed here reaches the Bot.
-    if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name));
+    if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name, pending));
     if (attachments.length > 0) {
       throw new Error(
         attachments.some((attachment) => attachment.kind === "image")
@@ -943,7 +943,7 @@ export function BotChatPane({ botId }: { botId: string }) {
               : state?.kind === "paused"
                 ? botPausedText(current.name)
                 : signInWaits
-                  ? handoffSignInComposerText(current.name)
+                  ? handoffSignInComposerText(current.name, handoff ?? undefined)
                   : undefined
           }
           hasMessages={snapshot.entries.length > 0}

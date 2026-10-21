@@ -9,13 +9,35 @@
 import { formatHarnessBytes } from "./acp-harness.js";
 import { DEVICE_ID_PATTERN, parseDeviceStreamGrant, type DeviceStreamGrant } from "./devices.js";
 
+/** The guest's grants for its driver, as the base reports them while it waits for the person. */
+export interface BotComputerGuestPermissions {
+  accessibility: boolean;
+  screenRecording: boolean;
+}
+
+export type BotComputerBuildStep = "create" | "provision" | "guest_driver" | "permissions";
+
 export type BotComputerSetupState =
   | { kind: "unsupported"; reason: "platform" | "host_os" }
   | { kind: "not_set_up" }
   | { kind: "downloading"; receivedBytes: number; totalBytes: number }
   | { kind: "verifying" }
-  | { kind: "building_base"; step: "create" | "provision" | "guest_driver" | "permissions" }
-  | { kind: "ready"; baseVersion: string; baseBuild: string; updateAvailable: boolean }
+  | {
+      kind: "building_base";
+      step: BotComputerBuildStep;
+      /** Only while `step` is "permissions": what the guest has granted so far. */
+      permissions?: BotComputerGuestPermissions;
+    }
+  | {
+      kind: "ready";
+      baseVersion: string;
+      baseBuild: string;
+      updateAvailable: boolean;
+      /** The base's guest driver passed its probe: Bots can act on screen elements, not only pixels. */
+      elementControl?: boolean;
+      /** Why the last attempt to set up element control ended without it. */
+      elementControlNote?: string;
+    }
   | { kind: "failed"; message: string; resumable: boolean };
 
 export type BotComputerRunState = "stopped" | "starting" | "running" | "stopping" | "waiting_for_slot" | "stale";
@@ -79,6 +101,13 @@ export const BOT_COMPUTER_CHANNELS = {
   takeOver: "botComputers:takeOver", // invoke(botId) → BotComputerStatus; refused unless the computer is running
   giveBack: "botComputers:giveBack", // invoke(botId) → BotComputerStatus
   pointer: "botComputers:pointer", // invoke(botId) → BotComputerPointer | null
+  // The guest driver lane (plan §8.6). Element control on a ready base that
+  // lacks it boots the base once; while setup waits for the person's grants,
+  // Settings shows the base's screen and can check again or skip.
+  setUpElementControl: "botComputers:setUpElementControl", // invoke() → BotComputersStatus
+  checkPermissions: "botComputers:checkPermissions", // invoke() → void
+  skipPermissions: "botComputers:skipPermissions", // invoke() → void
+  baseViewerGrant: "botComputers:baseViewerGrant", // invoke() → BotComputerViewerGrant; only while the base waits for grants
 } as const;
 
 /** The host id the Computer tab's device stream uses; main's viewer proxy serves nothing else. */
@@ -181,16 +210,33 @@ function parseSetup(value: unknown): BotComputerSetupState | undefined {
     }
     case "verifying":
       return { kind: "verifying" };
-    case "building_base":
-      return typeof input.step === "string" && BUILD_STEPS.has(input.step)
-        ? { kind: "building_base", step: input.step as "create" | "provision" | "guest_driver" | "permissions" }
-        : undefined;
+    case "building_base": {
+      if (typeof input.step !== "string" || !BUILD_STEPS.has(input.step)) return undefined;
+      const step = input.step as BotComputerBuildStep;
+      const permissions = record(input.permissions);
+      return step === "permissions" &&
+        typeof permissions?.accessibility === "boolean" &&
+        typeof permissions.screenRecording === "boolean"
+        ? {
+            kind: "building_base",
+            step,
+            permissions: { accessibility: permissions.accessibility, screenRecording: permissions.screenRecording },
+          }
+        : { kind: "building_base", step };
+    }
     case "ready": {
       const baseVersion = text(input.baseVersion, 32);
       const baseBuild = text(input.baseBuild, 32);
-      return baseVersion && baseBuild && typeof input.updateAvailable === "boolean"
-        ? { kind: "ready", baseVersion, baseBuild, updateAvailable: input.updateAvailable }
-        : undefined;
+      if (!baseVersion || !baseBuild || typeof input.updateAvailable !== "boolean") return undefined;
+      const note = text(input.elementControlNote, 300);
+      return {
+        kind: "ready",
+        baseVersion,
+        baseBuild,
+        updateAvailable: input.updateAvailable,
+        ...(typeof input.elementControl === "boolean" ? { elementControl: input.elementControl } : {}),
+        ...(note ? { elementControlNote: note } : {}),
+      };
     }
     case "failed": {
       const message = text(input.message, 600);
@@ -280,7 +326,7 @@ export function approximateBotComputerBytes(bytes: number): string {
   return `about ${formatHarnessBytes(bytes)}`;
 }
 
-const BUILD_STEP_COPY: Record<"create" | "provision" | "guest_driver" | "permissions", string> = {
+const BUILD_STEP_COPY: Record<BotComputerBuildStep, string> = {
   create: "Installing macOS on the base computer",
   provision: "Preparing the base computer",
   guest_driver: "Installing Aiden's helper in the base computer",

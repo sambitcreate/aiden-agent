@@ -157,7 +157,8 @@ test("a change made against rules another window changed says so and shows the c
 });
 
 test("where Bots have their own computers, the rules say they read the Bot's stated intent there", async () => {
-  const note = "On Planner’s own computer, rules read Planner’s stated intent; Planner is told to hand off passwords and payments.";
+  const note =
+    "On Planner’s own computer, rules read Planner’s stated intent, and with element control the button or field it acts on; Planner is told to hand off passwords and payments.";
   rulesIpc();
   await mountWithBotRouter(
     <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", bots: true, botComputers: true }}>

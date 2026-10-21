@@ -21,6 +21,8 @@ export type ProvisionStepId =
   | "disable_updates"
   | "suppress_prompts"
   | "shared_folder"
+  | "guest_driver"
+  | "permissions"
   | "shut_down";
 
 export type ProvisionChannel = "lume_ssh" | "guest_ssh" | "lume";
@@ -38,6 +40,15 @@ export interface ProvisionContext {
   newPassword(): string;
   /** Stored before the guest's password changes, so it is never lost. */
   storePassword(password: string): Promise<void>;
+  /**
+   * The guest driver lane (plan §8.6): install Aiden's pinned cua-driver, then
+   * walk the person through its grants in the live view. Neither ever fails
+   * the base: without them it is made for the VNC lane only.
+   */
+  guestDriver?: {
+    install(password: string): Promise<void>;
+    grant(password: string): Promise<void>;
+  };
   signal?: AbortSignal;
 }
 
@@ -200,6 +211,22 @@ export const BASE_PROVISION_STEPS: readonly ProvisionStep[] = Object.freeze([
     async run(context) {
       const script = `s="$HOME/Shared"; if [ -L "$s" ] || [ ! -e "$s" ]; then /bin/ln -sfn ${quoteRemoteArg(BOT_COMPUTER_SHARED_MOUNT)} "$s"; else exit 65; fi`;
       check("shared_folder", await context.guestSsh(script, { timeoutMs: 30_000 }));
+    },
+  },
+  {
+    id: "guest_driver",
+    channel: "guest_ssh",
+    async run(context, state) {
+      await context.guestDriver?.install(state.password);
+    },
+  },
+  {
+    // "Allow Accessibility and Screen Recording for cua-driver": the person
+    // grants them in the base's live view, or skips; clones inherit them.
+    id: "permissions",
+    channel: "guest_ssh",
+    async run(context, state) {
+      await context.guestDriver?.grant(state.password);
     },
   },
   {
