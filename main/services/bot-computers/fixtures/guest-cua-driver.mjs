@@ -14,6 +14,8 @@
 //   --driver-version <v>          health_report driver_version (default "0.36.0")
 //   --exit <code>                 exit at once with this code (the daemon never came up)
 //   --elements <file>             JSON array of AX rows every window shows (default: the shared fake's)
+//   --exit-on <tool>              log a call to this tool, then exit without answering (the bridge
+//                                 dropped after the guest got the call)
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import readline from "node:readline";
@@ -31,6 +33,7 @@ const driverVersion = option("--driver-version") ?? "0.36.0";
 const grantOnPrompt = argv.includes("--grant-on-prompt");
 const exitCode = option("--exit");
 const elementsFile = option("--elements");
+const exitOn = option("--exit-on");
 
 const log = (event) => {
   if (logPath) appendFileSync(logPath, `${JSON.stringify(event)}\n`, "utf8");
@@ -70,6 +73,7 @@ lines.on("line", (line) => {
     const name = message.params?.name;
     const args = message.params?.arguments ?? {};
     log({ event: "tool-call", name, args });
+    if (name === exitOn) process.exit(1);
     if (name === "check_permissions" && args.prompt === true && grantOnPrompt && permissionsFile) {
       writeFileSync(permissionsFile, JSON.stringify({ accessibility: true, screen_recording: true }));
     }

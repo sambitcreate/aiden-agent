@@ -380,13 +380,21 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   screen until you answer, and never sees your password.
 - **Open.** Aiden starts the computer if it is stopped, takes it over for you
   before anything shows on its screen, stops the guest driver (removing its
-  "enabled" file and ending every process signed as `cua-driver`, including a
-  copy the Bot made), opens the site in Safari there, and brings the Computer
-  tab forward. If any of that fails, nothing opens and the Bot gets its
-  computer back.
+  "enabled" file, ending every process signed as `cua-driver` that runs then,
+  including a copy the Bot made, and removing the stopped driver's socket),
+  opens the site in Safari there, and brings the Computer tab forward. If any
+  of that fails, nothing opens and the Bot gets its computer back.
 - **While you sign in.** The Bot's `computer` and `computer_shell` calls wait
-  and capture nothing, as for any Take over. The model never sees the screen
-  or the password.
+  and capture nothing, as for any Take over, so none of its tools shows the
+  model the screen or the password.
+- **Limit: programs left running.** Stopping the driver is one sweep at Open,
+  not a guard for the whole sign-in. A program the Bot started earlier with
+  `computer_shell` and left running in the guest keeps running while you hold
+  the computer (Take over doesn't end it), and the driver's grants follow its
+  signature, so such a program could start the driver again and record the
+  screen while you sign in, for the Bot to read once it has the computer back.
+  Password fields stay masked on the screen, and the driver never reads a
+  secure field's value. A computer without element control has no such grant.
 - **Answering.** I'm signed in, Skip, or the card being withdrawn (the Bot was
   stopped or paused) gives the computer back, unless you already gave it back
   or took it again from the viewer, which keeps it with you. The Bot then takes

@@ -239,7 +239,14 @@ export function guestDriverRestartScript(location: GuestDriverLocation): string 
  * Stop the guest driver for computer sign-in, without the guest password:
  * remove the enabled file so the agent isn't kept alive, then end every
  * process signed as cua-driver, wherever its file is. A copy the Bot made
- * keeps the driver's signature and so its grants; this sweep ends those too.
+ * keeps the driver's signature and so its grants; this sweep ends those that
+ * run now. It is one sweep: a program left running in the guest can still
+ * start the driver again later (docs/bot-computers.md, "Signing in on a Bot's
+ * computer").
+ *
+ * The kill can't be handled, so the daemon leaves its socket file. That goes
+ * too: otherwise the next bridge would find the dead daemon's socket at once
+ * and connect before the restarted daemon listens on its own.
  */
 export function guestDriverSuspendScript(): string {
   return [
@@ -249,6 +256,7 @@ export function guestDriverSuspendScript(): string {
     '  [ "$p" = "$$" ] && continue',
     '  if /usr/bin/codesign -d -v "+$p" 2>&1 | /usr/bin/grep -qx "Identifier=cua-driver"; then /bin/kill -KILL "$p" 2>/dev/null; fi',
     "done",
+    `/bin/rm -f "$HOME/${GUEST_DRIVER_SOCKET}"`,
     "exit 0",
   ].join("\n");
 }

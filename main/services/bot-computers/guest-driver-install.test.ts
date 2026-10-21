@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -106,7 +107,10 @@ function sh(script: string, home: string, stdin?: string, env: Record<string, st
 }
 
 function tempHome(t: test.TestContext): string {
-  const home = mkdtempSync(path.join(tmpdir(), "aiden-guest-driver-"));
+  // Short, like a real guest home: the daemon's socket sits 50 characters below
+  // it, and a socket path is at most 103 bytes on macOS (107 on Linux). Under a
+  // macOS runner's /var/folders/…/T it would not fit.
+  const home = mkdtempSync(path.join(process.platform === "win32" ? tmpdir() : "/tmp", "agd-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   mkdirSync(path.join(home, path.dirname(GUEST_DRIVER_BINARY)), { recursive: true });
   return home;
@@ -302,11 +306,36 @@ test("without the daemon's socket the bridge gives up, bounded, with exit 69", (
   assert.ok(Date.now() - started < 10_000);
 });
 
-test("suspending removes the enabled file so the agent isn't kept alive", (t) => {
+test("suspending removes the enabled file so the agent isn't kept alive, and leaves no dead daemon's socket behind", async (t) => {
   const home = tempHome(t);
   const enabled = path.join(home, GUEST_DRIVER_ENABLED_FILE);
   writeFileSync(enabled, "");
+  // The daemon as the sweep leaves it: killed outright (SIGKILL), so its socket file stays.
+  const socket = path.join(home, GUEST_DRIVER_SOCKET);
+  const daemon = spawn(
+    process.execPath,
+    ["-e", `require("node:net").createServer().listen(${JSON.stringify(socket)}); setInterval(() => {}, 1000);`],
+    { stdio: "ignore" },
+  );
+  t.after(() => daemon.kill("SIGKILL"));
+  for (let tries = 0; !existsSync(socket); tries += 1) {
+    assert.ok(tries < 500, "the stand-in daemon never bound its socket");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  daemon.kill("SIGKILL");
+  await once(daemon, "exit");
+  assert.equal(existsSync(socket), true, "a killed daemon leaves its socket file");
+
   const run = sh(guestDriverSuspendScript(), home);
   assert.equal(run.status, 0, run.stderr);
   assert.equal(existsSync(enabled), false);
+
+  // The Bot's next element step after the sign-in: its bridge must wait for the
+  // restarted daemon's own socket, not connect to the dead one's.
+  const binary = path.join(home, GUEST_DRIVER_BINARY);
+  writeFileSync(binary, "#!/bin/sh\necho connected\n");
+  chmodSync(binary, 0o755);
+  const bridge = sh(guestDriverBridgeScript({ home, uid: 501 }, 0.5), home);
+  assert.equal(bridge.status, 69, "no daemon is back yet, so the bridge gives up instead of connecting");
+  assert.doesNotMatch(bridge.stdout, /connected/u);
 });

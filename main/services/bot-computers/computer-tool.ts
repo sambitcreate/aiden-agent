@@ -524,7 +524,21 @@ export function createBotComputerTool(
           // Whatever happens next, these numbers no longer name what is on screen.
           deps.state.setDriverFacts(botId, { ...facts, elements: undefined, focused: undefined });
           await authorizeAllowedComputerUseAction(controller, id, callArgs, actionSignal);
-          const result = await controller.execute(id, callArgs, actionSignal);
+          let result: AgentToolResult<unknown>;
+          try {
+            result = await controller.execute(id, callArgs, actionSignal);
+          } catch (error) {
+            // Lost on the way back (the bridge dropped, the call timed out): the
+            // guest may already have pressed it, so never invite a blind repeat.
+            if (error instanceof CuaDriverError && !actionSignal.aborted) {
+              return text(
+                `Aiden lost element control in ${possessive} computer during this step, so it may already have happened. Capture the screen and check before doing it again.`,
+                laneDetails,
+                true,
+              );
+            }
+            throw error;
+          }
           deps.state.setDriverFacts(botId, { ...facts, elements: undefined, focused: element });
           const verb = clickAction === "double_click" ? "Double-clicked" : clickAction === "right_click" ? "Right-clicked" : "Clicked";
           const noop = (result.details as { driverEffect?: string } | undefined)?.driverEffect === "suspected_noop";

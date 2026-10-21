@@ -3,12 +3,14 @@
 //
 // - The person takes the computer over first (`takeOver(botId, "sign_in")`).
 //   That aborts the Bot's in-flight action, and every later `computer` and
-//   `computer_shell` call waits for Give back, so the model sees nothing of
-//   the screen while the person signs in, and never the password.
+//   `computer_shell` call waits for Give back, so no tool shows the model the
+//   screen while the person signs in, and never the password.
 // - The guest driver is stopped before the page opens: its LaunchAgent's
-//   "enabled" file goes and every process signed as `cua-driver` is killed,
-//   so nothing the Bot left running can read the screen through it. The
-//   driver lane's bridge starts it again on the Bot's next element step.
+//   "enabled" file goes and every process signed as `cua-driver` that runs
+//   then is killed. That is one sweep, not a guard: a program the Bot started
+//   earlier and left running in the guest could start the driver again while
+//   the person signs in (docs/bot-computers.md). The driver lane's bridge
+//   starts it again on the Bot's next element step.
 // - Then the site opens in Safari in the computer, and the panel's Computer
 //   tab comes forward in the window whose Open was pressed.
 // - When the card settles or is withdrawn, the computer is given back, unless

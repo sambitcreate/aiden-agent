@@ -365,7 +365,7 @@ test("stopping the reply stops the call instead of reporting a failure", async (
 const GUEST_FIXTURE = fileURLToPath(new URL("./fixtures/guest-cua-driver.mjs", import.meta.url));
 
 /** A computer with element control: the guest bridge is the fake driver on stdio, logging every call. */
-function guestLane(t: test.TestContext, options: { elements?: unknown[] } = {}) {
+function guestLane(t: test.TestContext, options: { elements?: unknown[]; exitOn?: string } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "aiden-guest-lane-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = path.join(dir, "calls.jsonl");
@@ -376,6 +376,7 @@ function guestLane(t: test.TestContext, options: { elements?: unknown[] } = {}) 
     writeFileSync(file, JSON.stringify(options.elements));
     args.push("--elements", file);
   }
+  if (options.exitOn) args.push("--exit-on", options.exitOn);
   let bridges = 0;
   const factory = createGuestCuaDriverHostFactory({
     bridge: () => {
@@ -429,6 +430,21 @@ test("an element click goes through the guest driver, and the numbers end once a
   await h.call({ action: "type", text: "hello", intent: "Type the search terms" });
   const afterTyping = await h.call({ action: "click", element: 0, intent: "Click First" });
   assert.equal(afterTyping.isError, true);
+  assert.equal(h.calls().filter((call) => call.name === "click").length, 1);
+});
+
+test("an element click whose guest bridge dropped after the guest got it may have happened: the Bot looks before any retry", async (t) => {
+  const h = guestLane(t, { exitOn: "click" });
+  await h.call({ action: "capture", app: "Safari" });
+  const clicked = await h.call({ action: "click", element: 1, intent: "Click Second" });
+  assert.equal(h.calls().filter((call) => call.name === "click").length, 1, "the guest received the click");
+  assert.equal(clicked.isError, true);
+  assert.match(textOf(clicked), /may already have happened/u);
+  assert.match(textOf(clicked), /capture/iu);
+  assert.doesNotMatch(textOf(clicked), /try again/iu, "never an invitation to repeat it blindly");
+  // The element numbers are spent, so only a fresh capture can name the button again.
+  const again = await h.call({ action: "click", element: 1, intent: "Click Second" });
+  assert.equal(again.isError, true);
   assert.equal(h.calls().filter((call) => call.name === "click").length, 1);
 });
 
