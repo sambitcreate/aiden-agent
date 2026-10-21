@@ -240,13 +240,36 @@ export function boundaryRefusalOf(error: unknown): unknown {
 
 /**
  * Attribute tests on `value` would let a selector read a field: a CSS or
- * Playwright attribute selector, an XPath `@value` or `attribute::value`, or
- * an escape that could spell one.
+ * Playwright attribute selector, or an escape that could spell one.
  */
-const VALUE_PROBE = /\[\s*(?:[\w*-]*\|)?value\b|@\s*value\b|attribute\s*::\s*value\b|\\/iu;
+const VALUE_ATTRIBUTE = /\[\s*(?:[\w*-]*\|)?value\b|\\/iu;
+/**
+ * An XPath attribute step (`@name` or `attribute::name`): what it names, and
+ * whether a `(` follows (a node test such as `node()`).
+ */
+const XPATH_ATTRIBUTE_STEP = /(?:@|attribute\s*::)\s*([^\s[\](),=!<>|/]*)(\s*\()?/giu;
+/** An attribute name an XPath step may use: plain, never `value`, a wildcard or a namespace. */
+const PLAIN_ATTRIBUTE = /^[a-z_][\w.-]*$/iu;
+/** CSS comments, which a selector parser skips, so a comment can hide `[value`. */
+const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/gu;
 
+function testsValue(selector: string): boolean {
+  if (VALUE_ATTRIBUTE.test(selector)) return true;
+  for (const [, name = "", call] of selector.matchAll(XPATH_ATTRIBUTE_STEP)) {
+    if (call !== undefined || !PLAIN_ATTRIBUTE.test(name) || name.toLowerCase() === "value") return true;
+  }
+  return false;
+}
+
+/**
+ * Refuse a selector that could tell what a field holds: one testing its
+ * `value` attribute, directly, behind a CSS comment, or through an XPath step
+ * that names any attribute (a wildcard or node test) rather than one plain,
+ * non-`value` name. The selector is checked as written and without comments.
+ */
 export function assertBoundarySelector(selector: string | undefined): void {
-  if (selector !== undefined && VALUE_PROBE.test(selector)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
+  if (selector === undefined) return;
+  if (testsValue(selector) || testsValue(selector.replace(CSS_COMMENT, ""))) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
 }
 
 /**

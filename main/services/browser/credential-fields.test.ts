@@ -13,6 +13,7 @@ import {
   type CdpDomNode,
 } from "./credential-fields.js";
 import {
+  assertBoundarySelector,
   BROWSER_OPAQUE_TYPING_REFUSED,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
@@ -174,5 +175,38 @@ test("Chromium: the in-page typing guard follows focus through shadow roots and 
   } finally {
     await browser?.close();
     server.close();
+  }
+});
+
+test("Chromium: every selector that can tell a field's value apart is refused; ordinary locators still work", { timeout: 30_000 }, async () => {
+  // Frameworks that mirror a controlled input into its `value` attribute let a
+  // selector test what the person typed. Chromium is the oracle: each refused
+  // selector really matches with the field's prefix and not with another one.
+  const reads = (prefix: string) => [
+    `xpath=//input[@*[starts-with(.,'${prefix}')]]`,
+    `xpath=//input[attribute::*[starts-with(.,'${prefix}')]]`,
+    `xpath=//input[@node()[starts-with(.,'${prefix}')]]`,
+    `input[/**/value^='${prefix}']`,
+    `input[/* any */ value^='${prefix}']`,
+  ];
+  const ordinary = ["internal:role=textbox[name=\"Password\"i]", "#pw", "input[name=pw]", "text=Signed in as sam@example.com", "xpath=//input[@name='pw']"];
+  let browser: Browser | undefined;
+  try {
+    browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.setContent('<label>Password <input id="pw" name="pw" type="password" value="hunter2"></label><p>Signed in as sam@example.com</p>');
+    const matches = async (selector: string) => page.locator(selector).count();
+    const right = reads("hunt"), wrong = reads("zzzz");
+    for (const [index, selector] of right.entries()) {
+      assert.equal(await matches(selector), 1, `${selector} reads the field`);
+      assert.equal(await matches(wrong[index]!), 0, `${wrong[index]} tells another value apart`);
+      assert.throws(() => assertBoundarySelector(selector), /what is typed/u, selector);
+    }
+    for (const selector of ordinary) {
+      assert.ok((await matches(selector)) >= 1, `${selector} finds its element`);
+      assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
+    }
+  } finally {
+    await browser?.close();
   }
 });
