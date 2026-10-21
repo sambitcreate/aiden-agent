@@ -226,6 +226,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   let permissionWait: { check(): void; skip(): void } | undefined;
   /** Why the last element-control attempt ended without it; shown with the ready base. */
   let elementControlNote: string | undefined;
+  /**
+   * Give and Reset copying the base's disk right now. Set up, Update base and
+   * Set up element control wait for them before they boot or replace the base,
+   * so no copy reads a disk that is running or being swapped.
+   */
+  const copies = new Set<Promise<unknown>>();
   const guestHostFor =
     deps.guestDriverHost ?? ((bridge: () => Promise<GuestDriverBridgeCommand>) => createGuestCuaDriverHostFactory({ bridge }));
 
@@ -618,34 +624,72 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }
     if (entry.stopping) return entry.stopping;
     if (entry.state !== "running") return;
-    const vmName = entry.connection?.vmName ?? (await store.read()).computers[botId]?.vmName;
+    const connection = entry.connection;
+    const vmName = connection?.vmName ?? (await store.read()).computers[botId]?.vmName;
     entry.cancelIdle?.();
     entry.cancelIdle = undefined;
     entry.state = "stopping";
     entry.connection = undefined;
     emit(botId);
     entry.stopping = (async () => {
+      let stillRunning = false;
       try {
         if (vmName) await stopVm(vmName, reason === "quit");
+      } catch (error) {
+        // Even a forced stop failed: count the computer as off only if Lume says it is. One
+        // that is still on keeps its place (macOS's limit) and its connection, and its idle
+        // timer tries again; an unreadable state counts as on.
+        stillRunning =
+          vmName !== undefined && connection !== undefined && (await getVm(vmName).then((info) => info?.state === "running", () => true));
+        throw error;
       } finally {
-        entry.state = "stopped";
         entry.stopping = undefined;
-        // What the Bot was doing ended with the run.
-        activity.set(botId, undefined);
-        if (entry.lastUsedAt !== undefined) {
-          const lastUsedAt = entry.lastUsedAt;
-          await store
-            .update((draft) => {
-              const current = draft.computers[botId];
-              if (current) current.lastUsedAt = lastUsedAt;
-            })
+        if (stillRunning && connection) {
+          log("A Bot computer did not stop; it is still running.");
+          entry.state = "running";
+          entry.connection = connection;
+          const minutes = await store
+            .read()
+            .then((state) => state.settings.idleStopMinutes)
             .catch(() => undefined);
+          if (minutes !== undefined && entry.state === "running") armIdle(botId, entry, minutes);
+        } else {
+          entry.state = "stopped";
+          // What the Bot was doing ended with the run.
+          activity.set(botId, undefined);
+          // Nobody uses a computer that is off. Control goes back to the Bot, so its next call
+          // doesn't wait for a Give back the tab can't offer and a later run idles out as usual.
+          // A sign-in card's hold lasts until the card settles or is withdrawn.
+          if (control.controller(botId) === "person" && control.takenOverBy(botId) !== "sign_in") control.giveBack(botId);
+          if (entry.lastUsedAt !== undefined) {
+            const lastUsedAt = entry.lastUsedAt;
+            await store
+              .update((draft) => {
+                const current = draft.computers[botId];
+                if (current) current.lastUsedAt = lastUsedAt;
+              })
+              .catch(() => undefined);
+          }
+          wakeSlotWaiters();
         }
-        wakeSlotWaiters();
         emit(botId);
       }
     })();
     return entry.stopping;
+  }
+
+  /** Counts `copy` as reading the base until it settles. Call it with no await since the setup check. */
+  function copyingBase<T>(copy: Promise<T>): Promise<T> {
+    copies.add(copy);
+    void copy.then(
+      () => copies.delete(copy),
+      () => copies.delete(copy),
+    );
+    return copy;
+  }
+
+  async function copiesSettled(): Promise<void> {
+    while (copies.size > 0) await Promise.allSettled([...copies]);
   }
 
   async function requireRecord(botId: string): Promise<BotComputerRecord> {
@@ -805,11 +849,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   ): Promise<BotComputerGuestDriverRecord | undefined> {
     const target: GuestSshTarget = { host: base.ip, user: BOT_COMPUTER_GUEST_USER };
     let wake: (() => void) | undefined;
-    let skipped = false;
+    // Skip ends whatever step is running (the first check, a later one, the restart or the
+    // probe) at once, not only the wait between checks.
+    const skipping = new AbortController();
+    const step = AbortSignal.any([signal, skipping.signal]);
+    const skippedNote = "Element control was skipped, so Bots act on the screen only.";
     permissionWait = {
       check: () => wake?.(),
       skip: () => {
-        skipped = true;
+        skipping.abort();
         wake?.();
       },
     };
@@ -818,46 +866,50 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     try {
       let permissions: GuestDriverPermissions = { accessibility: false, screenRecording: false };
       show("permissions", permissions);
-      open = await openGuestDriver(target, location, signal);
-      permissions = await guestDriverPermissions(open.session, { prompt: true, signal });
+      open = await openGuestDriver(target, location, step);
+      permissions = await guestDriverPermissions(open.session, { prompt: true, signal: step });
       const deadline = now() + (deps.permissionWaitMs ?? 30 * 60_000);
       while (!(permissions.accessibility && permissions.screenRecording)) {
         show("permissions", permissions);
         await new Promise<void>((resolve) => {
           const done = () => {
             clearTimeout(timer);
-            signal.removeEventListener("abort", done);
+            step.removeEventListener("abort", done);
             wake = undefined;
             resolve();
           };
           const timer = setTimeout(done, deps.permissionPollMs ?? 3_000);
           wake = done;
-          signal.addEventListener("abort", done, { once: true });
+          step.addEventListener("abort", done, { once: true });
         });
         if (signal.aborted) throw setupCancelled();
-        if (skipped) {
-          elementControlNote = "Element control was skipped, so Bots act on the screen only.";
+        if (skipping.signal.aborted) {
+          elementControlNote = skippedNote;
           return undefined;
         }
         if (now() > deadline) {
           elementControlNote = "The permissions weren't allowed in time, so Bots act on the screen only.";
           return undefined;
         }
-        permissions = await guestDriverPermissions(open.session, { prompt: false, signal });
+        permissions = await guestDriverPermissions(open.session, { prompt: false, signal: step });
       }
       show("permissions", permissions);
       await open.close();
       open = undefined;
       // A daemon that started before the grants can keep refusing captures until it restarts.
-      const restarted = await guestSshTo(target, signal)(guestDriverRestartScript(location), {
+      const restarted = await guestSshTo(target, step)(guestDriverRestartScript(location), {
         stdin: `${password}\n`,
         timeoutMs: 30_000,
       });
       if (restarted.exitCode !== 0 || restarted.timedOut) {
         throw new BotComputerError("start_failed", "The guest driver didn't restart.");
       }
-      open = await openGuestDriver(target, location, signal);
-      const probe = await probeGuestDriver(open.session, signal);
+      open = await openGuestDriver(target, location, step);
+      const probe = await probeGuestDriver(open.session, step);
+      if (skipping.signal.aborted) {
+        elementControlNote = skippedNote;
+        return undefined;
+      }
       if (!probe.ready) {
         log(`The guest driver probe did not pass (${probe.reason}).`);
         elementControlNote = "Aiden's helper in the base computer didn't pass its check, so Bots act on the screen only.";
@@ -867,6 +919,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       return { version: CUA_DRIVER_VERSION, home: location.home, uid: location.uid };
     } catch (error) {
       if (signal.aborted) throw setupCancelled();
+      if (skipping.signal.aborted) {
+        elementControlNote = skippedNote;
+        return undefined;
+      }
       log("Waiting for the guest driver's permissions did not finish.", error);
       elementControlNote = "Aiden couldn't check the permissions in the base computer, so Bots act on the screen only.";
       return undefined;
@@ -921,6 +977,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
   /** Element control for a ready base made without it: boot it once, install, wait for the grants, shut it down. */
   async function performElementControlSetup(signal: AbortSignal): Promise<void> {
+    // A Bot's computer still being copied from the base finishes before the base boots.
+    await copiesSettled();
     const state = await store.read();
     if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
     if (guestDriverReady(state.setup.guestDriver)) return;
@@ -968,6 +1026,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
   async function performSetup(mode: "setup" | "update", signal: AbortSignal): Promise<void> {
     const target = mode === "setup" ? BOT_COMPUTER_BASE_VM : BOT_COMPUTER_STAGING_BASE_VM;
+    // An update swaps the base at the end: a copy of the old one finishes first.
+    await copiesSettled();
     // The bundled Lume is checked before a 20 GB download it would be needed for.
     await invocation();
     // Booting the base needs a running computer's memory. Say so before a long
@@ -1247,7 +1307,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (existing) return computerStatus(botId, existing, state);
       if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
       if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
-      const record = await cloneFromBase(botId, state);
+      const record = await copyingBase(cloneFromBase(botId, state));
       const next = await store.update((draft) => {
         draft.computers[botId] = record;
       });
@@ -1262,9 +1322,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const state = await store.read();
       if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
       if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
-      await stopComputer(botId, "person");
-      await deleteVm(record.vmName);
-      const fresh = await cloneFromBase(botId, state);
+      const fresh = await copyingBase(
+        (async () => {
+          await stopComputer(botId, "person");
+          await deleteVm(record.vmName);
+          return cloneFromBase(botId, state);
+        })(),
+      );
       const next = await store.update((draft) => {
         draft.computers[botId] = fresh;
       });
@@ -1348,6 +1412,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
     stop(botId, options) {
       return stopComputer(botId, options?.reason ?? "person");
+    },
+
+    runningConnection(botId) {
+      const entry = runtimes.get(botId);
+      return entry?.state === "running" && entry.connection ? entry.connection : undefined;
     },
 
     touch(botId) {

@@ -60,7 +60,14 @@ export interface BotComputerHost {
     botId: string,
     options: { reason: BotComputerStartReason; signal?: AbortSignal; onProgress?(text: string): void },
   ): Promise<BotComputerConnection>;
+  /**
+   * Stops the computer. When even a forced stop fails and Lume still reports the VM running,
+   * it stays running (with its connection and place) and this rejects. A stop that turns it
+   * off gives control back to the Bot, except while a sign-in card holds it for the person.
+   */
   stop(botId: string, options?: { reason: BotComputerStopReason }): Promise<void>;
+  /** This run's connection while the computer is running, or undefined; never starts it. */
+  runningConnection(botId: string): BotComputerConnection | undefined;
   /** Restart the idle timer after the Bot or the person used the computer. */
   touch(botId: string): void;
   runGuestCommand(
@@ -144,6 +151,8 @@ export interface BotComputerPointer {
 export interface BotComputerSessions {
   /** `ensureRunning` plus the screen factory; one screen is cached per run. */
   screen(botId: string, signal?: AbortSignal): Promise<BotComputerScreen>;
+  /** The running computer's screen (the viewer's); refuses a computer that isn't running and never starts one. */
+  runningScreen(botId: string, signal?: AbortSignal): Promise<BotComputerScreen>;
   /** Set once by P9's viewer. */
   setScreenFactory(factory: BotComputerScreenFactory): void;
   control: BotComputerControl;

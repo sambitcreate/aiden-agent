@@ -22,7 +22,7 @@ interface GuestCall {
 
 function harness(
   respond: (call: GuestCall) => Promise<BotComputerGuestCommandResult>,
-  options: { routine?: boolean } = {},
+  options: { routine?: boolean; unattended?: boolean; unattendedWaitMs?: number } = {},
 ) {
   const control = createBotComputerControl();
   const calls: GuestCall[] = [];
@@ -47,8 +47,9 @@ function harness(
       },
       control,
       botName: async () => "Ada",
+      ...(options.unattendedWaitMs === undefined ? {} : { unattendedWaitMs: options.unattendedWaitMs }),
     },
-    { routine: options.routine === true },
+    { routine: options.routine === true, ...(options.unattended === undefined ? {} : { unattended: options.unattended }) },
   );
   const run = (command: string, signal?: AbortSignal) =>
     tool.execute("call", { command, description: "List the home folder" }, signal) as Promise<AgentToolResult<null>>;
@@ -140,4 +141,24 @@ test("a routine starts the computer for the routine", async () => {
   const h = harness(async () => ok("ok"), { routine: true });
   await h.run("date");
   assert.deepEqual(h.reasons, ["routine"]);
+});
+
+test("on a routine or Telegram turn, a command waits for the person only so long", async () => {
+  for (const turn of [{ routine: true }, { unattended: true }]) {
+    const h = harness(async () => ok("done"), { ...turn, unattendedWaitMs: 40 });
+    h.control.takeOver("ada", "viewer");
+    let timer: NodeJS.Timeout | undefined;
+    const result = await Promise.race([
+      h.run("echo done"),
+      new Promise<"still waiting">((resolve) => {
+        timer = setTimeout(() => resolve("still waiting"), 2_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    assert.notEqual(result, "still waiting", JSON.stringify(turn));
+    if (result === "still waiting") continue;
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /still using Ada's computer.*say in your reply/u);
+    assert.equal(h.calls.length, 0, "the command never ran");
+  }
 });

@@ -9,7 +9,8 @@
 // site in a new tab of the Bot's own browser), Skip and I'm signed in. A
 // sign-in on the Bot's own computer (`target: "computer"`, plan §8.6) offers
 // "Open Ada's computer" instead: the site opens there with the person in
-// control, and the Bot can't see the screen until the card is answered.
+// control, and the Bot's computer tools wait until the card is answered (a
+// program it left running in the guest is the limit; docs/bot-computers.md).
 //
 // A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
 // sign-in happens in its own browser over there, so that card offers
@@ -199,7 +200,7 @@ export function HandoffCard({
       {signIn && !elsewhere ? (
         <p className="mt-1 text-tertiary">
           {onComputer(handoff)
-            ? `Opens on ${name}’s own computer, with you in control. ${name} can’t see the screen until you answer, and never sees your password.`
+            ? `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer, and never sees your password.`
             : `Opens in ${name}’s own browser. ${name} never sees your password.`}
         </p>
       ) : null}

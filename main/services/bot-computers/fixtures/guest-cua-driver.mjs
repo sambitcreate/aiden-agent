@@ -16,6 +16,8 @@
 //   --elements <file>             JSON array of AX rows every window shows (default: the shared fake's)
 //   --exit-on <tool>              log a call to this tool, then exit without answering (the bridge
 //                                 dropped after the guest got the call)
+//   --hang-on <tool>              log a call to this tool and never answer it (a guest that is slow
+//                                 to check or probe)
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import readline from "node:readline";
@@ -34,6 +36,7 @@ const grantOnPrompt = argv.includes("--grant-on-prompt");
 const exitCode = option("--exit");
 const elementsFile = option("--elements");
 const exitOn = option("--exit-on");
+const hangOn = option("--hang-on");
 
 const log = (event) => {
   if (logPath) appendFileSync(logPath, `${JSON.stringify(event)}\n`, "utf8");
@@ -74,6 +77,7 @@ lines.on("line", (line) => {
     const args = message.params?.arguments ?? {};
     log({ event: "tool-call", name, args });
     if (name === exitOn) process.exit(1);
+    if (name === hangOn) return;
     if (name === "check_permissions" && args.prompt === true && grantOnPrompt && permissionsFile) {
       writeFileSync(permissionsFile, JSON.stringify({ accessibility: true, screen_recording: true }));
     }
