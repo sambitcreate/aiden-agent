@@ -3607,9 +3607,10 @@ final class AidenChatViewModel {
                 await draftStore.settlePendingSend(key: key, session: session)
                 // The admitted text leaves the saved draft under the same
                 // ownership, so a screen or pairing change before this answer
-                // cannot offer it again as an unsent draft.
+                // cannot offer it again as an unsent draft. A draft typed and
+                // saved since is left alone.
                 if !retry, AidenRunInputPresentation.consumesDraft(result) {
-                    await draftStore.consumeDraft(submitted: text, session: session)
+                    await draftStore.consumeDraft(submitted: text, from: draftBeforeSend, session: session)
                 }
             }
             guard retained, !isRemoved, coordinator.isCurrent(context) else { return }

@@ -3818,14 +3818,20 @@ class AidenChatTest {
             // The chat was reopened before the Mac admitted the input: the older session still
             // retires the admitted text, and only that text.
             val reopened = store.beginSession("inst-1", "chat-1")
-            store.consumeDraft("Fix the tests", submitting)
+            store.consumeDraft("Fix the tests", "Fix the tests\nthen ship", submitting)
             assertEquals("then ship", store.load(reopened))
             assertEquals("Fix the tests", store.load(otherMac))
 
-            store.consumeDraft("then ship", submitting)
+            // A draft typed after the composer cleared is a different draft, even when it starts
+            // with the admitted text.
+            assertTrue(store.save("then ship it today", reopened))
+            store.consumeDraft("then ship", "then ship", submitting)
+            assertEquals("then ship it today", store.load(reopened))
+
+            store.consumeDraft("then ship it today", "then ship it today", submitting)
             assertNull(store.load(reopened))
             // Nothing saved: nothing is written back.
-            store.consumeDraft("anything", submitting)
+            store.consumeDraft("anything", "anything", submitting)
             assertNull(store.load(reopened))
         } finally {
             tempDir.deleteRecursively()

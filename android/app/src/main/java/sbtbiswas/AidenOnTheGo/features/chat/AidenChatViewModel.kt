@@ -2136,8 +2136,9 @@ class AidenChatViewModel(
                 withContext(ioDispatcher) {
                     draftStore.settlePendingSend(key.toString(), session)
                     // The admitted text leaves the saved draft under the same ownership, so a
-                    // screen or client change before this answer cannot offer it again.
-                    if (!retry && AidenRunInputPresentation.consumesDraft(result)) draftStore.consumeDraft(text, session)
+                    // screen or client change before this answer cannot offer it again. A draft
+                    // typed and saved since is left alone.
+                    if (!retry && AidenRunInputPresentation.consumesDraft(result)) draftStore.consumeDraft(text, draftBeforeSend, session)
                 }
                 if (activeClient() !== client) return@launch
                 _pendingSend.value = null

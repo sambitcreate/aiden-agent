@@ -75,16 +75,19 @@ class AidenChatDraftStore(
     }
 
     /**
-     * Removes an admitted run input from the saved draft. Like [settlePendingSend] it accepts an
-     * older session: the Mac admitted the text under this pairing, so the draft must not offer it
-     * again whichever screen is current now. Nothing is written when no draft is saved.
+     * Removes an admitted run input from the saved draft, if the saved draft is still [original],
+     * the draft the input was submitted from. Like [settlePendingSend] it accepts an older session:
+     * the Mac admitted the text under this pairing, so the draft must not offer it again whichever
+     * screen is current now. A draft saved since (text typed after the composer cleared, even one
+     * starting the same way) is not touched, and nothing is written when no draft is saved.
      */
     @Synchronized
-    fun consumeDraft(submitted: String, session: Session) {
+    fun consumeDraft(submitted: String, original: String, session: Session) {
         val file = fileURL(session.instanceId, session.chatId)
         if (!file.exists() || file.length() > maximumDraftBytes) return
         val envelope = runCatching { json.decodeFromString<Envelope>(file.readText(Charsets.UTF_8)) }.getOrNull() ?: return
         if (envelope.version != 1 || envelope.instanceId != session.instanceId || envelope.chatId != session.chatId) return
+        if (envelope.text != original) return
         val remaining = AidenRunInputPresentation.consumedDraft(submitted, envelope.text)
         if (remaining == envelope.text) return
         if (remaining.isEmpty()) { file.delete(); return }
