@@ -120,6 +120,37 @@ test("pausing while a reply streams leaves it interrupted under the pause and ru
   }
 });
 
+test("a pause whose session can't reopen still stops the Bot's other work and tells every window it is paused", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const published: BotSessionState[] = [];
+  const reports: unknown[] = [];
+  const order: string[] = [];
+  let opens = 0;
+  const reopenFailure = new Error("the session could not reopen");
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    onStateChange: (_botId, state) => published.push(state),
+    onReport: (_botId, error) => reports.push(error),
+    // The first open runs the reply; the reopen after the pause closes it fails once.
+    onSessionOpen: () => {
+      opens += 1;
+      if (opens === 2) throw reopenFailure;
+    },
+    afterPaused: () => void order.push("afterPaused"),
+  });
+  try {
+    await streaming(service, fauxModels);
+    assert.deepEqual(await service.pause(BOT, "mac"), pausedAt(), "the pause answers, with no turn it could read back");
+    assert.deepEqual(order, ["afterPaused"], "the Bot's computer and legacy chats are still stopped");
+    assert.deepEqual(published[published.length - 1], pausedAt(), "every window hears the Bot is paused");
+    assert.ok(reports.includes(reopenFailure), "the failure is reported");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(fauxModels.calls(), 1, "nothing runs");
+    assert.deepEqual(await service.state(BOT), pausedAt(), "the Bot stays paused");
+  } finally {
+    await service.shutdown();
+  }
+});
+
 test("pausing while a tool is running closes the turn; unpause and Resume finish it", async () => {
   let blockFirst = true;
   const tool = countingTool("run_command", async (params, signal) => {

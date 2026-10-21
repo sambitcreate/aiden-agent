@@ -834,11 +834,17 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         } catch (error) {
           deps.onReport?.(botId, error);
         }
-        if (owner.isOpen(botId) && !suspending.has(botId) && (await hasLiveWork(owner, botId))) {
-          const outcome = await owner.suspend(botId, deps.suspendTimeoutMs);
-          if (outcome === "timed_out") reopenAfterSuspend(owner, botId);
-          // Reopen: the closed turn is read back as interrupted and nothing is scheduled.
-          else if (outcome === "closed") await owner.inspect(botId);
+        // A close or reopen that fails is reported, never raised: the pause is
+        // already durable, so the Bot's other work still stops and every window hears it.
+        try {
+          if (owner.isOpen(botId) && !suspending.has(botId) && (await hasLiveWork(owner, botId))) {
+            const outcome = await owner.suspend(botId, deps.suspendTimeoutMs);
+            if (outcome === "timed_out") reopenAfterSuspend(owner, botId);
+            // Reopen: the closed turn is read back as interrupted and nothing is scheduled.
+            else if (outcome === "closed") await owner.inspect(botId);
+          }
+        } catch (error) {
+          deps.onReport?.(botId, error);
         }
         try {
           await deps.afterPaused?.(botId);
