@@ -1595,6 +1595,233 @@
       "expected": []
     },
     {
+      "id": "br-slack-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://app.slack.com/client/T0123/C0456",
+        "key": "Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Message #general"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "br-whatsapp-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://web.whatsapp.com/",
+        "key": "Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Type a message"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "br-linkedin-message-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://www.linkedin.com/messaging/thread/2-abc/",
+        "key": "Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Write a message…"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "br-messenger-unnamed-enter",
+      "note": "An unnamed text box on a chat site is its message box.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://www.messenger.com/t/1000123",
+        "key": "Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "br-gmail-control-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://mail.google.com/mail/u/0/#inbox?compose=new",
+        "key": "Control+Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Message Body"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "br-outlook-meta-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://outlook.office.com/mail/",
+        "key": "Meta+Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Message body"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "br-slack-shift-enter",
+      "note": "Shift-Enter is a new line.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://app.slack.com/client/T0123/C0456",
+        "key": "Shift+Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Message #general"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-gmail-body-enter",
+      "note": "Enter in a mail body is a new line.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://mail.google.com/mail/u/0/#inbox?compose=new",
+        "key": "Enter",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Message Body"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-google-search-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://www.google.com/",
+        "key": "Enter",
+        "field": {
+          "tag": "textarea",
+          "role": "combobox",
+          "accessibleName": "Search"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-gmail-search-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://mail.google.com/mail/u/0/#inbox",
+        "key": "Enter",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "role": "combobox",
+          "accessibleName": "Search mail"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-slack-search-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://app.slack.com/client/T0123/C0456",
+        "key": "Enter",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "role": "textbox",
+          "accessibleName": "Search Acme"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-slack-tab",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://app.slack.com/client/T0123/C0456",
+        "key": "Tab",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Message #general"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-newsletter-enter",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://news.example.com/signup",
+        "key": "Enter",
+        "field": {
+          "tag": "input",
+          "type": "email",
+          "autocomplete": "email",
+          "accessibleName": "Email"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-type-reply",
+      "note": "Typing into a reply box is not sending it.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://app.slack.com/client/T0123/C0456",
+        "field": {
+          "tag": "div",
+          "role": "textbox",
+          "accessibleName": "Reply…"
+        }
+      },
+      "expected": []
+    },
+    {
       "id": "mcp-gmail-send",
       "action": {
         "surface": "mcp",

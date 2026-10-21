@@ -242,8 +242,42 @@ export const PAYMENT_HOSTS: readonly string[] = Object.freeze([
   "checkout.shopify.com",
 ]);
 
-export function isPaymentHost(host: string): boolean {
+/** Whether `host` is one of `hosts` or a subdomain of one. */
+function hostIn(host: string, hosts: readonly string[]): boolean {
   const normalized = host.trim().toLocaleLowerCase("en-US").replace(/\.$/u, "");
   if (normalized.length === 0) return false;
-  return PAYMENT_HOSTS.some((candidate) => normalized === candidate || normalized.endsWith(`.${candidate}`));
+  return hosts.some((candidate) => normalized === candidate || normalized.endsWith(`.${candidate}`));
 }
+
+export function isPaymentHost(host: string): boolean {
+  return hostIn(host, PAYMENT_HOSTS);
+}
+
+/**
+ * Web chat apps, where Enter in the message box sends it. A host matches
+ * itself and its subdomains.
+ */
+export const MESSAGING_HOSTS: readonly string[] = Object.freeze([
+  "slack.com", "web.whatsapp.com", "messenger.com", "discord.com", "teams.microsoft.com", "teams.live.com",
+  "web.telegram.org", "messages.google.com", "chat.google.com", "web.skype.com", "app.element.io",
+]);
+
+/** Web mail, where Enter in the body is a new line and Control- or Command-Enter sends. */
+export const MAIL_HOSTS: readonly string[] = Object.freeze([
+  "mail.google.com", "outlook.live.com", "outlook.office.com", "outlook.office365.com", "mail.yahoo.com",
+  "mail.proton.me", "app.fastmail.com",
+]);
+
+export function isMessagingHost(host: string): boolean {
+  return hostIn(host, MESSAGING_HOSTS);
+}
+
+export function isMailHost(host: string): boolean {
+  return hostIn(host, MAIL_HOSTS);
+}
+
+/** Words in a text box's name that make it a message box ("Message #general", "Type a message", "Reply"). Compared as stems. */
+export const COMPOSER_WORDS: ReadonlySet<string> = new Set(["message", "reply", "chat", "dm", "compose"].map(stem));
+
+/** Words in a text box's name that make it a search or filter box, where Enter sends nothing. Compared as stems. */
+export const SEARCH_BOX_WORDS: ReadonlySet<string> = new Set(["search", "find", "filter", "jump"].map(stem));

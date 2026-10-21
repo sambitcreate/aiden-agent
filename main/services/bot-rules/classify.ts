@@ -17,7 +17,9 @@
 //   negates them.
 // - The other classes take words only from what the action presses: a button
 //   or link's label, a menu leaf, a tool's name, title or first description
-//   sentence. Typing into a field labelled "Reply" is not sending.
+//   sentence. Typing into a field labelled "Reply" is not sending; pressing
+//   the key that sends it is (Return in a messaging app, Enter in a web
+//   message box, Control- or Command-Enter in web mail).
 // - Window titles, URL hosts and app names never make a class by word; they
 //   only feed custom-rule matching.
 // - Passive actions (scroll, wait, focus an app, move a window) change nothing
@@ -35,14 +37,18 @@ import { parseComputerUseKeyChord } from "../computer-use/safety.js";
 import {
   actionStems,
   COMMUNICATION_APPS,
+  COMPOSER_WORDS,
   contentStems,
   INSTALL_LEAVES,
+  isMailHost,
+  isMessagingHost,
   isPaymentHost,
   LOCKED_CLASSES,
   MCP_NAME_VERBS,
   MCP_POST_MESSAGE_WORDS,
   phraseMatches,
   phraseStems,
+  SEARCH_BOX_WORDS,
   stem,
   tokenize,
 } from "./words.js";
@@ -216,7 +222,7 @@ function chordOf(keys: string | undefined): { key: string; modifiers: readonly s
   }
 }
 
-const SUBMIT_KEYS = new Set(["return", "enter", "kp_enter", "keypadenter"]);
+const SUBMIT_KEYS = new Set(["return", "enter", "kp_enter", "keypadenter", "numpadenter"]);
 const ERASE_KEYS = new Set(["delete", "backspace", "del", "forwarddelete"]);
 
 /** A single printable character (with at most Shift): typing, one key at a time. */
@@ -308,6 +314,47 @@ function classifyComputer(action: Extract<BotClassifiableAction, { surface: "com
   out.words(action.intent, "the Bot's stated intent", classes);
 }
 
+/** A `browser_press` key as one chord: `Control+Enter` is Enter with Control. */
+function browserChord(keys: string | undefined): { key: string; modifiers: readonly string[] } | undefined {
+  if (keys === undefined || keys.length === 0) return undefined;
+  const parts = keys.split("+").map(lower);
+  const key = parts.pop();
+  if (key === undefined || key.length === 0) return undefined;
+  return { key, modifiers: parts.filter((part) => part.length > 0) };
+}
+
+const BROWSER_TEXT_INPUT_TYPES = new Set(["", "text"]);
+
+/**
+ * Why a key press sends a message from a web page's message box, or
+ * `undefined`. The box is an editable text box that is not a search or filter
+ * box and is named for messages or sits on a chat site. Enter sends there;
+ * Shift- or Alt-Enter is a new line. In web mail only Control- or
+ * Command-Enter sends.
+ */
+function browserSendKey(action: Extract<BotClassifiableAction, { surface: "browser" }>, host: string | undefined): string | undefined {
+  if (action.tool !== "browser_press") return undefined;
+  const chord = browserChord(action.key);
+  if (chord === undefined || !SUBMIT_KEYS.has(chord.key)) return undefined;
+  if (chord.modifiers.some((modifier) => modifier !== "control" && modifier !== "meta")) return undefined;
+  const field = action.field;
+  if (field === undefined) return undefined;
+  const role = lower(field.role);
+  const tag = lower(field.tag);
+  const type = lower(field.type);
+  if (role === "searchbox" || role === "combobox" || type === "search") return undefined;
+  const editable = role === "textbox" || tag === "textarea" || (tag === "input" && BROWSER_TEXT_INPUT_TYPES.has(type));
+  if (!editable) return undefined;
+  const name = tokenize((field.accessibleName ?? "").slice(0, MAX_TEXT)).map(stem);
+  if (name.some((word) => SEARCH_BOX_WORDS.has(word))) return undefined;
+  if (host !== undefined && isMailHost(host)) {
+    return chord.modifiers.length > 0 ? "Control- or Command-Enter in a mail message" : undefined;
+  }
+  if (name.some((word) => COMPOSER_WORDS.has(word))) return "Enter in a message box";
+  if (host !== undefined && isMessagingHost(host)) return "Enter in a chat site's text box";
+  return undefined;
+}
+
 function classifyBrowser(action: Extract<BotClassifiableAction, { surface: "browser" }>, out: Collector): void {
   const field = action.field;
   const host = hostOf(action.url);
@@ -337,6 +384,9 @@ function classifyBrowser(action: Extract<BotClassifiableAction, { surface: "brow
   out.words(field?.accessibleName, typing ? "field name" : "button or link name", classes);
   out.words(action.locator, "locator", classes);
   out.words(action.selector, "selector", classes);
+
+  const sends = browserSendKey(action, host);
+  if (sends !== undefined) out.strong("communicate", sends);
 }
 
 const POST = stem("post");

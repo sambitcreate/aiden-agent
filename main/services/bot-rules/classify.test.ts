@@ -194,6 +194,38 @@ test("every class decision carries evidence naming the signal, never a field val
   for (const entry of result.evidence) assert.ok(entry.source.length > 0 && entry.source.length < 120);
 });
 
+test("the key that sends a web message is communicating; a new line, a search or an unknown box is not", () => {
+  const press = (key: string, url: string, field?: Extract<BotClassifiableAction, { surface: "browser" }>["field"]) =>
+    [...classifyBotAction({ surface: "browser", tool: "browser_press", url, key, ...(field ? { field } : {}) }, []).classes];
+  const reply = { tag: "textarea", accessibleName: "Reply to Ada" };
+  // A message box anywhere, by its name; the numeric keypad's Enter too.
+  assert.deepEqual(press("Enter", "https://forum.example.org/t/42", reply), ["communicate"]);
+  assert.deepEqual(press("NumpadEnter", "https://forum.example.org/t/42", reply), ["communicate"]);
+  assert.deepEqual(press("Control+Enter", "https://forum.example.org/t/42", reply), ["communicate"]);
+  // A new line, another key, or a box the probe couldn't read.
+  assert.deepEqual(press("Alt+Enter", "https://forum.example.org/t/42", reply), []);
+  assert.deepEqual(press("Shift+Control+Enter", "https://forum.example.org/t/42", reply), []);
+  assert.deepEqual(press("ArrowUp", "https://forum.example.org/t/42", reply), []);
+  assert.deepEqual(press("Enter", "https://app.slack.com/client/T1/C2"), []);
+  // A search box is never a message box, even on a chat site or named for messages.
+  assert.deepEqual(press("Enter", "https://app.slack.com/client/T1/C2", { tag: "input", type: "search" }), []);
+  assert.deepEqual(press("Enter", "https://discord.com/channels/1/2", { tag: "div", role: "searchbox" }), []);
+  assert.deepEqual(press("Enter", "https://example.com/", { tag: "input", type: "text", accessibleName: "Search messages" }), []);
+  // A button or checkbox with focus is not a text box.
+  assert.deepEqual(press("Enter", "https://app.slack.com/client/T1/C2", { tag: "button", accessibleName: "Message" }), []);
+  // An unnamed text box sends only on a chat site, and in web mail only with Control or Command.
+  assert.deepEqual(press("Enter", "https://example.com/", { tag: "input", type: "text" }), []);
+  assert.deepEqual(press("Enter", "https://teams.microsoft.com/v2/", { tag: "div", role: "textbox" }), ["communicate"]);
+  assert.deepEqual(press("Enter", "https://outlook.live.com/mail/0/", { tag: "div", role: "textbox", accessibleName: "Reply" }), []);
+  assert.deepEqual(press("Meta+Enter", "https://outlook.live.com/mail/0/", { tag: "div", role: "textbox" }), ["communicate"]);
+
+  const evidence = classifyBotAction(
+    { surface: "browser", tool: "browser_press", url: "https://web.whatsapp.com/", key: "Enter", field: { role: "textbox", accessibleName: "Type a message" } },
+    [],
+  ).evidence;
+  assert.ok(evidence.some((entry) => entry.actionClass === "communicate" && entry.kind === "strong"));
+});
+
 test("hostile input is bounded and never throws", () => {
   const huge = "send ".repeat(50_000);
   const result = classifyBotAction(
