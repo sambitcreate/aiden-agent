@@ -16,6 +16,7 @@ import androidx.annotation.StringRes
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import java.util.UUID
@@ -287,6 +288,18 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
     is AidenRemoteClientException.MissingCredential, is AidenRemoteClientException.InstallationChanged -> true
     else -> false
 }
+
+/**
+ * Which of `bot:cards`, `bot:activity` and `bot:handoffs` [installation] holds. The Mac shapes a
+ * Bot session feed by these (its cards, Chat activity, hand-offs and the paused state) when the
+ * feed opens, and keeps that shape for the feed's life. A Bot chat can open from the pairing's
+ * saved features while it connects, before this connection has negotiated a grant, so the chat
+ * compares these once `/server` has answered and reopens a feed that opened without one
+ * ([AidenBotSessionController.reopenFeed]).
+ */
+fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemoteCapability> =
+    listOf(AidenRemoteCapability.BOT_CARDS, AidenRemoteCapability.BOT_ACTIVITY, AidenRemoteCapability.BOT_HANDOFFS)
+        .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
 
 /** What the composer does with its text (revision 37). */
 enum class AidenBotComposerMode {
@@ -593,6 +606,19 @@ class AidenBotSessionController(
         restoreJob?.cancel()
         unheldTimers.values.forEach { it.cancel() }
         unheldTimers.clear()
+    }
+
+    /**
+     * Opens the feed again: a fresh read of the session, then a new feed whose first frame is a
+     * snapshot. The Mac shapes a feed by this phone's grants when it opens, so a grant negotiated
+     * after this chat's feed opened ([aidenBotSessionFeedGrants]) reaches it only on a new one.
+     * Unsent messages, their keys and any answer on its way are left as they are. Does nothing
+     * unless the feed is following.
+     */
+    fun reopenFeed() {
+        if (released || feedJob?.isActive != true) return
+        feedJob?.cancel()
+        feedJob = scope.launch { follow() }
     }
 
     /** The notice was read. */

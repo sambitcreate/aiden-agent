@@ -177,6 +177,18 @@ private fun AidenBotSessionContent(
         controller.start()
         onDispose { controller.stopFollowing() }
     }
+    // The Mac shapes the feed by the grants this phone holds when it opens (cards, Chat activity,
+    // hand-offs and the paused state). This chat can open from the pairing's saved features while
+    // it connects, before this connection has negotiated a grant (`bot:handoffs` after the Mac
+    // updates); once `/server` has answered, every grant is negotiated and saved, and a feed that
+    // opened without one opens again.
+    val feedOpenedWith = remember(controller) { aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) }
+    val grantsSettled = serverInfo != null
+    LaunchedEffect(controller, grantsSettled) {
+        if (grantsSettled && aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) != feedOpenedWith) {
+            controller.reopenFeed()
+        }
+    }
     val ui by controller.state.collectAsStateWithLifecycle()
     // Revision 37 (G24): a hand-off that arrives while the app is in the background, with this
     // chat still open behind it, posts one local notification that opens the chat.

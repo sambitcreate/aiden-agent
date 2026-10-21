@@ -2458,4 +2458,54 @@ class AidenBotSessionControllerTest {
         assertEquals(transport.unpauseKeys[0], transport.unpauseKeys[1])
         assertEquals(2, transport.unpauseKeys.size)
     }
+
+    @Test
+    fun aFeedThatOpenedBeforeTheHandoffsGrantOpensAgainAndShowsTheCard() = runTest {
+        // The Mac shapes a feed by the grants this phone held when it opened. A chat opened while
+        // connecting can open its feed before `bot:handoffs` is negotiated: no card on that feed.
+        val beforeGrant = handoffSession.copy(handoff = null)
+        val reads = FakeTransport(beforeGrant)
+        var opens = 0
+        val closed = mutableListOf<Int>()
+        val transport = object : AidenBotSessionTransport by reads {
+            override fun events(botId: String): Flow<AidenBotSessionEvent> = flow {
+                val open = ++opens
+                emit(snapshotOf(reads.session))
+                try {
+                    awaitCancellation()
+                } finally {
+                    closed += open
+                }
+            }
+        }
+        val controller = AidenBotSessionController(beforeGrant.botId, transport, backgroundScope)
+        controller.reopenFeed()
+        runCurrent()
+        assertEquals("nothing to reopen before the chat follows", 0, opens)
+
+        controller.start()
+        runCurrent()
+        assertEquals(1, opens)
+        assertNull(controller.state.value.handoff)
+        assertTrue(controller.send("Still there?"))
+        runCurrent()
+        assertEquals(1, reads.sends.size)
+
+        // The grant is saved: the same chat reads the Mac again and gets the card, and the
+        // message it already took isn't sent again.
+        reads.session = handoffSession
+        controller.reopenFeed()
+        runCurrent()
+        assertEquals(2, opens)
+        assertEquals("the first feed is closed", listOf(1), closed)
+        assertEquals(handoffSession.handoff, controller.state.value.handoff)
+        assertEquals(AidenBotComposerMode.HANDOFF_NOTE, controller.state.value.composerMode)
+        assertEquals(1, reads.sends.size)
+
+        controller.stopFollowing()
+        runCurrent()
+        controller.reopenFeed()
+        runCurrent()
+        assertEquals("a closed chat opens no feed", 2, opens)
+    }
 }

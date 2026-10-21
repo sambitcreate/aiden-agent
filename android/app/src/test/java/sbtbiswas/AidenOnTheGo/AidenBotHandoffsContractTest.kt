@@ -1,6 +1,11 @@
 package sbtbiswas.AidenOnTheGo
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -11,8 +16,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,13 +28,17 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotSessionEventOutcome
 import sbtbiswas.AidenOnTheGo.features.bots.aidenApplyBotSessionEvent
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotSessionFeedGrants
+import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
 import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestBotHandoffs
 import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestBotHandoffs
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseScope
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseValidator
 import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
@@ -37,6 +48,9 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Contract revision 37 (`bot:handoffs`): hand-offs and pause, read from the fixture every client shares. */
 class AidenBotHandoffsContractTest {
@@ -323,6 +337,70 @@ class AidenBotHandoffsContractTest {
         val before = server.requestCount
         assertNull(aidenRequestBotHandoffs(client, mac(base, emptyList()), installationHolding(base)))
         assertEquals(before, server.requestCount)
+    }
+
+    @Test
+    fun aBotChatOpenedWhileConnectingSeesTheNewGrantByTheTimeServerInfoIsPublished() = runBlocking {
+        // A Bot chat opens from the pairing's saved features while it connects, so its feed can
+        // open before this connection asks for `bot:handoffs`. The chat compares the feed's grants
+        // once `/server` is published: they must have changed by then, and only when a grant came.
+        val names = base.map { it.rawValue }
+        val asks = AtomicInteger()
+        val asked = CountDownLatch(1)
+        val answer = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> {
+                    val held = if (asks.get() > 0) names + "bot:handoffs" else names
+                    MockResponse().setResponseCode(200).setBody(serverBody(held, names + "bot:handoffs"))
+                }
+                "/api/aiden/v1/device/capabilities" -> {
+                    asked.countDown()
+                    answer.await(5, TimeUnit.SECONDS)
+                    asks.incrementAndGet()
+                    MockResponse().setResponseCode(200)
+                        .setBody("""{"capabilities":${JsonArray((names + "bot:handoffs").map(::JsonPrimitive))}}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        val root = kotlin.io.path.createTempDirectory("aiden-handoff-feed").toFile()
+        val job = SupervisorJob()
+        try {
+            val installations = AidenInstallationStore(root, InMemoryAidenSecureStore())
+            installations.addInstallation(
+                AidenPairingExchange(
+                    instanceId = "test_instance",
+                    deviceId = "test_device",
+                    endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test",
+                    credential = "synthetic",
+                    capabilities = base
+                ),
+                null
+            )
+            val coordinator = AidenRemoteCoordinator(installations, root, scope = CoroutineScope(Dispatchers.IO + job))
+            assertTrue("the Mac is asked for the grant", asked.await(5, TimeUnit.SECONDS))
+            // A chat that opens now, while the grant is being asked for, opens its feed without it.
+            assertNull(coordinator.serverInfo.value)
+            assertEquals(emptySet<AidenRemoteCapability>(), aidenBotSessionFeedGrants(installations.activeInstallation))
+            answer.countDown()
+
+            val published = requireNotNull(withTimeout(5_000) { coordinator.serverInfo.first { it != null } })
+            assertTrue(published.supportsBotHandoffs)
+            assertEquals(setOf(AidenRemoteCapability.BOT_HANDOFFS), aidenBotSessionFeedGrants(installations.activeInstallation))
+
+            // The next connection asks for nothing, so a chat that opened while it connected keeps its feed.
+            coordinator.refreshClient()
+            val openedWith = aidenBotSessionFeedGrants(installations.activeInstallation)
+            withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+            assertEquals(openedWith, aidenBotSessionFeedGrants(installations.activeInstallation))
+            assertEquals("the grant is asked for once", 1, asks.get())
+        } finally {
+            answer.countDown()
+            job.cancel()
+            root.deleteRecursively()
+        }
     }
 
     @Test
