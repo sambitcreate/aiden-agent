@@ -1,7 +1,7 @@
-// Child-process half of the Bot hand-off crash test (run through
+// Child-process half of the Bot hand-off and sign-in crash tests (run through
 // kill-harness.mjs `scenario`). It starts a Bot turn that hands a step to the
-// person and announces the card's wait id, so the parent can SIGKILL the
-// process while the card waits.
+// person (or asks them to sign in) and announces the card's wait id, so the
+// parent can SIGKILL the process while the card waits.
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -10,13 +10,22 @@ import { createBotHarnessHost } from "../harness-host.js";
 import { createBotHandoffs } from "../bot-handoffs.js";
 import { recordingDeps } from "./fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF } from "./faux.js";
-import { HANDOFF_ARGS, HANDOFF_TOOL_NAME, handoffEntries } from "./handoff-fixtures.js";
+import {
+  HANDOFF_ARGS,
+  HANDOFF_TOOL_NAME,
+  handoffEntries,
+  SIGN_IN_ARGS,
+  SIGN_IN_TOOL_NAME,
+  signInEntries,
+} from "./handoff-fixtures.js";
 
 type Emit = (tag: string, value: unknown) => void;
 
 export interface HandoffScenarioArgs {
   profileDir: string;
   botId: string;
+  /** Ask the person to sign in instead of handing off a step. */
+  signIn?: boolean;
 }
 
 export async function run(args: HandoffScenarioArgs, emit: Emit): Promise<void> {
@@ -26,10 +35,9 @@ export async function run(args: HandoffScenarioArgs, emit: Emit): Promise<void> 
     const [prompt] = handoffs.pending(botId);
     if (prompt) emit("HANDOFF", prompt.waitId);
   });
-  const deps = recordingDeps({ tools: handoffEntries(handoffs, args.botId) });
-  const { models } = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], { stopReason: "toolUse" }),
-  ]);
+  const deps = recordingDeps({ tools: args.signIn ? signInEntries(handoffs, args.botId) : handoffEntries(handoffs, args.botId) });
+  const call = args.signIn ? fauxToolCall(SIGN_IN_TOOL_NAME, SIGN_IN_ARGS) : fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS);
+  const { models } = createFauxModels([fauxAssistantMessage([call], { stopReason: "toolUse" })]);
   const registries = new Map<string, ReturnType<typeof createBotRegistry>>();
   const host = await createBotHarnessHost({
     profileDir: args.profileDir,

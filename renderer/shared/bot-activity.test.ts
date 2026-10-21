@@ -30,6 +30,7 @@ const SPEC_TOOL_PHASES: ReadonlyArray<[string, string]> = [
   ["routine_notes", "routine"],
   ["ask_user_question", "waiting"],
   ["hand_off", "waiting"],
+  ["sign_in", "waiting"],
   ["share_image", "working"],
   ["suggest_connection", "working"],
   ["skill_meal_planning", "working"],

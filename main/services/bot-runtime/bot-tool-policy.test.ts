@@ -63,3 +63,31 @@ test("a hand-off is allowed for any Bot on an attended turn, and refused when an
 test("a hand-off never needs an approval of its own: the card is the person's answer", async () => {
   assert.equal(await botToolApprovalSummary(HANDOFF, { action: "Pay the invoice" }, bareFacts()), undefined);
 });
+
+const SIGN_IN = "sign_in";
+
+/** A Bot whose access includes its own browser. */
+function browserFacts(): BotToolFacts {
+  const facts = bareFacts();
+  return { ...facts, authority: { ...facts.authority, otherCapabilities: [{ kind: "browser" }] } as unknown as BotRuntimeEffectiveAuthority };
+}
+
+test("a sign-in card is offered only to runs a person is there to answer", () => {
+  for (const [label, requestIds, attended] of RUNS) {
+    assert.equal(botIngressAllowsTool(SIGN_IN, requestIds), attended, label);
+  }
+});
+
+test("a sign-in needs the Browser in the Bot's access and a person there to sign in", async () => {
+  for (const [label, requestIds, attended] of RUNS) {
+    if (requestIds.includes(INTRO)) continue;
+    const turns = requestIds.map(botTurnOf);
+    const turn = { telegram: turns.some((each) => each.telegram), routine: turns.some((each) => each.routine) };
+    assert.equal((await botToolVerdict(SIGN_IN, browserFacts(), turn)).allowed, attended, label);
+  }
+  assert.deepEqual(await botToolVerdict(SIGN_IN, bareFacts(), {}), {
+    allowed: false,
+    reason: "Sign-in needs the Browser in this Bot's access.",
+  });
+  assert.equal(await botToolApprovalSummary(SIGN_IN, { site: "github.com" }, browserFacts()), undefined, "the card is the person's answer");
+});

@@ -66,6 +66,11 @@ test("a search step shows its query; a connection step names the app and shows n
     { kind: "waiting", label: "Handed you a step" },
     "a hand-off is not a question, and its card already shows what it asks",
   );
+  assert.deepEqual(
+    botStepDescriptor("sign_in", { site: "github.com", why: "To read your issues." }),
+    { kind: "waiting", label: "Asked you to sign in" },
+    "a sign-in reads as what it asked, and its card already names the site",
+  );
   assert.deepEqual(botStepDescriptor("read_file", "not an object"), { kind: "reading", label: "Read 1 file" });
 });
 
