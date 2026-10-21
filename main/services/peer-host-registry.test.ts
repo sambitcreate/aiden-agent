@@ -561,6 +561,48 @@ test("a Mac opts into a host's Bot activity frames only when the host serves the
   assert.deepEqual(await negotiated(["bot-durable-session-v1"]), []);
 });
 
+test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest, only when the host lists them", async () => {
+  const negotiate = async (serverCapabilities: string[] | undefined, refuse: (accepts: string[]) => boolean = () => false) => {
+    const held = new Set(["chat:read", "bot:read", "bot:write"]);
+    const { store, requests, stored } = scripted(
+      {
+        capabilities: [...held],
+        features: ["bot-durable-session-v1", "bot-activity-v1"],
+        ...(serverCapabilities ? { serverCapabilities } : {}),
+      },
+      (input) => {
+        if (input.path !== "/device/capabilities") return { ok: true };
+        const accepts = (input.body as { accepts: string[] }).accepts;
+        // A host that does not know a name refuses the whole request.
+        if (refuse(accepts)) throw new PeerTransportError("request_failed", 400);
+        for (const grant of accepts) held.add(grant);
+        return { capabilities: [...held] };
+      },
+    );
+    await store.request("host_a", { path: "/bots" });
+    return {
+      bodies: requests.filter((request) => request.path === "/device/capabilities").map((request) => request.body),
+      grants: stored()[0]!.capabilities,
+    };
+  };
+  const lists = ["chat:read", "bot:read", "bot:write", "bot:cards", "bot:activity", "bot:handoffs"];
+  const both = await negotiate(lists);
+  assert.deepEqual(both.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }]);
+  assert.ok(both.grants.includes("bot:activity") && both.grants.includes("bot:handoffs"));
+
+  // A refused hand-off request costs the Mac none of the grants the first call won.
+  const refused = await negotiate(lists, (accepts) => accepts.includes("bot:handoffs"));
+  assert.deepEqual(refused.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }]);
+  assert.ok(refused.grants.includes("bot:activity"));
+  assert.equal(refused.grants.includes("bot:handoffs"), false);
+
+  // Hand-offs have no feature token: a host that does not list them, or lists nothing, is never asked.
+  assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:activity"])).bodies, [{ accepts: ["bot:activity"] }]);
+  assert.deepEqual((await negotiate(undefined)).bodies, [{ accepts: ["bot:activity"] }]);
+  // With nothing else to ask for, the hand-off call still goes alone.
+  assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:handoffs"])).bodies, [{ accepts: ["bot:handoffs"] }]);
+});
+
 test("a malformed route hint is ignored instead of failing the connection", async () => {
   const { store } = scripted(
     { capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: [{ endpoint: "not a url" }] },

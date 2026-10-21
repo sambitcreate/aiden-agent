@@ -13,6 +13,36 @@ export function botPausedText(name: string): string {
   return `${name} is paused.`;
 }
 
+/**
+ * The paused card itself. `onResume` lifts the pause wherever the Bot lives:
+ * on this Mac, or on the paired Mac a remote Bot's chat talks to.
+ */
+export function BotPausedNotice({
+  name,
+  busy = false,
+  onResume,
+}: {
+  name: string;
+  /** A Resume is on its way: the button waits for it. */
+  busy?: boolean;
+  onResume(): void;
+}) {
+  return (
+    <BotNoticeCard
+      label={botPausedText(name)}
+      icon={<Pause />}
+      title={botPausedText(name)}
+      actions={
+        <Button variant="accent" size="small" disabled={busy} onClick={onResume}>
+          Resume
+        </Button>
+      }
+    >
+      <p>{`${name} won’t reply or run routines until you resume it.`}</p>
+    </BotNoticeCard>
+  );
+}
+
 export function BotPausedCard({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }) {
   // One Resume at a time: the button is disabled while the first is in flight.
   const [busy, setBusy] = React.useState(false);
@@ -24,18 +54,5 @@ export function BotPausedCard({ bot }: { bot: Pick<BotDefinition, "id" | "name">
       setBusy(false);
     }
   };
-  return (
-    <BotNoticeCard
-      label={botPausedText(bot.name)}
-      icon={<Pause />}
-      title={botPausedText(bot.name)}
-      actions={
-        <Button variant="accent" size="small" disabled={busy} onClick={() => void resume()}>
-          Resume
-        </Button>
-      }
-    >
-      <p>{`${bot.name} won’t reply or run routines until you resume it.`}</p>
-    </BotNoticeCard>
-  );
+  return <BotPausedNotice name={bot.name} busy={busy} onResume={() => void resume()} />;
 }

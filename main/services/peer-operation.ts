@@ -12,6 +12,9 @@ import {
 } from "./peer-transport.js";
 import {
   parseAidenRemoteBotConnectionRequestReceipt,
+  parseAidenRemoteBotHandoffAnswerReceipt,
+  parseAidenRemoteBotHandoffAnswerRequest,
+  parseAidenRemoteBotHandoffOpenOnMacReceipt,
   parseAidenRemoteBotMessageReceipt,
   parseAidenRemoteBotQuestionAnswerReceipt,
   parseAidenRemoteBotSession,
@@ -43,7 +46,7 @@ const ATTACHMENT_ID = /^[A-Za-z0-9._:-]{1,256}$/u;
 const PUBLIC_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 /** A staged upload's ID, as `POST /chats/{chatId}/attachments` mints it. */
 const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
-/** A Bot question's durable wait id, as the host's answer route accepts it. */
+/** A Bot question's or hand-off's durable wait id, as the host's answer routes accept it. */
 const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** Run-control operations reconcile from the host feed's run state. */
@@ -74,6 +77,9 @@ export const PEER_BOT_SESSION_MUTATIONS: ReadonlySet<string> = new Set([
   "botDismiss",
   "botStop",
   "botAnswerQuestion",
+  "botAnswerHandoff",
+  "botPause",
+  "botUnpause",
 ]);
 
 /** A fork names one message to cut at and, optionally, a summary of what followed. */
@@ -154,9 +160,11 @@ export async function peerOperationResult(
   if (name === "forkSummaryCancel") return forkSummaryCancelled(value);
   if (name === "botSession") return parseAidenRemoteBotSession(value);
   if (name === "botSend") return parseAidenRemoteBotMessageReceipt(value);
-  if (name === "botResume" || name === "botDismiss" || name === "botStop")
+  if (name === "botResume" || name === "botDismiss" || name === "botStop" || name === "botPause" || name === "botUnpause")
     return parseAidenRemoteBotSessionStateView(value);
   if (name === "botAnswerQuestion") return parseAidenRemoteBotQuestionAnswerReceipt(value);
+  if (name === "botAnswerHandoff") return parseAidenRemoteBotHandoffAnswerReceipt(value);
+  if (name === "botHandoffOpenOnMac") return parseAidenRemoteBotHandoffOpenOnMacReceipt(value);
   if (name === "botConnectionRequest") return parseAidenRemoteBotConnectionRequestReceipt(value);
   return value;
 }
@@ -422,6 +430,31 @@ export function peerOperationRequest(
       path = `/bots/${id()}/questions/${pattern(input.itemId, BOT_WAIT_ID)}/answer`;
       method = "POST";
       needsKey = true;
+      break;
+    case "botAnswerHandoff":
+      path = `/bots/${id()}/handoffs/${pattern(input.itemId, BOT_WAIT_ID)}/answer`;
+      method = "POST";
+      needsKey = true;
+      // Only `{ outcome, note? }` with a known outcome reaches the host.
+      body = parseAidenRemoteBotHandoffAnswerRequest(input.body);
+      break;
+    case "botHandoffOpenOnMac":
+      path = `/bots/${id()}/handoffs/${pattern(input.itemId, BOT_WAIT_ID)}/open-on-mac`;
+      method = "POST";
+      needsKey = true;
+      if (input.body !== undefined && Object.keys(peerRecord(input.body)).length > 0)
+        throw new Error("Invalid peer Bot session request.");
+      body = {};
+      break;
+    case "botPause":
+    case "botUnpause":
+      // The same route: POST pauses, DELETE (without a body) lifts the pause.
+      path = `/bots/${id()}/pause`;
+      method = operation === "botPause" ? "POST" : "DELETE";
+      needsKey = true;
+      if (input.body !== undefined && Object.keys(peerRecord(input.body)).length > 0)
+        throw new Error("Invalid peer Bot session request.");
+      body = {};
       break;
     case "botConnectionRequest":
       path = `/bots/${id()}/connection-requests`;

@@ -3,8 +3,12 @@
 // helps, Skip and Done. The shared Bot notice card, elevated like an approval,
 // with the Bot's own face in the tile; no coloured borders. The composer stays
 // below it: typing there answers Done with a note.
+//
+// A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
+// sign-in happens in its own browser over there, so that card offers
+// "Finish on <Mac>" and Skip instead of Open and Done.
 
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Laptop } from "lucide-react";
 import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
@@ -26,28 +30,48 @@ export function HandoffCard({
   avatar,
   handoff,
   busy = false,
+  finishOn,
   onOpen,
+  onFinish,
   onAnswer,
 }: {
-  botId: string;
+  /** A Bot of this Mac, whose photo the tile may show; left out for a Bot on another Mac. */
+  botId?: string;
   name: string;
   avatar: BotAvatarValue;
-  handoff: BotPendingHandoff;
+  handoff: Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" | "rule">;
   /** An answer or Open is on its way: the buttons wait for it. */
   busy?: boolean;
+  /** The other Mac the Bot lives on, by name: a sign-in is finished there. */
+  finishOn?: string;
   onOpen(): void;
+  /** "Finish on <Mac>": bring the sign-in forward on the Bot's own Mac. */
+  onFinish?(): void;
   onAnswer(outcome: BotHandoffOutcome): void;
 }) {
-  const host = handoff.open ? linkHost(handoff.open.url) : undefined;
+  const elsewhere = handoff.kind === "sign_in" && finishOn !== undefined;
+  const host = handoff.open && !elsewhere ? linkHost(handoff.open.url) : undefined;
   return (
     <BotNoticeCard
       label={`${name} needs you`}
       elevated
-      iconTile={<BotAvatar botId={botId} avatar={avatar} name={name} photoLoading="immediate" size="small" />}
+      iconTile={
+        <BotAvatar
+          {...(botId === undefined ? {} : { botId, photoLoading: "immediate" as const })}
+          avatar={avatar}
+          name={name}
+          size="small"
+        />
+      }
       title={`Your turn: ${handoff.action}`}
       actions={
         <>
-          {handoff.open ? (
+          {elsewhere ? (
+            <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
+              <Laptop aria-hidden="true" />
+              {`Finish on ${finishOn}`}
+            </Button>
+          ) : handoff.open ? (
             <Button
               variant="filled"
               size="small"
@@ -62,9 +86,11 @@ export function HandoffCard({
           <Button variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
             Skip
           </Button>
-          <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
-            Done
-          </Button>
+          {elsewhere ? null : (
+            <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+              Done
+            </Button>
+          )}
         </>
       }
     >
