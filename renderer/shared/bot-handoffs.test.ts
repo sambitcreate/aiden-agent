@@ -7,6 +7,7 @@ import {
   isBotHandoffOpenUrl,
   isBotHandoffOrigin,
   normalizeBotHandoffAction,
+  withoutBotHandoffControls,
 } from "./bot-handoffs.js";
 
 test("a card opens only https pages with a host and no credentials", () => {
@@ -48,6 +49,19 @@ test("the card title is one tidy line without a trailing full stop", () => {
   assert.equal(normalizeBotHandoffAction("Approve the payment..."), "Approve the payment");
   assert.equal(normalizeBotHandoffAction("Sign the form?"), "Sign the form?", "a question mark is kept");
   assert.equal(normalizeBotHandoffAction(" . "), "");
+});
+
+test("text the Bot wrote for a card loses control and direction marks, so it reads as what it says", () => {
+  // U+202E would draw "moc.knab" as "bank.com"; a bell or an escape draws nothing honest.
+  assert.equal(normalizeBotHandoffAction("Sign in to \u202Emoc.knab\u202C"), "Sign in to moc.knab");
+  assert.equal(normalizeBotHandoffAction("Pay\u0007 the\u001B[2J invoice\u0085."), "Pay the[2J invoice");
+  assert.equal(normalizeBotHandoffAction("Enter the code\r\nfor your bank"), "Enter the code for your bank");
+  assert.equal(
+    withoutBotHandoffControls("Only you\u2066 get\u2069 the code.\nIt expires soon."),
+    "Only you get the code.\nIt expires soon.",
+  );
+  assert.equal(withoutBotHandoffControls("Tabs\tand\nnew lines stay"), "Tabs\tand\nnew lines stay");
+  assert.equal(withoutBotHandoffControls("שלום, Ada"), "שלום, Ada", "right-to-left text itself is kept");
 });
 
 test("an answer is exactly Done or Skip with an optional note, trimmed", () => {

@@ -24,6 +24,7 @@ import {
   BOT_HANDOFF_WHY_MAX_CHARS,
   isBotHandoffOpenUrl,
   normalizeBotHandoffAction,
+  withoutBotHandoffControls,
   type BotHandoffResultDetails,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { isBoundedBotText } from "../../../renderer/shared/bot-capabilities.js";
@@ -48,6 +49,20 @@ interface HandoffParams {
   open?: { url: string };
 }
 
+/**
+ * A card's `why` as the model wrote it, trimmed and without control or
+ * direction marks; `undefined` when left out or blank. Shared with `sign_in`.
+ */
+export function handoffWhyOf(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error("`why` must be text.");
+  const why = withoutBotHandoffControls(value).trim();
+  if (why && !isBoundedBotText(why, BOT_HANDOFF_WHY_MAX_CHARS)) {
+    throw new Error(`Keep \`why\` under ${BOT_HANDOFF_WHY_MAX_CHARS} characters.`);
+  }
+  return why || undefined;
+}
+
 /** The model's arguments, checked again here: the harness's schema check cannot see https or blank text. */
 function parseParams(params: unknown): HandoffParams {
   const record = (params ?? {}) as { action?: unknown; why?: unknown; open?: unknown };
@@ -57,15 +72,7 @@ function parseParams(params: unknown): HandoffParams {
   if (!isBoundedBotText(action, BOT_HANDOFF_ACTION_MAX_CHARS)) {
     throw new Error(`Keep the action under ${BOT_HANDOFF_ACTION_MAX_CHARS} characters.`);
   }
-  let why: string | undefined;
-  if (record.why !== undefined) {
-    if (typeof record.why !== "string") throw new Error("`why` must be text.");
-    const trimmed = record.why.trim();
-    if (trimmed && !isBoundedBotText(trimmed, BOT_HANDOFF_WHY_MAX_CHARS)) {
-      throw new Error(`Keep \`why\` under ${BOT_HANDOFF_WHY_MAX_CHARS} characters.`);
-    }
-    why = trimmed || undefined;
-  }
+  const why = handoffWhyOf(record.why);
   let open: { url: string } | undefined;
   if (record.open !== undefined) {
     const url = (record.open as { url?: unknown } | null)?.url;

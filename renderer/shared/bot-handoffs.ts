@@ -86,9 +86,25 @@ function boundedText(value: unknown, maximum: number): value is string {
   return isBoundedBotText(value, maximum) && value.trim().length > 0;
 }
 
+/**
+ * Control characters but tab, newline, vertical tab, form feed and carriage
+ * return (whitespace, handled where the text is laid out), DEL, C1 controls,
+ * and the marks that embed, override or isolate text direction.
+ */
+// eslint-disable-next-line no-control-regex -- these are exactly the characters it removes
+const CARD_CONTROL_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+
+/**
+ * Text the Bot wrote for a card, without the characters that could make it
+ * read differently from what it says (a reversed host, a hidden line).
+ */
+export function withoutBotHandoffControls(text: string): string {
+  return text.replace(CARD_CONTROL_CHARACTERS, "");
+}
+
 /** Collapses whitespace and drops trailing full stops, so "Done" texts never read "code.." */
 export function normalizeBotHandoffAction(text: string): string {
-  return text.replace(/\s+/gu, " ").trim().replace(/[.。]+$/u, "").trimEnd();
+  return withoutBotHandoffControls(text.replace(/\s+/gu, " ")).trim().replace(/[.。]+$/u, "").trimEnd();
 }
 
 /**
