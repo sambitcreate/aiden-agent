@@ -2971,7 +2971,8 @@ test("a sign-in the Bot asks for reaches a holder as a sign_in card and other de
       open: { url: "https://github.com" },
     });
     const legacy = await service.session(BOT_ID);
-    assert.equal(last(legacy.entries)?.type === "message" && last(legacy.entries)?.text, "Scout needs you on your Mac: Sign in to github.com");
+    const notice = last(legacy.entries);
+    assert.equal(notice?.type === "message" && notice.text, "Scout needs you on your Mac: Sign in to github.com");
 
     await service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0101", { outcome: "skipped" }, HOLDER);
     const result = await asked;

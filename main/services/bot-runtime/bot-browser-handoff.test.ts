@@ -192,7 +192,7 @@ test("Open again on the same card brings back the tab it opened; once the person
 
   browser.tabs.delete("tab-1");
   await open(BOT, "wait-1", "https://github.com", "sign_in");
-  assert.deepEqual(browser.created.at(-1)?.command, { action: "create", url: "https://github.com", show: true });
+  assert.deepEqual(browser.created[browser.created.length - 1]?.command, { action: "create", url: "https://github.com", show: true });
   assert.deepEqual(browser.heldBy("tab-2"), { holdId: "wait-1", reason: "sign_in" });
 
   handoffs.answer(BOT, "wait-1", { outcome: "done" });

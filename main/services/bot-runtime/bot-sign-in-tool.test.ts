@@ -294,7 +294,7 @@ function fakeBotBrowser() {
   const tabs: BrowserTab[] = [browserTab("tab-1", "https://github.com/issues")];
   const holds = new Map<string, string>();
   const state = (): BrowserState => ({
-    workspaceId: WORKSPACE, revision: 1, tabs: structuredClone(tabs), activeTabId: tabs.at(-1)?.id ?? null,
+    workspaceId: WORKSPACE, revision: 1, tabs: structuredClone(tabs), activeTabId: tabs[tabs.length - 1]?.id ?? null,
     profiles: structuredClone(BUILT_IN_BROWSER_PROFILES), defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
     agentAccessOverride: "inherit", agentAccessAllowed: true, history: [], servers: [],
   });
@@ -392,7 +392,7 @@ test("Open sign-in holds a new tab of the Bot's browser for the person; the Bot 
 
     // Open again brings the same tab back rather than opening another.
     assert.equal(await open("bot-tab", card!.waitId), "browser");
-    assert.deepEqual(browser.opened.at(-1), { action: "select", tabId: "tab-2" });
+    assert.deepEqual(browser.opened[browser.opened.length - 1], { action: "select", tabId: "tab-2" });
     assert.equal(browser.tabs.length, 2);
 
     browser.browse("tab-2", "https://github.com/issues", "Issues");
