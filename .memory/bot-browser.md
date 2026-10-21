@@ -52,6 +52,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - `npm run test:bot-browser`: `bot-browser-tools.test.ts`, `bot-browser-handoff.test.ts` and `main/services/renderer-document-owner.test.ts` (runtime-subagents), `main/handlers/bot-browser.test.ts` and `bot-browser-tab.test.tsx` (renderer-other). New `main/services/browser/*.test.ts` run under `test:browser`'s glob (no lane entry).
 - Credential tests launch Playwright Chromium. Locally (no `npm install`): `PLAYWRIGHT_BROWSERS_PATH=/tmp/p6-browser/pw` with symlinks to `/opt/pw-browsers`.
 - `tests/e2e/bot-browser.spec.ts` bundles `bot-browser-native.ts` with esbuild and runs it as a standalone Electron main (`--no-sandbox` only as root). Fixture fields need `position:absolute` or one covers another.
+- macOS detaches hidden tabs, and a detached page gets no frames (no capture of a page loaded while hidden, no rAF for Playwright actionability). `hostWhileActive` in `browser/service.ts` re-hosts a hidden tab invisibly during queued actions and `capture()` (Linux always keeps it hosted). To reproduce on Linux, make `hide()` detach unconditionally: the spec then fails with "Browser action timed out." at step 1 unless hosting is on (2026-10-21, fixed the macOS CI failure on #559).
 
 ## Not yet / risks
 - `clearBotProfile` clears storage, cache and auth but leaves the empty partition directory on disk.
