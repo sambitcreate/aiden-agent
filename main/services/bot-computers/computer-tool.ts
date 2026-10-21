@@ -495,7 +495,8 @@ export function createBotComputerTool(
           }
         }
       } catch (error) {
-        if (error instanceof BotComputerTakenOverError) return waitForGiveBack();
+        // Awaited, so the idle timer below restarts when the call ends, after Give back.
+        if (error instanceof BotComputerTakenOverError) return await waitForGiveBack();
         if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
         if (error instanceof BotComputerArgumentError || error instanceof BotComputerKeyError) {
           return text(error.message, details, true);

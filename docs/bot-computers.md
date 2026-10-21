@@ -206,18 +206,23 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   shortcuts Computer Use blocks (such as Command-Q) are blocked here too.
 - **`computer_shell`** runs one command with `/bin/sh` inside the computer, over
   SSH as the computer's user, for up to 120 seconds and 64 KiB of output, shown
-  like `run_command`'s output. That user has no administrator rights: `sudo`
-  needs the guest password, which only Aiden holds. The model never sees the
-  guest password or the screen-sharing password.
+  like `run_command`'s output. That user is the computer's administrator, but
+  `sudo` and system changes need the guest password, which only Aiden holds.
+  The model never sees the guest password or the screen-sharing password.
 - **Starting and idle.** Either tool starts the computer when it isn't running,
   with "Starting Ada's computer…" as the step's progress, and each call
   restarts the idle timer. A routine's call starts it for the routine.
 - **Take over.** While the person has the computer, nothing the Bot asks for
-  runs and nothing is captured: the call waits until they give it back, then
-  tells the Bot "The person used the computer; take a fresh capture first."
-  Take over stops an action or command in progress and releases any key or
-  button it held. A screenshot from before Take over, or from an earlier run of
-  the computer, no longer places a click.
+  runs and nothing is captured: a `computer` call waits until they give it
+  back, then tells the Bot "The person used the computer; take a fresh capture
+  first.", and a `computer_shell` command waits and then runs. Take over stops
+  a `computer` action in progress and releases any key or button it held. For
+  a running `computer_shell` command it ends the SSH connection and tells the
+  Bot the command may have partly run or still be running: without a terminal
+  the command itself isn't signalled, so it can go on in the computer until it
+  ends or its time limit stops it.
+  A screenshot from before Take over, or from an earlier run of the computer,
+  no longer places a click.
 - **Shared folder.** `<botHome>/Computer` is shared read-write into the
   computer at `/Volumes/My Shared Files`, which `~/Shared` links to. It is the
   one way files move between the computer and the Bot's Files panel.
@@ -234,10 +239,11 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   call `hand_off` for passwords, codes and payments and let the person do those
   steps, and the rules editor says so. A rule's hand-off card has no Open
   button in this lane.
-- **Routines and Telegram.** Unlike Computer Use and the Bot's browser, the Bot
-  may use its own computer on routine runs and Telegram turns, where nobody is
-  watching. A rule that would ask or hand off on those turns never waits: the
-  call is blocked with what the person needs to do, and the Bot tells them in
+- **Routines and Telegram.** Unlike the Bot's browser, which those turns never
+  get, the Bot may use its own computer on routine runs and Telegram turns,
+  where nobody is watching, and without asking per step as Computer Use on the
+  person's Mac does. A rule that would ask or hand off on those turns never
+  waits: the call is blocked with what the person needs to do, and the Bot tells them in
   its reply. Those turns have no `hand_off`, so there the tool's guidance tells
   the Bot never to enter passwords, codes or payment details and to say in its
   reply what the person needs to do instead.

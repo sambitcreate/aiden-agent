@@ -246,9 +246,11 @@ test("Take over interrupts the action, nothing stays held, and Give back returns
     { kind: "key", keysym: XK_SHIFT, down: false },
     "Shift is released after the interruption",
   );
+  const touchesWhileHeld = h.touches();
   h.control.giveBack("ada");
   const result = await typing;
   assert.equal(textOf(result), BOT_COMPUTER_GIVE_BACK_NOTE);
+  assert.ok(h.touches() > touchesWhileHeld, "the idle timer restarts when the call ends, after Give back");
 
   // The capture from before the person held the computer no longer places a click.
   const before = h.fake.events.length;

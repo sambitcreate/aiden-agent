@@ -116,12 +116,13 @@ test("Take over stops a running command; the call reports it after Give back", a
   await new Promise((resolve) => setImmediate(resolve));
   h.control.takeOver("ada", "viewer");
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(h.calls[0]?.signal?.aborted, true, "the guest command is stopped");
+  assert.equal(h.calls[0]?.signal?.aborted, true, "the wait on the guest command ends");
   assert.equal(settled, false, "the turn waits for the person");
   h.control.giveBack("ada");
   const result = await pending;
   assert.equal(result.isError, true);
-  assert.match(textOf(result), /took over the computer, so the command was stopped/u);
+  // Without a terminal the guest side keeps running, so the Bot must check before a rerun.
+  assert.match(textOf(result), /took over the computer.*still be running.*check before running it again/u);
 });
 
 test("while the person has the computer a command waits, then runs after Give back", async () => {

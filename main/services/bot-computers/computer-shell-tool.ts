@@ -4,8 +4,11 @@
 // - Bounded: 120 seconds (the guest's own alarm, plus a local bound for a dead
 //   connection) and 64 KiB of output, shown like `run_command`'s output.
 // - Control: while the person holds the computer the command waits for Give
-//   back, and Take over stops a running command, as it stops any computer
-//   action. The guest user has no administrator rights without the guest
+//   back, and Take over ends a running command's SSH connection, as it stops
+//   any computer action. Without a terminal the guest side is not signalled,
+//   so the command itself can keep running until it ends or its alarm fires;
+//   the result says so.
+// - The guest user is the computer's administrator, but sudo needs the guest
 //   password, which only Aiden holds and never shows the model.
 
 import { Type } from "@earendil-works/pi-ai";
@@ -46,7 +49,7 @@ export const BotComputerShellParameters = Type.Object(
 
 export const BOT_COMPUTER_SHELL_TOOL_DESCRIPTION =
   "Run a shell command inside your own computer (the macOS virtual machine), never on the person's Mac. " +
-  "Use it to install and run tools there. Runs as the computer's user without administrator rights, for up to 120 seconds, with up to 64 KiB of output. " +
+  "Use it to install and run tools there. Runs as the computer's user, without the password sudo asks for, for up to 120 seconds, with up to 64 KiB of output. " +
   "~/Shared (/Volumes/My Shared Files) is your Computer folder, shared with the person's Files panel.";
 
 export interface BotComputerShellDependencies {
@@ -112,7 +115,7 @@ export function createBotComputerShellTool(
         if (error instanceof BotComputerTakenOverError) {
           await waitForGiveBack();
           return textResult(
-            "The person took over the computer, so the command was stopped. It may have partly run: check before running it again.",
+            "The person took over the computer, so Aiden stopped waiting for the command. It may have partly run, or still be running in the computer: check before running it again.",
             true,
           );
         }
