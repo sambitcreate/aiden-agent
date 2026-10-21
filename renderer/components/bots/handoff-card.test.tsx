@@ -99,3 +99,34 @@ test("on a Bot that lives on another Mac, a sign-in offers Finish there and Skip
   draw({ kind: "action", action: HANDOFF.action, open: HANDOFF.open });
   assert.deepEqual(buttonNames(), ["Open bank.example", "Skip", "Done"]);
 });
+
+const SIGN_IN: BotPendingHandoff = {
+  botId: "bot:ada",
+  waitId: "w-2",
+  toolCallId: "call-2",
+  kind: "sign_in",
+  action: "Sign in to github.com",
+  why: "I need your GitHub account to read your issues.",
+  open: { url: "https://github.com" },
+  origin: "https://github.com",
+  target: "browser",
+  source: "tool",
+};
+
+test("a sign-in asks to sign in to one site for the Bot, opens it in the Bot's browser, and is answered I'm signed in or Skip", () => {
+  const { answers, opens } = mount(SIGN_IN);
+  screen.getByText("Sign in to github.com for Ada");
+  assert.equal(screen.queryByText(/^Your turn/u), null);
+  screen.getByText("I need your GitHub account to read your issues.");
+  screen.getByText("Opens in Ada’s own browser. Ada never sees your password.");
+  assert.deepEqual(buttonNames(), ["Open sign-in", "Skip", "I’m signed in"], "Open sign-in, then Skip, then I'm signed in in tab order");
+  fireEvent.click(screen.getByRole("button", { name: "Open sign-in" }));
+  fireEvent.click(screen.getByRole("button", { name: "I’m signed in" }));
+  assert.equal(opens(), 1);
+  assert.deepEqual(answers, ["done"], "I'm signed in answers Done");
+});
+
+test("a sign-in card names its site by origin, even when the title text says otherwise", () => {
+  mount({ ...SIGN_IN, action: "Sign in to \u202Emoc.buhtig", origin: "https://github.com" });
+  screen.getByText("Sign in to github.com for Ada");
+});

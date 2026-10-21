@@ -163,3 +163,25 @@ test("a tab the person holds says so and names the Bot, and an empty Bot browser
   assert.ok(await screen.findByText(/Planner opens pages here, with its own sign-ins/u));
   assert.equal(screen.queryByText("My bank"), null);
 });
+
+test("a sign-in opened from a phone shows its held tab once the chat opens, and only that once", async () => {
+  // The phone's Open brought this chat forward after the tab was already held,
+  // so there was no "show" left to hear.
+  let tabs: BrowserTab[] = [browserTab({ heldForPerson: { reason: "sign_in" } })];
+  await mountBotChat(() => browserState(tabs));
+  await waitFor(() => assert.equal(botPanel().getAttribute("data-state"), "open"));
+  assert.equal(selectedTab(), "Browser");
+
+  // The person looks at Activity; coming back to the window, or the tab
+  // loading, doesn't pull them back to the same hold.
+  fireEvent.click(within(botPanel()).getByRole("tab", { name: "Activity" }));
+  assert.equal(selectedTab(), "Activity");
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
+  assert.equal(selectedTab(), "Activity");
+
+  // A later sign-in in another tab is new: it shows.
+  tabs = [...tabs, browserTab({ id: "tab-2", title: "Sign in to Slack", heldForPerson: { reason: "sign_in" } })];
+  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
+  await waitFor(() => assert.equal(selectedTab(), "Browser"));
+});

@@ -1157,3 +1157,78 @@ test("a photo sent while a hand-off waits is refused and kept with the note, and
     errors.restore();
   }
 });
+
+const GITHUB_SIGN_IN = {
+  botId: "bot-1",
+  waitId: "wait-s",
+  toolCallId: "tool-s",
+  kind: "sign_in" as const,
+  action: "Sign in to github.com",
+  why: "I need your GitHub account to read your issues.",
+  open: { url: "https://github.com" },
+  origin: "https://github.com",
+  target: "browser" as const,
+  source: "tool" as const,
+};
+
+test("a sign-in card opens the site in the Bot's browser, brings its panel forward, and I'm signed in answers it", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+    "bots:openHandoff": () => ({ opened: "browser" }),
+    "bots:answerHandoff": () => ({ answered: true }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(within(card).getByText("Sign in to github.com for Planner"));
+  const panel = document.getElementById("bot-panel");
+  assert.equal(panel?.getAttribute("data-state"), "closed");
+
+  fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:openHandoff")?.args, [{ botId: "bot-1", waitId: "wait-s" }]),
+  );
+  await waitFor(() => assert.equal(document.getElementById("bot-panel")?.getAttribute("data-state"), "open"));
+
+  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "I’m signed in" }) as HTMLButtonElement).disabled, false));
+  fireEvent.click(within(card).getByRole("button", { name: "I’m signed in" }));
+  await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-s", outcome: "done" }]));
+});
+
+test("while a sign-in waits the composer takes no note, so a password typed there never reaches the Bot", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+    "bots:answerHandoff": () => ({ answered: true }),
+    "bots:stop": () => ({ kind: "idle" }),
+  });
+  await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(
+    screen.getByText("Sign in for Planner with Open sign-in above, then choose I’m signed in.", { selector: "[role=status]" }),
+    "the composer says where to answer",
+  );
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  const box = screen.getByRole("textbox");
+  fireEvent.change(box, { target: { value: "hunter2" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(handoffAnswers(calls).length, 0);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
+});
+
+test("a sign-in page that couldn't open says so, and the card keeps waiting", async () => {
+  const errors = captureErrorToasts();
+  try {
+    await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+      "bots:openHandoff": () => ({ opened: "none" }),
+    });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["Aiden couldn’t open the sign-in page."]));
+    assert.equal(document.getElementById("bot-panel")?.getAttribute("data-state"), "closed");
+    assert.ok(screen.getByRole("group", { name: "Planner needs you" }));
+  } finally {
+    errors.restore();
+  }
+});
