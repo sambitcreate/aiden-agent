@@ -46,7 +46,8 @@ export async function readPeerProjectFile(root: ManagedWorktreeRootIdentity, nam
   }
   const directory = await pinnedLinuxRoot(root);
   try {
-    const file = await fs.open(`/proc/self/fd/${directory.fd}/${name}`, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // A substituted FIFO must reach the descriptor type check without waiting for a writer.
+    const file = await fs.open(`/proc/self/fd/${directory.fd}/${name}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = await file.stat({ bigint: true });
       if (!stat.isFile() || stat.nlink !== 1n || String(stat.dev) !== identity.device || String(stat.ino) !== identity.inode || stat.size > BigInt(PEER_PROJECT_FILE_MAX_BYTES)) throw new Error("The environment file changed.");
