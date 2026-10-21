@@ -9,7 +9,8 @@
 // - `share_image` and companion vision `inspect_image` through the durable
 //   bindings in `bot-tool-candidates.ts`;
 // - the Bot's own browser (`bot-browser-tools.ts`): the `browser` gateway and
-//   the browser tools without page scripts or recording.
+//   the browser tools without page scripts or recording;
+// - the cards a person answers: `ask_user_question`, `hand_off` and `sign_in`.
 //
 // Policy is applied afterwards by `bot-tool-assembly.ts`. This module only
 // builds; it never decides what a Bot may use.
@@ -63,6 +64,7 @@ import { botQuestionCandidate } from "./bot-question-tool.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffCandidate } from "./bot-handoff-tool.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
+import { signInCandidate } from "./bot-sign-in-tool.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
 import { SUBAGENT_TOOL } from "./bot-tool-policy.js";
 import { isBrowserToolName } from "../browser-tools.js";
@@ -419,6 +421,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
       tools.push(botHandoffCandidate(botId, botHandoffs));
+      // Needs the Browser in the Bot's access; the verdict keeps it off otherwise.
+      tools.push(signInCandidate(botId, botHandoffs, { ...(deps.botName ? { botName: deps.botName } : {}) }));
       return {
         tools,
         ...(skillSnapshot === undefined ? {} : { skillSnapshot }),

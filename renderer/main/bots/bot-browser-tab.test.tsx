@@ -53,7 +53,7 @@ function browserIpc(state: () => BrowserState) {
   };
 }
 
-async function mountBotChat(state: () => BrowserState) {
+async function mountBotChat(state: () => BrowserState, handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
   const calls = installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
@@ -61,6 +61,7 @@ async function mountBotChat(state: () => BrowserState) {
     "bots:live:unsubscribe": () => undefined,
     "bots:routines:list": () => [],
     ...browserIpc(state),
+    ...handlers,
   });
   const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
   await screen.findByRole("button", { name: "Planner profile" });
@@ -162,4 +163,55 @@ test("a tab the person holds says so and names the Bot, and an empty Bot browser
   render(<BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />);
   assert.ok(await screen.findByText(/Planner opens pages here, with its own sign-ins/u));
   assert.equal(screen.queryByText("My bank"), null);
+});
+
+test("a sign-in opened from a phone shows its held tab once the chat opens, and only that once", async () => {
+  // The phone's Open brought this chat forward after the tab was already held,
+  // so there was no "show" left to hear.
+  let tabs: BrowserTab[] = [browserTab({ heldForPerson: { reason: "sign_in" } })];
+  await mountBotChat(() => browserState(tabs));
+  await waitFor(() => assert.equal(botPanel().getAttribute("data-state"), "open"));
+  assert.equal(selectedTab(), "Browser");
+
+  // The person looks at Activity; coming back to the window, or the tab
+  // loading, doesn't pull them back to the same hold.
+  fireEvent.click(within(botPanel()).getByRole("tab", { name: "Activity" }));
+  assert.equal(selectedTab(), "Activity");
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
+  assert.equal(selectedTab(), "Activity");
+
+  // A later sign-in in another tab is new: it shows.
+  tabs = [...tabs, browserTab({ id: "tab-2", title: "Sign in to Slack", heldForPerson: { reason: "sign_in" } })];
+  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
+  await waitFor(() => assert.equal(selectedTab(), "Browser"));
+});
+
+test("Open sign-in on the Mac moves the person into the Bot's Browser tab, where the held sign-in page is", async () => {
+  let tabs: BrowserTab[] = [];
+  const signIn = {
+    botId: "bot-1", waitId: "wait-s", toolCallId: "tool-s", kind: "sign_in" as const, action: "Sign in to github.com",
+    open: { url: "https://github.com" }, origin: "https://github.com", target: "browser" as const, source: "tool" as const,
+  };
+  await mountBotChat(() => browserState(tabs), {
+    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: signIn }),
+    // As main opens it: a new tab, shown and held for the person, then the answer.
+    "bots:openHandoff": () => {
+      tabs = [browserTab({ heldForPerson: { reason: "sign_in" } })];
+      emitBotTestNotification("browser:event", { type: "show", workspaceId: WORKSPACE, tabId: "tab-1" });
+      emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) });
+      return { opened: "browser" };
+    },
+  });
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  const open = within(card).getByRole("button", { name: "Open sign-in" });
+  open.focus();
+  await act(async () => fireEvent.click(open));
+
+  await waitFor(() => assert.equal(selectedTab(), "Browser"));
+  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u));
+  // The person asked for it, so focus follows them there; a tab the Bot opens leaves focus alone.
+  await waitFor(() => assert.equal(document.activeElement?.textContent, "Browser"));
+  assert.ok(botPanel().contains(document.activeElement));
 });

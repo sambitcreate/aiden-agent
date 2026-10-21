@@ -9,6 +9,7 @@
 import * as React from "react";
 import { BrowserPanel } from "../../components/browser-panel";
 import { botsApi, browserApi } from "../../lib/ipc";
+import type { BrowserState } from "../../shared/browser";
 
 export interface BotBrowserPresence {
   /** The Bot's browser workspace; `null` while unknown or for a Bot that is gone. */
@@ -27,7 +28,9 @@ function same(left: BotBrowserPresence, right: BotBrowserPresence): boolean {
 
 /**
  * Whether `botId`'s browser has tabs, kept current from browser events.
- * `onShow` runs when the Bot, or a hand-off card's Open, opens a tab to show.
+ * `onShow` runs when the Bot, or a hand-off card's Open, opens a tab to show,
+ * and when a tab is newly held for the person: a sign-in opened from a phone
+ * may hold its tab before this chat is on screen to hear it open.
  */
 export function useBotBrowserPresence(botId: string, onShow: () => void): BotBrowserPresence {
   const [presence, setPresence] = React.useState<BotBrowserPresence>(UNKNOWN);
@@ -37,7 +40,22 @@ export function useBotBrowserPresence(botId: string, onShow: () => void): BotBro
   React.useEffect(() => {
     let cancelled = false;
     let workspaceId: string | null = null;
+    // Each hold is revealed once while this chat is open, so a later focus or
+    // state change never pulls the panel back to Browser.
+    const revealedHolds = new Set<string>();
     const update = (next: BotBrowserPresence) => setPresence((current) => (same(current, next) ? current : next));
+    const revealNewHolds = (state: BrowserState) => {
+      let fresh = false;
+      for (const tab of state.tabs) {
+        if (!tab.heldForPerson || revealedHolds.has(tab.id)) continue;
+        revealedHolds.add(tab.id);
+        fresh = true;
+      }
+      for (const id of [...revealedHolds]) {
+        if (!state.tabs.some((tab) => tab.id === id && tab.heldForPerson)) revealedHolds.delete(id);
+      }
+      if (fresh) onShowRef.current();
+    };
     const read = async () => {
       try {
         const answer = await botsApi.browser.workspace(botId);
@@ -48,7 +66,9 @@ export function useBotBrowserPresence(botId: string, onShow: () => void): BotBro
           return;
         }
         const state = await browserApi.getState(workspaceId);
-        if (!cancelled) update({ workspaceId, hasTabs: state.tabs.length > 0, resolved: true });
+        if (cancelled) return;
+        update({ workspaceId, hasTabs: state.tabs.length > 0, resolved: true });
+        revealNewHolds(state);
       } catch {
         if (!cancelled) setPresence((current) => (current.resolved ? current : { ...current, resolved: true }));
       }
@@ -58,6 +78,7 @@ export function useBotBrowserPresence(botId: string, onShow: () => void): BotBro
       if (workspaceId === null) return;
       if (event.type === "state" && event.state.workspaceId === workspaceId) {
         update({ workspaceId, hasTabs: event.state.tabs.length > 0, resolved: true });
+        revealNewHolds(event.state);
       } else if (event.type === "show" && event.workspaceId === workspaceId) {
         update({ workspaceId, hasTabs: true, resolved: true });
         onShowRef.current();

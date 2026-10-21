@@ -4,11 +4,16 @@
 // with the Bot's own face in the tile; no coloured borders. The composer stays
 // below it: typing there answers Done with a note.
 //
+// A sign-in (plan §5.2) is the same card asking the person to sign in to one
+// site for the Bot: "Sign in to github.com for Ada", with Open sign-in (the
+// site in a new tab of the Bot's own browser), Skip and I'm signed in.
+//
 // A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
 // sign-in happens in its own browser over there, so that card offers
-// "Finish on <Mac>" and Skip instead of Open and Done.
+// "Finish on <Mac>" and Skip instead of Open sign-in and I'm signed in.
 
-import { ExternalLink, Laptop } from "lucide-react";
+import type { ReactNode } from "react";
+import { ExternalLink, Laptop, LogIn } from "lucide-react";
 import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
@@ -22,6 +27,30 @@ function linkHost(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+type ShownHandoff = Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" | "rule"> & Pick<Partial<BotPendingHandoff>, "origin">;
+
+/** The site a sign-in names ("github.com"): its origin, else its page, else its title. */
+function signInHost(handoff: ShownHandoff): string {
+  for (const url of [handoff.origin, handoff.open?.url]) {
+    const host = url === undefined ? undefined : linkHost(url);
+    if (host) return host;
+  }
+  return handoff.action.replace(/^Sign in to /u, "");
+}
+
+/**
+ * What the composer says while a sign-in waits: it is answered on the card,
+ * never with a note, so a password typed in the chat can't reach the Bot.
+ */
+export function handoffSignInComposerText(name: string): string {
+  return `Sign in for ${name} with Open sign-in above, then choose I’m signed in.`;
+}
+
+/** The card's title: whose turn it is, or what to sign in to and for whom. */
+export function handoffCardTitle(name: string, handoff: ShownHandoff): string {
+  return handoff.kind === "sign_in" ? `Sign in to ${signInHost(handoff)} for ${name}` : `Your turn: ${handoff.action}`;
 }
 
 export function HandoffCard({
@@ -39,7 +68,7 @@ export function HandoffCard({
   botId?: string;
   name: string;
   avatar: BotAvatarValue;
-  handoff: Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" | "rule">;
+  handoff: ShownHandoff;
   /** An answer or Open is on its way: the buttons wait for it. */
   busy?: boolean;
   /** The other Mac the Bot lives on, by name: a sign-in is finished there. */
@@ -49,8 +78,62 @@ export function HandoffCard({
   onFinish?(): void;
   onAnswer(outcome: BotHandoffOutcome): void;
 }) {
-  const elsewhere = handoff.kind === "sign_in" && finishOn !== undefined;
-  const host = handoff.open && !elsewhere ? linkHost(handoff.open.url) : undefined;
+  const signIn = handoff.kind === "sign_in";
+  const elsewhere = signIn && finishOn !== undefined;
+  const host = handoff.open && !signIn ? linkHost(handoff.open.url) : undefined;
+  const skip = (
+    <Button variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
+      Skip
+    </Button>
+  );
+  let actions: ReactNode;
+  if (elsewhere) {
+    actions = (
+      <>
+        <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
+          <Laptop aria-hidden="true" />
+          {`Finish on ${finishOn}`}
+        </Button>
+        {skip}
+      </>
+    );
+  } else if (signIn) {
+    actions = (
+      <>
+        {handoff.open ? (
+          <Button variant="filled" size="small" disabled={busy} onClick={onOpen}>
+            <LogIn aria-hidden="true" />
+            Open sign-in
+          </Button>
+        ) : null}
+        {skip}
+        <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+          I’m signed in
+        </Button>
+      </>
+    );
+  } else {
+    actions = (
+      <>
+        {handoff.open ? (
+          <Button
+            variant="filled"
+            size="small"
+            disabled={busy}
+            aria-label={host ? `Open ${host}` : "Open"}
+            onClick={onOpen}
+          >
+            <ExternalLink aria-hidden="true" />
+            Open
+          </Button>
+        ) : null}
+        {skip}
+        <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+          Done
+        </Button>
+      </>
+    );
+  }
   return (
     <BotNoticeCard
       label={`${name} needs you`}
@@ -63,40 +146,15 @@ export function HandoffCard({
           size="small"
         />
       }
-      title={`Your turn: ${handoff.action}`}
-      actions={
-        <>
-          {elsewhere ? (
-            <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
-              <Laptop aria-hidden="true" />
-              {`Finish on ${finishOn}`}
-            </Button>
-          ) : handoff.open ? (
-            <Button
-              variant="filled"
-              size="small"
-              disabled={busy}
-              aria-label={host ? `Open ${host}` : "Open"}
-              onClick={onOpen}
-            >
-              <ExternalLink aria-hidden="true" />
-              Open
-            </Button>
-          ) : null}
-          <Button variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
-            Skip
-          </Button>
-          {elsewhere ? null : (
-            <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
-              Done
-            </Button>
-          )}
-        </>
-      }
+      title={handoffCardTitle(name, handoff)}
+      actions={actions}
     >
       {handoff.why ? <p className="whitespace-pre-line">{handoff.why}</p> : null}
       {handoff.rule ? <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p> : null}
       {host ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
+      {signIn && !elsewhere ? (
+        <p className="mt-1 text-tertiary">{`Opens in ${name}’s own browser. ${name} never sees your password.`}</p>
+      ) : null}
     </BotNoticeCard>
   );
 }

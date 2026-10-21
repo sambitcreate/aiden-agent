@@ -24,7 +24,9 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   BOT_HANDOFF_ACTION_MAX_CHARS,
   BOT_HANDOFF_WHY_MAX_CHARS,
+  isBotHandoffOpenUrl,
   normalizeBotHandoffAction,
+  withoutBotHandoffControls,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { botRuleLabel, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import { classifyBotAction, type BotClassifiableAction } from "../bot-rules/classify.js";
@@ -82,6 +84,11 @@ export interface BotCandidateSet {
 export interface BotLiveApproval {
   approval: BotApprovalRequirement | null;
   action?: BotClassifiableAction;
+  /**
+   * Where the person can do the step themselves when a rule hands it to them
+   * (the Bot browser's page): the card's Open. An https page only.
+   */
+  open?: { url: string };
 }
 
 export interface BotToolSources {
@@ -131,8 +138,10 @@ function ruleActionText(rule: BotRule): string {
   return bounded(normalizeBotHandoffAction(botRuleLabel(rule)), BOT_HANDOFF_ACTION_MAX_CHARS);
 }
 
+/** The card's reason. The step's summary quotes the screen or page, so it loses control and direction marks too. */
 function ruleWhyText(label: string, botName: string, summary: string): string {
-  return bounded(`Your rule “${label}” hands this to you. ${botName} was about to: ${summary}`, BOT_HANDOFF_WHY_MAX_CHARS);
+  const why = `Your rule “${label}” hands this to you. ${botName} was about to: ${summary}`;
+  return bounded(withoutBotHandoffControls(why), BOT_HANDOFF_WHY_MAX_CHARS);
 }
 
 export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssembly {
@@ -250,6 +259,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         }
         if (unattended) return { allowed: false, reason: ruleUnattendedBlock(label) };
         const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
+        const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
         return {
           allowed: true,
           handoff: {
@@ -257,6 +267,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
             summary: callSummary,
             action: ruleActionText(rule),
             why: ruleWhyText(label, botName, callSummary),
+            ...(open === undefined ? {} : { open }),
           },
         };
       } catch (error) {

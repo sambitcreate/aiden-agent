@@ -98,6 +98,8 @@ export interface BotRuleHandoff {
   /** The card's title after "Your turn: ". */
   action: string;
   why: string;
+  /** The page where the person can do it (the Bot browser's tab): the card's Open. */
+  open?: { url: string };
 }
 
 export type BotPolicyDecision =
@@ -114,6 +116,8 @@ export interface BotRuleHandoffRequest {
   action: string;
   why: string;
   rule: BotHandoffRule;
+  /** The page where the person can do it: the card's Open. */
+  open?: { url: string };
   /** Aborted when the turn is stopped; the card is withdrawn. */
   signal: AbortSignal | undefined;
 }
@@ -478,6 +482,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             action: handoff.action,
             why: handoff.why,
             rule: handoff.rule,
+            ...(handoff.open === undefined ? {} : { open: handoff.open }),
             signal: context.abortSignal,
           });
           const stored = await api.memo<HandoffAnswerMemo>(

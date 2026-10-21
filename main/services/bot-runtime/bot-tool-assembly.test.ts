@@ -716,6 +716,8 @@ function ruledTurn(options: {
   calls?: number;
   baseline?: boolean;
   action?: BotClassifiableAction;
+  /** What the baseline approval says the call does. */
+  summary?: string;
   requestHandoff?: Parameters<typeof assemblyDeps>[1]["requestHandoff"];
 }) {
   const state = assemblyState(full(botHome()));
@@ -735,7 +737,7 @@ function ruledTurn(options: {
     approvalFor: async (_toolName, call) => ({
       approval: options.baseline === false
         ? null
-        : { summary: "Click Place your order — Safari", onAllow: () => void allowed.push(call.callId) },
+        : { summary: options.summary ?? "Click Place your order — Safari", onAllow: () => void allowed.push(call.callId) },
       action: options.action ?? PLACE_ORDER,
     }),
     ...(options.requestHandoff === undefined ? {} : { requestHandoff: options.requestHandoff }),
@@ -874,9 +876,15 @@ async function handoffTurn(
   answer: { outcome: "done" | "skipped"; note?: string },
   rules = () => rulesWith("hand_off"),
   action = PLACE_ORDER,
+  summary?: string,
 ) {
   const handoffs = createBotHandoffs();
-  const turn = ruledTurn({ rules, action, requestHandoff: (request) => handoffs.request(ruleHandoffRequest(request)) });
+  const turn = ruledTurn({
+    rules,
+    action,
+    ...(summary === undefined ? {} : { summary }),
+    requestHandoff: (request) => handoffs.request(ruleHandoffRequest(request)),
+  });
   const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
   try {
     const run = await root.submit({ type: "input", content: "order it" }, ctx);
@@ -918,6 +926,13 @@ test("a hand-off rule never runs the call: the person's Done blocks it with what
       rule: { id: "default.purchase", label: PURCHASE_LABEL },
     },
   ]);
+});
+
+test("a rule hand-off's card and Done read as what the step says: control and direction marks from the screen never reach them", async () => {
+  // A page can name its button with a right-to-left override, so "redro ruoy ecalP" would draw as "Place your order".
+  const { card, results } = await handoffTurn({ outcome: "done" }, undefined, PLACE_ORDER, "Click \u202Eredro ruoy ecalP\u202C\u0007 — Safari");
+  assert.equal(card.why, `Your rule “${PURCHASE_LABEL}” hands this to you. Ada was about to: Click redro ruoy ecalP — Safari`);
+  assert.ok(resultText(results[0]).includes("The person did this themselves: Click redro ruoy ecalP — Safari. Continue from there."));
 });
 
 test("Skip on a rule hand-off tells the Bot not to try another way", async () => {

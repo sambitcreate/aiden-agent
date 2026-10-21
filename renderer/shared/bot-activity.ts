@@ -89,10 +89,14 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
   ["routine_notes", "routine"],
   ["ask_user_question", "waiting"],
   ["hand_off", "waiting"],
+  ["sign_in", "waiting"],
 ]);
 
 /** Fixed tools whose finished step reads differently from their phase's: a hand-off is not a question. */
-const TOOL_STEP_LABELS: ReadonlyMap<string, string> = new Map<string, string>([["hand_off", "Handed you a step"]]);
+const TOOL_STEP_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
+  ["hand_off", "Handed you a step"],
+  ["sign_in", "Asked you to sign in"],
+]);
 
 const PHASE_IDS: ReadonlySet<string> = new Set(BOT_ACTIVITY_PHASES);
 

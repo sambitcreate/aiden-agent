@@ -21,7 +21,7 @@ import { SHARE_IMAGE_TOOL_NAME } from "../share-image-tool.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
-import { BOT_HANDOFF_TOOL_NAME } from "../../../renderer/shared/bot-handoffs.js";
+import { BOT_HANDOFF_TOOL_NAME, BOT_SIGN_IN_TOOL_NAME } from "../../../renderer/shared/bot-handoffs.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 import { BROWSER_BOT_OMITTED_TOOLS, BROWSER_TOOL_NAMES, isBrowserToolName } from "../browser-tools.js";
 import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
@@ -75,7 +75,8 @@ const UNATTENDED_WITHHELD = new Set<string>([
   ROUTINE_TOOL,
   SUBAGENT_TOOL,
   BOT_HANDOFF_TOOL_NAME,
-  // Nobody can approve a click or use a held tab on these turns (G12).
+  // Nobody can sign in, approve a click or use a held tab on these turns (G12).
+  BOT_SIGN_IN_TOOL_NAME,
   BOT_BROWSER_GATEWAY_TOOL,
   ...BROWSER_TOOL_NAMES,
 ]);
@@ -83,8 +84,9 @@ const UNATTENDED_WITHHELD = new Set<string>([
 /**
  * Whether an input from this ingress may use `name`, whatever the Bot's
  * access: the self-intro uses no tools, and routine and Telegram turns get no
- * question or hand-off card, routine tool or subagents. A run that serves several inputs
- * (a steer joined it) may use a tool only when every input allows it.
+ * question, hand-off or sign-in card, browser, routine tool or subagents. A
+ * run that serves several inputs (a steer joined it) may use a tool only when
+ * every input allows it.
  */
 export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
   // A routine's notepad belongs to routine runs alone: a person's turn, or a
@@ -132,6 +134,14 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
   }
   if (name === BOT_HANDOFF_TOOL_NAME) {
     return verdict(turn.telegram !== true && turn.routine !== true, "Hand-offs are off for this Bot.");
+  }
+  if (name === BOT_SIGN_IN_TOOL_NAME) {
+    // The person signs in in the Bot's own browser, so the Bot needs it, and
+    // someone there to sign in.
+    return verdict(
+      hasCapability(facts, "browser") && turn.telegram !== true && turn.routine !== true,
+      "Sign-in needs the Browser in this Bot's access.",
+    );
   }
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) {
     // A page script can read a field's value and a recording shows what the
