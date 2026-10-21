@@ -1,3 +1,4 @@
+import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-reclamation.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -131,6 +132,7 @@ export class StudioAssetStore {
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
     const db = new DatabaseSync(path.join(root, "assets-v1.sqlite"));
     try {
+      initializeSqliteReclamation(db);
       db.exec(
         "PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
       );
@@ -149,6 +151,7 @@ export class StudioAssetStore {
       db.close();
       throw error;
     }
+    reclaimSqlitePages(db);
     this.db = db;
     this.root = root;
     // Housekeeping is best effort: a failed pass must not disable a store whose
@@ -180,7 +183,10 @@ export class StudioAssetStore {
     this.failed = false;
     if (!db) return Promise.resolve();
     this.db = null;
-    return this.blobWrites.then(() => db.close());
+    return this.blobWrites.then(() => {
+      reclaimSqlitePages(db);
+      db.close();
+    });
   }
 
   get(assetId: string): StudioAssetRecord | undefined {

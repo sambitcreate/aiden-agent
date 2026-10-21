@@ -28,6 +28,9 @@ test("memory facts normalize, deduplicate, stay private, and search with scoped 
     provenance: { kind: "user_edit", sourceId: "settings-memory" },
     alwaysOn: true,
   });
+  const raw = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  assert.equal(raw.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
+  raw.close();
   const duplicate = await store.put({
     id: "fact-duplicate",
     scope: workspace,

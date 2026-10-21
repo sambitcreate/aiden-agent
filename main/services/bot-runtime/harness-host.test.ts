@@ -49,6 +49,9 @@ test("(a) the root conversation survives close and reopen", async () => {
   const host = await hostFor(profile, fauxModels);
   try {
     const first = await host.open("bot-a");
+    const raw = new DatabaseSync(path.join(profile, "bots", "bot-a", BOT_SESSION_FILE));
+    assert.equal(raw.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
+    raw.close();
     await first.conversation.configure({ model: FAUX_MODEL_REF }, ctx);
     const submission = await first.conversation.submit({ type: "input", content: "hello" }, ctx);
     assert.equal((await submission.wait(ctx)).status, "done");
