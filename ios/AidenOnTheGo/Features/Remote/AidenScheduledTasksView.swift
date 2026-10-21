@@ -314,7 +314,7 @@ final class AidenScheduledTasksModel {
             currentMcpServers: hasCurrentMcpInventory ? mcpServers : nil
         ) == nil, !isMutating, isConnected else {
             if task?.usesLegacyInheritedMcpAccess == true, !hasCurrentMcpInventory {
-                presentedError = String(localized: "Refresh the enabled MCP server inventory before editing this legacy task.")
+                presentedError = String(localized: "Refresh the enabled connectors before editing this legacy task.")
             }
             return false
         }
@@ -837,7 +837,7 @@ private struct AidenScheduledTaskDetailView: View {
                     LabeledContent("Mode", value: task.mode.title)
                     LabeledContent("Permission", value: task.permission.title)
                     if let mcpAccessSummary = task.mcpAccessSummary {
-                        LabeledContent("MCP Access", value: mcpAccessSummary)
+                        LabeledContent("Connectors", value: mcpAccessSummary)
                     }
                     if let prompt = task.prompt { Text(prompt).textSelection(.enabled) }
                 }
@@ -852,7 +852,7 @@ private struct AidenScheduledTaskDetailView: View {
                         Button("Delete", systemImage: "trash", role: .destructive) { isConfirmingDelete = true }
                         if task.usesLegacyInheritedMcpAccess, !model.hasCurrentMcpInventory {
                             Label(
-                                "Editing is unavailable until Aiden refreshes the enabled MCP server inventory.",
+                                "Editing is unavailable until Aiden refreshes the enabled connectors.",
                                 systemImage: "arrow.clockwise"
                             )
                             .font(.footnote)
@@ -890,9 +890,9 @@ private struct AidenScheduledTaskDetailView: View {
                 AidenScheduledTaskEditor(model: model, task: task) { isEditing = false }
             } else {
                 ContentUnavailableView(
-                    "MCP Inventory Required",
+                    "Connector List Required",
                     systemImage: "arrow.clockwise",
-                    description: Text("Refresh Scheduled Tasks before editing this legacy task so Aiden can freeze its exact MCP access.")
+                    description: Text("Refresh Scheduled Tasks before editing this legacy task so Aiden can freeze its exact connector access.")
                 )
                 .padding()
             }
@@ -1073,9 +1073,9 @@ private struct AidenScheduledTaskEditor: View {
                     if !model.mcpServers.isEmpty
                         || !draft.mcpServerIds.isEmpty
                         || task?.usesLegacyInheritedMcpAccess == true {
-                        Section("MCP Access") {
+                        Section("Connectors") {
                             if task?.usesLegacyInheritedMcpAccess == true {
-                                Text("This legacy task inherits every enabled MCP server. Saving freezes access to the exact enabled servers listed here.")
+                                Text("This legacy task inherits every enabled connector. Saving freezes access to the exact enabled connectors listed here.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -1107,7 +1107,7 @@ private struct AidenScheduledTaskEditor: View {
                                 }
                             }
                             if model.mcpServers.isEmpty {
-                                Text("No MCP servers are currently enabled. Saving freezes this task with no MCP access.")
+                                Text("No connectors are currently enabled. Saving freezes this task with no connector access.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -1199,7 +1199,7 @@ private struct AidenScheduledTaskEditor: View {
                             if draft.mode == .llm {
                                 LabeledContent("Provider", value: selectedProvider?.label ?? String(localized: "Default"))
                                 LabeledContent("Model", value: selectedModel?.label ?? String(localized: "Default"))
-                                LabeledContent("MCP Access") {
+                                LabeledContent("Connectors") {
                                     Text(draft.mcpAccessReviewSummary(currentMcpServers: model.mcpServers))
                                         .multilineTextAlignment(.trailing)
                                 }
@@ -1269,7 +1269,7 @@ private struct AidenScheduledSettingsView: View {
                             Toggle("Scheduled tasks enabled", isOn: $enabled)
                             Picker("Default mode", selection: $mode) { ForEach(AidenScheduledTaskMode.allCases, id: \.self) { Text($0.title).tag($0) } }
                             Picker("Default permission", selection: $permission) { ForEach(AidenScheduledTaskPermission.allCases, id: \.self) { Text($0.title).tag($0) } }
-                            Toggle("Enable MCP by default", isOn: $mcpEnabled)
+                            Toggle("Enable connectors by default", isOn: $mcpEnabled)
                             Toggle("Default notifications", isOn: $notify)
                             TextField("Default timezone", text: $timezone)
                         }

@@ -69,9 +69,9 @@ test("parseMcpServer parses a stdio server with command/args/env", () => {
   assert.equal(server.enabled, true);
 });
 
-test("parseMcpServer parses http/sse transports and defaults unknown transport to stdio", () => {
+test("parseMcpServer parses http, rejects retired SSE, and defaults unknown transport to stdio", () => {
   assert.equal(parseMcpServer({ id: "a", name: "A", transport: "http" }).transport, "http");
-  assert.equal(parseMcpServer({ id: "b", name: "B", transport: "sse" }).transport, "sse");
+  assert.throws(() => parseMcpServer({ id: "b", name: "B", transport: "sse" }), /SSE MCP servers are no longer supported/u);
   assert.equal(parseMcpServer({ id: "c", name: "C", transport: "weird" }).transport, "stdio");
   assert.equal(parseMcpServer({ id: "d", name: "D" }).transport, "stdio");
 });
@@ -142,13 +142,35 @@ test("MCP metadata overrides require explicit remote OAuth and reject unsafe add
 });
 
 
-test("custom MCP descriptions and OAuth registration names are bounded and preserved", () => {
+test("custom MCP descriptions are bounded and preserved", () => {
   const server = { id: "custom", name: "Custom", transport: "http", oauth: true };
-  const parsed = parseMcpServer({ ...server, description: "Search our documents", oauthClientName: "Approved Aiden" });
-  assert.equal(parsed.description, "Search our documents");
-  assert.equal(parsed.oauthClientName, "Approved Aiden");
-  for (const override of [{ description: "x".repeat(1025) }, { oauthClientName: "x".repeat(129) }, { oauthClientName: "bad\nname" }, { oauthClientName: "Aiden", oauth: false }]) {
-    assert.throws(() => parseMcpServer({ ...server, ...override }), /description|client name/u);
+  assert.equal(parseMcpServer({ ...server, description: "Search our documents" }).description, "Search our documents");
+  assert.throws(() => parseMcpServer({ ...server, description: "x".repeat(1025) }), /description/u);
+});
+
+test("OAuth client name overrides are gone: registrations always use the catalog's name", () => {
+  const parsed = parseMcpServer({ id: "custom", name: "Custom", transport: "http", oauth: true, oauthClientName: "Codex" });
+  assert.equal("oauthClientName" in parsed, false);
+});
+
+test("a pre-registered OAuth client needs a custom remote OAuth server and bounded values", () => {
+  const server = { id: "custom", name: "Custom", transport: "http", url: "https://tools.test/mcp", oauth: true };
+  const parsed = parseMcpServer({ ...server, oauthClientId: "slack-app-123", oauthClientSecret: "s3cr3t" });
+  assert.equal(parsed.oauthClientId, "slack-app-123");
+  assert.equal(parsed.oauthClientSecret, "s3cr3t");
+  assert.equal(parseMcpServer({ ...server, oauthClientId: "public-client" }).oauthClientSecret, undefined, "a public client has no secret");
+  for (const [override, message] of [
+    [{ oauthClientSecret: "orphan" }, /client ID/u],
+    [{ oauthClientId: " padded" }, /client ID/u],
+    [{ oauthClientId: "x".repeat(257) }, /client ID/u],
+    [{ oauthClientId: "id\nnext" }, /client ID/u],
+    [{ oauthClientId: "id", oauthClientSecret: "" }, /client secret/u],
+    [{ oauthClientId: "id", oauthClientSecret: "x".repeat(4097) }, /client secret/u],
+    [{ oauthClientId: "id", oauth: false }, /custom remote server with OAuth/u],
+    [{ oauthClientId: "id", transport: "stdio", command: "npx" }, /custom remote server with OAuth/u],
+    [{ oauthClientId: "id", presetId: "linear" }, /custom remote server with OAuth/u],
+  ] as const) {
+    assert.throws(() => parseMcpServer({ ...server, ...override }), message, JSON.stringify(override));
   }
 });
 
@@ -156,5 +178,5 @@ test("custom MCP descriptions and OAuth registration names are bounded and prese
 test("MCP provider references require HTTPS HTTP and cannot mix credential sources", () => {
   const input = { id: "custom", name: "Custom", enabled: true, transport: "http", url: "https://tools.test/mcp", authProvider: "openai" };
   assert.equal(parseMcpServer(input).authProvider, "openai");
-  for (const change of [{ transport: "stdio" }, { transport: "sse" }, { url: "http://localhost/mcp" }, { oauth: true }, { headers: { Authorization: "secret" } }, { presetId: "figma" }, { authProvider: "../secret" }]) assert.throws(() => parseMcpServer({ ...input, ...change }), /authentication|provider|OAuth/u);
+  for (const change of [{ transport: "stdio" }, { url: "http://localhost/mcp" }, { oauth: true }, { headers: { Authorization: "secret" } }, { presetId: "figma" }, { authProvider: "../secret" }]) assert.throws(() => parseMcpServer({ ...input, ...change }), /authentication|provider|OAuth/u);
 });

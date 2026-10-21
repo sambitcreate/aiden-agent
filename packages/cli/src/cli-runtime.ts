@@ -76,15 +76,14 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 			// `aiden mcp` commands retry it and report the same error.
 			process.stderr.write(`aiden: MCP migration deferred (${error instanceof Error ? error.message : String(error)})\n`);
 		}
-		if (argv[0] === "pi-mcp") {
-			await main(["mcp", ...argv.slice(1)]);
-			return;
-		}
 		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(0);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error)); await exitAfterFlush(1);
 	}
 	if (argv.includes("--help")) process.stdout.write(CLI_COMMAND_HELP + "\n");
+	// Aiden's extension owns MCP (aiden-mcp.json, /mcp). Disabling Pi's built-in
+	// MCP extension outright keeps Pi from reporting it as replaced on every launch.
+	if (!argv.includes("--no-mcp")) argv.push("--no-mcp");
 	for (const themePath of bundledThemePaths(appDir)) {
 		argv.push("--theme", themePath);
 	}

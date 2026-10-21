@@ -31,6 +31,12 @@ Duplicate workspace names receive a short stable ID suffix in both visible and a
 
 Settings → Aiden Live opens with an "Availability" group of two trailing switches (not titled "Aiden Live", so the page keeps one heading with that name). `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
 
+## Connectors
+
+Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add custom connector** and a ⋯ menu that holds **Reset connections**. Saved connectors sit in a "Your connectors" `FieldSet`; the directory below has its own group title with an ⓘ, a search field and category chips. Directory cards come from `renderer/shared/connector-catalog.ts`. A card's badge follows the live connection (`mcpPresetCardStatus`), so only a working connection is green. A connector marked unavailable shows its reason and a button that moves focus to its alternative instead of Set Up. A search that matches only an alias (Composio's apps) shows the entry's one-line hint. Secret fields say values are stored encrypted on this device, never "this Mac's keychain".
+
+Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
+
 ## Icons and illustrations
 
 Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain glyphs or brain illustrations. The existing onboarding artwork is outside this Settings change.

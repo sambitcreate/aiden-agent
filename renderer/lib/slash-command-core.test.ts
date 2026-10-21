@@ -266,6 +266,11 @@ test("commands and skills rank only inside their explicit trigger namespace", ()
     `slash-option-skill-${invocationId(1)}`,
   );
   assert.ok(rankSlashResults("mdl", skills, "command").results.length > 0);
+  // /mcp stays an alias of /connectors.
+  assert.equal(
+    rankSlashResults("mcp", skills, "command").results[0]?.id,
+    "slash-option-command-connectors",
+  );
   assert.equal(rankSlashResults("model", skills, "skill").results.length, 1);
   assert.ok(
     rankSlashResults("", skills, "command").results.every((result) => result.kind === "command"),

@@ -1,4 +1,4 @@
-// Per-server model access for Settings → Plugins: how the model reaches a
+// Per-server model access for Settings → Connectors: how the model reaches a
 // server's tools (on demand, always listed, or not at all) and which
 // individual tools it may use. Changes save through `mcp:save`, which
 // reconnects the server.

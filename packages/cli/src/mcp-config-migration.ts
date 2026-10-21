@@ -1,6 +1,7 @@
 import { closeSync, fsyncSync, linkSync, mkdtempSync, openSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { withoutRetiredMcpServers } from "../../../renderer/shared/mcp-retired-servers.js";
 import { acquireLease, atomicJson, readJson } from "./state.ts";
 
 function syncDirectory(path: string): void {
@@ -26,7 +27,11 @@ function readLegacySource(legacy: string): { bytes: Buffer; servers: unknown[] }
   return Array.isArray(data) ? { bytes, servers: data } : undefined;
 }
 
-/** Keep Aiden's server IDs and encrypted credentials separate from native pi MCP. */
+/**
+ * Keep Aiden's server IDs and encrypted credentials separate from native pi MCP.
+ * Retired (SSE) entries are not validated; they move to aiden-mcp.json as they
+ * are, where the store drops them together with their stored credentials.
+ */
 export function migrateAidenMcpConfig(
   agentDir: string,
   validate: (server: unknown) => unknown,
@@ -45,9 +50,9 @@ export function migrateAidenMcpConfig(
     const source = readLegacySource(legacy);
     if (!source) return;
     const { bytes, servers: data } = source;
-    data.forEach(validate);
+    withoutRetiredMcpServers(data).forEach(validate);
     const existing = readJson<unknown>(destination, undefined);
-    if (existing !== undefined && !isDeepStrictEqual(existing, data)) {
+    if (existing !== undefined && !isDeepStrictEqual(withoutRetiredMcpServers(existing), withoutRetiredMcpServers(data))) {
       throw new Error("Both mcp.json and aiden-mcp.json contain Aiden servers. Reconcile them before continuing; neither file was changed.");
     }
     const backup = join(agentDir, "mcp.pre-pi-1.json");

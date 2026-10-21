@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { Type, type JsonObject } from "@earendil-works/pi-ai";
 import { runToolCall, type AgentTool, type AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpClient } from "@earendil-works/pi-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectSdkServer } from "./mcp-test-support.js";
+import { createMcpToolCallGuard, guardedMcpToolCall } from "./mcp-tool-inventory.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import { codemodeResultSchema, createPiCodemodeTool, MAX_CODEMODE_TOOLS } from "./pi-codemode.js";
@@ -291,15 +292,15 @@ async function mcpFixture(t: TestContext, results: Record<string, () => Record<s
     tools: Object.keys(results).map((name) => ({ name, inputSchema: { type: "object" as const }, ...(outputSchema ? { outputSchema } : {}) })),
   }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => results[params.name]!() as never);
-  const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
-  const [a, b] = InMemoryTransport.createLinkedPair();
-  await server.connect(b); await client.connect(a);
+  const client = new McpClient({ name: "test", version: "1" });
+  await client.connect(await connectSdkServer(server));
   t.after(async () => { await client.close(); await server.close(); });
-  await client.listTools();
+  // Guarded dispatch, as the MCP manager runs it: output schemas are checked.
+  const guard = createMcpToolCallGuard(await client.listTools());
   const tools: AgentTool[] = Object.keys(results).map((name) => Object.assign({
     name: `mcp_${name}`, label: name, description: name, parameters: Type.Object({}),
     ...(outputSchema ? { outputSchema: Type.Unsafe(outputSchema) } : {}),
-    execute: () => executeMcpAgentTool(() => client.callTool({ name, arguments: {} })),
+    execute: () => executeMcpAgentTool(() => guardedMcpToolCall(guard, client, { name, arguments: {} })),
   }, { codemode: true }));
   return tools;
 }
