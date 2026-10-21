@@ -225,18 +225,24 @@ void app.whenReady().then(async () => {
   await snapshot(botTab);
   await agent({ action: "click", tabId: botTab, selector: "#show" });
   const shownByBot = revealAsSeen(await snapshot(botTab));
+  // What the approval of the Bot's typing and the rules read first, as in a Bot's call.
+  const probedShownByBot = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
   const typingShownByBot = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
   browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-2", reason: "sign_in" });
   // The person reads the page, then presses Show (the page shows the field after 2 s).
   await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal?show=2000`);
   await new Promise((resolve) => setTimeout(resolve, 3_000));
   const shownType = (await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').type" })).value;
+  // They leave the cursor in the field.
+  await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').focus()" });
   browser.release(BOT_WORKSPACE, "wait-2");
   const shownByPerson = revealAsSeen(await snapshot(botTab));
+  // A printable key into the focused field is typing too (asked before anything else touches the field).
+  const pressingShownByPerson = await outcome(agent({ action: "press", tabId: botTab, key: "x" }));
   const typingShownByPerson = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
   // What an approval and the rules read about the field.
   const probedType = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
-  const reveal = { shownByBot, typingShownByBot, shownByPerson, typingShownByPerson, shownType, probedType };
+  const reveal = { shownByBot, probedShownByBot, typingShownByBot, shownByPerson, pressingShownByPerson, typingShownByPerson, shownType, probedType };
 
   // 6. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
   step("6 delete");
