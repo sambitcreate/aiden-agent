@@ -496,6 +496,7 @@
         "main/services/bot-computers/computer-shell-tool.test.ts",
         "main/services/bot-computers/computer-tool.test.ts",
         "main/services/bot-computers/host.test.ts",
+        "main/services/bot-computers/integration.test.ts",
         "main/services/bot-computers/keysyms.test.ts",
         "main/services/bot-computers/lume-binary.test.ts",
         "main/services/bot-computers/lume-cli.test.ts",

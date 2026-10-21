@@ -13,7 +13,7 @@
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit, vncHost, stopDelayMs and hostKey of a JSON file named by a
+// keys log, stale, limit, vncHost, stopDelayMs, hostKey and vncUpstream of a JSON file named by a
 // leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)";
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
@@ -24,9 +24,13 @@
 // - AIDEN_FAKE_LUME_HOST_KEY: the `ssh-ed25519 …` host key a fresh install gets
 //   (every macOS install makes its own; clones keep their source's). The VM's
 //   key is in the fake state, so host tests can check what ssh would trust.
+// - AIDEN_FAKE_LUME_VNC_UPSTREAM: a loopback port the VM's VNC listener
+//   forwards every connection to, so a test's fake RFB server plays the
+//   guest's screen (it reads the run's `--vnc-password` from the fake state).
+//   Unset, the listener only greets and hangs up.
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -46,6 +50,7 @@ if (args[0] === "--fake-config") {
     vncHost: "AIDEN_FAKE_LUME_VNC_HOST",
     stopDelayMs: "AIDEN_FAKE_LUME_STOP_DELAY_MS",
     hostKey: "AIDEN_FAKE_LUME_HOST_KEY",
+    vncUpstream: "AIDEN_FAKE_LUME_VNC_UPSTREAM",
   };
   for (const [key, name] of Object.entries(names)) {
     if (config[key] !== undefined && config[key] !== null) process.env[name] = String(config[key]);
@@ -166,9 +171,20 @@ function details(storage, name, vm) {
 }
 
 async function vncChild(storage, name, port) {
+  const upstream = Number(process.env.AIDEN_FAKE_LUME_VNC_UPSTREAM ?? "0");
   const server = createServer((socket) => {
     socket.on("error", () => undefined);
-    socket.end("RFB 003.008\n");
+    if (!(upstream > 0)) {
+      socket.end("RFB 003.008\n");
+      return;
+    }
+    // The guest's screen is the test's RFB server; the VM going away drops it, as a stopping VM does.
+    const guest = connect({ host: "127.0.0.1", port: upstream });
+    guest.on("error", () => socket.destroy());
+    guest.on("close", () => socket.destroy());
+    socket.on("close", () => guest.destroy());
+    socket.pipe(guest);
+    guest.pipe(socket);
   });
   await new Promise((resolve) => server.listen(port, process.env.AIDEN_FAKE_LUME_VNC_BIND ?? "127.0.0.1", resolve));
   const state = readState(storage);
