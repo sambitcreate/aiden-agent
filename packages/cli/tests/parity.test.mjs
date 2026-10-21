@@ -1282,7 +1282,8 @@ test("retired SSE entries in a legacy mcp.json migrate away with their credentia
   assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
 });
 
-test("a retired SSE entry whose credentials could not be deleted stays until a later read deletes them", async (t) => {
+// The delete failure comes from a read-only credentials directory, which root ignores.
+test("a retired SSE entry whose credentials could not be deleted stays until a later read deletes them", { skip: process.getuid?.() === 0 && "root bypasses directory permissions" }, async (t) => {
   const dir = temporary(t), inventory = retiredSseInventory();
   api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
   const credentials = await storeRetiredCredentials(dir, inventory);
