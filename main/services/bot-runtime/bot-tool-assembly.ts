@@ -143,11 +143,10 @@ function ruleActionText(rule: BotRule): string {
   return bounded(normalizeBotHandoffAction(botRuleLabel(rule)), BOT_HANDOFF_ACTION_MAX_CHARS);
 }
 
-/** The card's reason. The step's summary quotes the screen or page, so it loses control and direction marks too. */
 /** Computer Use and Bot computer actions whose summary can carry what is typed. */
 const TYPING_ACTIONS: Readonly<Record<"computer_use" | "computer", ReadonlySet<string>>> = {
   computer_use: new Set(["type", "set_value"]),
-  // A Bot computer `key` that only types a character is typing; any other chord reads "press".
+  // A Bot computer `key` that edits text (a character, or Backspace in a field) is typing; any other chord reads "press".
   computer: new Set(["type", "key"]),
 };
 
@@ -167,6 +166,7 @@ function lockedRuleSummary(action: BotClassifiableAction, summary: string): stri
   return `type into ${label ? `the “${label}” field` : "the focused field"}${where}`;
 }
 
+/** The card's reason. The step's summary quotes the screen or page, so it loses control and direction marks too. */
 function ruleWhyText(label: string, botName: string, summary: string): string {
   const why = `Your rule “${label}” hands this to you. ${botName} was about to: ${summary}`;
   return bounded(withoutBotHandoffControls(why), BOT_HANDOFF_WHY_MAX_CHARS);
