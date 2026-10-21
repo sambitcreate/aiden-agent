@@ -209,6 +209,7 @@ export function FilesPanel({
   const focusDetailRef = React.useRef(false);
   const focusTreePathRef = React.useRef<string | null>(null);
   const consumedRequestKeyRef = React.useRef(0);
+  const refreshedRequestKeyRef = React.useRef(0);
   const loadRequestRef = React.useRef(0);
   const saveRequestRef = React.useRef(0);
   const loadedPathRef = React.useRef<string | null>(null);
@@ -327,6 +328,7 @@ export function FilesPanel({
     else searchRef.current?.focus();
   }, [compact, selectedPath]);
 
+  const { data: indexData, error: indexError, loading: indexLoading, refresh: refreshIndex } = index;
   const revealFolder = React.useCallback(
     (path: string) => {
       setQuery("");
@@ -343,13 +345,22 @@ export function FilesPanel({
 
   React.useEffect(() => {
     if (!requestedPath || consumedRequestKeyRef.current === requestedPathKey) return;
-    // A request can name a folder (a chat link to one); wait for the index to tell.
-    if (available && !interactionBlocked && !index.data && !index.error) return;
+    // A request can name a folder (a chat link to one), so classify it from the
+    // index. A path the index doesn't list may be newer than the index: refresh
+    // once and decide on the fresh result.
+    const entry = indexData?.entries.find((candidate) => candidate.path === requestedPath);
+    if (!entry && available && !interactionBlocked) {
+      if (indexLoading || (!indexData && !indexError)) return;
+      if (refreshedRequestKeyRef.current !== requestedPathKey) {
+        refreshedRequestKeyRef.current = requestedPathKey;
+        void refreshIndex();
+        return;
+      }
+    }
     consumedRequestKeyRef.current = requestedPathKey;
-    const entry = index.data?.entries.find((candidate) => candidate.path === requestedPath);
     if (entry?.kind === "directory") revealFolder(requestedPath);
     else chooseFile(requestedPath);
-  }, [available, chooseFile, index.data, index.error, interactionBlocked, requestedPath, requestedPathKey, revealFolder]);
+  }, [available, chooseFile, indexData, indexError, indexLoading, interactionBlocked, refreshIndex, requestedPath, requestedPathKey, revealFolder]);
 
   const loadFile = React.useCallback(async () => {
     if (!workspace?.id || !selectedPath || !active || interactionBlocked) return;

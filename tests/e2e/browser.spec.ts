@@ -415,12 +415,14 @@ test("file links in an agent reply open in the Aiden browser and Files", async (
   await page.getByRole("link", { name: "index.html" }).click();
   await expect.poll(async () => (await state(page)).tabs.map((tab) => tab.title)).toContain("Thermostat preview");
 
+  // The folder first: opening style.css would expand its parent on its own.
+  await page.getByRole("link", { name: "the folder" }).click();
+  const folderButton = page.getByRole("region", { name: "Workspace files" }).getByRole("button", { name: "thermostat", exact: true });
+  await expect(folderButton).toHaveAttribute("aria-expanded", "true");
+  await expect(folderButton).toBeFocused();
+
   await page.getByRole("link", { name: "style.css" }).click();
   await expect(page.getByRole("textbox", { name: "Edit thermostat/style.css" })).toHaveValue("h1 { color: tomato; }");
-
-  await page.getByRole("link", { name: "the folder" }).click();
-  await expect(page.getByRole("region", { name: "Workspace files" }).getByRole("button", { name: "thermostat", exact: true }))
-    .toHaveAttribute("aria-expanded", "true");
 });
 
 test("browser recording produces a real bounded WebM artifact", async ({ aiden }) => {
