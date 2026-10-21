@@ -4166,8 +4166,9 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite()
         )
         await model.load(observeProgress: false)
+        // `done` drains the rest of the reply over a few reveal ticks.
         for _ in 0..<200 {
-            if model.streamState == .done, fixture.chatReads >= 2 { break }
+            if model.streamState == .done, fixture.chatReads >= 2, model.liveText == "prefix suffix" { break }
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(model.streamState, .done)
@@ -4262,6 +4263,32 @@ final class AidenChatTests: XCTestCase {
         await model.load(observeProgress: false)
         try await waitUntil { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
         return (model, fixture)
+    }
+
+    /// Releases reveal ticks one at a time until `condition` holds, since a
+    /// paced reveal shows a burst over several ticks. Returns the ticks used.
+    @MainActor
+    @discardableResult
+    private func releaseRevealTicks(
+        _ ticks: AidenManualRevealTicks,
+        until condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> Int {
+        var released = 0
+        while !condition() {
+            guard released < 40 else {
+                XCTFail("The reveal never reached the condition.", file: file, line: line)
+                return released
+            }
+            try await waitUntil({ ticks.pending > 0 || condition() }, file: file, line: line)
+            guard ticks.pending > 0 else { continue }
+            ticks.releaseAll()
+            released += 1
+            // Let the released tick run before the condition is checked.
+            try await waitUntil({ ticks.pending > 0 || condition() }, file: file, line: line)
+        }
+        return released
     }
 
     @MainActor
@@ -4385,15 +4412,19 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.streamState, .done)
         XCTAssertEqual(fixture.chatReads, readsBeforeTerminal + 1, "done reads the transcript without waiting for the reveal")
         XCTAssertEqual(model.liveText, "", "done does not dump the buffered text in one frame")
-        // While the transcript is read, ticks drain what is left, faster.
-        var revealTicks = 0
-        while model.liveText != words {
-            try await waitUntil { ticks.pending == 1 }
-            ticks.releaseAll()
-            revealTicks += 1
-            XCTAssertLessThan(revealTicks, 20, "the end of a reply drains within a few ticks")
+        // While the transcript is read, ticks drain what is left, faster:
+        // each tick shows a growing prefix of the reply, never all of it.
+        var revealed = [model.liveText]
+        let used = try await releaseRevealTicks(ticks) {
+            if revealed.last != model.liveText { revealed.append(model.liveText) }
+            return model.liveText == words
         }
-        XCTAssertGreaterThan(revealTicks, 1)
+        XCTAssertGreaterThan(used, 1, "the end of a reply is not shown in one tick")
+        XCTAssertLessThan(used, 20, "the end of a reply drains within a few ticks")
+        XCTAssertEqual(model.liveText, words)
+        for (shorter, longer) in zip(revealed, revealed.dropFirst()) {
+            XCTAssertTrue(longer.hasPrefix(shorter), "the reveal only appends")
+        }
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
     }
 
@@ -4443,9 +4474,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(model.chat.isBotChat)
 
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Old shown "}"#))
-        try await waitUntil { ticks.pending == 1 }
-        ticks.releaseAll()
-        try await waitUntil { model.liveText == "Old shown " }
+        try await releaseRevealTicks(ticks) { model.liveText == "Old shown " }
         // Reasoning, then reply text received but not yet revealed.
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Thinking"}"#))
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, "text_delta", #"{"text":"old buffered "}"#))
@@ -4468,9 +4497,7 @@ final class AidenChatTests: XCTestCase {
         // The cumulative replacement after the reset starts from empty.
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Fresh copy "}"#))
-        try await waitUntil { ticks.pending == 1 }
-        ticks.releaseAll()
-        try await waitUntil { !model.liveText.isEmpty }
+        try await releaseRevealTicks(ticks) { model.liveText.count >= "Fresh copy ".count }
         XCTAssertEqual(model.liveText, "Fresh copy ")
     }
 

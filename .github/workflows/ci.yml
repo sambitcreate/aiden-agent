@@ -360,6 +360,19 @@ jobs:
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           CODE_SIGNING_ALLOWED=NO
 
+      - name: Print failed iOS simulator test messages
+        if: failure()
+        shell: bash
+        run: |
+          # Parallel test runs print only test names; the failure messages
+          # live in the result bundle.
+          xcrun xcresulttool get test-results summary --compact \
+            --path '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult' | python3 -c '
+          import json, sys
+          for failure in json.load(sys.stdin).get("testFailures", []):
+              print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
+          ' || true
+
       - name: Preserve failed iOS simulator test results
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
