@@ -64,6 +64,22 @@ test("text the Bot wrote for a card loses control and direction marks, so it rea
   assert.equal(withoutBotHandoffControls("שלום, Ada"), "שלום, Ada", "right-to-left text itself is kept");
 });
 
+test("invisible characters never reach a card, and a Unicode line break is an ordinary one", () => {
+  // Zero-width spaces, word joiners, BOMs and invisible operators draw nothing: "pay\u200Bpal.com" reads as "paypal.com".
+  assert.equal(normalizeBotHandoffAction("Sign in to pay\u200Bpal\u2060.c\uFEFFom\uFEFF"), "Sign in to paypal.com");
+  assert.equal(withoutBotHandoffControls("Enter\u2063 the\u180E code\u206A"), "Enter the code");
+  // U+2028 and U+2029 break lines wherever they are drawn: a card's reason shows the line break they are,
+  // and a one-line title folds them like any other.
+  assert.equal(
+    withoutBotHandoffControls("Only you get the code.\u2028It expires soon.\u2029Hurry."),
+    "Only you get the code.\nIt expires soon.\nHurry.",
+  );
+  assert.equal(normalizeBotHandoffAction("Enter the code\u2028for your bank"), "Enter the code for your bank");
+  // The joiners that shape emoji and scripts are text, not tricks.
+  assert.equal(withoutBotHandoffControls("Ask \u{1F469}\u200D\u{1F4BB} about it"), "Ask \u{1F469}\u200D\u{1F4BB} about it");
+  assert.equal(withoutBotHandoffControls("\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645"), "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645");
+});
+
 test("an answer is exactly Done or Skip with an optional note, trimmed", () => {
   assert.deepEqual(botHandoffAnswerOf({ outcome: "done" }), { outcome: "done" });
   assert.deepEqual(botHandoffAnswerOf({ outcome: "skipped", note: "  Not today.  " }), {

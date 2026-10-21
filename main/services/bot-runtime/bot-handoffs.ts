@@ -13,6 +13,7 @@
 import {
   BOT_HANDOFF_RESULT_ENTRY_KIND,
   botHandoffAnswerOf,
+  botHandoffTakesNote,
   type BotHandoffAnswer,
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
@@ -70,7 +71,9 @@ export async function recordRuleHandoffEntry(
  * - `not_waiting`: nothing waits under that `waitId` for that Bot (answered
  *   elsewhere, withdrawn, or never asked).
  * - `invalid`: the card waits, but the value is not exactly
- *   `{ outcome: "done" | "skipped", note? }`. The card keeps waiting.
+ *   `{ outcome: "done" | "skipped", note? }`, or carries a note the card
+ *   takes none of (a sign-in, a password-or-code rule's card:
+ *   `botHandoffTakesNote`). The card keeps waiting.
  */
 export type BotHandoffAnswerOutcome = "answered" | "not_waiting" | "invalid";
 
@@ -158,6 +161,8 @@ export function createBotHandoffs(): BotHandoffs {
       if (!entry || entry.prompt.botId !== botId) return "not_waiting";
       const answer = botHandoffAnswerOf(value);
       if (!answer) return "invalid";
+      // A password or code typed as a note would reach the Bot with the answer.
+      if (answer.note !== undefined && !botHandoffTakesNote(entry.prompt)) return "invalid";
       entry.settle(answer);
       return "answered";
     },

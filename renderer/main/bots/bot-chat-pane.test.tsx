@@ -1162,6 +1162,48 @@ test("a note the card could not take stays in the composer", async () => {
   }
 });
 
+const CREDENTIALS_HANDOFF = {
+  botId: "bot-1",
+  waitId: "wait-c",
+  toolCallId: "tool-c",
+  kind: "action" as const,
+  action: "Enter a password or 2FA code, or change account security",
+  why: "Planner was about to type into the bank's code field.",
+  source: "rule" as const,
+  rule: { id: "locked.credentials", label: "Enter a password or 2FA code, or change account security" },
+};
+
+test("a card that takes a note says the Bot reads it, so a password or code stays out of the chat", async () => {
+  await mountChat({ "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }) });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(within(card).getByText("Planner reads any note you send. Enter passwords and codes on the page, never in the chat."));
+});
+
+test("a password-or-code card takes no note: the composer points to the card, and Done answers it without one", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: CREDENTIALS_HANDOFF }),
+    "bots:answerHandoff": () => ({ answered: true }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(
+    screen.getByText("Enter it yourself, then choose Done above. This card takes no note, so a password or code never reaches Planner.", {
+      selector: "[role=status]",
+    }),
+    "the composer says where to answer",
+  );
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  assert.equal(within(card).queryByText(/reads any note you send/u), null, "no note to warn about");
+  const box = screen.getByRole("textbox");
+  fireEvent.change(box, { target: { value: "481516" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(handoffAnswers(calls).length, 0, "the code typed in the chat is never sent");
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-c", outcome: "done" }]));
+});
+
 test("a photo sent while a hand-off waits is refused and kept with the note, and the card stays unanswered", async () => {
   const errors = captureErrorToasts();
   try {
