@@ -3805,6 +3805,33 @@ class AidenChatTest {
         }
     }
 
+    @Test
+    fun testDraftStoreConsumesAdmittedRunInputFromAnOlderSession() {
+        val tempDir = File(System.getProperty("java.io.tmpdir"), "aiden-drafts-test-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val store = AidenChatDraftStore(root = tempDir)
+            val submitting = store.beginSession("inst-1", "chat-1")
+            assertTrue(store.save("Fix the tests\nthen ship", submitting))
+            val otherMac = store.beginSession("inst-2", "chat-1")
+            assertTrue(store.save("Fix the tests", otherMac))
+
+            // The chat was reopened before the Mac admitted the input: the older session still
+            // retires the admitted text, and only that text.
+            val reopened = store.beginSession("inst-1", "chat-1")
+            store.consumeDraft("Fix the tests", submitting)
+            assertEquals("then ship", store.load(reopened))
+            assertEquals("Fix the tests", store.load(otherMac))
+
+            store.consumeDraft("then ship", submitting)
+            assertNull(store.load(reopened))
+            // Nothing saved: nothing is written back.
+            store.consumeDraft("anything", submitting)
+            assertNull(store.load(reopened))
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
     private fun sampleChat(): AidenChat {
         return AidenChat(
             id = "chat-1",

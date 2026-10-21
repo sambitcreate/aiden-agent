@@ -110,6 +110,13 @@ export async function updateBotIdentity(
     if (!stack) return;
     stack.pending.splice(stack.pending.indexOf(patch), 1);
     if (confirmed) stack.confirmed = confirmed;
+    else {
+      // A reread may have landed while this edit was in flight (an edit from a
+      // phone, say). Patches never change the revision, so a different one in
+      // the cache is newer confirmed data: build on it, do not overwrite it.
+      const cached = qc.getQueryData<BotDefinition>(queryKeys.bot(botId));
+      if (cached && cached.revision !== stack.confirmed.revision) stack.confirmed = cached;
+    }
     if (stack.pending.length === 0) editStacks.delete(botId);
     presentEdits(qc, stack);
   };
@@ -131,8 +138,12 @@ export async function updateBotIdentity(
     return saved;
   } catch (error) {
     settle(null);
-    // The confirmed Bot this window held may be older than main's by now.
-    if (stack && !editStacks.has(botId)) void qc.invalidateQueries({ queryKey: queryKeys.bot(botId) });
+    // The confirmed Bot this window held may be older than main's by now:
+    // reread it and every list the rollback touched.
+    if (stack && !editStacks.has(botId)) {
+      void qc.invalidateQueries({ queryKey: queryKeys.bot(botId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.bots });
+    }
     throw error;
   }
 }

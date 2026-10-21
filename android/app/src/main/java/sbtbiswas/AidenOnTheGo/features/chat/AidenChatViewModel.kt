@@ -2133,7 +2133,12 @@ class AidenChatViewModel(
                     return@launch
                 }
                 if (pairingCreatedAt?.let(::isPairingRetained) != true) return@launch
-                withContext(ioDispatcher) { draftStore.settlePendingSend(key.toString(), session) }
+                withContext(ioDispatcher) {
+                    draftStore.settlePendingSend(key.toString(), session)
+                    // The admitted text leaves the saved draft under the same ownership, so a
+                    // screen or client change before this answer cannot offer it again.
+                    if (!retry && AidenRunInputPresentation.consumesDraft(result)) draftStore.consumeDraft(text, session)
+                }
                 if (activeClient() !== client) return@launch
                 _pendingSend.value = null
                 if (lastRunInputAttempt == attempt) lastRunInputAttempt = null

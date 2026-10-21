@@ -338,6 +338,39 @@ test("two edits in flight that both fail leave the confirmed Bot, whichever answ
   assert.equal(list?.find((row) => row.id === "bot-1")?.name, "Planner");
 });
 
+test("a failed edit keeps a newer Bot that another device saved meanwhile, in the Profile and the list", async () => {
+  let reject: (error: Error) => void = () => undefined;
+  // `bots:list` and `bots:get` read the store; the held update never writes it.
+  let stored = botFixture();
+  installBotTestIpc({
+    "bots:list": () => [stored],
+    "bots:get": () => stored,
+    "bots:update": () => new Promise<BotDefinition>((_resolve, rejectUpdate) => (reject = rejectUpdate)),
+  });
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(["bots", "active"], [botFixture()]);
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1", queryClient });
+  const subtitle = (await screen.findByRole("textbox", { name: "Subtitle" })) as HTMLInputElement;
+  fireEvent.change(subtitle, { target: { value: "Unsaved subtitle" } });
+  fireEvent.blur(subtitle);
+  const shown = () => queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])!;
+  await waitFor(() => assert.equal(shown().description, "Unsaved subtitle"));
+
+  // A phone renames the Bot; main's `bots:changed` rereads the Bot and the list.
+  stored = botFixture({ name: "Renamed on phone", revision: "rev-2" });
+  await queryClient.invalidateQueries({ queryKey: ["bots"] });
+  await queryClient.invalidateQueries({ queryKey: ["bot", "bot-1"] });
+  await waitFor(() => assert.equal(shown().name, "Renamed on phone"));
+
+  reject(new Error("Error invoking remote method 'bots:update': Error: Bots are starting."));
+  await waitFor(() => assert.equal(shown().description, "Plans trips"));
+  assert.equal(shown().name, "Renamed on phone");
+  await waitFor(() =>
+    assert.equal(queryClient.getQueryData<BotDefinition[]>(["bots", "active"])?.find((row) => row.id === "bot-1")?.name, "Renamed on phone"),
+  );
+  await waitFor(() => assert.equal(subtitle.value, "Plans trips"));
+});
+
 test("a Bot already in the list opens its Profile without a loading skeleton", async () => {
   installBotTestIpc({
     "bots:list": () => [botFixture()],

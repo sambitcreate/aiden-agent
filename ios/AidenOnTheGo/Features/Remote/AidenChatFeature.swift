@@ -3605,6 +3605,12 @@ final class AidenChatViewModel {
             let retained = await coordinator.withRetainedInstallationData(for: context) {
                 guard !isRemoved else { return }
                 await draftStore.settlePendingSend(key: key, session: session)
+                // The admitted text leaves the saved draft under the same
+                // ownership, so a screen or pairing change before this answer
+                // cannot offer it again as an unsent draft.
+                if !retry, AidenRunInputPresentation.consumesDraft(result) {
+                    await draftStore.consumeDraft(submitted: text, session: session)
+                }
             }
             guard retained, !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
