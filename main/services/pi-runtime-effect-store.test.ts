@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
+import { reconcileChatScopedStores } from "./startup-chat-reconciliation.js";
 import {
   PiCompactionSessionStore,
   recordPiEffectRecoveryBoundary,
@@ -954,6 +955,42 @@ test("restart retries lifecycle receipt publication after effect recovery alread
     const receipts = await again.verification.list(input.chatId, scope);
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0]?.result, "inconclusive");
+  });
+});
+
+test("startup chat reconciliation completes with unreadable private evidence files", async () => {
+  await withTempDirectory(async (directory) => {
+    const first = makeStore(directory); await first.initialize();
+    const orphan = operation("orphan", "deleted-chat"); await first.startOperation(orphan);
+    await writeFile(path.join(directory, "pi-verification-receipts.json"), "{not json");
+    await writeFile(path.join(directory, "workflow-evidence.json"), JSON.stringify({ version: 99 }));
+    const restarted = makeStore(directory); await restarted.initialize();
+    await reconcileChatScopedStores({ list: async () => [] }, [restarted]);
+    assert.deepEqual(await restarted.listOperationsByChat(orphan.chatId), []);
+    assert.equal(await readFile(path.join(directory, "pi-verification-receipts.json"), "utf8"), "{not json");
+  });
+});
+
+test("reconciliation fences receipt catch-up items that have not been published yet", async () => {
+  await withTempDirectory(async (directory) => {
+    const first = makeStore(directory); await first.initialize();
+    first.verification.check = () => Promise.reject(new Error("receipt publication failed"));
+    const kept = operation("kept-op", "kept-chat");
+    const deleted = operation("deleted-op", "deleted-chat");
+    for (const input of [kept, deleted]) { await first.startOperation(input); await first.finishOperation(input.operationId, "completed"); }
+    const restarted = makeStore(directory);
+    const publish = restarted.verification.check.bind(restarted.verification);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    restarted.verification.check = async (...args) => { if (calls++ === 0) await gate; return publish(...args); };
+    await restarted.initialize();
+    await restarted.reconcileChats(new Set(["kept-chat"]));
+    release();
+    await restarted.settleVerificationReceipts();
+    const receipts = (input: typeof kept) => restarted.verification.list(input.chatId, toolOutputScope({ runId: input.runId, sessionId: input.sessionId }));
+    assert.equal((await receipts(kept)).length, 1);
+    assert.equal((await receipts(deleted)).length, 0);
   });
 });
 

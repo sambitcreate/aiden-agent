@@ -697,20 +697,21 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (effect.chatId === chatId) this.localUnknown.delete(effectId);
     }
-    await this.workflowEvidence.deleteByChat(chatId);
-    await this.verification.deleteByChat(chatId);
+    // Both stores fence the chat before loading, so an unreadable evidence
+    // file stays preserved without blocking deletion or allowing new writes.
+    await this.workflowEvidence.deleteByChat(chatId).catch(() => undefined);
+    await this.verification.deleteByChat(chatId).catch(() => undefined);
   }
 
   /** Remove private effect evidence whose visible chat no longer exists. */
   async reconcileChats(validChatIds: ReadonlySet<string>): Promise<void> {
     this.requireInitialized();
     const valid = new Set([...validChatIds].filter((chatId) => isSafePiRuntimeIdentity(chatId)));
+    const orphanChats = new Set<string>();
     await this.data.update((database) => {
-      const orphanOperationIds = new Set(
-        database.operations
-          .filter((operation) => !valid.has(operation.chatId))
-          .map(({ operationId }) => operationId),
-      );
+      const orphans = database.operations.filter((operation) => !valid.has(operation.chatId));
+      for (const { chatId } of orphans) orphanChats.add(chatId);
+      const orphanOperationIds = new Set(orphans.map(({ operationId }) => operationId));
       if (orphanOperationIds.size === 0) return;
       database.operations = database.operations.filter(
         ({ operationId }) => !orphanOperationIds.has(operationId),
@@ -723,8 +724,13 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (!valid.has(effect.chatId)) this.localUnknown.delete(effectId);
     }
-    await this.workflowEvidence.reconcileChats(validChatIds);
-    await this.verification.reconcileChats(validChatIds);
+    // Fence orphans first: startup receipt catch-up may still hold their
+    // operations. Evidence cleanup is best effort, so an unreadable private
+    // file stays preserved and never blocks startup.
+    this.verification.revokeChats(orphanChats);
+    this.workflowEvidence.revokeChats(orphanChats);
+    await this.workflowEvidence.reconcileChats(validChatIds).catch(() => undefined);
+    await this.verification.reconcileChats(validChatIds).catch(() => undefined);
   }
 }
 

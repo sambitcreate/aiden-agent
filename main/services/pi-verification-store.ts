@@ -158,6 +158,10 @@ export class PiVerificationStore {
     if (!receipt?.evidenceHandle) throw new Error("Verification evidence is unavailable.");
     return this.outputs.read(chatId, scope, new Set(["host_verification"]), receipt.evidenceHandle, offset, length);
   }
+  /** Fence publication for chats synchronously, before any cleanup that might fail. */
+  revokeChats(chatIds: Iterable<string>): void {
+    for (const chatId of chatIds) this.deletedChats.add(toolOutputScope(chatId));
+  }
   async reconcileChats(validChatIds: ReadonlySet<string>): Promise<void> {
     const valid = new Set([...validChatIds].map((id) => toolOutputScope(id)));
     for (const chat of this.pendingChats.keys()) {

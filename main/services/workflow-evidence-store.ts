@@ -272,6 +272,10 @@ export class WorkflowEvidenceStore {
     const chat = toolOutputScope(chatId); this.deletedChats.add(chat);
     await this.serialized(chatId, async () => { await this.load(); await this.data.update((draft) => { draft.bundles = draft.bundles.filter((row) => row.chat !== chat); draft.lessons = draft.lessons.filter((row) => row.chat !== chat); }); });
   }
+  /** Fence publication for chats synchronously, before any cleanup that might fail. */
+  revokeChats(chatIds: Iterable<string>): void {
+    for (const chatId of chatIds) this.deletedChats.add(toolOutputScope(chatId));
+  }
   async reconcileChats(validChatIds: ReadonlySet<string>): Promise<void> {
     const valid = new Set([...validChatIds].map((chatId) => toolOutputScope(chatId)));
     for (const chat of this.pendingChats.keys()) if (!valid.has(chat)) this.deletedChats.add(chat);
