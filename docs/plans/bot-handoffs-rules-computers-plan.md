@@ -311,6 +311,7 @@ v1 shows the computer's state on Bot detail ("Ada's computer is running"). A liv
 
 - `tests/e2e/lume-fake.mjs`: a fake `lume` CLI (like `agent-device-fake.mjs`) that records arguments and emulates `create`, `clone`, `run`, `get` and `delete`, including the stale and limit errors. Host tests cover pinning, the environment (telemetry off), storage isolation (the fake fails any call without Aiden's `--storage`, or for `clone` without both `--source-storage` and `--dest-storage`), lifecycle, the concurrency cap, idle stop, and delete idempotence.
 - RFB client tests against recorded frame fixtures.
+- `main/services/bot-computers/integration.test.ts`: the real host (driving the fake Lume, whose VM forwards its VNC listener to the fake RFB server), sessions, RFB screen, viewer, IPC handlers and the `computer` tool in a real Bot session: Give, a capture boots the VM, a click lands, Take over interrupts the call and Give back returns the note, Pause stops the VM, and Delete Bot removes it.
 - Packaged acceptance script `scripts/bot-computers-packaged-acceptance.mjs` (owner Mac only, like `computer-use-packaged-acceptance.mjs`): create the base, clone, run, capture, click, take over, then delete.
 
 ## 9. Remote contract revision 36
