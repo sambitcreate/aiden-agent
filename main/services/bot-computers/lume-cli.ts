@@ -192,6 +192,8 @@ export async function runLume(
     signal?: AbortSignal;
     timeoutMs: number;
     maxStdoutBytes?: number;
+    /** Lume has started (it never runs when it can't be started at all). */
+    onSpawn?: () => void;
   },
 ): Promise<LumeRunResult> {
   if (options.env.LUME_TELEMETRY_ENABLED !== "false" || options.env.LUME_UPDATE_CHECK !== "false") {
@@ -205,6 +207,7 @@ export async function runLume(
     maxStdoutBytes: options.maxStdoutBytes ?? 1024 * 1024,
     maxStderrBytes: 64 * 1024,
     overflow: "fail",
+    onSpawn: options.onSpawn,
   });
   if (result.timedOut) {
     throw new BotComputerError("lume_failed", `Lume did not finish ${command.op} in time.`);

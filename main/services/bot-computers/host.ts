@@ -86,6 +86,11 @@ export interface BotComputerHostDependencies {
   /** Poll gap while a VM starts or stops. */
   pollIntervalMs?: number;
   startTimeoutMs?: number;
+  /**
+   * How long a start that failed after `lume run` keeps watching for the VM to come up
+   * (Lume's detached run can return before the VM it launched is up), to turn it off.
+   */
+  launchSettleMs?: number;
   /** `/usr/bin/ssh` and `/usr/bin/ssh-keygen`, or fakes. */
   sshCommand?: string;
   keygenCommand?: string;
@@ -198,6 +203,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     });
   const pollMs = deps.pollIntervalMs ?? 1_000;
   const startTimeoutMs = deps.startTimeoutMs ?? 240_000;
+  const launchSettleMs = deps.launchSettleMs ?? 10_000;
   const control = deps.control ?? createBotComputerControl();
   const activity = deps.activity ?? createBotComputerActivity();
   const exposed = deps.vncExposed ?? ((port: number) => vncReachableBeyondLoopback(port));
@@ -276,13 +282,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   };
   const lumeEnv = () => lumeEnvironment(deps.env ?? process.env, dirs.home);
 
-  async function lume(command: LumeCommand, timeoutMs: number, signal?: AbortSignal): Promise<LumeRunResult> {
+  async function lume(command: LumeCommand, timeoutMs: number, signal?: AbortSignal, onSpawn?: () => void): Promise<LumeRunResult> {
     // Verified first: Aiden's VM storage only appears once Lume can run, so a
     // Mac whose helper is missing never makes later deletes or startups run it.
     const resolved = await invocation();
     await mkdir(dirs.vms, { recursive: true, mode: 0o700 });
     await mkdir(dirs.home, { recursive: true, mode: 0o700 });
-    return runLume(resolved, command, { storage: dirs.vms, env: lumeEnv(), timeoutMs, signal });
+    return runLume(resolved, command, { storage: dirs.vms, env: lumeEnv(), timeoutMs, signal, onSpawn });
   }
 
   const failureKind = (result: LumeRunResult): LumeErrorKind =>
@@ -313,15 +319,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     throw new BotComputerError("lume_failed", "Aiden couldn't delete the computer. Try again.");
   }
 
-  async function stopVm(vmName: string, force: boolean): Promise<void> {
+  /** Resolves what Lume found: a VM it turned off, one that wasn't running, or none by that name. */
+  async function stopVm(vmName: string, force: boolean): Promise<"stopped" | "not_running" | "not_found"> {
     const result = await lume({ op: "stop", name: vmName, force, timeoutSeconds: force ? 0 : 30 }, force ? 30_000 : 75_000);
-    if (result.exitCode === 0) return;
+    if (result.exitCode === 0) return "stopped";
     const kind = failureKind(result);
-    if (kind === "not_running" || kind === "not_found") return;
-    if (!force) {
-      await stopVm(vmName, true);
-      return;
-    }
+    if (kind === "not_running" || kind === "not_found") return kind;
+    if (!force) return stopVm(vmName, true);
     log(`lume stop failed: ${result.stderr.slice(-600)}`);
     throw new BotComputerError("lume_failed", "Aiden couldn't stop the computer.");
   }
@@ -360,12 +364,17 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   }
 
   /**
-   * Turn off what a failed start may have launched. Resolves whether Lume still runs it: after a
-   * forced stop that failed, it counts as off only if Lume says so, and an unreadable state counts as on.
+   * Turn off what a failed start may have launched, and resolve whether Lume still runs it.
+   * While the VM `mayComeUp` (Lume's detached run can return, or fail, before the VM it launched
+   * is up), one that isn't running yet is watched for `launchSettleMs` and turned off once it is.
+   * After a forced stop that failed, it counts as off only if Lume says so, and an unreadable
+   * state counts as on.
    */
-  async function stopFailedStart(vmName: string): Promise<boolean> {
+  async function stopFailedStart(vmName: string, mayComeUp: boolean): Promise<boolean> {
+    const watchUntil = mayComeUp ? performance.now() + launchSettleMs : 0;
     try {
-      await stopVm(vmName, true);
+      // Lume turned off what came up, or has no such VM: nothing else this start launched can run.
+      while ((await stopVm(vmName, true)) === "not_running" && performance.now() < watchUntil) await delay(pollMs);
       return false;
     } catch (error) {
       log("Stopping a failed start did not finish.", error);
@@ -380,8 +389,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
    * Start a VM detached and wait for it to be running with an IP and a VNC
    * endpoint. The endpoint must be loopback (G22) and its port must not answer
    * on any other interface; otherwise the VM is stopped and refused. A start
-   * that fails or is cancelled turns the VM off before it rejects, and
-   * `onLeftRunning` hears when Lume still runs it afterwards.
+   * that fails or is cancelled once Lume has begun launching the VM turns it
+   * off before it rejects, and `onLeftRunning` hears when Lume still runs it.
    */
   async function runAndWait(
     vmName: string,
@@ -395,13 +404,19 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await mkdir(dirs.logs, { recursive: true, mode: 0o700 });
     const logFile = path.join(dirs.logs, `${vmName}.log`);
     await rm(logFile, { force: true });
-    // Resolved first: a helper that can't run fails here, before anything could have launched.
-    await invocation();
     let polls = 0;
+    /** `none` until Lume's `run` has started; `ended` once its launch is known to have failed. */
+    let launch = "none" as "none" | "launching" | "ended";
     try {
-      // `run --detach` launches the VM before its own process returns, so a run that is
-      // cancelled, times out or exits non-zero may have left the VM on: the catch turns it off.
-      const started = await lume({ op: "run", name: vmName, vncPassword: password, sharedDir, logFile }, 60_000, signal);
+      if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
+      // `run --detach` launches the VM in the background before it returns, and the VM can
+      // come up after that. So it isn't cut short by a cancel, which would leave no way to tell
+      // whether it launched: it is bounded, and the cancel is honoured once it returns. A run
+      // that fails or times out may still have launched the VM: the catch turns it off.
+      const started = await lume({ op: "run", name: vmName, vncPassword: password, sharedDir, logFile }, 60_000, undefined, () => {
+        launch = "launching";
+      });
+      if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (started.exitCode !== 0) throw startFailure(failureKind(started), owner);
       const deadline = now() + startTimeoutMs;
       for (;;) {
@@ -420,13 +435,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         }
         if (info.state !== "running" && polls > 1) {
           const tail = await logTail(logFile);
-          if (/^Error:/mu.test(tail)) throw startFailure(classifyLumeError(tail, 1), owner);
+          if (/^Error:/mu.test(tail)) {
+            // Lume's background launch reported its failure: the VM isn't coming up.
+            launch = "ended";
+            throw startFailure(classifyLumeError(tail, 1), owner);
+          }
         }
         if (now() > deadline) throw new BotComputerError("start_failed", `${owner} computer didn't start in time.`);
         await delay(pollMs, signal);
       }
     } catch (error) {
-      if (await stopFailedStart(vmName)) onLeftRunning?.();
+      // A Lume that never started (missing, or refused by the OS) launched nothing.
+      if (launch !== "none" && (await stopFailedStart(vmName, launch === "launching"))) onLeftRunning?.();
       throw error;
     }
   }
@@ -1201,7 +1221,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         return { ip: info.ip };
       },
       provisionContext: (ip) => provisionContext(target, ip, publicKey, guestPassword, signal, driver?.hooks),
-      stop: () => stopVm(target, true),
+      stop: async () => {
+        await stopVm(target, true);
+      },
       removeIpsw: async () => {
         await downloader.remove();
       },

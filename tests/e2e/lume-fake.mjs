@@ -14,7 +14,7 @@
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
 // keys log, stale, limit, vncHost, stopDelayMs, stopFails, cloneDelayMs, runReturnDelayMs, runFailsLate,
-// hostKey and vncUpstream of a JSON file named by a leading `--fake-config <file>`):
+// bootDelayMs, hostKey and vncUpstream of a JSON file named by a leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)";
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
 //   Virtualization VM-limit error (written to the --log-file, as the detached run does);
@@ -25,8 +25,12 @@
 //   fails and leaves the VM running;
 // - AIDEN_FAKE_LUME_CLONE_DELAY_MS: how long `clone` copies the disk. A source that starts
 //   running meanwhile fails the clone: the real copy would be torn, and the fake says so.
-// - AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS: how long `run --detach` takes to return once its
-//   detached VM is up (the real detach branch launches the VM before it prints and returns);
+// - AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS: how long `run --detach` takes to return once it has
+//   launched its detached VM (the real detach branch launches the VM before it prints and returns);
+// - AIDEN_FAKE_LUME_BOOT_DELAY_MS: how long the detached VM takes to come up. With it set, `run`
+//   doesn't wait for the VM to be up, as the real detach branch doesn't: a `get` meanwhile
+//   reports it stopped and a `stop` says it isn't running. Every launch logs a `spawned` entry
+//   (with the VM process's pid) as soon as the process exists;
 // - AIDEN_FAKE_LUME_RUN_FAILS_LATE: comma-separated VM names whose `run` launches the detached
 //   VM and then exits non-zero, leaving the VM running;
 // - AIDEN_FAKE_LUME_HOST_KEY: the `ssh-ed25519 …` host key a fresh install gets
@@ -61,6 +65,7 @@ if (args[0] === "--fake-config") {
     cloneDelayMs: "AIDEN_FAKE_LUME_CLONE_DELAY_MS",
     runReturnDelayMs: "AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS",
     runFailsLate: "AIDEN_FAKE_LUME_RUN_FAILS_LATE",
+    bootDelayMs: "AIDEN_FAKE_LUME_BOOT_DELAY_MS",
     hostKey: "AIDEN_FAKE_LUME_HOST_KEY",
     vncUpstream: "AIDEN_FAKE_LUME_VNC_UPSTREAM",
   };
@@ -183,6 +188,8 @@ function details(storage, name, vm) {
 }
 
 async function vncChild(storage, name, port) {
+  const bootDelay = Number(process.env.AIDEN_FAKE_LUME_BOOT_DELAY_MS ?? "0");
+  if (bootDelay > 0) await sleep(bootDelay);
   const upstream = Number(process.env.AIDEN_FAKE_LUME_VNC_UPSTREAM ?? "0");
   const server = createServer((socket) => {
     socket.on("error", () => undefined);
@@ -347,9 +354,13 @@ async function main() {
         env: process.env,
       });
       child.unref();
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        await sleep(50);
-        if (readState(storage).vms[name]?.status === "running") break;
+      log({ kind: "spawned", name, pid: child.pid });
+      // Without a boot delay the VM is up within moments, and `run` waits for it so a `get` right after sees it.
+      if (!(Number(process.env.AIDEN_FAKE_LUME_BOOT_DELAY_MS ?? "0") > 0)) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          await sleep(50);
+          if (readState(storage).vms[name]?.status === "running") break;
+        }
       }
       const returnDelay = Number(process.env.AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS ?? "0");
       if (returnDelay > 0) await sleep(returnDelay);

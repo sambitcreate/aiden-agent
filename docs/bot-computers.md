@@ -111,12 +111,20 @@ Bot computer that was interrupted while it was being made is marked for
 - **A stop that fails:** if Lume can't stop a computer, Aiden asks Lume for its
   state again. A computer that is still running stays shown as running (and
   keeps its idle timer), rather than being shown as off while it runs.
-- **A start that fails:** Lume starts a computer in the background before it
-  reports back, so a start that is cancelled (Pause, Stop, or every caller
-  giving up) or fails can leave it on. Aiden turns it off before the computer
-  reads Stopped and gives up its place. If Lume can't turn it off, it stays
-  shown as running, keeps its place and has no screen to use; its idle timer,
-  Stop, Pause or quit tries again, and its next start turns it off first.
+- **A start that fails:** Lume starts a computer in the background, and the
+  computer can come up a few moments after Lume has reported back. So a start
+  that is cancelled (Pause, Stop, or every caller giving up) or fails can leave
+  it on. Aiden lets Lume finish launching it, then turns it off; while Lume
+  says it isn't running yet, Aiden keeps checking for up to about ten seconds
+  and turns it off once it comes up. Until then the computer still reads
+  Starting and keeps its place, so stopping it can take that long. A computer
+  that comes up even later is turned off by its next start (which then fails
+  once) or at Aiden's next launch. If Lume can't turn it off, it stays shown as
+  running, keeps its place and has no screen to use: its Computer tab says it
+  isn't running. Its idle timer, Stop in the Bot's profile, Pause or quit tries
+  again, and the Bot's next computer call turns it off before starting it
+  afresh. A start that fails because Lume itself can't be started launched
+  nothing, so the computer reads Stopped at once.
 - **Startup** stops computers an earlier launch left running and marks
   interrupted ones for Reset. It never stops a computer this launch is already
   starting or using, or the base while Set up builds it. A Mac that never chose

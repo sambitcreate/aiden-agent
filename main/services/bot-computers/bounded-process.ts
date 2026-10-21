@@ -16,6 +16,8 @@ export interface BoundedProcessOptions {
   /** A local file streamed to the child's stdin instead (a binary copied into a guest). */
   stdinFile?: string;
   cwd?: string;
+  /** Called once the executable has started; never when it couldn't be started at all. */
+  onSpawn?: () => void;
 }
 
 export interface BoundedProcessResult {
@@ -56,6 +58,7 @@ export function runBoundedProcess(
       stdio: [options.stdin === undefined && options.stdinFile === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       windowsHide: true,
     });
+    if (options.onSpawn) child.once("spawn", options.onSpawn);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;

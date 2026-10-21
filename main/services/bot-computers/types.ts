@@ -65,7 +65,9 @@ export interface BotComputerHost {
     options: { reason: BotComputerStartReason; signal?: AbortSignal; onProgress?(text: string): void },
   ): Promise<BotComputerConnection>;
   /**
-   * Stops the computer. When even a forced stop fails and Lume still reports the VM running,
+   * Stops the computer. A start in progress is cancelled, and this waits until what it launched
+   * is off: Lume's `run` returning, then up to the launch settle time (10 s) for a VM that is
+   * still coming up. When even a forced stop fails and Lume still reports the VM running,
    * it stays running (with its place, and its connection if it had one) and this rejects. A
    * stop that turns it off gives control back to the Bot, except while a sign-in card holds it
    * for the person.

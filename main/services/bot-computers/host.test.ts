@@ -42,6 +42,7 @@ interface FakeConfig {
   cloneDelayMs?: number;
   runReturnDelayMs?: number;
   runFailsLate?: string;
+  bootDelayMs?: number;
   hostKey?: string;
 }
 
@@ -57,7 +58,7 @@ interface LoggedCall {
   at?: number;
   kind: string;
   pid?: number;
-  /** The VM a `vnc` entry plays. */
+  /** The VM a `vnc` or `spawned` entry plays. */
   name?: string;
   op?: string;
   args?: string[];
@@ -105,9 +106,16 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
   };
   // Restore images by URL; anything else gets the default pin's bytes.
   const served = new Map<string, Buffer>();
+  /** `missing` makes every later Lume call fail to start, as when the helper has gone. */
+  const lumeHelper = { missing: false };
   const deps: BotComputerHostDependencies = {
     root,
-    lume: async () => ({ command: process.execPath, prefixArgs: [fake, "--fake-config", configFile] }),
+    lume: async () => ({
+      get command() {
+        return lumeHelper.missing ? path.join(dir, "missing-lume") : process.execPath;
+      },
+      prefixArgs: [fake, "--fake-config", configFile],
+    }),
     support: () => ({ ok: true }),
     botComputerDir: async (botId) => path.join(dir, "bots", botId, "Computer"),
     botName: (botId) => botId.charAt(0).toUpperCase() + botId.slice(1),
@@ -186,6 +194,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     host,
     config,
     writeConfig,
+    lumeHelper,
     secrets,
     sshCalls,
     ssh,
@@ -209,7 +218,9 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       // Every fake VM this test started, including one left running after its storage went.
       const pids = new Set([
         ...Object.values(fakeState().vms).map((vm) => vm.pid),
-        ...calls().filter((call) => call.kind === "vnc").map((call) => call.pid),
+        ...calls()
+          .filter((call) => call.kind === "vnc" || call.kind === "spawned")
+          .map((call) => call.pid),
       ]);
       for (const pid of pids) {
         if (!pid) continue;
@@ -572,14 +583,14 @@ test("a stop Lume fails to carry out leaves the computer running, as Lume report
 
 const failsWith = (code: BotComputerError["code"]) => (error: unknown) => error instanceof BotComputerError && error.code === code;
 
-test("a start cancelled or failing after Lume launched the VM turns it off; one Lume can't turn off keeps its place", async () => {
+test("a start cancelled or failing after Lume launched the VM turns it off; one Lume can't turn off keeps its place, and one Lume never ran for holds none", async () => {
   await withHost(async (context) => {
     await setUp(context);
     const { vmName } = await context.host.give("ada");
     const launches = () => context.calls().filter((call) => call.kind === "vnc" && call.name === vmName).length;
 
     // `lume run --detach` has launched the VM but not returned when the only caller gives up, and Pause follows.
-    context.config.runReturnDelayMs = 30_000;
+    context.config.runReturnDelayMs = 1_000;
     context.writeConfig();
     const caller = new AbortController();
     const cancelled = context.host.ensureRunning("ada", { reason: "tool", signal: caller.signal });
@@ -621,6 +632,58 @@ test("a start cancelled or failing after Lume launched the VM turns it off; one 
     assert.equal(launches(), 4);
     assert.equal(context.vmRunning(vmName), true);
     assert.equal(context.host.runningConnection("ada")?.vnc.password, connection.vnc.password);
+
+    // A Lume that can't be started at all launched nothing: Ben's start fails and holds no place.
+    await context.host.stop("ada", { reason: "pause" });
+    context.lumeHelper.missing = true;
+    await assert.rejects(context.host.ensureRunning("ben", { reason: "tool" }), failsWith("lume_failed"));
+    assert.equal((await context.host.computer("ben"))?.state, "stopped", "Ben's computer gives up the place it never used");
+    context.lumeHelper.missing = false;
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    assert.equal(context.vmRunning(vmName), true, "the one place is free for Ada");
+  });
+});
+
+test("a start cancelled while the VM Lume launched is still coming up turns it off once it is up, before Pause returns", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    const logged = (kind: string) => context.calls().filter((call) => call.kind === kind && call.name === vmName);
+    // As with Lume's detach branch, the VM comes up a while after `run` launched its process.
+    context.config.bootDelayMs = 1_000;
+
+    // Cancelled once the VM's process exists, while `run` is still returning.
+    context.config.runReturnDelayMs = 300;
+    context.writeConfig();
+    let caller = new AbortController();
+    let cancelled = context.host.ensureRunning("ada", { reason: "tool", signal: caller.signal });
+    await waitFor(() => logged("spawned").length === 1, "the VM's process");
+    caller.abort();
+    await assert.rejects(cancelled, failsWith("cancelled"));
+    assert.equal((await context.host.computer("ada"))?.state, "starting", "it keeps its place while its VM may come up");
+    await context.host.stop("ada", { reason: "pause" });
+    await waitFor(() => logged("vnc").length === 1, "the VM to come up");
+    assert.equal(context.vmRunning(vmName), false, "the VM that came up after the cancel is off once Pause returns");
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+
+    // Cancelled after `run` returned, while Aiden asks Lume whether the VM is up yet.
+    context.config.runReturnDelayMs = undefined;
+    context.writeConfig();
+    caller = new AbortController();
+    cancelled = context.host.ensureRunning("ada", { reason: "tool", signal: caller.signal });
+    await waitFor(() => logged("spawned").length === 2, "the VM's process");
+    const spawnedAt = last(logged("spawned"))?.at ?? 0;
+    await waitFor(() => context.calls().some((call) => call.op === "get" && (call.at ?? 0) >= spawnedAt), "the first check");
+    caller.abort();
+    await assert.rejects(cancelled, failsWith("cancelled"));
+    await context.host.stop("ada", { reason: "pause" });
+    await waitFor(() => logged("vnc").length === 2, "the VM to come up");
+    assert.equal(context.vmRunning(vmName), false);
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+
+    // Started again, it comes up as usual.
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    assert.equal(context.vmRunning(vmName), true);
   });
 });
 

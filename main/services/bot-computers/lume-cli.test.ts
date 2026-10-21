@@ -160,3 +160,17 @@ test("output past the cap ends the child, and a hung child is killed at its time
   controller.abort();
   await assert.rejects(pending, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
 });
+
+test("onSpawn hears that the executable started, and never fires for one that couldn't be started", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "p8-bounded-"));
+  let spawned = 0;
+  const onSpawn = () => void (spawned += 1);
+  const ran = await runBoundedProcess(process.execPath, ["-e", "process.exit(3)"], { env: {}, timeoutMs: 10_000, onSpawn });
+  assert.equal(ran.exitCode, 3);
+  assert.equal(spawned, 1, "a child that ran and failed still started");
+  await assert.rejects(
+    runBoundedProcess(path.join(dir, "missing-lume"), [], { env: {}, timeoutMs: 10_000, onSpawn }),
+    (error: unknown) => error instanceof BotComputerError && error.code === "lume_failed" && /is missing/u.test(error.message),
+  );
+  assert.equal(spawned, 1, "a missing executable never started");
+});
