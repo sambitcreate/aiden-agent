@@ -11,13 +11,53 @@
 // or crash, Resume asks again under the same `waitId`.
 
 import {
+  BOT_HANDOFF_RESULT_ENTRY_KIND,
   botHandoffAnswerOf,
   type BotHandoffAnswer,
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
+import type { BotRuleHandoffRecord, BotRuleHandoffRequest, BotRuleHandoffRowTarget } from "./bot-extension.js";
 
 export interface BotHandoffRequest extends BotPendingHandoff {
   signal: AbortSignal | undefined;
+}
+
+/** The card a rule opens instead of running a call (plan §4.4): an action card naming its rule. */
+export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRequest {
+  return {
+    botId: request.botId,
+    waitId: request.waitId,
+    toolCallId: request.toolCallId,
+    kind: "action",
+    action: request.action,
+    why: request.why,
+    source: "rule",
+    rule: { id: request.rule.id, label: request.rule.label },
+    signal: request.signal,
+  };
+}
+
+/**
+ * The transcript row for a settled rule hand-off, an `aiden.handoff-result`
+ * entry, written into `conversation`: the stopped call's own, as the extension
+ * hands it over (appended, never submitted, so the row can't start the Bot).
+ * Written once per tool call: a crash after the row and before the call's
+ * block makes the extension apply the same answer again, and that second call
+ * finds the row and writes nothing. Returns whether it wrote.
+ */
+export async function recordRuleHandoffEntry(
+  conversation: BotRuleHandoffRowTarget,
+  record: BotRuleHandoffRecord,
+): Promise<boolean> {
+  const { botId: _botId, ...details } = record;
+  const recorded = (await conversation.entries()).some(
+    (entry) =>
+      entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND &&
+      (entry.data as { toolCallId?: unknown } | null)?.toolCallId === record.toolCallId,
+  );
+  if (recorded) return false;
+  await conversation.append(BOT_HANDOFF_RESULT_ENTRY_KIND, { ...details, rule: { ...details.rule } });
+  return true;
 }
 
 /**

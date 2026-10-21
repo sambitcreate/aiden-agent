@@ -12,6 +12,12 @@
 // filtered by `bot-tool-assembly.ts` against the Bot's Full/Custom authority.
 // Approvals go through `bot-approvals-main.ts` and resolve by `waitId`.
 //
+// Rules (plan §6): every call is checked against the Bot's rules, read fresh
+// from `<userData>/bots/<dir>/rules.json`, after its approval decision; a rule
+// can only add an ask or hand the call to the person (a hand-off card on the
+// shared bridge, its answer kept as an `aiden.handoff-result` entry). The
+// rules also render into the authority section so the Bot plans around them.
+//
 // Memory (spec 2026-10-09 §7–§10): every attended turn is offered the
 // main-owned `bot_memory` tool (never on routine or self-intro turns), the
 // `aiden-memory` section renders the service's frozen snapshot, a reply
@@ -26,6 +32,7 @@ import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import { defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
@@ -48,6 +55,7 @@ import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
+import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
@@ -64,6 +72,8 @@ import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { renderBotRulesSection } from "../bot-rules/prompt.js";
+import { botRules } from "../bot-rules/store-main.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
@@ -153,7 +163,22 @@ const toolSources = createBotToolSources({
   connectCards,
 });
 
-const tools = createBotToolAssembly({ admit, sources: toolSources });
+const tools = createBotToolAssembly({
+  admit,
+  sources: toolSources,
+  rules: (botId) => botRules.rules(botId),
+  botName: async (botId) => (await botStore.get(botId))?.name,
+});
+
+/** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
+async function promptRules(botId: string) {
+  try {
+    return await botRules.rules(botId);
+  } catch (error) {
+    logger.warn("bots", `Bot ${botId} rules could not be read for its prompt.`, error);
+    return defaultBotRules();
+  }
+}
 
 /**
  * Memory review and compaction work: admit the Bot's authority, keep the
@@ -233,7 +258,9 @@ const extension: BotExtensionDeps = {
       return [
         base,
         withBotPersona("", bot).trim(),
-        withBotManagedWorkspace("", workspace, fileAuthority).trim(),
+        [withBotManagedWorkspace("", workspace, fileAuthority).trim(), renderBotRulesSection(bot.name, await promptRules(bot.id))]
+          .filter((part) => part.length > 0)
+          .join("\n\n"),
         tools.guidance(bot.id, offered.toolNames),
       ];
     });
@@ -256,6 +283,17 @@ const extension: BotExtensionDeps = {
   afterReply: (botId) => memoryReview.afterReply(botId),
   beforeCompact: compactionSteering,
   requestApproval: (request) => botApprovals.request(request),
+  // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
+  requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request)),
+  // Into the stopped call's own conversation, never through the harness host,
+  // whose per-Bot lock a pause or quit holds while it waits for this call.
+  recordHandoff: async (record, conversation) => {
+    try {
+      await recordRuleHandoffEntry(conversation, record);
+    } catch (error) {
+      logger.warn("bots", `Bot ${record.botId} hand-off row could not be written.`, error);
+    }
+  },
   async readmit(botId) {
     if (!(await botStore.get(botId))) return { ok: false, reason: "bot_missing" };
     try {
@@ -494,6 +532,8 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       },
       deleteRoutines,
       (botId) => botPauses.forgetBot(botId),
+      // Its rules file goes, and no later edit can bring its directory back.
+      (botId) => botRules.forgetBot(botId),
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
       eraseBotData,

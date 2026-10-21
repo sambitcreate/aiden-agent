@@ -6,7 +6,7 @@ import { after, test } from "node:test";
 import type { BotMemoryChangedEvent, BotMemoryEditResult, BotMemoryView } from "../../renderer/shared/bot-memory.js";
 import { createBotMemoryService } from "../services/bot-memory/service.js";
 import { createBotMemoryStore } from "../services/bot-memory/store.js";
-import { registerBotMemoryHandlers } from "./bot-memory.js";
+import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
 
 const BOT = "bot:chief";
 const roots: string[] = [];
@@ -14,7 +14,7 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-async function setup() {
+async function setup(botExists: (botId: string) => Promise<boolean> = async (botId) => botId === BOT) {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-memory-ipc-"));
   roots.push(root);
   mkdirSync(path.join(root, "bots", "bot~3achief"), { recursive: true });
@@ -25,7 +25,7 @@ async function setup() {
   registerBotMemoryHandlers({
     handle: (channel, handler) => handlers.set(channel, handler),
     memory,
-    botExists: async (botId) => botId === BOT,
+    botExists,
   });
   const get = (botId: unknown) => Promise.resolve(handlers.get("bots:memory:get")!({}, botId)) as Promise<BotMemoryView>;
   const edit = (input: unknown) => Promise.resolve(handlers.get("bots:memory:edit")!({}, input)) as Promise<BotMemoryEditResult>;
@@ -54,6 +54,20 @@ test("malformed requests are rejected", async () => {
   ]) {
     await assert.rejects(edit(input), Error, JSON.stringify(input));
   }
+});
+
+test("a Bot the Bot store answers null for has no memory to read or edit", async () => {
+  // The Bot store answers null, not undefined, for a Bot it doesn't have (a deleted one).
+  const bots = new Map([[BOT, { id: BOT }]]);
+  const { get, edit } = await setup(botExistsIn({ get: async (botId) => bots.get(botId) ?? null }));
+  assert.ok((await get(BOT)).user.entries.length > 0);
+  for (const gone of ["bot:deleted", "bot:never-existed"]) {
+    await assert.rejects(get(gone), /no longer exists/u);
+    await assert.rejects(edit({ botId: gone, edit: { kind: "clear" } }), /no longer exists/u);
+  }
+  // Deleting the Bot closes its memory too.
+  bots.delete(BOT);
+  await assert.rejects(get(BOT), /no longer exists/u);
 });
 
 test("a stale entry id returns entry_not_found with the current view", async () => {

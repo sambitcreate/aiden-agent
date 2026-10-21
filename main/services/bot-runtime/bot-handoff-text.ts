@@ -5,7 +5,7 @@
 // them. They are the one wording every surface shares, so a Done from a phone
 // reads exactly like a Done on the Mac.
 
-import type { BotHandoffTarget } from "../../../renderer/shared/bot-handoffs.js";
+import { normalizeBotHandoffAction, type BotHandoffTarget } from "../../../renderer/shared/bot-handoffs.js";
 
 function noteLine(note: string | undefined): string {
   return note === undefined || !note.trim() ? "" : `\nTheir note: ${note.trim()}`;
@@ -31,8 +31,8 @@ export function signInDoneText(origin: string, note?: string, target: BotHandoff
 }
 
 /** Done on a card a rule opened instead of running the call. */
-export function ruleHandoffDoneBlock(summary: string): string {
-  return `The person did this themselves: ${summary}. Continue from there.`;
+export function ruleHandoffDoneBlock(summary: string, note?: string): string {
+  return `The person did this themselves: ${normalizeBotHandoffAction(summary)}. Continue from there.${noteLine(note)}`;
 }
 
 /** A rule hand-off on a turn nobody is watching (a routine, Telegram). */

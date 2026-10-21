@@ -1,0 +1,2395 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "cu-place-order",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Amazon.com Checkout",
+        "element": {
+          "role": "AXButton",
+          "label": "Place your order"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "cu-buy-now",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Apple AirPods Pro – Amazon.com",
+        "element": {
+          "role": "AXButton",
+          "label": "Buy Now"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "cu-book-now",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Hotel Lisboa Plaza – Booking.com",
+        "element": {
+          "role": "AXButton",
+          "label": "Book now"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "cu-subscribe-paid",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Plans – Spotify",
+        "element": {
+          "role": "AXButton",
+          "label": "Subscribe — $11.99/month"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "cu-start-trial",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Try Premium",
+        "element": {
+          "role": "AXButton",
+          "label": "Start free trial"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "cu-mail-send",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Mail",
+        "windowTitle": "Re: Quarterly numbers",
+        "element": {
+          "role": "AXButton",
+          "label": "Send"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "cu-mail-send-chord",
+      "action": {
+        "surface": "computer_use",
+        "action": "key",
+        "app": "Mail",
+        "windowTitle": "New Message",
+        "keys": "cmd+shift+d"
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "cu-messages-return",
+      "action": {
+        "surface": "computer_use",
+        "action": "key",
+        "app": "Messages",
+        "windowTitle": "Mom",
+        "keys": "return",
+        "focusedElement": {
+          "role": "AXTextArea",
+          "label": "iMessage"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "cu-slack-send",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Slack",
+        "windowTitle": "#design – Acme",
+        "element": {
+          "role": "AXButton",
+          "label": "Send now"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "cu-mail-send-again",
+      "action": {
+        "surface": "computer_use",
+        "action": "menu",
+        "app": "Mail",
+        "windowTitle": "Inbox",
+        "menuPath": [
+          "Message",
+          "Send Again"
+        ]
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "cu-messages-typing",
+      "note": "Composing is not sending.",
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Messages",
+        "windowTitle": "Mom",
+        "focusedElement": {
+          "role": "AXTextArea",
+          "label": "iMessage"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-mail-to-field",
+      "note": "Filling in a recipient is not sending.",
+      "action": {
+        "surface": "computer_use",
+        "action": "set_value",
+        "app": "Mail",
+        "windowTitle": "New Message",
+        "element": {
+          "role": "AXTextField",
+          "label": "To:"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-secure-type",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Safari",
+        "windowTitle": "Sign in – Google Accounts",
+        "focusedElement": {
+          "role": "AXSecureTextField",
+          "label": "Enter your password"
+        },
+        "secureFieldInCapture": true
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-secure-set-value",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "set_value",
+        "app": "1Password",
+        "windowTitle": "Unlock",
+        "element": {
+          "role": "AXSecureTextField"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-secure-click",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "System Settings",
+        "windowTitle": "Wi-Fi",
+        "element": {
+          "role": "AXSecureTextField",
+          "label": "Password"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-secure-present-type",
+      "note": "Typing while the window shows a secure field is treated as signing in.",
+      "tags": [
+        "sign_in_form"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Safari",
+        "windowTitle": "Sign in – Google Accounts",
+        "focusedElement": {
+          "role": "AXTextField",
+          "label": "Email or phone"
+        },
+        "secureFieldInCapture": true
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-secure-present-char",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "key",
+        "app": "Safari",
+        "windowTitle": "Bank of America – Sign In",
+        "keys": "a",
+        "secureFieldInCapture": true
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-secure-present-tab",
+      "note": "Moving focus is not typing.",
+      "action": {
+        "surface": "computer_use",
+        "action": "key",
+        "app": "Safari",
+        "windowTitle": "Bank of America – Sign In",
+        "keys": "tab",
+        "secureFieldInCapture": true
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-verification-code",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Safari",
+        "windowTitle": "Verify it's you",
+        "focusedElement": {
+          "role": "AXTextField",
+          "label": "Verification code"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-2fa-code",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "set_value",
+        "app": "Safari",
+        "windowTitle": "GitHub",
+        "element": {
+          "role": "AXTextField",
+          "label": "Authentication code"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-one-time-code",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Safari",
+        "windowTitle": "Microsoft account",
+        "focusedElement": {
+          "role": "AXTextField",
+          "label": "Enter one-time code"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-card-number",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Safari",
+        "windowTitle": "Checkout",
+        "focusedElement": {
+          "role": "AXTextField",
+          "label": "Card number"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "cu-cvc",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "set_value",
+        "app": "Safari",
+        "windowTitle": "Checkout",
+        "element": {
+          "role": "AXTextField",
+          "label": "CVC"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "cu-expiry",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "set_value",
+        "app": "Safari",
+        "windowTitle": "Checkout",
+        "element": {
+          "role": "AXTextField",
+          "label": "Expiration date (MM/YY)"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "cu-iban",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Revolut",
+        "windowTitle": "New transfer",
+        "focusedElement": {
+          "role": "AXTextField",
+          "label": "IBAN"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "cu-pay-button",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Pay your bill – PG&E",
+        "element": {
+          "role": "AXButton",
+          "label": "Pay $42.10"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "cu-transfer",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Chase",
+        "windowTitle": "Pay & transfer",
+        "element": {
+          "role": "AXButton",
+          "label": "Transfer"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "cu-change-password",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "System Settings",
+        "windowTitle": "Users & Groups",
+        "element": {
+          "role": "AXButton",
+          "label": "Change Password…"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-turn-on-2fa",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Security – Dropbox",
+        "element": {
+          "role": "AXButton",
+          "label": "Turn on two-step verification"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "cu-delete-photos",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Photos",
+        "windowTitle": "Library",
+        "element": {
+          "role": "AXButton",
+          "label": "Delete 3 Photos"
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "cu-empty-trash",
+      "action": {
+        "surface": "computer_use",
+        "action": "menu",
+        "app": "Finder",
+        "windowTitle": "Trash",
+        "menuPath": [
+          "Finder",
+          "Empty Trash…"
+        ]
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "cu-finder-cmd-delete",
+      "action": {
+        "surface": "computer_use",
+        "action": "key",
+        "app": "Finder",
+        "windowTitle": "Downloads",
+        "keys": "cmd+backspace"
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "cu-textedit-cmd-delete",
+      "note": "Deletes text to the line start.",
+      "action": {
+        "surface": "computer_use",
+        "action": "key",
+        "app": "TextEdit",
+        "windowTitle": "Notes.txt",
+        "keys": "cmd+backspace"
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-delete-account",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Account – Notion",
+        "element": {
+          "role": "AXButton",
+          "label": "Delete my account"
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "cu-app-store-get",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "App Store",
+        "windowTitle": "Things 3",
+        "element": {
+          "role": "AXButton",
+          "label": "Get"
+        }
+      },
+      "expected": [
+        "install"
+      ]
+    },
+    {
+      "id": "cu-installer",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Installer",
+        "windowTitle": "Install Zoom",
+        "element": {
+          "role": "AXButton",
+          "label": "Install"
+        }
+      },
+      "expected": [
+        "install"
+      ]
+    },
+    {
+      "id": "cu-install-update-menu",
+      "action": {
+        "surface": "computer_use",
+        "action": "menu",
+        "app": "Raycast",
+        "windowTitle": "Raycast",
+        "menuPath": [
+          "Raycast",
+          "Install Update"
+        ]
+      },
+      "expected": [
+        "install"
+      ]
+    },
+    {
+      "id": "cu-post",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Home / X",
+        "element": {
+          "role": "AXButton",
+          "label": "Post"
+        }
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "cu-publish",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Draft – Medium",
+        "element": {
+          "role": "AXButton",
+          "label": "Publish"
+        }
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "cu-cancel-order",
+      "note": "Negated.",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Your Orders",
+        "element": {
+          "role": "AXButton",
+          "label": "Cancel order"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-undo-send",
+      "note": "Negated.",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Mail",
+        "windowTitle": "Inbox",
+        "element": {
+          "role": "AXButton",
+          "label": "Undo Send"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-view-booking",
+      "note": "Negated.",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Trips",
+        "element": {
+          "role": "AXLink",
+          "label": "View booking"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-edit-post",
+      "note": "Negated.",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "WordPress",
+        "element": {
+          "role": "AXButton",
+          "label": "Edit post"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-save",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "TextEdit",
+        "windowTitle": "Untitled",
+        "element": {
+          "role": "AXButton",
+          "label": "Save"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-next",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Checkout",
+        "element": {
+          "role": "AXButton",
+          "label": "Next"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-download",
+      "note": "Downloading is not installing.",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Downloads – Figma",
+        "element": {
+          "role": "AXButton",
+          "label": "Download for Mac"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-export-menu",
+      "action": {
+        "surface": "computer_use",
+        "action": "menu",
+        "app": "Pages",
+        "windowTitle": "Report",
+        "menuPath": [
+          "File",
+          "Export To",
+          "PDF…"
+        ]
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-scroll-mail",
+      "action": {
+        "surface": "computer_use",
+        "action": "scroll",
+        "app": "Mail",
+        "windowTitle": "Inbox"
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-focus-app",
+      "action": {
+        "surface": "computer_use",
+        "action": "focus_app",
+        "app": "Messages"
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-scroll-custom-flight",
+      "note": "Scrolling changes nothing a rule covers, even in a window the person's rule names.",
+      "action": {
+        "surface": "computer_use",
+        "action": "scroll",
+        "app": "Safari",
+        "windowTitle": "Book a flight – United Airlines"
+      },
+      "expected": [],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000001",
+          "text": "book a flight",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": []
+    },
+    {
+      "id": "cu-postal-code",
+      "note": "postal is not post.",
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Safari",
+        "windowTitle": "Checkout",
+        "focusedElement": {
+          "role": "AXTextField",
+          "label": "Postal code"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-search",
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Safari",
+        "windowTitle": "Google",
+        "focusedElement": {
+          "role": "AXTextField",
+          "label": "Search"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-posted-label",
+      "note": "A label that mentions posts but is not the Post button.",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Reddit",
+        "element": {
+          "role": "AXLink",
+          "label": "Posted by u/ada"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "cu-reply-field-type",
+      "note": "Typing into a reply is not sending it.",
+      "action": {
+        "surface": "computer_use",
+        "action": "type",
+        "app": "Mail",
+        "windowTitle": "Re: Lunch",
+        "focusedElement": {
+          "role": "AXTextArea",
+          "label": "Reply"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "co-buy",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Buy the two concert tickets",
+        "app": "Safari",
+        "element": {
+          "role": "AXButton",
+          "label": "Buy"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "co-secure",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Fill in the Wi-Fi password",
+        "app": "System Settings",
+        "element": {
+          "role": "AXSecureTextField"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "co-otp-field",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Enter the code",
+        "app": "Safari",
+        "element": {
+          "role": "AXTextField",
+          "label": "One-time code"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "co-card",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Fill in the payment form",
+        "app": "Safari",
+        "element": {
+          "role": "AXTextField",
+          "label": "Card number"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "co-mail-send",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Send the summary to Sam",
+        "app": "Mail",
+        "element": {
+          "role": "AXButton",
+          "label": "Send"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "co-open-folder",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Open the Downloads folder",
+        "app": "Finder",
+        "element": {
+          "role": "AXRow",
+          "label": "Downloads"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "co-scroll",
+      "action": {
+        "surface": "computer",
+        "action": "scroll",
+        "intent": "Scroll to the pricing table",
+        "app": "Safari"
+      },
+      "expected": []
+    },
+    {
+      "id": "co-scroll-custom-flight",
+      "note": "A passive action in the Bot's own computer matches no rule either.",
+      "action": {
+        "surface": "computer",
+        "action": "scroll",
+        "intent": "Scroll down to book a flight",
+        "app": "Safari"
+      },
+      "expected": [],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000001",
+          "text": "book a flight",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": []
+    },
+    {
+      "id": "co-type-reply",
+      "note": "Typing the text is not sending.",
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Write the reply to Bob",
+        "app": "Mail",
+        "element": {
+          "role": "AXTextArea",
+          "label": "Message body"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "co-installer",
+      "note": "Installing inside the Bot's own computer is not ruled (plan §8.7); the install rule is about the person's Mac.",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Finish the Zoom setup",
+        "app": "Installer",
+        "element": {
+          "role": "AXButton",
+          "label": "Install"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "co-installer-custom",
+      "note": "The person can still rule installs inside the Bot's computer in their own words.",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Finish the Zoom setup",
+        "app": "Installer",
+        "element": {
+          "role": "AXButton",
+          "label": "Install"
+        }
+      },
+      "expected": [],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000007",
+          "text": "install Zoom",
+          "behavior": "ask",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-000000000007"
+      ]
+    },
+    {
+      "id": "co-delete-backups",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Delete the old backups permanently",
+        "app": "Finder",
+        "element": {
+          "role": "AXButton",
+          "label": "Delete"
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "co-post",
+      "note": "Share counts as communicate.",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Share the announcement on Reddit",
+        "app": "Safari",
+        "windowTitle": "Reddit",
+        "element": {
+          "role": "AXButton",
+          "label": "Post"
+        }
+      },
+      "expected": [
+        "publish",
+        "communicate"
+      ]
+    },
+    {
+      "id": "co-pay-bill",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Pay the electricity bill",
+        "app": "Safari",
+        "element": {
+          "role": "AXButton",
+          "label": "Continue"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "br-password",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://accounts.google.com/v3/signin/challenge/pwd",
+        "field": {
+          "tag": "input",
+          "type": "password",
+          "accessibleName": "Enter your password"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "br-otp-autocomplete",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://github.com/sessions/two-factor",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "autocomplete": "one-time-code",
+          "accessibleName": "Authentication code"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "br-current-password",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://login.example.org/",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "autocomplete": "section-login current-password",
+          "accessibleName": "Passcode"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "br-new-password",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://id.atlassian.com/signup",
+        "field": {
+          "tag": "input",
+          "type": "password",
+          "autocomplete": "new-password",
+          "accessibleName": "Create password"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "br-otp-selector",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://secure.bank.example/verify",
+        "selector": "input[name=otp]"
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "br-password-enter",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_press",
+        "url": "https://www.netflix.com/login",
+        "key": "Enter",
+        "field": {
+          "tag": "input",
+          "type": "password",
+          "accessibleName": "Password"
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "br-cc-number",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://shop.example.com/checkout",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "autocomplete": "cc-number",
+          "accessibleName": "Card number"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "br-cc-csc",
+      "note": "A card's security code is the CVC.",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://shop.example.com/checkout",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "autocomplete": "billing cc-csc",
+          "accessibleName": "Security code"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "br-cc-exp",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://shop.example.com/checkout",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "autocomplete": "cc-exp",
+          "accessibleName": "MM / YY"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "br-card-words",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://tickets.example.com/pay",
+        "field": {
+          "tag": "input",
+          "type": "tel",
+          "accessibleName": "Credit card number"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "br-stripe-form",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://shop.example.com/checkout",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "accessibleName": "Name on card",
+          "formActionHost": "api.stripe.com"
+        }
+      },
+      "expected": [
+        "money",
+        "purchase"
+      ]
+    },
+    {
+      "id": "br-paypal-signin",
+      "note": "Anything typed on a payment provider's page.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://www.paypal.com/signin",
+        "field": {
+          "tag": "input",
+          "type": "email",
+          "accessibleName": "Email or mobile number"
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "br-paypal-activity",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://www.paypal.com/myaccount/summary",
+        "field": {
+          "tag": "a",
+          "accessibleName": "Activity"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-pay-now-stripe",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://checkout.stripe.com/c/pay/cs_live_a1",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Pay now",
+          "formActionHost": "checkout.stripe.com"
+        }
+      },
+      "expected": [
+        "money",
+        "purchase"
+      ]
+    },
+    {
+      "id": "br-place-order",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://www.amazon.com/gp/buy/spc/handlers/display.html",
+        "field": {
+          "tag": "input",
+          "type": "submit",
+          "accessibleName": "Place your order"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "br-checkout-locator",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://www.etsy.com/cart",
+        "locator": "getByRole('button', { name: 'Proceed to checkout' })"
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "br-reserve",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://www.opentable.com/r/nopa",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Reserve now"
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "br-gmail-send",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://mail.google.com/mail/u/0/#inbox?compose=new",
+        "field": {
+          "tag": "div",
+          "role": "button",
+          "accessibleName": "Send"
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "br-x-post",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://x.com/compose/post",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Post"
+        }
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "br-publish-post",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://wordpress.com/post/example.blog/42",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Publish post"
+        }
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "br-delete-repo",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://github.com/ada/demo/settings",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Delete this repository"
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "br-delete-selector",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://app.example.com/account",
+        "selector": "#delete-account-confirm"
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "br-add-to-chrome",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://chromewebstore.google.com/detail/ublock-origin/cjpalhd",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Add to Chrome"
+        }
+      },
+      "expected": [
+        "install"
+      ]
+    },
+    {
+      "id": "br-next",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://shop.example.com/checkout",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Next"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-sign-in-button",
+      "note": "Pressing Sign in after the person typed is not entering a password.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://accounts.google.com/",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Sign in"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-cancel-subscription",
+      "note": "Negated.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://www.netflix.com/cancelplan",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Cancel subscription"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-postal-code",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://shop.example.com/checkout",
+        "field": {
+          "tag": "input",
+          "type": "text",
+          "autocomplete": "shipping postal-code",
+          "accessibleName": "Postal code"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-email",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://news.example.com/signup",
+        "field": {
+          "tag": "input",
+          "type": "email",
+          "autocomplete": "email",
+          "accessibleName": "Email"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-search",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_type",
+        "url": "https://www.google.com/",
+        "field": {
+          "tag": "textarea",
+          "role": "combobox",
+          "accessibleName": "Search"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "br-blog-post-link",
+      "note": "Posts as a noun in a link is a known word-signal false positive.",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://example.blog/",
+        "field": {
+          "tag": "a",
+          "accessibleName": "Read the latest blog posts"
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-gmail-send",
+      "action": {
+        "surface": "mcp",
+        "modelName": "gmail__send_message",
+        "serverId": "srv-gmail",
+        "remoteName": "send_message",
+        "summary": "gmail__send_message",
+        "destructive": "unknown",
+        "description": "Sends an email message from the signed-in account."
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "mcp-gmail-draft",
+      "action": {
+        "surface": "mcp",
+        "modelName": "gmail__create_draft",
+        "serverId": "srv-gmail",
+        "remoteName": "create_draft",
+        "summary": "gmail__create_draft",
+        "destructive": "additive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false
+        },
+        "description": "Creates a draft. Does not send it."
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-gmail-reply",
+      "action": {
+        "surface": "mcp",
+        "modelName": "gmail__reply",
+        "serverId": "srv-gmail",
+        "remoteName": "reply",
+        "summary": "gmail__reply",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "mcp-slack-post-message",
+      "note": "Posting into a conversation is communicating, not publishing.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "slack__chat_post_message",
+        "serverId": "srv-slack",
+        "remoteName": "chat_post_message",
+        "summary": "slack__chat_post_message",
+        "destructive": "unknown",
+        "annotations": {
+          "title": "Post a message",
+          "readOnlyHint": false
+        }
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "mcp-github-create-issue",
+      "action": {
+        "surface": "mcp",
+        "modelName": "github__create_issue",
+        "serverId": "srv-github",
+        "remoteName": "create_issue",
+        "summary": "github__create_issue",
+        "destructive": "additive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-github-delete-repo",
+      "action": {
+        "surface": "mcp",
+        "modelName": "github__delete_repository",
+        "serverId": "srv-github",
+        "remoteName": "delete_repository",
+        "summary": "github__delete_repository",
+        "destructive": "destructive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "mcp-linear-remove-label",
+      "note": "Additive tools never count as deleting.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "linear__remove_issue_label",
+        "serverId": "srv-linear",
+        "remoteName": "remove_issue_label",
+        "summary": "linear__remove_issue_label",
+        "destructive": "additive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-notion-delete-page",
+      "action": {
+        "surface": "mcp",
+        "modelName": "notion__delete_page",
+        "serverId": "srv-notion",
+        "remoteName": "delete_page",
+        "summary": "notion__delete_page",
+        "destructive": "destructive",
+        "annotations": {
+          "title": "Delete page",
+          "readOnlyHint": false,
+          "destructiveHint": true
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "mcp-drive-trash",
+      "action": {
+        "surface": "mcp",
+        "modelName": "drive__trash_file",
+        "serverId": "srv-drive",
+        "remoteName": "trash_file",
+        "summary": "drive__trash_file",
+        "destructive": "destructive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "mcp-stripe-payment-intent",
+      "action": {
+        "surface": "mcp",
+        "modelName": "stripe__create_payment_intent",
+        "serverId": "srv-stripe",
+        "remoteName": "create_payment_intent",
+        "summary": "stripe__create_payment_intent",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-stripe-refund",
+      "action": {
+        "surface": "mcp",
+        "modelName": "stripe__create_refund",
+        "serverId": "srv-stripe",
+        "remoteName": "create_refund",
+        "summary": "stripe__create_refund",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-wise-transfer",
+      "action": {
+        "surface": "mcp",
+        "modelName": "wise__create_transfer",
+        "serverId": "srv-wise",
+        "remoteName": "create_transfer",
+        "summary": "wise__create_transfer",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-venmo-send-money",
+      "note": "send_money is a payment, not a message.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "venmo__send_money",
+        "serverId": "srv-venmo",
+        "remoteName": "send_money",
+        "summary": "venmo__send_money",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-execute-payment",
+      "action": {
+        "surface": "mcp",
+        "modelName": "payments__execute_payment",
+        "serverId": "srv-payments",
+        "remoteName": "execute_payment",
+        "summary": "payments__execute_payment",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-invoice",
+      "action": {
+        "surface": "mcp",
+        "modelName": "quickbooks__create_invoice",
+        "serverId": "srv-quickbooks",
+        "remoteName": "create_invoice",
+        "summary": "quickbooks__create_invoice",
+        "destructive": "additive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-shopify-order",
+      "action": {
+        "surface": "mcp",
+        "modelName": "shopify__create_order",
+        "serverId": "srv-shopify",
+        "remoteName": "create_order",
+        "summary": "shopify__create_order",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "mcp-book-flight",
+      "action": {
+        "surface": "mcp",
+        "modelName": "travel__book_flight",
+        "serverId": "srv-travel",
+        "remoteName": "book_flight",
+        "summary": "travel__book_flight",
+        "destructive": "unknown",
+        "annotations": {
+          "title": "Book a flight",
+          "readOnlyHint": false
+        }
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "mcp-update-book",
+      "note": "book as a noun.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "library__update_book_metadata",
+        "serverId": "srv-library",
+        "remoteName": "update_book_metadata",
+        "summary": "library__update_book_metadata",
+        "destructive": "unknown"
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-subscribe-plan",
+      "action": {
+        "surface": "mcp",
+        "modelName": "billing__subscribe_to_plan",
+        "serverId": "srv-billing",
+        "remoteName": "subscribe_to_plan",
+        "summary": "billing__subscribe_to_plan",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "mcp-tweet",
+      "action": {
+        "surface": "mcp",
+        "modelName": "twitter__post_tweet",
+        "serverId": "srv-twitter",
+        "remoteName": "post_tweet",
+        "summary": "twitter__post_tweet",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "mcp-wp-publish",
+      "action": {
+        "surface": "mcp",
+        "modelName": "wordpress__publish_post",
+        "serverId": "srv-wordpress",
+        "remoteName": "publish_post",
+        "summary": "wordpress__publish_post",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "mcp-update-post",
+      "note": "Updating a live post republishes it.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "ghost__update_post",
+        "serverId": "srv-ghost",
+        "remoteName": "update_post",
+        "summary": "ghost__update_post",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "mcp-reset-password",
+      "action": {
+        "surface": "mcp",
+        "modelName": "okta__reset_password",
+        "serverId": "srv-okta",
+        "remoteName": "reset_password",
+        "summary": "okta__reset_password",
+        "destructive": "destructive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true
+        }
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "mcp-update-mfa",
+      "action": {
+        "surface": "mcp",
+        "modelName": "okta__update_user_mfa",
+        "serverId": "srv-okta",
+        "remoteName": "update_user_mfa",
+        "summary": "okta__update_user_mfa",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "mcp-submit-otp",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "mcp",
+        "modelName": "bank__submit_otp_code",
+        "serverId": "srv-bank",
+        "remoteName": "submit_otp_code",
+        "summary": "bank__submit_otp_code",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "mcp-update-card",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "mcp",
+        "modelName": "billing__update_card_details",
+        "serverId": "srv-billing",
+        "remoteName": "update_card_details",
+        "summary": "billing__update_card_details",
+        "destructive": "unknown",
+        "annotations": {
+          "title": "Update card details",
+          "readOnlyHint": false
+        }
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-add-payment-method",
+      "tags": [
+        "sensitive_field"
+      ],
+      "action": {
+        "surface": "mcp",
+        "modelName": "shop__add_payment_method",
+        "serverId": "srv-shop",
+        "remoteName": "add_payment_method",
+        "summary": "shop__add_payment_method",
+        "destructive": "additive"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "mcp-email-customer",
+      "action": {
+        "surface": "mcp",
+        "modelName": "crm__email_customer",
+        "serverId": "srv-crm",
+        "remoteName": "email_customer",
+        "summary": "crm__email_customer",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "mcp-email-settings",
+      "note": "email as a noun.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "crm__update_email_settings",
+        "serverId": "srv-crm",
+        "remoteName": "update_email_settings",
+        "summary": "crm__update_email_settings",
+        "destructive": "unknown"
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-calendar-event",
+      "action": {
+        "surface": "mcp",
+        "modelName": "calendar__create_event",
+        "serverId": "srv-calendar",
+        "remoteName": "create_event",
+        "summary": "calendar__create_event",
+        "destructive": "additive",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-calendar-invite",
+      "action": {
+        "surface": "mcp",
+        "modelName": "calendar__send_invitation",
+        "serverId": "srv-calendar",
+        "remoteName": "send_invitation",
+        "summary": "calendar__send_invitation",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "mcp-drive-share",
+      "action": {
+        "surface": "mcp",
+        "modelName": "drive__share_file",
+        "serverId": "srv-drive",
+        "remoteName": "share_file",
+        "summary": "drive__share_file",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "mcp-archive-email",
+      "action": {
+        "surface": "mcp",
+        "modelName": "gmail__archive_thread",
+        "serverId": "srv-gmail",
+        "remoteName": "archive_thread",
+        "summary": "gmail__archive_thread",
+        "destructive": "unknown"
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-move-file",
+      "action": {
+        "surface": "mcp",
+        "modelName": "drive__move_file",
+        "serverId": "srv-drive",
+        "remoteName": "move_file",
+        "summary": "drive__move_file",
+        "destructive": "unknown"
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-brew-install",
+      "action": {
+        "surface": "mcp",
+        "modelName": "homebrew__install_package",
+        "serverId": "srv-homebrew",
+        "remoteName": "install_package",
+        "summary": "homebrew__install_package",
+        "destructive": "unknown"
+      },
+      "expected": [
+        "install"
+      ]
+    },
+    {
+      "id": "mcp-comment",
+      "action": {
+        "surface": "mcp",
+        "modelName": "github__add_issue_comment",
+        "serverId": "srv-github",
+        "remoteName": "add_issue_comment",
+        "summary": "github__add_issue_comment",
+        "destructive": "additive",
+        "annotations": {
+          "title": "Add a comment",
+          "readOnlyHint": false,
+          "destructiveHint": false
+        }
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-sms-description",
+      "action": {
+        "surface": "mcp",
+        "modelName": "twilio__execute",
+        "serverId": "srv-twilio",
+        "remoteName": "execute",
+        "summary": "twilio__execute",
+        "destructive": "unknown",
+        "description": "Sends an SMS message to a phone number. Charges apply."
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "mcp-workflow-description",
+      "note": "Only the description's first sentence counts.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "zapier__run_workflow",
+        "serverId": "srv-zapier",
+        "remoteName": "run_workflow",
+        "summary": "zapier__run_workflow",
+        "destructive": "unknown",
+        "description": "Runs the selected workflow. Use delete_workflow to remove it."
+      },
+      "expected": []
+    },
+    {
+      "id": "mcp-title-delete",
+      "action": {
+        "surface": "mcp",
+        "modelName": "gcal__calendars_remove",
+        "serverId": "srv-gcal",
+        "remoteName": "calendars_remove",
+        "summary": "gcal__calendars_remove",
+        "destructive": "destructive",
+        "annotations": {
+          "title": "Delete a calendar",
+          "readOnlyHint": false,
+          "destructiveHint": true
+        }
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "custom-flight",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Choose flights – United Airlines",
+        "element": {
+          "role": "AXButton",
+          "label": "Book"
+        }
+      },
+      "expected": [
+        "purchase"
+      ],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000001",
+          "text": "book a flight",
+          "behavior": "hand_off",
+          "locked": false
+        },
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000002",
+          "text": "email my boss",
+          "behavior": "ask",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "id": "custom-hotel-not-flight",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Safari",
+        "windowTitle": "Hotels in Lisbon – Expedia",
+        "element": {
+          "role": "AXButton",
+          "label": "Book"
+        }
+      },
+      "expected": [
+        "purchase"
+      ],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000001",
+          "text": "book a flight",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": []
+    },
+    {
+      "id": "custom-boss-missing",
+      "note": "Nothing in the call says boss.",
+      "action": {
+        "surface": "mcp",
+        "modelName": "gmail__send_message",
+        "serverId": "srv-gmail",
+        "remoteName": "send_message",
+        "summary": "gmail__send_message",
+        "destructive": "unknown",
+        "description": "Sends an email message from the signed-in account."
+      },
+      "expected": [
+        "communicate"
+      ],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000002",
+          "text": "email my boss",
+          "behavior": "ask",
+          "locked": false
+        }
+      ],
+      "expectedCustom": []
+    },
+    {
+      "id": "custom-photos",
+      "action": {
+        "surface": "computer_use",
+        "action": "click",
+        "app": "Photos",
+        "windowTitle": "Library",
+        "element": {
+          "role": "AXButton",
+          "label": "Delete 3 Photos"
+        }
+      },
+      "expected": [
+        "delete"
+      ],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000003",
+          "text": "delete photos",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-000000000003"
+      ]
+    },
+    {
+      "id": "custom-linkedin",
+      "action": {
+        "surface": "browser",
+        "tool": "browser_click",
+        "url": "https://www.linkedin.com/feed/",
+        "field": {
+          "tag": "button",
+          "accessibleName": "Post"
+        }
+      },
+      "expected": [
+        "publish"
+      ],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000004",
+          "text": "post on LinkedIn",
+          "behavior": "ask",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-000000000004"
+      ]
+    },
+    {
+      "id": "custom-food",
+      "action": {
+        "surface": "mcp",
+        "modelName": "doordash__place_order",
+        "serverId": "srv-doordash",
+        "remoteName": "place_order",
+        "summary": "doordash__place_order",
+        "destructive": "unknown",
+        "annotations": {
+          "title": "Place a food order",
+          "readOnlyHint": false
+        }
+      },
+      "expected": [
+        "purchase"
+      ],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000005",
+          "text": "order food",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-000000000005"
+      ]
+    },
+    {
+      "id": "custom-thermostat",
+      "action": {
+        "surface": "mcp",
+        "modelName": "nest__set_thermostat_temperature",
+        "serverId": "srv-nest",
+        "remoteName": "set_thermostat_temperature",
+        "summary": "nest__set_thermostat_temperature",
+        "destructive": "unknown"
+      },
+      "expected": [],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000006",
+          "text": "set the thermostat",
+          "behavior": "ask",
+          "locked": false
+        },
+        {
+          "id": "custom.00000000-0000-4000-8000-000000000005",
+          "text": "order food",
+          "behavior": "hand_off",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-000000000006"
+      ]
+    }
+  ]
+}

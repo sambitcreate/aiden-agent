@@ -3,6 +3,7 @@ import "./test-env";
 import { isServer } from "@tanstack/router-core/isServer";
 import { Window } from "happy-dom";
 import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
+import { defaultBotRulesView } from "../../shared/bot-rules";
 
 // With the router's server build, routed pages never follow a navigation and
 // tests that navigate pass while showing the wrong page. Fail loudly instead.
@@ -97,6 +98,8 @@ export function installBotTestDom(): Window {
 /** Answers for reads every Bot surface makes, unless a test overrides them. */
 const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
   "bots:getCanonicalPhoto": () => null,
+  // Profile → Rules: a Bot nobody has changed the rules of.
+  "bots:rules:get": (botId) => defaultBotRulesView(String(botId)),
 };
 
 export interface BotTestIpcCall {
