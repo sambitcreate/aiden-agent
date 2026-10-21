@@ -219,3 +219,32 @@ test("routines that fail to load say so instead of claiming there are none", asy
   fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
   assert.ok(await screen.findByText("Every Sunday at 8:41 AM"));
 });
+
+test("a saved or deleted routine changes the list at once, without waiting for it to be read again", async () => {
+  let listReads = 0;
+  installBotTestIpc({
+    "bots:routines:list": () => {
+      listReads += 1;
+      // Only the first read answers; later rereads hang, so the list must come from the editor's answer.
+      return listReads === 1 ? [routine()] : new Promise<never>(() => undefined);
+    },
+    "bots:routines:create": (input) => routine({ ...(input as Record<string, unknown>), id: "task-2", label: "Every day at 7:30 AM", updatedAt: 20 }),
+    "bots:routines:delete": () => undefined,
+  });
+  await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
+  await screen.findByRole("button", { name: /Weekly meal prep/u });
+  fireEvent.click(screen.getByRole("button", { name: /Add routine/u }));
+  const add = await screen.findByRole("dialog", { name: "Add routine" });
+  fireEvent.change(within(add).getByRole("textbox", { name: "Name" }), { target: { value: "Morning brief" } });
+  fireEvent.change(within(add).getByRole("textbox", { name: "What should it do?" }), { target: { value: "Brief me." } });
+  fireEvent.click(within(add).getByRole("radio", { name: "Every day" }));
+  fireEvent.click(within(add).getByRole("button", { name: "Save" }));
+  assert.ok(await screen.findByRole("button", { name: /Morning brief/u }));
+  assert.ok(screen.getByRole("button", { name: /Weekly meal prep/u }));
+
+  fireEvent.click(screen.getByRole("button", { name: /Weekly meal prep/u }));
+  const edit = await screen.findByRole("dialog", { name: "Edit routine" });
+  fireEvent.click(within(edit).getByRole("button", { name: "Delete routine" }));
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: /Weekly meal prep/u }), null));
+  assert.ok(screen.getByRole("button", { name: /Morning brief/u }));
+});

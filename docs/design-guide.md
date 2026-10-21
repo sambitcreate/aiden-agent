@@ -74,6 +74,26 @@ focus uses fill and caret changes without a new border or ring. Reuse existing
 hover and press feedback and respect Reduce Motion; do not animate the corner
 shape or add layout shifts.
 
+## Loading and optimistic updates
+
+Reads follow the cache-first rule ([plan](plans/cache-first-loading-states-plan.md)):
+saved or last-known data renders at once and revalidates underneath, shaped
+skeletons appear only on a true first read with nothing saved, an empty state
+only once the read has settled, and connection status stays quiet. Reads never
+show indeterminate spinners.
+
+Writes follow the instant rule ([plan](plans/instant-ui-optimistic-updates-plan.md)):
+a tap changes the screen before the round trip. Rename, toggle, send, resume,
+dismiss and list edits apply to the local cache or view first and settle when
+the host answers; a failure rolls the row back and shows one toast or inline
+error, never a second confirmation. Sends show a pending echo keyed by one
+idempotent request id that is kept across a retry. Navigation never waits for
+the network: open from the cache or from the create receipt and refresh behind
+the new screen. Destructive actions that cannot be restored keep a pending label
+(Delete Bot, Remove workspace) until the host confirms; rows that can be
+restored are removed at once and put back on failure. Feature gates on phones
+read the pairing's saved `/server` features until the connection answers.
+
 ## Activity marks
 
 Show agent activity with the shared activity marks (`AidenActivityMark` on desktop), never with new spinners, canvas loops or shimmering icons. Geometry, timing and the phase mapping live in [`activity-marks.md`](activity-marks.md), and iOS and Android draw the same marks natively. Chat marks use the text colour, and Live uses the accent. Pass `active={false}` for terminal states so the mark freezes on its still pose rather than disappearing.

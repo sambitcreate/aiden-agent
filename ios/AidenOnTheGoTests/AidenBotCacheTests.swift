@@ -345,6 +345,41 @@ final class AidenBotCacheTests: XCTestCase {
         XCTAssertEqual(retainedCurrent, "Bot and Workspace use this draft")
     }
 
+    func testDraftStoreConsumesAdmittedRunInputFromAnOlderSession() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-drafts-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenChatDraftStore(root: root)
+        let submitting = await store.beginSession(instanceId: "instance-a", chatId: "chat-1")
+        _ = try await store.save("Fix the tests\nthen ship", session: submitting)
+        let otherMac = await store.beginSession(instanceId: "instance-b", chatId: "chat-1")
+        _ = try await store.save("Fix the tests", session: otherMac)
+
+        // The chat was reopened before the Mac admitted the input: the older
+        // session still retires the admitted text, and only that text.
+        let reopened = await store.beginSession(instanceId: "instance-a", chatId: "chat-1")
+        await store.consumeDraft(submitted: "Fix the tests", from: "Fix the tests\nthen ship", session: submitting)
+        let remaining = await store.load(session: reopened)
+        XCTAssertEqual(remaining, "then ship")
+        let untouchedOtherMac = await store.load(session: otherMac)
+        XCTAssertEqual(untouchedOtherMac, "Fix the tests")
+
+        // A draft typed after the composer cleared is a different draft, even
+        // when it starts with the admitted text.
+        _ = try await store.save("then ship it today", session: reopened)
+        await store.consumeDraft(submitted: "then ship", from: "then ship", session: submitting)
+        let newerDraft = await store.load(session: reopened)
+        XCTAssertEqual(newerDraft, "then ship it today")
+
+        await store.consumeDraft(submitted: "then ship it today", from: "then ship it today", session: submitting)
+        let cleared = await store.load(session: reopened)
+        XCTAssertNil(cleared)
+        // Nothing saved: nothing is written back.
+        await store.consumeDraft(submitted: "anything", from: "anything", session: submitting)
+        let stillCleared = await store.load(session: reopened)
+        XCTAssertNil(stillCleared)
+    }
+
     func testBotCacheRejectsTruncatedAvatarThatOnlyLooksLikeA512PNGHeader() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-bot-avatar-cache-\(UUID().uuidString)", directoryHint: .isDirectory)

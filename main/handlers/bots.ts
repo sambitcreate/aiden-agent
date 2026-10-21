@@ -140,7 +140,10 @@ export function registerBotHandlers(): void {
   });
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
     const { presetId, access } = parseBotCreateFromPreset(input);
-    const { bot, created } = await botStarter().startFromPreset(presetId, access === undefined ? {} : { access });
+    // The chat opens as soon as the Bot exists; its self-intro arrives in that chat.
+    const starter = botStarter();
+    const { bot, created } = await starter.startFromPreset(presetId, { ...(access === undefined ? {} : { access }), introduce: false });
+    if (created) void starter.introduce(bot.id);
     return { bot, created };
   });
   ipcMain.handle("bots:introduce", async (_event, id: unknown) => {

@@ -22,9 +22,12 @@ enum AidenBotHostFeature {
         features?.contains(token) == true
     }
 
+    /// Reads the connection's `/server` answer, or the pairing's saved one
+    /// while connecting, so a cold open resolves Bot routes the way the last
+    /// connected open did.
     @MainActor
     static func isAdvertised(_ token: String, coordinator: AidenRemoteCoordinator) -> Bool {
-        isAdvertised(token, by: coordinator.server?.features)
+        isAdvertised(token, by: coordinator.knownServerFeatures)
     }
 }
 

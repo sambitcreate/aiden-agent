@@ -230,13 +230,14 @@ class AidenProductShellTest {
 
     @Test
     fun testBotsHomeContentStates() {
-        fun resolve(hasSnapshot: Boolean, bots: Int, error: Boolean = false, query: Boolean = false, matches: Int = bots) =
+        fun resolve(hasSnapshot: Boolean, bots: Int, error: Boolean = false, query: Boolean = false, matches: Int = bots, offline: Boolean = false) =
             aidenBotsHomeContentState(
                 hasSnapshot = hasSnapshot,
                 totalBotCount = bots,
                 hasQuery = query,
                 filteredBotCount = matches,
-                hasError = error
+                hasError = error,
+                isOffline = offline
             )
 
         assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, 0))
@@ -246,5 +247,8 @@ class AidenProductShellTest {
         assertEquals(AidenBotsHomeContentState.NO_RESULTS, resolve(true, 2, query = true, matches = 0))
         // A saved snapshot keeps showing through a later load error.
         assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, 2, error = true))
+        // Offline with nothing saved is settled, not a skeleton that never ends; a saved list still shows.
+        assertEquals(AidenBotsHomeContentState.ERROR, resolve(false, 0, offline = true))
+        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, 2, offline = true))
     }
 }

@@ -44,6 +44,12 @@ export interface BotStartResult extends BotPresetCreateResult {
 export interface BotStartOptions {
   /** The access the person confirmed (desktop). */
   access?: BotAccessUpdate;
+  /**
+   * False leaves the one-time self-intro to the caller (`introduce`), so the
+   * answer comes back as soon as the Bot exists and its chat can open while the
+   * intro is sent. The intro is deduped per Bot either way.
+   */
+  introduce?: boolean;
   /** Creates the Bot with exactly `botId` for another audience (a paired phone); the key is still kept here. */
   createBot?(input: BotCreateInput, botId: string): Promise<BotDefinition>;
 }
@@ -84,7 +90,7 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
       if (owner) optionsByKey.set(key, options);
       try {
         const result = await create(presetId);
-        const introduced = result.created ? await introduce(result.bot.id) : false;
+        const introduced = result.created && options.introduce !== false ? await introduce(result.bot.id) : false;
         return { ...result, introduced };
       } finally {
         if (owner) optionsByKey.delete(key);
