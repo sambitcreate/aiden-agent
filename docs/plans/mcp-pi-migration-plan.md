@@ -1,6 +1,6 @@
 # MCP audit and move to Pi's MCP client
 
-Status: **In progress** (2026-10-21). Phases 0–3 committed; Phases 4 and 5 implemented (see `.memory/mcp-pi-migration.md`). The owner accepted decisions 1–5. Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
+Status: **Implemented, awaiting live acceptance** (2026-10-21). Phases 0–6 are on `feature/mcp-servers-audit-b21018`; Phase 7's automated discovery check passed, and real sign-ins per connector need the owner's accounts. The owner accepted decisions 1–5. Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
 
 ## Why
 
@@ -226,6 +226,18 @@ Implemented 2026-10-21. Outcome:
 
 - Sign in to every OAuth preset with a real account where one exists, and record pass or fail, auth method (DCR, CIMD or pre-registered) and refresh-after-restart in this plan. The API-key presets (Composio, GitHub) are checked once with a real key.
 - Update `README.md`, `PRODUCT.md`, the relevant `docs/*.md`, the onboarding tile and `docs/plans/README.md`, and add the `.memory/` record. Archive this plan to `completed/`.
+
+**Discovery acceptance (2026-10-21, automated, no accounts).** `pi-mcp`'s `discoverOAuthServerInfo` ran against the live server of every hosted OAuth connector. All 18 discover without error and all offer dynamic registration. Vercel and Supabase accept only confidential clients, which the kept client secret now covers.
+
+| Connectors | Registration | CIMD | Token auth | Result |
+|---|---|---|---|---|
+| Linear, Atlassian Rovo, Canva, Notion, Cloudflare, Sentry, Granola, monday.com, Airtable, PostHog, Higgsfield | DCR | yes | public | OK |
+| Stripe, Datadog, Dropbox, ClickUp, Consensus | DCR | no | public | OK |
+| Vercel, Supabase | DCR | no | confidential | OK |
+| Figma (hosted) | — | — | — | Not run: marked unavailable until Figma approves "Aiden Agent" |
+| Figma Desktop, Composio, GitHub | — | — | — | Not run: no OAuth (local, or API key) |
+
+**Still owner-only:** a real sign-in, a tool call and a refresh after restart for each connector, plus a real key for Composio and GitHub. These need the owner's accounts and are tracked in the plans index row.
 
 ## Notes
 
