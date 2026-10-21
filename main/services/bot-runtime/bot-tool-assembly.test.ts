@@ -739,6 +739,8 @@ function ruledTurn(options: {
         ? null
         : { summary: options.summary ?? "Click Place your order — Safari", onAllow: () => void allowed.push(call.callId) },
       action: options.action ?? PLACE_ORDER,
+      // Without an approval, the live source's own words (the Bot computer's intent).
+      ...(options.baseline === false && options.summary !== undefined ? { summary: options.summary } : {}),
     }),
     ...(options.requestHandoff === undefined ? {} : { requestHandoff: options.requestHandoff }),
   });
@@ -892,12 +894,14 @@ async function handoffTurn(
   rules = () => rulesWith("hand_off"),
   action = PLACE_ORDER,
   summary?: string,
+  baseline?: boolean,
 ) {
   const handoffs = createBotHandoffs();
   const turn = ruledTurn({
     rules,
     action,
     ...(summary === undefined ? {} : { summary }),
+    ...(baseline === undefined ? {} : { baseline }),
     requestHandoff: (request) => handoffs.request(ruleHandoffRequest(request)),
   });
   const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
@@ -1023,6 +1027,48 @@ test("a locked rule hands off a card field even when no rules are configured", a
     assert.equal(turn.computer.executions.length, 0);
   } finally {
     await harness.close(ctx);
+  }
+});
+
+test("a password-or-money rule's card and Done never quote what the Bot was typing", async () => {
+  const secret = "hunter2-481516";
+  const cases: Array<{ action: BotClassifiableAction; summary: string; baseline?: boolean; says: string }> = [
+    {
+      action: { surface: "computer_use", action: "type", app: "Safari", focusedElement: { role: "AXSecureTextField", label: "Password" } },
+      summary: `type "${secret}" — Safari`,
+      says: "type into the “Password” field in Safari",
+    },
+    {
+      action: { surface: "computer_use", action: "set_value", app: "Safari", element: { role: "AXTextField", label: "Card number" } },
+      summary: `set element 4 to "${secret}" — Safari`,
+      says: "type into the “Card number” field in Safari",
+    },
+    {
+      action: { surface: "computer_use", action: "key", keys: "4", focusedElement: { role: "AXSecureTextField", label: "Passcode" } },
+      summary: `press "4"`,
+      says: "press keys",
+    },
+    // The Bot's own computer: its card reads the Bot's intent, which may spell out what it types.
+    {
+      action: {
+        surface: "computer",
+        action: "type",
+        intent: `Type ${secret} into the password field`,
+        app: "Safari",
+        element: { role: "AXSecureTextField", label: "Password" },
+      },
+      summary: `Type ${secret} into the password field`,
+      baseline: false,
+      says: "type into the “Password” field in Safari",
+    },
+  ];
+  for (const { action, summary, baseline, says } of cases) {
+    const { card, results } = await handoffTurn({ outcome: "done" }, () => [], action, summary, baseline);
+    assert.ok(card.rule?.id.startsWith("locked."), `${says}: a locked rule handed it off`);
+    assert.equal(card.why?.includes(secret), false, `${says}: the card`);
+    assert.ok(card.why?.endsWith(`was about to: ${says}`), `${says}: ${card.why}`);
+    assert.equal(resultText(results[0]).includes(secret), false, `${says}: the Done the Bot reads`);
+    assert.ok(resultText(results[0]).includes(ruleHandoffDoneBlock(says)), `${says}: ${resultText(results[0])}`);
   }
 });
 
