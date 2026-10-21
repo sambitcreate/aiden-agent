@@ -53,3 +53,13 @@ export { migrateCliAzureConfig } from "./azure-config-migration.ts";
 export { createTodoInlineExtension } from "./extensions/todo.ts";
 export { createAgentSession, DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 export { buildOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
+
+export * from "./bot-durable-migration.ts";
+export { createCliRemoteBots } from "./remote-bots.ts";
+export { AidenIdempotencyLedger } from "../../../main/services/aiden-remote-operation-contract.js";
+
+export { cliDurableBotToolContext } from "./bot-durable.ts";
+
+export { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+export { capturePersistedSubagentContext } from "../../../main/services/subagents/forked-context.js";
+export { createAdvisorInlineExtension } from "./extensions/advisor.ts";

@@ -25,7 +25,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     cancelSchedules: (id) => runtime.service.cancelWorkspace(id), resumeSchedules: (id) => runtime.service.resumeWorkspace(id),
   });
   const telegram = createCliTelegram(agentDir, chats);
-  const bots = await createCliBots(agentDir, chats); chats.setBots(bots);
+  const bots = await createCliBots(agentDir, chats); chats.setBots(bots); bots.setScheduler(runtime);
   let remote: Awaited<ReturnType<typeof createCliRemote>> | undefined;
   const path = daemonSocket(agentDir);
   const clients = new Set<import("node:net").Socket>();

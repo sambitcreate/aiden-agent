@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { convertToLlm } from "../pi-legacy-harness.js";
 import type {
   AgentMessage,
+  AgentOptions,
   AgentTool,
   BeforeToolCallContext,
   BeforeToolCallResult,
@@ -60,6 +61,9 @@ export interface SubagentChildSpec {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+  /** Host-owned budget transition; may remove tools for a final report. */
+  prepareNextTurnWithContext?: AgentOptions["prepareNextTurnWithContext"];
+  finishTurn?: AgentOptions["finishTurn"];
   onStarting?: () => void;
 }
 
@@ -273,6 +277,8 @@ export class SubagentRuntimeRegistry {
         entry.providerResponseReceived = true;
       },
       beforeToolCall: spec.beforeToolCall,
+      prepareNextTurnWithContext: spec.prepareNextTurnWithContext,
+      finishTurn: spec.finishTurn,
       initialState: {
         systemPrompt: spec.systemPrompt,
         model: spec.runtime.model,

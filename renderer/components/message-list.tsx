@@ -403,6 +403,7 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 
 interface SettledMessageRowProps {
   chatId: string;
+  deferOffscreenLayout?: boolean;
   /** Absent only for the in-flight reply, which passes `live` instead. */
   message?: ChatMessage;
   /**
@@ -435,6 +436,7 @@ interface SettledMessageRowProps {
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
   chatId,
+  deferOffscreenLayout,
   message,
   live,
   readAloud,
@@ -482,7 +484,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [storedImagePlacements],
   );
   const row = (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
+      ? "transcript-settled-contained flex min-w-0 flex-col gap-3" : "flex min-w-0 flex-col gap-3"}>
       {live ? (
         <AssistantResponse {...live} streaming />
       ) : !message ? null : message.role === "assistant" ? (
@@ -932,7 +935,7 @@ export function MessageList({
     />
   ) : null;
 
-  for (const message of messages) {
+  for (const [messageIndex, message] of messages.entries()) {
     if (message.id === settlingMessageId) {
       transcriptRows.push(liveRow);
       continue;
@@ -941,6 +944,7 @@ export function MessageList({
       <SettledMessageRow
         key={settledRowKeys.get(message.id)}
         chatId={chatId}
+        deferOffscreenLayout={messageIndex < messages.length - 32}
         message={message}
         readAloud={readAloudMessageId === message.id ? readAloud : undefined}
         subagentsEnabled={subagentsEnabled}

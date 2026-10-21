@@ -9,7 +9,8 @@
  * preserving the once-per-response semantics.
  */
 
-import { recordUsage } from "../usage-ledger.ts";
+import type { ResolvedModelRuntime } from "../../../../main/services/model-runtime.js";
+import { recordUsage, recordUsageRecord } from "../usage-ledger.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -86,8 +87,13 @@ export function createAdvisorInlineExtension(context: {
 				if (!ctx) throw new Error("The session context is unavailable.");
 				return resolveRuntimeFromContext(asModelRuntimeContext(ctx), providerId, modelId);
 			},
-			recordUsage: async (message: AssistantMessage) => recordUsage(context.agentDir, "advisor", message),
-			recordUnreportedUsage: async () => {},
+			recordUsage: async (message: AssistantMessage, _runtime: ResolvedModelRuntime, attemptId: string) => recordUsage(context.agentDir, "advisor", message, attemptId),
+			recordUnreportedUsage: async (runtime: ResolvedModelRuntime, status: "failed" | "cancelled", attemptId: string) => recordUsageRecord(context.agentDir, {
+        source: "advisor", providerId: runtime.provider.id, providerLabel: runtime.provider.label,
+        modelId: runtime.model.id, modelLabel: runtime.model.name,
+        local: /^(ollama|lmstudio)$/.test(runtime.provider.id), status,
+        tokens: null, costStatus: "unavailable",
+      }, attemptId),
 		});
 		return runtime;
 	};
