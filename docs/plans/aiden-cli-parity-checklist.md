@@ -48,7 +48,7 @@ autocomplete, themes, hidden `/debug`.
 
 | Feature | Glue needed | Files |
 | --- | --- | --- |
-| MCP preset catalog + OAuth | printed-URL OAuth + file credential store replace keychain/session glue | `mcp-presets.ts`, `plugin-catalog.ts` (pure), `mcp-oauth-store-core.ts` |
+| MCP preset catalog + OAuth | printed-URL OAuth + file credential store replace keychain/session glue | `mcp-presets.ts`, `connector-catalog.ts` (pure), `mcp-oauth-store-core.ts` |
 | Provider auth browser handoff | `shell.openExternal` injected (pure coordinator) | `provider-auth-flow.ts` |
 | Catalog refresh on credential commit | drop bot-inventory hooks | `provider-registry.ts::refreshBuiltinCatalogs` |
 | Telegram control | token source swap (env/auth.json vs safeStorage) | `telegram/*` (pure pipeline), Phase 4 serve |

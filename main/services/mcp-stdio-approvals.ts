@@ -18,7 +18,7 @@ const FINGERPRINT = /^[a-f0-9]{64}$/u;
 export class McpStdioApprovalRequiredError extends Error {
   readonly code = "mcp-stdio-approval-required";
   constructor(serverName: string) {
-    super(`“${serverName}” was added outside Aiden. Approve it in Settings → Plugins before it can run.`);
+    super(`“${serverName}” was added outside Aiden. Approve it in Settings → Connectors before it can run.`);
   }
 }
 

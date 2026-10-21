@@ -18,7 +18,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
 import { logger } from "../platform.js";
-import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { mcpDiagnostics } from "./mcp-failure-diagnostics.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
 import {
   assertMcpPresetServer,
@@ -29,7 +29,6 @@ import type { McpServer } from "./types.js";
 import { mcpServerExposure, mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { resolveMcpConnectionCredentials } from "./mcp-connection-credentials.js";
 import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
-import { McpStdioApprovalRequiredError } from "./mcp-stdio-approvals.js";
 import { markMcpToolExposure, planMcpServerExposure } from "./mcp-exposure.js";
 import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
@@ -107,7 +106,7 @@ async function resolveAuth(
       return secrets.getOrBindLegacyProviderKey(presetSecretId(configured.id), binding);
     },
     isCurrent,
-    missingKey: (name) => `${name} needs an API key — add one in Settings → Plugins.`,
+    missingKey: (name) => `${name} needs an API key — add one in Settings → Connectors.`,
   });
 }
 
@@ -484,6 +483,8 @@ class McpManager {
     this.built.clear();
     if (options.final) {
       this.closed = true;
+      // Write pending repeat counts and stop the coalescing timers.
+      mcpDiagnostics.shutdown();
       const shutdown = Promise.all([this.clients.shutdown(), this.statusClients.shutdown()]).then(() => undefined);
       this.disconnecting.add(shutdown);
       void shutdown.finally(() => this.disconnecting.delete(shutdown)).catch(() => undefined);
@@ -726,25 +727,13 @@ class McpRecentFailureError extends Error {
   }
 }
 
-function writeMcpDegraded(error: unknown, phase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm", extra: Record<string, number> = {}): void {
-  // An unapproved local command is a distinct, expected state, not a failure to connect.
-  const failurePhase = error instanceof McpStdioApprovalRequiredError ? "mcp-stdio-approval" : phase;
-  const projected = projectDiagnosticError(error);
-  writeDiagnosticEvent({
-    level: "warn",
-    area: "mcp",
-    event: "mcp-degraded",
-    outcome: projected.code === "cancelled" ? "cancelled" : "degraded",
-    code: projected.code,
-    fields: {
-      errorType: projected.errorType,
-      ...(projected.fingerprint ? { fingerprint: projected.fingerprint } : {}),
-      ...(projected.causeCode ? { causeCode: projected.causeCode } : {}),
-      ...(projected.httpStatus === undefined ? {} : { httpStatus: projected.httpStatus }),
-      failurePhase,
-      ...extra,
-    },
-  });
+function writeMcpDegraded(
+  server: McpServer | undefined,
+  error: unknown,
+  phase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm",
+  extra: Record<string, number> = {},
+): void {
+  mcpDiagnostics.degraded(server, error, { phase, extra });
 }
 
 /**
@@ -774,6 +763,7 @@ function discoverMcpServer(
   ).then(
     (context) => {
       mcpManager.clearFailure(server.id);
+      mcpDiagnostics.recovered(server);
       return context;
     },
     (error: unknown) => {
@@ -797,7 +787,7 @@ async function configuredMcpToolNamingServers(extra: readonly McpServer[]): Prom
 /** Report a server that lost its tools for this turn, and remember why. */
 function reportUnavailableMcpServer(server: McpServer, error: unknown, generations: Map<string, number>): void {
   if (error instanceof McpRecentFailureError) {
-    writeMcpDegraded(asMcpDeadlineError(error.original), "mcp-recent-failure", { backoffMs: Math.max(0, Math.round(error.retryInMs)) });
+    writeMcpDegraded(server, asMcpDeadlineError(error.original), "mcp-recent-failure", { backoffMs: Math.max(0, Math.round(error.retryInMs)) });
     return;
   }
   // A missed deadline leaves the raw attempt running; remember the timeout
@@ -806,7 +796,7 @@ function reportUnavailableMcpServer(server: McpServer, error: unknown, generatio
   if (generation !== undefined) mcpManager.recordFailure(server.id, generation, error);
   // A skipped server, including one that missed its deadline, is surfaced
   // as degraded MCP status in diagnostics rather than failing the turn.
-  writeMcpDegraded(error, "mcp-tool-discovery");
+  writeMcpDegraded(server, error, "mcp-tool-discovery");
 }
 
 /**
@@ -832,11 +822,11 @@ export function prewarmMcpServers(servers?: readonly McpServer[]): void {
           // A missed deadline is remembered like any failure; a late success clears it.
           const generation = generations.get(server.id);
           if (generation !== undefined) mcpManager.recordFailure(server.id, generation, error);
-          writeMcpDegraded(asMcpDeadlineError(error), "mcp-prewarm");
+          writeMcpDegraded(server, asMcpDeadlineError(error), "mcp-prewarm");
         },
       );
     }
-  })().catch((error: unknown) => writeMcpDegraded(error, "mcp-prewarm"));
+  })().catch((error: unknown) => writeMcpDegraded(undefined, error, "mcp-prewarm"));
 }
 
 /**

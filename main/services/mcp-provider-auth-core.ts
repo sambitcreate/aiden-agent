@@ -14,6 +14,90 @@ export function mcpProviderGrantBinding(server: McpServer): string {
   return JSON.stringify({ version: 1, connection: createHash("sha256").update(JSON.stringify(mcpCredentialConnectionSnapshot(server))).digest("hex") });
 }
 
+/**
+ * Device-local opt-ins, stored encrypted: provider id → fingerprint of the
+ * exact API key that was opted in. A replaced key, a switch to a sign-in, or
+ * a logout no longer matches, so a different credential is never shared.
+ */
+export const MCP_PROVIDER_KEY_SHARING_KEY = "mcp-provider-key-sharing";
+const MAX_SHARING_IDS = 256;
+const FINGERPRINT = /^[0-9a-f]{64}$/u;
+
+export type McpProviderKeySharing = Map<string, string>;
+
+export function mcpProviderKeyFingerprint(key: string): string {
+  return createHash("sha256").update(`aiden-mcp-provider-key\0${key}`).digest("hex");
+}
+
+export function parseMcpProviderKeySharing(value: string | null): McpProviderKeySharing {
+  const result: McpProviderKeySharing = new Map();
+  if (!value) return result;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return result;
+    for (const [id, fingerprint] of Object.entries(parsed)) {
+      if (result.size >= MAX_SHARING_IDS) break;
+      if (id.length > 0 && id.length <= 200 && typeof fingerprint === "string" && FINGERPRINT.test(fingerprint)) result.set(id, fingerprint);
+    }
+  } catch {
+    // Unreadable records share nothing.
+  }
+  return result;
+}
+
+export function serializeMcpProviderKeySharing(sharing: McpProviderKeySharing): string {
+  return JSON.stringify(Object.fromEntries([...sharing].sort(([a], [b]) => a.localeCompare(b)).slice(0, MAX_SHARING_IDS)));
+}
+
+/** The ChatGPT subscription provider: its sign-in is never an API key. */
+const SUBSCRIPTION_PROVIDER_IDS: ReadonlySet<string> = new Set(["openai-codex"]);
+
+export interface McpProviderStoredCredential {
+  type: "api_key" | "oauth";
+  /** The saved API key (api_key credentials only). */
+  key?: string;
+}
+
+export interface McpProviderCredentialSource {
+  isBuiltin(providerId: string): boolean;
+  /** One read of the credential Aiden stores for this provider: its type and, for an API key, the key. */
+  storedCredential(providerId: string): Promise<McpProviderStoredCredential | undefined>;
+  /** Fingerprint of the key that was opted in with "Let custom connectors use this key". */
+  sharedFingerprint(providerId: string): Promise<string | undefined>;
+}
+
+/** A provider credential that custom connectors may not use, with the reason. */
+export class McpProviderKeyRefusedError extends Error {}
+
+/**
+ * The API key a custom connector may use, from a single read of the stored
+ * credential so its type and value cannot change in between. Only a saved API
+ * key qualifies: sign-in and subscription credentials (ChatGPT, Claude, GitHub
+ * Copilot and any other OAuth credential) never do, and the exact key must
+ * have been opted in from Settings → Providers. `checkSharing: false` checks
+ * only the credential (used when opting in). Throws `McpProviderKeyRefusedError`.
+ */
+export async function resolveMcpProviderSharedKey(
+  providerId: string,
+  source: McpProviderCredentialSource,
+  options: { checkSharing?: boolean } = {},
+): Promise<{ key: string; fingerprint: string }> {
+  if (!source.isBuiltin(providerId) || SUBSCRIPTION_PROVIDER_IDS.has(providerId)) {
+    throw new McpProviderKeyRefusedError("Only a built-in provider’s API key can be shared with a custom connector.");
+  }
+  const credential = await source.storedCredential(providerId);
+  if (credential?.type === "oauth") {
+    throw new McpProviderKeyRefusedError("Sign-in and subscription credentials are never shared with connectors. Use a provider with a saved API key.");
+  }
+  const key = credential?.type === "api_key" ? credential.key?.trim() : undefined;
+  if (!key) throw new McpProviderKeyRefusedError("This provider has no saved API key to share.");
+  const fingerprint = mcpProviderKeyFingerprint(key);
+  if (options.checkSharing !== false && (await source.sharedFingerprint(providerId)) !== fingerprint) {
+    throw new McpProviderKeyRefusedError("Turn on “Let custom connectors use this key” for this provider in Settings → Providers first.");
+  }
+  return { key, fingerprint };
+}
+
 export function canUseProviderAuthenticatedMcp(input: {
   rendererOwner: boolean; workspace: boolean; assistant: boolean; bot: boolean; permission: string;
   usageSource?: string; interactionSurface?: string;
@@ -57,11 +141,14 @@ export function createMcpProviderAuthenticatedFetch(options: {
     const signal = init?.signal ?? request?.signal;
     signal?.throwIfAborted();
     const verifyGrant = !grantVerified;
-    if (verifyGrant && await options.readGrant() !== binding) throw new Error("Approve this provider credential in Settings → Plugins on this device before connecting.");
+    if (verifyGrant && await options.readGrant() !== binding) throw new Error("Approve this provider credential in Settings → Connectors on this device before connecting.");
     options.assertCurrent();
     let token: string | undefined;
     try { token = await options.resolveToken(server.authProvider!); }
-    catch { throw new Error("The selected provider credential could not be refreshed. Sign in again in Provider Settings."); }
+    catch (error) {
+      if (error instanceof McpProviderKeyRefusedError) throw error;
+      throw new Error("The selected provider credential could not be read. Check it in Settings → Providers.");
+    }
     signal?.throwIfAborted();
     options.assertCurrent();
     if (verifyGrant) {

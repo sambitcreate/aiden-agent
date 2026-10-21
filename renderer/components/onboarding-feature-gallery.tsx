@@ -216,8 +216,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
   {
     id: "mcp",
     group: "extend",
-    title: "MCP Connectors",
-    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools. Sharing a provider sign-in requires approval on each device.",
+    title: "Connectors",
+    description: "Connect apps like Linear, Notion and GitHub, or any MCP server, to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
     icon: Plug,
     size: "wide",
   },

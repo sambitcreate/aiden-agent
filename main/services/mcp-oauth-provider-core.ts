@@ -93,7 +93,7 @@ export interface McpOAuthRuntime {
 export class McpOAuthSignInRequiredError extends Error {
   readonly code = "mcp-oauth-sign-in-required";
   constructor() {
-    super("This MCP server needs sign-in. Open Settings → Plugins and click Authorize.");
+    super("This MCP server needs sign-in. Open Settings → Connectors and click Authorize.");
     this.name = "McpOAuthSignInRequiredError";
   }
 }
@@ -334,7 +334,7 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
   private configuredClient(identity: Extract<McpOAuthClientIdentity, { kind: "pre-registered" }>): OAuthClientInformationMixed {
     if (identity.clientSecret !== undefined && isMcpFieldSecretMarker(identity.clientSecret)) {
       // Never send the marker itself as a secret.
-      throw new Error("The saved OAuth client secret for this MCP server is missing on this device. Enter it again in Settings → Plugins.");
+      throw new Error("The saved OAuth client secret for this MCP server is missing on this device. Enter it again in Settings → Connectors.");
     }
     return { client_id: identity.clientId, ...(identity.clientSecret ? { client_secret: identity.clientSecret } : {}) };
   }

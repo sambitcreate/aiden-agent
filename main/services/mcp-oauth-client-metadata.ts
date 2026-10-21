@@ -1,6 +1,5 @@
 // Electron-free MCP OAuth client metadata. Every registration uses the
-// client name "Aiden Agent" unless a catalog preset names another one
-// (`mcpOAuthClientNameForServer` is the single source).
+// client name "Aiden Agent" (`mcpOAuthClientNameForServer` is the single source).
 
 import { OAuthError, OAuthIssuerMismatchError, OAuthRegistrationError } from "@earendil-works/pi-mcp/oauth";
 import { mcpOAuthDisplayText } from "./mcp-oauth-session.js";
@@ -71,8 +70,8 @@ function oauthDescription(body: string): string {
 /**
  * Readable Settings lines for OAuth failures users can act on. The original
  * error stays as a non-enumerable `cause` for logs.
- * - A host that allowlists registering clients (Figma) answers dynamic client
- *   registration with a 403.
+ * - A host that only lets approved clients register answers dynamic client
+ *   registration with a 403: Aiden is not one of them, and no setting changes that.
  * - Authorization-server metadata whose issuer does not match the server it
  *   was discovered from (RFC 8414) is refused; a custom server can name the
  *   right metadata document instead.
@@ -82,7 +81,7 @@ function oauthDescription(body: string): string {
 export function explainMcpOAuthFailure(error: unknown): Error & { cause?: unknown } {
   if (error instanceof OAuthRegistrationError && error.status === 403) {
     return explained(
-      "This MCP server rejected OAuth client registration (HTTP 403). Some hosts only allow listed MCP clients to register. Check Settings → Plugins for this connector's documented setup, then try Authorize again.",
+      "This server only lets approved apps sign in, and it hasn’t approved Aiden (HTTP 403). Use another way to connect if the service offers one, such as a local server or an API key.",
       error,
     );
   }
@@ -99,7 +98,7 @@ export function explainMcpOAuthFailure(error: unknown): Error & { cause?: unknow
   }
   if (error instanceof OAuthIssuerMismatchError) {
     return explained(
-      "This MCP server's authorization server reported a different issuer than expected, so sign-in was stopped. For a custom server, set its Authorization metadata URL in Settings → Plugins to the provider's own metadata document, then try Authorize again.",
+      "This MCP server's authorization server reported a different issuer than expected, so sign-in was stopped. For a custom server, set its Authorization metadata URL in Settings → Connectors to the provider's own metadata document, then try Authorize again.",
       error,
     );
   }

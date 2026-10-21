@@ -39,7 +39,7 @@ export interface McpFieldSecretRecord {
 
 export class McpFieldSecretDestinationError extends Error {
   constructor(readonly serverName: string) {
-    super(`The address or command of “${serverName}” changed outside Aiden, so its saved header and environment values were not sent. Enter them again in Settings → Plugins.`);
+    super(`The address or command of “${serverName}” changed outside Aiden, so its saved header and environment values were not sent. Enter them again in Settings → Connectors.`);
   }
 }
 
@@ -77,7 +77,7 @@ export function mcpFieldSecretId(serverId: string): string {
 
 export class McpFieldSecretMissingError extends Error {
   constructor(readonly serverName: string, readonly field: string) {
-    super(`The saved value for ${field} of “${serverName}” is missing on this device. Enter it again in Settings → Plugins.`);
+    super(`The saved value for ${field} of “${serverName}” is missing on this device. Enter it again in Settings → Connectors.`);
   }
 }
 

@@ -13,6 +13,7 @@ import type { Provider, ProviderAuthEvent, ProviderAuthPrompt } from "../../lib/
 import { harnessSignInHint, isAcpHarnessProvider } from "../../shared/acp-harness";
 import { HarnessRuntimeSection, useHarnessStatus } from "./harness-runtime-section";
 import { ProviderModelVisibility } from "./provider-model-visibility";
+import { ProviderConnectorKeySharing } from "./provider-connector-key-sharing";
 
 interface BuiltinProviderEditorProps {
   provider: Provider;
@@ -310,6 +311,7 @@ export function BuiltinProviderEditor({
             </a>
           </Button>
         ) : null}
+        {requireChatModel ? <ProviderConnectorKeySharing provider={provider} /> : null}
         {requireChatModel ? (
           <>
             <Text variant="small" color="tertiary">

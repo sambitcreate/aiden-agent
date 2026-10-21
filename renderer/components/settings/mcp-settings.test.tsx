@@ -7,14 +7,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClientProvider } from "@tanstack/react-query";
 import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
-import { PLUGIN_CATALOG, isConnectablePlugin } from "../../shared/plugin-catalog";
-import type { McpPresetState, McpServer } from "../../lib/types";
+import type { McpPresetState, McpServer, Provider } from "../../lib/types";
 import { Toaster } from "../ui";
 import { useMcpPresets, useMcpServers } from "../../lib/queries";
 import { McpSettings } from "./mcp-settings";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
-import { McpProviderAuthFields } from "./mcp-provider-auth-fields";
+import { ProviderConnectorKeySharing } from "./provider-connector-key-sharing";
+import { McpProviderAuthFields, mcpShareableProviders } from "./mcp-provider-auth-fields";
 import { buildMcpPresetStates } from "../../../main/handlers/mcp-preset-states";
 import {
   MCP_PRESETS,
@@ -25,25 +25,15 @@ import {
 
 afterEach(cleanup);
 
-/** Preset states derived from the shared catalog, the way main builds them. */
+/** Preset states for the whole catalog, the way main builds them. */
 function catalogPresetStates(patch: Record<string, Partial<McpPresetState>> = {}): McpPresetState[] {
-  return PLUGIN_CATALOG.filter(isConnectablePlugin).map((plugin) => ({
-    preset: {
-      id: plugin.id,
-      name: plugin.name,
-      tagline: plugin.tagline,
-      vendor: plugin.vendor,
-      category: plugin.category,
-      transport: "http",
-      url: plugin.url!,
-      auth: plugin.auth!,
-      docsUrl: plugin.docsUrl,
-    },
-    serverId: `preset-${plugin.id}`,
+  return MCP_PRESETS.map((preset) => ({
+    preset,
+    serverId: presetServerId(preset.id),
     configured: false,
     enabled: true,
     ready: false,
-    ...patch[plugin.id],
+    ...patch[preset.id],
   }));
 }
 
@@ -78,28 +68,67 @@ function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
 const savedServers = (calls: { channel: string; args: unknown[] }[]) =>
   calls.filter((call) => call.channel === "mcp:save").map((call) => call.args[0] as McpServer);
 
-test("searching the plugin directory narrows the cards", async () => {
+test("searching the directory narrows the cards", async () => {
   mount();
   await screen.findByRole("button", { name: "Set Up Linear" });
   assert.ok(screen.getByRole("button", { name: "Set Up Notion" }));
 
-  fireEvent.change(screen.getByRole("searchbox", { name: "Search plugins" }), {
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search connectors" }), {
     target: { value: "linear" },
   });
 
   await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Set Up Notion" }), null));
   assert.ok(screen.getByRole("button", { name: "Set Up Linear" }));
-  assert.ok(screen.getByText(/^\d+ plugins?$/u).textContent!.startsWith("1 "));
+  assert.ok(screen.getByText(/^\d+ connectors?$/u).textContent!.startsWith("1 "));
 });
 
-test("connectable cards offer setup while skills and apps only offer details", async () => {
+test("searching for an app Composio reaches shows the Composio card with its hint", async () => {
   mount();
-  const setUp = await screen.findByRole("button", { name: "Set Up Linear" });
-  await waitFor(() => assert.equal((setUp as HTMLButtonElement).disabled, false));
-  assert.equal(screen.queryByRole("button", { name: "Set Up Superpowers" }), null);
-  fireEvent.click(screen.getByRole("button", { name: "Details for Superpowers" }));
-  const dialog = await screen.findByRole("dialog");
-  assert.ok(within(dialog).getByText("Superpowers"));
+  await screen.findByRole("button", { name: "Set Up Linear" });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search connectors" }), { target: { value: "gmail" } });
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Set Up Linear" }), null));
+  assert.ok(screen.getByRole("button", { name: "Set Up Composio" }));
+  assert.ok(screen.getByText("Gmail, Slack and 500+ apps through Composio"));
+});
+
+test("hosted Figma explains why it can't be set up and leads to Figma Desktop", async () => {
+  mount();
+  await screen.findByRole("button", { name: "Set Up Linear" });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search connectors" }), { target: { value: "hosted server" } });
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Set Up Linear" }), null));
+  assert.equal(screen.queryByRole("button", { name: "Set Up Figma" }), null);
+  assert.ok(screen.getByText(/Figma only lets approved apps connect to its hosted server/u));
+
+  fireEvent.click(screen.getByRole("button", { name: "Use Figma Desktop instead of Figma" }));
+  // The search clears so the Figma Desktop card is shown, and its action takes focus.
+  await screen.findByRole("button", { name: "Set Up Figma Desktop" });
+  assert.equal((screen.getByRole("searchbox", { name: "Search connectors" }) as HTMLInputElement).value, "");
+  // Focus lands on the Figma Desktop card itself, which can take focus even before its button is enabled.
+  await waitFor(() => assert.equal(document.activeElement, screen.getByRole("group", { name: "Figma Desktop" })));
+});
+
+test("a connector card turns green only once its live connection succeeds", async () => {
+  const notion = serverFromPreset(MCP_PRESETS.find((preset) => preset.id === "notion")!);
+  mount({
+    "mcp:list": () => [notion],
+    "mcp:presets": () => catalogPresetStates({ notion: { configured: true, ready: true } }),
+    "mcp:liveStatus": () => [{ serverId: notion.id, state: "failed", error: "HTTP 500" }],
+  });
+  const card = () => document.getElementById("connector-card-notion")!;
+  await waitFor(() => assert.match(card().textContent ?? "", /Couldn’t connect/u));
+  assert.doesNotMatch(card().textContent ?? "", /Connected/u);
+  act(() => emitBotTestNotification("mcp:statusChanged", { serverId: notion.id, state: "connected", toolCount: 4 }));
+  await waitFor(() => assert.match(card().textContent ?? "", /Connected/u));
+});
+
+test("Reset connections lives in the page's overflow menu", async () => {
+  const calls = mount({ "mcp:reconnect": () => undefined });
+  await screen.findByRole("button", { name: "Set Up Linear" });
+  assert.equal(screen.queryByRole("button", { name: "Reset connections" }), null);
+  const more = screen.getByRole("button", { name: "More connector actions" });
+  fireEvent.pointerDown(more, { button: 0, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Reset connections" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "mcp:reconnect").length, 1));
 });
 
 test("configured rows name the server they act on", async () => {
@@ -166,7 +195,7 @@ test("a failed preset load shows Retry, and retrying restores the directory", as
       return catalogPresetStates();
     },
   });
-  const retry = await screen.findByRole("button", { name: "Retry loading plugin connection details" });
+  const retry = await screen.findByRole("button", { name: "Retry loading connector details" });
   assert.match(screen.getByRole("alert").textContent ?? "", /bad preset record/u);
   assert.equal((screen.getByRole("button", { name: "Set Up Linear" }) as HTMLButtonElement).disabled, true);
 
@@ -286,7 +315,7 @@ test("OAuth metadata field labels optional setup and exposes invalid addresses a
   assert.ok(mcpOAuthMetadataFieldError("file:///tmp/metadata"));
 });
 
-test("provider credential consent identifies the exact endpoint and separates saving from approval", () => {
+test("provider key consent identifies the exact endpoint and separates saving from approval", () => {
   const props = {
     providerId: "openai",
     endpoint: "https://tools.test/mcp?tenant=one",
@@ -299,13 +328,34 @@ test("provider credential consent identifies the exact endpoint and separates sa
   };
   const html = renderToStaticMarkup(<McpProviderAuthFields {...props} />);
   assert.match(html, /https:\/\/tools.test\/mcp\?tenant=one/u);
-  assert.match(html, /Allow provider credential/u);
+  assert.match(html, /Allow the key/u);
   assert.match(html, /Saving the server does not grant access/u);
   assert.match(html, /each device needs your approval/u);
   assert.match(html, /Only attended desktop workspace chats/u);
   const approved = renderToStaticMarkup(<McpProviderAuthFields {...props} approved />);
-  assert.match(approved, /Stop sharing credential/u);
+  assert.match(approved, /Stop sharing the key/u);
   assert.match(approved, /Approved on this device/u);
+});
+
+test("the provider key picker offers only opted-in API keys, never sign-in or subscription credentials", () => {
+  const provider = (id: string, patch: Partial<Provider>): Provider => ({
+    id, label: id, kind: "openai", baseUrl: "", models: [], needsKey: true, isBuiltin: true, hasKey: true, ...patch,
+  });
+  const providers = [
+    provider("openai", { credentialType: "api_key", connectorKeySharing: true }),
+    provider("anthropic", { credentialType: "oauth", connectorKeySharing: true }),
+    provider("github-copilot", { credentialType: "oauth" }),
+    provider("groq", { credentialType: "api_key" }),
+    provider("mistral", { credentialType: "api_key", connectorKeySharing: true, hasKey: false }),
+    provider("custom-local", { credentialType: "api_key", connectorKeySharing: true, isBuiltin: false }),
+  ];
+  assert.deepEqual(mcpShareableProviders(providers, "").map((entry) => entry.id), ["openai"]);
+  // A provider already selected stays listed so its sharing can be stopped.
+  assert.deepEqual(mcpShareableProviders(providers, "groq").map((entry) => entry.id), ["openai", "groq"]);
+  const empty = renderToStaticMarkup(
+    <McpProviderAuthFields providerId="" endpoint="" approved={false} busy={false} disabled providers={[]} onProviderChange={() => {}} onConsent={() => {}} />,
+  );
+  assert.match(empty, /No provider keys are shared with connectors/u);
 });
 
 const remoteServer: McpServer = {
@@ -377,7 +427,7 @@ test("removing a server names the schedules and Bots that rely on it", async () 
   });
   fireEvent.click(await screen.findByRole("button", { name: "Remove Files" }));
   const dialog = await screen.findByRole("alertdialog");
-  await waitFor(() => assert.match(within(dialog).getByRole("note").textContent ?? "", /“Morning digest”.*“Planner”.*use this server/su));
+  await waitFor(() => assert.match(within(dialog).getByRole("note").textContent ?? "", /“Morning digest”.*“Planner”.*use this connector/su));
 });
 
 test("disabling a server with dependents asks first and only then saves it disabled", async () => {
@@ -387,9 +437,9 @@ test("disabling a server with dependents asks first and only then saves it disab
   });
   fireEvent.click(await screen.findByRole("switch", { name: "Enable Files" }));
   const dialog = await screen.findByRole("alertdialog");
-  assert.match(within(dialog).getByRole("note").textContent ?? "", /Scheduled task “Morning digest” uses this server/u);
+  assert.match(within(dialog).getByRole("note").textContent ?? "", /Scheduled task “Morning digest” uses this connector/u);
   assert.equal(savedServers(calls).length, 0);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Disable" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Turn off" }));
   await waitFor(() => assert.equal(savedServers(calls).length, 1));
   assert.equal(savedServers(calls)[0]?.enabled, false);
 });
@@ -413,7 +463,7 @@ test("editing an existing server's connection warns that dependents need approva
   mount({ "mcp:dependents": () => ({ schedules: [], bots: [{ id: "b1", name: "Planner" }] }) });
   fireEvent.click(await screen.findByRole("button", { name: "Edit Files" }));
   const dialog = await screen.findByRole("dialog");
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "MCP server description" }), { target: { value: "notes" } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Connector description" }), { target: { value: "notes" } });
   assert.equal(within(dialog).queryByText(/asks for their approval again/u), null);
   fireEvent.change(within(dialog).getByRole("textbox", { name: "Arguments" }), { target: { value: "--other" } });
   assert.ok(await within(dialog).findByText(/Bot “Planner” uses this server. Changing how Aiden connects/u));
@@ -508,6 +558,46 @@ test("a preset whose sign-in stopped working offers Sign in again and Sign out",
   fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
   await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:signOut").map((call) => call.args[0]), [state.serverId]));
   assert.ok(await within(dialog).findByRole("button", { name: "Authorize" }));
+  assert.equal(savedServers(calls).length, 0);
+});
+
+test("a connector on this device sets up with Test and Connect, without a key or sign-in", async () => {
+  const state = catalogPresetStates().find((entry) => entry.preset.id === "figma-desktop")!;
+  const { calls, openChanges } = renderPreset(state, undefined, {
+    "mcp:testDraft": () => ({ connected: true, toolCount: 6, tools: [], serverCapabilities: {} }),
+    "mcp:save": (server: unknown) => { assertMcpPresetServer(server as McpServer); return server; },
+    "mcp:status": () => ({ connected: true, toolCount: 6 }),
+  });
+  const dialog = await screen.findByRole("dialog");
+  assert.equal(within(dialog).queryByRole("button", { name: "Authorize" }), null);
+  assert.equal(within(dialog).queryByPlaceholderText(/API key/u), null);
+  assert.equal(within(dialog).queryByText("Credentials saved"), null);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Test connection" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:testDraft").length, 1));
+  assert.equal(channelCalls(calls, "mcp:testDraft")[0]!.args[1], undefined, "no key is sent");
+  assert.equal(savedServers(calls).length, 0, "testing saves nothing");
+
+  const connect = within(dialog).getByRole("button", { name: "Connect" }) as HTMLButtonElement;
+  assert.equal(connect.disabled, false);
+  fireEvent.click(connect);
+  await waitFor(() => assert.deepEqual(openChanges, [false]));
+  assert.deepEqual(savedServers(calls).map((server) => [server.url, server.oauth]), [["http://127.0.0.1:3845/mcp", undefined]]);
+});
+
+test("a saved hosted Figma connection shows why it can't connect and offers no way to save or sign in", async () => {
+  const figma = MCP_PRESETS.find((preset) => preset.id === "figma")!;
+  const state: McpPresetState = {
+    preset: figma, serverId: "preset-figma", configured: true, enabled: true, ready: false,
+    error: figma.availability!.reason, invalidRecord: true,
+  };
+  const server: McpServer = { id: "preset-figma", name: "Figma", transport: "http", url: figma.url, oauth: true, presetId: "figma", enabled: true };
+  const { calls } = renderPreset(state, server, {});
+  const dialog = await screen.findByRole("dialog");
+  assert.match(within(dialog).getByRole("note").textContent ?? "", /isn’t approved yet/u);
+  assert.equal((within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true);
+  assert.equal((within(dialog).getByRole("button", { name: "Authorize" }) as HTMLButtonElement).disabled, true);
+  assert.equal((within(dialog).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled, true);
   assert.equal(savedServers(calls).length, 0);
 });
 
@@ -795,7 +885,7 @@ test("closing a new custom server while its sign-in save is pending never author
     "mcp:cancelAuthorize": () => ({ cancelled: true }),
     "mcp:remove": () => undefined,
   });
-  fireEvent.click(await screen.findByRole("button", { name: /Add custom MCP/u }));
+  fireEvent.click(await screen.findByRole("button", { name: /Add custom connector/u }));
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("combobox"));
   fireEvent.click(await screen.findByRole("option", { name: "Remote URL (Streamable HTTP)" }));
@@ -833,7 +923,7 @@ test("a header-only edit is saved before sign-in and warns dependents", async ()
   assert.deepEqual(order, ["mcp:save", "mcp:authorize"]);
 });
 
-test("returning to Plugins shows status that changed while it was closed", async () => {
+test("returning to Connectors shows status that changed while it was closed", async () => {
   let snapshot: unknown[] = [{ serverId: "mcp-files", state: "connected", toolCount: 5 }];
   const calls = installBotTestIpc({
     "mcp:list": () => [localServer],
@@ -852,11 +942,35 @@ test("returning to Plugins shows status that changed while it was closed", async
   await waitFor(() => assert.match(screen.getByLabelText("Files status").textContent ?? "", /Connected/u));
   first.unmount();
 
-  // Main's status changes while Plugins is closed; its push reaches no one.
+  // Main's status changes while Connectors is closed; its push reaches no one.
   snapshot = [{ serverId: "mcp-files", state: "failed", error: "token revoked" }];
   act(() => emitBotTestNotification("mcp:statusChanged", snapshot[0]));
 
   render(view());
   await waitFor(() => assert.match(screen.getByLabelText("Files status").textContent ?? "", /Couldn’t connect/u));
   assert.equal(channelCalls(calls, "mcp:liveStatus").length, 2);
+});
+
+test("Settings → Providers offers connector key sharing only for a saved API key, and turning it on asks main", async () => {
+  const base: Provider = { id: "openai", label: "OpenAI", kind: "openai", baseUrl: "", models: [], needsKey: true, isBuiltin: true, hasKey: true };
+  const calls = installBotTestIpc({
+    "providers:list": () => [],
+    "providers:setConnectorKeySharing": (_id: unknown, allowed: unknown) => ({ connectorKeySharing: allowed }),
+  });
+  const { rerender } = render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <ProviderConnectorKeySharing provider={{ ...base, credentialType: "oauth" }} />
+    </QueryClientProvider>,
+  );
+  assert.equal(screen.queryByRole("switch"), null, "a sign-in credential is never offered");
+  rerender(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <ProviderConnectorKeySharing provider={{ ...base, credentialType: "api_key" }} />
+    </QueryClientProvider>,
+  );
+  const toggle = screen.getByRole("switch", { name: "Let custom connectors use the OpenAI key" });
+  assert.equal(toggle.getAttribute("aria-checked"), "false", "off by default");
+  fireEvent.click(toggle);
+  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "true"));
+  assert.deepEqual(calls.filter((call) => call.channel === "providers:setConnectorKeySharing").map((call) => call.args), [["openai", true]]);
 });

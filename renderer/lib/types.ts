@@ -1,4 +1,5 @@
 import type { McpExposure } from "../shared/mcp-exposure";
+import type { ConnectorCatalogEntry } from "../shared/connector-catalog";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -99,6 +100,10 @@ export interface Provider {
   canLogout?: boolean;
   /** Former custom IDs remapped during a safe provider-identity migration. */
   legacyIds?: string[];
+  /** Built-in providers: the kind of credential Aiden stores (never the value). */
+  credentialType?: "api_key" | "oauth";
+  /** Built-in API-key providers: custom connectors may use this key on this device (Settings → Providers). */
+  connectorKeySharing?: boolean;
   /** Pi-owned setup options. Credential payloads never leave Electron main. */
   authMethods?: Array<{
     type: "api_key" | "oauth";
@@ -808,27 +813,11 @@ export interface McpServer {
   hiddenTools?: string[];
 }
 
-export type McpPresetAuth =
-  | {
-      kind: "apiKey";
-      headerName: string;
-      keyLabel: string;
-      keyHelpUrl: string;
-      headerValuePrefix?: string;
-    }
-  | { kind: "oauth"; clientName?: string };
+export type { McpPresetAuth } from "../shared/connector-catalog";
 
-/** A built-in MCP provider definition from the main-process catalog. */
-export interface McpPreset {
-  id: string;
-  name: string;
-  tagline: string;
-  vendor: string;
-  category: string;
+/** A built-in connector definition from the main-process catalog. */
+export interface McpPreset extends ConnectorCatalogEntry {
   transport: "http";
-  url: string;
-  auth: McpPresetAuth;
-  docsUrl: string;
 }
 
 /** Catalog entry plus the user's connection state for it. */
@@ -837,7 +826,7 @@ export interface McpPresetState {
   serverId: string;
   configured: boolean;
   enabled: boolean;
-  /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
+  /** API key stored (apiKey presets), OAuth tokens present (oauth presets), or saved (no-credential presets). */
   ready: boolean;
   /** OAuth presets: the stored sign-in was rejected and must be renewed. */
   needsSignIn?: boolean;

@@ -38,6 +38,10 @@ export interface McpControlDependencies<Event> {
    * the requesting document goes away. Resolves once tokens are stored.
    */
   authorize(server: McpServer, isCurrent: () => boolean, signal: AbortSignal): Promise<{ authorized: true; connectionError?: string }>;
+  /** Record a failed or cancelled Authorize in diagnostics (classified, no secrets). */
+  reportAuthorizeFailure?(server: McpServer, error: unknown): void;
+  /** Record that Authorize stored tokens and the server answered. */
+  reportAuthorizeSuccess?(server: McpServer): void;
   cancelAuthorization(serverId: string): boolean;
   signOut(server: McpServer, isCurrent: () => boolean): Promise<void>;
   testDraft(server: McpServer, credentials: McpDraftCredentials, isCurrent: () => boolean): Promise<McpStatus>;
@@ -92,13 +96,17 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
     if (!isCurrent()) throw new Error("MCP authorization must come from the active application document.");
     const server = parseMcpServer(value);
     const preset = assertMcpPresetServer(server);
-    if (preset && preset.auth.kind !== "oauth") throw new Error("This MCP preset uses an API key instead of OAuth.");
+    if (preset && preset.auth.kind !== "oauth") throw new Error(`${preset.name} does not use browser sign-in.`);
     if (!usesBrowserSignIn(server)) throw new Error("This MCP server does not use browser sign-in.");
     const ownerAbort = new AbortController();
     const stopWatching = owner.onInvalidated?.(() => ownerAbort.abort(new Error("The renderer document is no longer active.")));
     try {
       const result = await deps.authorize(server, isCurrent, ownerAbort.signal);
+      if (!result.connectionError) deps.reportAuthorizeSuccess?.(server);
       return result.connectionError ? { authorized: true, connectionError: result.connectionError } : { authorized: true };
+    } catch (error) {
+      deps.reportAuthorizeFailure?.(server, error);
+      throw error;
     } finally {
       stopWatching?.();
     }

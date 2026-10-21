@@ -1,11 +1,14 @@
-// Setup dialog for a built-in MCP provider preset (Composio, Notion, Linear, …).
-// Mirrors the manual McpEditor but everything is prefilled from the catalog:
-// API-key presets collect a key that is stored encrypted in the system credential store
-// (never in config.json); OAuth presets reuse the browser sign-in flow.
+// Setup dialog for a catalog connector (Composio, Notion, Figma Desktop, …).
+// Mirrors the custom connector editor but everything is prefilled from the
+// catalog: API-key connectors collect a key stored encrypted on this device
+// (never in config.json), OAuth connectors reuse the browser sign-in flow, and
+// a connector running on this device needs only Test and Connect.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, Callout, Dialog, Field, FieldSet, Input, Switch, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
+import { isConnectorAvailable } from "../../shared/connector-catalog";
 import { McpSignInControls } from "./mcp-sign-in-controls";
 import { mcpApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
@@ -29,6 +32,7 @@ export function PresetSetupDialog({
   onSaved?: () => Promise<void> | void;
 }) {
   const { preset } = state;
+  const available = isConnectorAvailable(preset);
   const queryClient = useQueryClient();
   // Every caller (Settings, Bot setup) must see the saved record and its new
   // credential state, so the dialog owns the shared cache refresh.
@@ -263,6 +267,7 @@ export function PresetSetupDialog({
         testing ||
         authorizing ||
         toggling ||
+        !available ||
         !name.trim() ||
         !url.trim() ||
         !credentialReady
@@ -288,7 +293,12 @@ export function PresetSetupDialog({
         }
       }}
     >
-      {state.error ? (
+      {!available ? (
+        <Callout color="warning" role="note" className="mb-3">
+          <Text variant="small-strong">{preset.name} can’t be connected yet</Text>
+          <Text variant="small">{preset.availability?.reason}</Text>
+        </Callout>
+      ) : state.error ? (
         <Callout color="red" role="alert" className="mb-3">
           <Text variant="small-strong">This saved connection needs repair</Text>
           <Text variant="small">
@@ -318,7 +328,6 @@ export function PresetSetupDialog({
           </Field>
         ) : null}
 
-        <Text as="p" variant="small" color="secondary" className="p-4">Sign in or add your key to connect {preset.name}. This service receives the requests made with its tools. Review its account permissions during sign-in.</Text>
         <details className="px-4 py-3">
           <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Connection details</summary>
         <Field label="Name">
@@ -329,7 +338,7 @@ export function PresetSetupDialog({
             autoFocus
           />
         </Field>
-        <Field label="Server address" description="The URL where this MCP server is available.">
+        <Field label="Server address" description={preset.local ? "Runs on this device." : "The URL where this MCP server is available."}>
           <Input
             value={url}
             onChange={(e) => {
@@ -341,13 +350,27 @@ export function PresetSetupDialog({
         </Field>
 
         </details>
-        {preset.auth.kind === "apiKey" ? (
+        {preset.auth.kind === "none" ? (
           <Field
-            label={preset.auth.keyLabel}
+            label="Before you connect"
+            description={`${preset.name} runs on this device and needs no sign-in. Start it, then test the connection.`}
+          >
+            <a
+              href={preset.docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="w-fit rounded-control text-small text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+            >
+              How to turn it on
+            </a>
+          </Field>
+        ) : preset.auth.kind === "apiKey" ? (
+          <Field
+            label={<span className="inline-flex items-center gap-1.5">{preset.auth.keyLabel}<ServiceAccessHint name={preset.name} /></span>}
             description={
               hasKey
-                ? "Saved encrypted in the system credential store. Paste a new key to replace it."
-                : "Stored encrypted in the system credential store — never written to the app configuration."
+                ? "Saved encrypted on this device. Paste a new key to replace it."
+                : "Stored encrypted on this device, never in the app configuration."
             }
           >
             <div className="flex flex-col gap-1.5">
@@ -381,7 +404,7 @@ export function PresetSetupDialog({
           </Field>
         ) : (
           <Field
-            label="Authentication"
+            label={<span className="inline-flex items-center gap-1.5">Authentication<ServiceAccessHint name={preset.name} /></span>}
             description={
               authorizing
                 ? "Finish signing in in your browser, or cancel."
@@ -398,7 +421,7 @@ export function PresetSetupDialog({
               needsSignIn={needsSignIn}
               hasSession={hasSession}
               signingOut={signingOut}
-              disabled={saving || testing || toggling || !url.trim()}
+              disabled={saving || testing || toggling || !available || !url.trim()}
               onAuthorize={() => void handleAuthorize()}
               onCancel={() => void cancelSignIn()}
               onSignOut={() => void handleSignOut()}
@@ -413,12 +436,12 @@ export function PresetSetupDialog({
               variant="filled"
               onClick={handleTest}
               disabled={
-                saving || testing || authorizing || toggling || !name.trim() || !credentialReady
+                saving || testing || authorizing || toggling || !available || !name.trim() || !credentialReady
               }
             >
               {testing ? "Connecting…" : "Test connection"}
             </Button>
-            {credentialReady ? <Badge>Credentials saved</Badge> : null}
+            {credentialReady && preset.auth.kind !== "none" ? <Badge>Credentials saved</Badge> : null}
           </div>
         </Field>
       </FieldSet>
@@ -437,5 +460,14 @@ export function PresetSetupDialog({
         .
       </Text>
     </Dialog>
+  );
+}
+
+/** The service behind a connector receives what its tools send. */
+function ServiceAccessHint({ name }: { name: string }) {
+  return (
+    <InfoHint topic={`what ${name} receives`}>
+      {name} receives the requests made with its tools. Review its account permissions when you sign in.
+    </InfoHint>
   );
 }

@@ -18,6 +18,7 @@ import {
   suspendMcpOAuthOperations,
 } from "../services/mcp-oauth.js";
 import { registerMcpControlHandlers, type McpDraftCredentials } from "./mcp-controls.js";
+import { mcpDiagnostics } from "../services/mcp-failure-diagnostics.js";
 import { mcpLiveStatus } from "../services/mcp-status-events.js";
 import { botsGrantingMcpServer, scheduledTasksUsingMcpServer } from "../services/mcp-dependents.js";
 import type { McpServer } from "../services/types.js";
@@ -379,7 +380,9 @@ export function registerPhase2Handlers(): void {
                 mcpPresetKeyBinding(existing),
               )),
             )
-          : Boolean(existing) && (await mcpOAuthSignInState(serverId, existing)).authorized && !mcpLiveStatus.needsSignIn(serverId),
+          : preset.auth.kind === "none"
+            ? Boolean(existing)
+            : Boolean(existing) && (await mcpOAuthSignInState(serverId, existing)).authorized && !mcpLiveStatus.needsSignIn(serverId),
       signIn: async (preset, serverId, existing) => {
         if (preset.auth.kind !== "oauth") return undefined;
         const state = await mcpOAuthSignInState(serverId, existing);
@@ -546,6 +549,8 @@ export function registerPhase2Handlers(): void {
         if (reserved) endReservedMcpAuthorization(reserved);
       }
     },
+    reportAuthorizeFailure: (server, error) => mcpDiagnostics.signInFailed(server, error),
+    reportAuthorizeSuccess: (server) => mcpDiagnostics.recovered(server),
     cancelAuthorization: cancelMcpAuthorization,
     signOut: (server, isCurrent) =>
       mutateCredentialForConfiguredMcp(

@@ -110,7 +110,13 @@ test("authorize runs browser sign-in only for OAuth servers from the live docume
   assert.equal(ipc.authorizations[0]?.server.id, linear.id);
   ipc.setAuthorizeResult({ authorized: true, connectionError: "MCP HTTP request failed with status 503" });
   assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", linear), { authorized: true, connectionError: "MCP HTTP request failed with status 503" });
-  await assert.rejects(ipc.invoke("mcp:authorize", "settings", apiKeyPreset), /API key instead of OAuth/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", apiKeyPreset), /does not use browser sign-in/u);
+  const localPreset = serverFromPreset(MCP_PRESETS.find((candidate) => candidate.id === "figma-desktop")!);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", localPreset), /does not use browser sign-in/u);
+  // A connector marked unavailable is refused before any sign-in starts.
+  const hostedFigma = { id: "preset-figma", name: "Figma", transport: "http", url: "https://mcp.figma.com/mcp", oauth: true, presetId: "figma", enabled: true };
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", hostedFigma), /isn’t approved yet/u);
+  await assert.rejects(ipc.invoke("mcp:testDraft", "settings", hostedFigma), /isn’t approved yet/u);
   await assert.rejects(ipc.invoke("mcp:authorize", "settings", { id: "files", name: "Files", transport: "stdio", command: "npx", enabled: true }), /does not use browser sign-in/u);
   await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauth: false }), /does not use browser sign-in/u);
   await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauthClientId: " padded " }), /OAuth client ID/u);

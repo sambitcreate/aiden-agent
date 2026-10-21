@@ -93,6 +93,10 @@ export interface Provider extends StoredProvider {
   canLogout?: boolean;
   /** Former custom IDs remapped during a safe provider-identity migration. */
   legacyIds?: string[];
+  /** Built-in providers: the kind of credential Aiden stores (never the value). */
+  credentialType?: "api_key" | "oauth";
+  /** Built-in API-key providers: custom connectors may use this key on this device (Settings → Providers). */
+  connectorKeySharing?: boolean;
   /** Pi-owned setup options. No credentials or provider environment values cross IPC. */
   authMethods?: Array<{
     type: "api_key" | "oauth";

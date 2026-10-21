@@ -50,9 +50,9 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },
   {
     id: "mcp",
-    title: "Plugins",
+    title: "Connectors",
     group: "Agent",
-    keywords: ["mcp", "connections", "protocol", "plugins", "connectors"],
+    keywords: ["mcp", "plugins", "apps", "integrations", "tools", "servers", "composio"],
   },
   {
     id: "websearch",

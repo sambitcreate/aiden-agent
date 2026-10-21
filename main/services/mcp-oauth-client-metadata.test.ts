@@ -46,7 +46,9 @@ test("a registration endpoint that answers 403 to dynamic registration gets a re
     fetch: async () => new Response("Forbidden", { status: 403 }),
   }).then(() => assert.fail("registration must be rejected"), (error: unknown) => error);
   const explained = explainMcpOAuthFailure(raw);
-  assert.match(explained.message, /rejected OAuth client registration/u);
+  assert.match(explained.message, /only lets approved apps sign in, and it hasn’t approved Aiden/u);
+  // The advice must not send people back to the page they are already on.
+  assert.doesNotMatch(explained.message, /Settings/u);
   assert.equal(explained.cause, raw);
   assert.equal(Object.prototype.propertyIsEnumerable.call(explained, "cause"), false);
   const denied = new Error("Authorization denied: access_denied");

@@ -427,6 +427,9 @@ export const providersApi = {
       request,
     ),
   logout: (providerId: string) => invoke<unknown>("providers:logout", providerId),
+  /** Settings → Providers: let custom connectors use this provider's saved API key. */
+  setConnectorKeySharing: (providerId: string, allowed: boolean) =>
+    invoke<{ connectorKeySharing: boolean }>("providers:setConnectorKeySharing", providerId, allowed),
   onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
     onNotification("providers:auth:prompt", handler),
   onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>

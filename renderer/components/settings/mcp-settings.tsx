@@ -1,18 +1,19 @@
-import { McpProviderAuthFields } from "./mcp-provider-auth-fields";
-import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
-import { McpOAuthClientFields, mcpOAuthClientSecretDraft, mcpOAuthClientSecretValue } from "./mcp-oauth-client-fields";
-// Plugins settings — Codex official directory plus custom MCP servers whose
-// tools become available to the assistant. Connectable plugins reuse the
-// hosted HTTP preset flow; other directory entries explain compatibility.
+// Settings → Connectors: Aiden's connector catalog plus custom MCP servers
+// (a local command or a remote URL) whose tools become available to the
+// assistant. Catalog connectors reuse the preset setup flow.
 
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertDialog,
   Badge,
   Button,
   Callout,
   Dialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Field,
   FieldSet,
   Input,
@@ -27,13 +28,14 @@ import {
   Textarea,
   toast,
 } from "../ui";
-import { Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { InfoHint } from "../ui-info-hint";
+import { MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
 import {
   mcpConnectionChanged,
   mcpDependentsSummary,
   mcpLiveStatusView,
-  mcpPresetConnectionBadge,
+  mcpPresetCardStatus,
   mcpServerDraftForEditor,
   mcpServerEditorKind,
   type McpLiveTone,
@@ -49,26 +51,27 @@ import {
 } from "../../lib/queries";
 import type { McpLiveStatus, McpPendingLaunchApproval, McpPresetState, McpServer, McpServerDependents, McpTransport } from "../../lib/types";
 import {
-  filterPluginCatalog,
-  isConnectablePlugin,
-  PLUGIN_CATALOG,
-  PLUGIN_CATEGORIES,
-  pluginCompatibilityLabel,
-  type PluginCatalogEntry,
-  type PluginCompatibilityFilter,
-} from "../../shared/plugin-catalog";
+  CONNECTOR_CATALOG,
+  CONNECTOR_CATEGORIES,
+  filterConnectorCatalog,
+  getConnectorCatalogEntry,
+  isConnectorAvailable,
+  type ConnectorCatalogEntry,
+} from "../../shared/connector-catalog";
 import { McpPresetIcon } from "./mcp-preset-icons";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 import { McpSignInControls } from "./mcp-sign-in-controls";
 import { McpExposureControls } from "./mcp-exposure-controls";
 import { McpSecretFields, mcpSecretFieldDrafts, mcpSecretFieldRecord } from "./mcp-secret-fields";
+import { McpProviderAuthFields, mcpShareableProviders } from "./mcp-provider-auth-fields";
+import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
+import { McpOAuthClientFields, mcpOAuthClientSecretDraft, mcpOAuthClientSecretValue } from "./mcp-oauth-client-fields";
 
-const COMPATIBILITY_FILTERS: ReadonlyArray<{ id: PluginCompatibilityFilter; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "connectable", label: "Connectable MCP" },
-  { id: "skills", label: "Skills" },
-  { id: "other", label: "Other" },
-];
+/** Secret values typed into a custom connector never stay in config.json. */
+const STORED_SECRET_DESCRIPTION = "Stored encrypted on this device, never in config.json, and never shown again.";
+
+/** DOM id of a directory card, so another card can move focus to it. */
+const connectorCardId = (id: string) => `connector-card-${id}`;
 
 function newServer(): McpServer {
   return { id: `mcp-${Date.now().toString(36)}`, name: "", transport: "stdio", enabled: true, args: [] };
@@ -127,7 +130,7 @@ function McpLaunchApproval({
   onApproved: () => Promise<void>;
 }) {
   const [busy, setBusy] = React.useState(false);
-  const label = server.name || "this server";
+  const label = server.name || "this connector";
   const approve = async () => {
     setBusy(true);
     try {
@@ -180,11 +183,12 @@ function McpDependentsNote({
   if (!summary) return null;
   return (
     <Text as="p" variant="small" className="mt-2 block" role="note">
-      {summary} {dependents!.schedules.length + dependents!.bots.length === 1 ? "uses" : "use"} this server.{" "}
+      {summary} {dependents!.schedules.length + dependents!.bots.length === 1 ? "uses" : "use"} this connector.{" "}
       {consequence}
     </Text>
   );
 }
+
 
 export function McpSettings() {
   const qc = useQueryClient();
@@ -195,12 +199,13 @@ export function McpSettings() {
   const [removing, setRemoving] = React.useState<McpServer | null>(null);
   const [disabling, setDisabling] = React.useState<{ server: McpServer; dependents: McpServerDependents } | null>(null);
   const live = useMcpLiveStatus();
+  // Same cache entry as useMcpLiveStatus; only its load state is read here.
+  const liveLoaded = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity }).isSuccess;
   const launchApprovals = useMcpLaunchApprovals();
   const removingDependents = useMcpDependents(removing?.id);
-  const [pluginSearch, setPluginSearch] = React.useState("");
-  const [pluginCategory, setPluginCategory] = React.useState<string | "all">("all");
-  const [pluginFilter, setPluginFilter] = React.useState<PluginCompatibilityFilter>("all");
-  const [pluginDetails, setPluginDetails] = React.useState<PluginCatalogEntry | null>(null);
+  const [search, setSearch] = React.useState("");
+  const [category, setCategory] = React.useState<string | "all">("all");
+  const [focusCard, setFocusCard] = React.useState<string | null>(null);
   const [toggling, setToggling] = React.useState<ReadonlySet<string>>(() => new Set());
   const [removeBusy, setRemoveBusy] = React.useState(false);
   const [removeError, setRemoveError] = React.useState<string | null>(null);
@@ -236,7 +241,7 @@ export function McpSettings() {
       await mcpApi.save({ ...server, enabled });
     } catch (error) {
       toast.error(
-        `Couldn’t ${enabled ? "enable" : "disable"} ${server.name || "this server"}: ${errorMessage(error)}`,
+        `Couldn’t ${enabled ? "enable" : "disable"} ${server.name || "this connector"}: ${errorMessage(error)}`,
       );
     } finally {
       await invalidate().catch(() => undefined);
@@ -253,7 +258,7 @@ export function McpSettings() {
     try {
       await mcpApi.save(server);
     } catch (error) {
-      toast.error(`Couldn’t change model access for ${server.name || "this server"}: ${errorMessage(error)}`);
+      toast.error(`Couldn’t change model access for ${server.name || "this connector"}: ${errorMessage(error)}`);
     } finally {
       await invalidate().catch(() => undefined);
     }
@@ -263,7 +268,7 @@ export function McpSettings() {
     setResetting(true);
     try {
       await mcpApi.reconnect();
-      toast.success("Connections reset. Enabled servers reconnect with your next message.");
+      toast.success("Connections reset. Enabled connectors reconnect with your next message.");
     } catch (error) {
       toast.error(`Couldn’t reset connections: ${errorMessage(error)}`);
     } finally {
@@ -290,7 +295,7 @@ export function McpSettings() {
   const openServer = (server: McpServer) => {
     const kind = mcpServerEditorKind(server, presets.isSuccess, presets.data ?? []);
     if (kind === "loading") {
-      toast.info("MCP provider details are still loading.");
+      toast.info("Connector details are still loading.");
       return;
     }
     if (kind === "missing-preset") {
@@ -305,41 +310,62 @@ export function McpSettings() {
     setEditing(server);
   };
 
+  /** Clear the filters so a card is shown, then move focus to its action. */
+  const showCard = (id: string) => {
+    setSearch("");
+    setCategory("all");
+    setFocusCard(id);
+  };
+  React.useEffect(() => {
+    if (!focusCard) return;
+    // The card itself takes focus: its Set Up button may still be disabled while the catalog loads.
+    const card = document.getElementById(connectorCardId(focusCard));
+    card?.scrollIntoView?.({ block: "nearest" });
+    card?.focus();
+    setFocusCard(null);
+  }, [focusCard]);
+
   const list = servers.data ?? [];
   const catalogReady = servers.isSuccess && presets.isSuccess;
   const loadErrors = [
-    servers.isError ? { label: "configured MCP servers", query: servers } : null,
-    presets.isError ? { label: "plugin connection details", query: presets } : null,
+    servers.isError ? { label: "your connectors", query: servers } : null,
+    presets.isError ? { label: "connector details", query: presets } : null,
   ].filter((entry) => entry !== null);
-  const visiblePlugins = filterPluginCatalog(
-    PLUGIN_CATALOG,
-    pluginSearch,
-    pluginCategory,
-    pluginFilter,
-  );
+  const results = filterConnectorCatalog(CONNECTOR_CATALOG, search, category);
 
   return (
     <div className="flex flex-col gap-6">
       <div className="settings-page-heading flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <Text as="h1" variant="heading1">Plugins</Text>
+          <span className="flex items-center gap-1.5">
+            <Text as="h1" variant="heading1">Connectors</Text>
+            <InfoHint topic="connectors">
+              <p>Enabled connectors give the assistant their tools. Tool inputs are sent to that service.</p>
+              <p>Folder access in a workspace is a separate permission.</p>
+            </InfoHint>
+          </span>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Browse plugins, connect hosted MCP servers, or add your own. Listing a plugin does not
-            add tools. Enabled MCP servers and Skills you add become assistant tools; workspace
-            folder access is a separate permission. Tool inputs may be shared with a configured
-            server.
+            Connect apps and tool servers the assistant can use.
           </Text>
         </div>
-        <Button
-          variant="transparent"
-          size="small"
-          className="shrink-0"
-          disabled={resetting}
-          onClick={() => void resetConnections()}
-        >
-          <RefreshCw className="size-4" />
-          {resetting ? "Resetting…" : "Reset connections"}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button variant="filled" size="small" onClick={() => setEditing(newServer())}>
+            <Plus className="size-4" />
+            Add custom connector
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="transparent" size="small" iconOnly aria-label="More connector actions">
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem disabled={resetting} onSelect={() => void resetConnections()}>
+                {resetting ? "Resetting…" : "Reset connections"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {loadErrors.map(({ label, query }) => (
@@ -363,184 +389,136 @@ export function McpSettings() {
         </Callout>
       ))}
 
-      <div className="flex items-center justify-between gap-4 settings-card rounded-card px-3.5 py-3">
-        <div className="min-w-0 flex-1">
-          <Text variant="small-strong">Manual MCP server setup</Text>
-          <Text variant="small" color="secondary" className="mt-0.5 block">
-            Add a local command or remote MCP server. Enabled custom servers become assistant tools
-            the same way connectable plugins do.
-          </Text>
-        </div>
-        <Button variant="filled" size="small" className="shrink-0" onClick={() => setEditing(newServer())}>
-          <Plus className="size-4" />
-          Add custom MCP
-        </Button>
-      </div>
-
       {list.length > 0 ? (
-        <section className="flex flex-col gap-2">
-          <Text variant="small-strong" color="secondary">
-            Configured MCP servers · {list.length}
-          </Text>
-          <div className="settings-card rounded-card">
-            {list.map((s, i) => (
-              <React.Fragment key={s.id}>
-                {i > 0 ? <Separator /> : null}
-                {/* Top-aligned: the model-access controls below the name can expand. */}
-                <div className="flex items-start gap-3 px-3.5 py-3">
-                  {s.presetId ? (
-                    <div
-                      aria-hidden
-                      className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-well text-strong"
-                    >
-                      <McpPresetIcon presetId={s.presetId} name={s.name} className="size-4" />
-                    </div>
-                  ) : null}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Text variant="strong" truncate>
-                        {s.name || "Untitled server"}
-                      </Text>
-                      <Badge>{s.transport}</Badge>
-                      {mcpServerEditorKind(s, catalogReady, presets.data ?? []) === "preset" ? (
-                        <Badge color="blue">built-in</Badge>
-                      ) : null}
-                    </div>
-                    <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                      {s.transport === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command" : s.url || "No URL"}
-                    </Text>
-                    <div
-                      className="mt-1 flex flex-wrap items-center gap-2"
-                      aria-label={`${s.name || "MCP server"} status`}
-                      aria-live="polite"
-                    >
-                      <McpLiveIndicator server={s} status={live.get(s.id)} />
-                    </div>
-                    {s.enabled && !launchApprovals.has(s.id) && live.get(s.id)?.state === "failed" && live.get(s.id)?.error ? (
-                      <Text variant="small" color="red" className="mt-0.5 block break-words">
-                        {live.get(s.id)!.error}
-                      </Text>
-                    ) : null}
-                    {launchApprovals.get(s.id) ? (
-                      <McpLaunchApproval server={s} approval={launchApprovals.get(s.id)!} onApproved={invalidate} />
-                    ) : (
-                      <McpExposureControls server={s} toolsRevision={live.get(s.id)?.toolsRevision} onSave={saveExposure} />
-                    )}
+        <FieldSet title={`Your connectors · ${list.length}`} className="mb-0">
+          {list.map((s, i) => (
+            <React.Fragment key={s.id}>
+              {i > 0 ? <Separator className="mx-4 w-auto" /> : null}
+              {/* Top-aligned: the model-access controls below the name can expand. */}
+              <div className="flex items-start gap-3 px-4 py-3">
+                {s.presetId ? (
+                  <div
+                    aria-hidden
+                    className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-control text-strong"
+                  >
+                    <McpPresetIcon presetId={s.presetId} name={s.name} className="size-4" />
                   </div>
-                  <Button
-                    variant="filled"
-                    size="small"
-                    disabled={Boolean(s.presetId) && !catalogReady}
-                    aria-label={`${s.presetId ? "Manage" : "Edit"} ${s.name || "untitled server"}`}
-                    onClick={() => openServer(s)}
+                ) : null}
+                <div className="min-w-0 flex-1">
+                  <Text variant="strong" truncate className="block">
+                    {s.name || "Untitled connector"}
+                  </Text>
+                  <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
+                    {s.transport === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command" : s.url || "No URL"}
+                  </Text>
+                  <div
+                    className="mt-1 flex flex-wrap items-center gap-2"
+                    aria-label={`${s.name || "Connector"} status`}
+                    aria-live="polite"
                   >
-                    {s.presetId ? "Manage" : "Edit"}
-                  </Button>
-                  <Switch
-                    aria-label={`Enable ${s.name || "MCP server"}`}
-                    checked={s.enabled}
-                    disabled={toggling.has(s.id)}
-                    aria-busy={toggling.has(s.id) || undefined}
-                    onCheckedChange={(v) => void toggle(s, v)}
-                  />
-                  <Button
-                    variant="transparent"
-                    size="small"
-                    iconOnly
-                    aria-label={`Remove ${s.name || "untitled server"}`}
-                    onClick={() => {
-                      setRemoveError(null);
-                      setRemoving(s);
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                    <McpLiveIndicator server={s} status={live.get(s.id)} />
+                  </div>
+                  {s.enabled && !launchApprovals.has(s.id) && live.get(s.id)?.state === "failed" && live.get(s.id)?.error ? (
+                    <Text variant="small" color="red" className="mt-0.5 block break-words">
+                      {live.get(s.id)!.error}
+                    </Text>
+                  ) : null}
+                  {launchApprovals.get(s.id) ? (
+                    <McpLaunchApproval server={s} approval={launchApprovals.get(s.id)!} onApproved={invalidate} />
+                  ) : (
+                    <McpExposureControls server={s} toolsRevision={live.get(s.id)?.toolsRevision} onSave={saveExposure} />
+                  )}
                 </div>
-              </React.Fragment>
-            ))}
-          </div>
-        </section>
+                <Button
+                  variant="filled"
+                  size="small"
+                  disabled={Boolean(s.presetId) && !catalogReady}
+                  aria-label={`${s.presetId ? "Manage" : "Edit"} ${s.name || "untitled connector"}`}
+                  onClick={() => openServer(s)}
+                >
+                  {s.presetId ? "Manage" : "Edit"}
+                </Button>
+                <Switch
+                  aria-label={`Enable ${s.name || "connector"}`}
+                  checked={s.enabled}
+                  disabled={toggling.has(s.id)}
+                  aria-busy={toggling.has(s.id) || undefined}
+                  onCheckedChange={(v) => void toggle(s, v)}
+                />
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  aria-label={`Remove ${s.name || "untitled connector"}`}
+                  onClick={() => {
+                    setRemoveError(null);
+                    setRemoving(s);
+                  }}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
+            </React.Fragment>
+          ))}
+        </FieldSet>
       ) : null}
 
-      <section className="flex flex-col gap-3">
-        <div>
-          <Text variant="small-strong" color="secondary">
-            Plugin directory
-          </Text>
-          <Text variant="small" color="tertiary" className="mt-0.5 block">
-            Official Codex plugins plus Aiden’s Composio connector. Connectable entries use hosted
-            MCP setup. Skills and ChatGPT-only apps stay listed so you can see what they do; they
-            do not install Codex skill files or grant workspace access.
-          </Text>
+      <section className="settings-group flex flex-col gap-3" aria-labelledby="connector-directory-title">
+        <div className="settings-group-title flex items-center gap-1.5 px-4">
+          <h2 id="connector-directory-title" className="text-large-strong text-primary">Directory</h2>
+          <InfoHint topic="the connector directory">
+            <p>Hosted connectors sign in with your account or use an API key. Aiden stores it encrypted on this device and sends it only to that service.</p>
+            <p>Need something else? Add a custom connector for any MCP server.</p>
+          </InfoHint>
         </div>
         <label className="flex h-10 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color,box-shadow] duration-150 ease-out focus-within:bg-popover motion-reduce:transition-none">
           <Search aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
           <input
             type="search"
-            value={pluginSearch}
-            onChange={(event) => setPluginSearch(event.target.value)}
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
             onKeyDown={(event) => {
               if (event.key !== "Escape") return;
               event.preventDefault();
-              setPluginSearch("");
+              setSearch("");
             }}
-            placeholder="Search plugins…"
-            aria-label="Search plugins"
+            placeholder="Search connectors and apps…"
+            aria-label="Search connectors"
             className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-secondary"
           />
         </label>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter plugins by connection type">
-          {COMPATIBILITY_FILTERS.map((option) => (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter connectors by category">
+          {(["all", ...CONNECTOR_CATEGORIES] as const).map((option) => (
             <Button
-              key={option.id}
+              key={option}
               size="small"
-              variant={pluginFilter === option.id ? "muted" : "transparent"}
-              aria-pressed={pluginFilter === option.id}
-              className={pluginFilter === option.id ? "bg-list-selection text-primary" : "text-secondary"}
-              onClick={() => setPluginFilter(option.id)}
+              variant={category === option ? "muted" : "transparent"}
+              aria-pressed={category === option}
+              className={category === option ? "bg-list-selection text-primary" : "text-secondary"}
+              onClick={() => setCategory(option)}
             >
-              {option.label}
-            </Button>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter plugins by category">
-          <Button
-            size="small"
-            variant={pluginCategory === "all" ? "muted" : "transparent"}
-            aria-pressed={pluginCategory === "all"}
-            className={pluginCategory === "all" ? "bg-list-selection text-primary" : "text-secondary"}
-            onClick={() => setPluginCategory("all")}
-          >
-            All categories
-          </Button>
-          {PLUGIN_CATEGORIES.map((category) => (
-            <Button
-              key={category}
-              size="small"
-              variant={pluginCategory === category ? "muted" : "transparent"}
-              aria-pressed={pluginCategory === category}
-              className={pluginCategory === category ? "bg-list-selection text-primary" : "text-secondary"}
-              onClick={() => setPluginCategory(category)}
-            >
-              {category}
+              {option === "all" ? "All categories" : option}
             </Button>
           ))}
         </div>
         <Text variant="small" color="tertiary" aria-live="polite">
-          {visiblePlugins.length} plugin{visiblePlugins.length === 1 ? "" : "s"}
+          {results.length} connector{results.length === 1 ? "" : "s"}
         </Text>
         <div className="settings-plugin-grid">
-          {visiblePlugins.map((plugin) => {
-            const state = presets.data?.find((entry) => entry.preset.id === plugin.id);
+          {results.map(({ entry, matchedAlias }) => {
+            const state = presets.data?.find((candidate) => candidate.preset.id === entry.id);
             return (
-              <PluginCard
-                key={plugin.id}
-                plugin={plugin}
+              <ConnectorCard
+                key={entry.id}
+                entry={entry}
                 state={catalogReady ? state : undefined}
+                live={state ? live.get(state.serverId) : undefined}
+                liveLoaded={liveLoaded}
+                matchedAlias={matchedAlias}
                 catalogReady={catalogReady}
                 onSetup={() => {
                   if (!state) {
-                    toast.error("This built-in MCP definition is unavailable. Reload Settings and try again.");
+                    toast.error("This connector’s details are unavailable. Reload Settings and try again.");
                     return;
                   }
                   setSetup({
@@ -550,7 +528,7 @@ export function McpSettings() {
                     ),
                   });
                 }}
-                onDetails={() => setPluginDetails(plugin)}
+                onShowAlternative={showCard}
               />
             );
           })}
@@ -577,64 +555,17 @@ export function McpSettings() {
         />
       ) : null}
 
-      {pluginDetails ? (
-        <Dialog
-          open={pluginDetails !== null}
-          onOpenChange={(open) => !open && setPluginDetails(null)}
-          title={pluginDetails.name}
-          description={pluginDetails.tagline}
-          confirmLabel="Close"
-          onConfirm={() => setPluginDetails(null)}
-        >
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge>{pluginCompatibilityLabel(pluginDetails.compatibility)}</Badge>
-              <Badge>{pluginDetails.category}</Badge>
-            </div>
-            <Text variant="small" color="secondary" className="block">
-              {pluginDetails.vendor}
-              {pluginDetails.source === "openai-curated" ? " · Codex official" : " · Aiden catalog"}
-            </Text>
-            {pluginDetails.compatibilityNote ? (
-              <Text variant="small" color="secondary" className="block">
-                {pluginDetails.compatibilityNote}
-              </Text>
-            ) : (
-              <Text variant="small" color="secondary" className="block">
-                Connects over HTTPS MCP. Aiden stores credentials on this device and only sends resource
-                tokens to the official MCP origin. Browser sign-in may also talk to that vendor’s
-                declared OAuth provider. Connecting adds tools only after the server is enabled;
-                it does not install Codex skill files or change workspace folder permission.
-              </Text>
-            )}
-            {pluginDetails.url ? (
-              <Text variant="small" color="tertiary" className="block">
-                {pluginDetails.url}
-              </Text>
-            ) : null}
-            <a
-              href={pluginDetails.docsUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="text-small text-secondary underline-offset-2 hover:underline"
-            >
-              Documentation
-            </a>
-          </div>
-        </Dialog>
-      ) : null}
-
       <AlertDialog
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
-        title="Remove this MCP server?"
+        title="Remove this connector?"
         description={
           removing ? (
             <>
-              “{removing.name || "Untitled server"}” will be disconnected and removed.
+              “{removing.name || "Untitled connector"}” will be disconnected and removed.
               <McpDependentsNote
                 dependents={removingDependents.data}
-                consequence="They will stop running with it until you choose another server."
+                consequence="They will stop running with it until you choose another connector."
               />
               {removeError ? (
                 <Text as="p" variant="small" color="red" role="alert" className="mt-2">
@@ -654,19 +585,19 @@ export function McpSettings() {
       <AlertDialog
         open={disabling !== null}
         onOpenChange={(open) => !open && setDisabling(null)}
-        title="Disable this MCP server?"
+        title="Turn off this connector?"
         description={
           disabling ? (
             <>
-              The assistant stops using “{disabling.server.name || "Untitled server"}” until you enable it again.
+              The assistant stops using “{disabling.server.name || "Untitled connector"}” until you turn it on again.
               <McpDependentsNote
                 dependents={disabling.dependents}
-                consequence="They cannot use it while it is disabled."
+                consequence="They cannot use it while it is off."
               />
             </>
           ) : null
         }
-        confirmLabel="Disable"
+        confirmLabel="Turn off"
         confirmVariant="destructive"
         onConfirm={() => {
           if (!disabling) return;
@@ -679,57 +610,85 @@ export function McpSettings() {
   );
 }
 
-function PluginCard({
-  plugin,
+function ConnectorCard({
+  entry,
   state,
+  live,
+  liveLoaded,
+  matchedAlias,
   catalogReady,
   onSetup,
-  onDetails,
+  onShowAlternative,
 }: {
-  plugin: PluginCatalogEntry;
+  entry: ConnectorCatalogEntry;
   state?: McpPresetState;
+  live?: McpLiveStatus;
+  liveLoaded: boolean;
+  /** Set when a search found this card only through one of its aliases. */
+  matchedAlias?: string;
   catalogReady: boolean;
   onSetup: () => void;
-  onDetails: () => void;
+  onShowAlternative: (id: string) => void;
 }) {
-  const connectable = isConnectablePlugin(plugin);
-  const badge = state ? mcpPresetConnectionBadge(state) : null;
+  const status = state ? mcpPresetCardStatus(state, live, liveLoaded) : null;
+  const available = isConnectorAvailable(entry);
+  const alternative = entry.availability?.alternativeId
+    ? getConnectorCatalogEntry(entry.availability.alternativeId)
+    : undefined;
   return (
-    <div className="flex flex-col gap-2 settings-card rounded-card p-4">
+    <div
+      id={connectorCardId(entry.id)}
+      tabIndex={-1}
+      role="group"
+      aria-labelledby={`${connectorCardId(entry.id)}-name`}
+      className="flex flex-col gap-2 settings-card rounded-card p-4 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+    >
       <div
         aria-hidden
         className="flex size-9 items-center justify-center rounded-lg bg-well text-strong"
       >
-        <McpPresetIcon presetId={plugin.id} name={plugin.name} className="size-5" />
+        <McpPresetIcon presetId={entry.id} name={entry.name} className="size-5" />
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Text variant="strong">{plugin.name}</Text>
-        <Badge>{pluginCompatibilityLabel(plugin.compatibility)}</Badge>
-      </div>
+      <Text variant="strong" id={`${connectorCardId(entry.id)}-name`}>{entry.name}</Text>
       <Text variant="small" color="secondary" className="block">
-        {plugin.tagline}
+        {entry.tagline}
       </Text>
+      {matchedAlias && entry.aliasHint ? (
+        <Text variant="small" className="block text-accent-text">
+          {entry.aliasHint}
+        </Text>
+      ) : null}
+      {!available ? (
+        <Text as="p" variant="small" color="secondary" role="note" className="block">
+          {entry.availability!.reason}
+        </Text>
+      ) : null}
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <Text variant="small" color="tertiary">
-          {plugin.vendor}
+          {entry.vendor}
         </Text>
         <div className="flex items-center gap-2">
-          {badge ? <Badge color={badge.color}>{badge.label}</Badge> : null}
-          {connectable ? (
+          {status ? <Badge color={status.color}>{status.label}</Badge> : null}
+          {available ? (
             <Button
               variant="filled"
               size="small"
               disabled={!catalogReady}
-              aria-label={`${state?.configured ? "Manage" : "Set Up"} ${plugin.name}`}
+              aria-label={`${state?.configured ? "Manage" : "Set Up"} ${entry.name}`}
               onClick={onSetup}
             >
               {state?.configured ? "Manage" : "Set Up"}
             </Button>
-          ) : (
-            <Button variant="filled" size="small" aria-label={`Details for ${plugin.name}`} onClick={onDetails}>
-              Details
+          ) : alternative ? (
+            <Button
+              variant="filled"
+              size="small"
+              aria-label={`Use ${alternative.name} instead of ${entry.name}`}
+              onClick={() => onShowAlternative(alternative.id)}
+            >
+              Use {alternative.name}
             </Button>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
@@ -851,7 +810,7 @@ function McpEditor({
       await mcpApi.providerAuth(record, allowed);
       setApprovedProviderConnection(allowed ? JSON.stringify([record.authProvider ?? "", record.url?.trim() ?? "", record.transport]) : undefined);
       onSaved();
-      toast.success(allowed ? "Provider credential approved for this server on this device." : "Provider credential sharing stopped.");
+      toast.success(allowed ? "Provider key approved for this connector on this device." : "Provider key sharing stopped.");
     } catch (error) { setApprovedProviderConnection(undefined); toast.error(error instanceof Error ? error.message : String(error)); }
     finally { setProviderAuthorizing(false); }
   };
@@ -976,8 +935,8 @@ function McpEditor({
     <Dialog
       open={open}
       onOpenChange={closeEditor}
-      title={server.name ? `Edit ${server.name}` : "Add MCP server"}
-      description="Configure how Aiden connects to this tool server."
+      title={server.name ? `Edit ${server.name}` : "Add custom connector"}
+      description="A local command or a remote MCP server whose tools the assistant can use."
       size="large"
       confirmLabel={saving ? "Saving…" : "Save"}
       busy={saving}
@@ -992,7 +951,7 @@ function McpEditor({
         } catch (error) {
           const message = errorMessage(error);
           setSaveError(message);
-          toast.error(`Couldn’t save ${name.trim() || "this server"}: ${message}`);
+          toast.error(`Couldn’t save ${name.trim() || "this connector"}: ${message}`);
           return;
         } finally {
           setSaving(false);
@@ -1011,10 +970,10 @@ function McpEditor({
       ) : null}
       <FieldSet>
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My MCP server" autoFocus />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My connector" autoFocus />
         </Field>
-        <Field label="Description" description="Optional context to help Aiden find this server’s tools." orientation="vertical">
-          <Input aria-label="MCP server description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1024} />
+        <Field label="Description" description="Optional context to help Aiden find this connector’s tools." orientation="vertical">
+          <Input aria-label="Connector description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1024} />
         </Field>
         <Field label="Connection">
           <Select value={transport} onValueChange={(v) => { setTransport(v as McpTransport); setAuthProvider(""); setApprovedProviderConnection(undefined); }}>
@@ -1047,7 +1006,7 @@ function McpEditor({
                 spellCheck={false}
               />
             </Field>
-            <Field label="Environment" description="Values are encrypted in this Mac’s keychain, not in config.json, and are never shown again." orientation="vertical">
+            <Field label="Environment" description={STORED_SECRET_DESCRIPTION} orientation="vertical">
               <McpSecretFields kind="env" fields={env} onChange={setEnv} />
             </Field>
           </>
@@ -1056,7 +1015,7 @@ function McpEditor({
             <Field label="Server URL">
               <Input aria-label="Server URL" value={url} onChange={(e) => { setUrl(e.target.value); setApprovedProviderConnection(undefined); }} placeholder="https://example.com/mcp" />
             </Field>
-            <Field label="Headers" description="Values are encrypted in this Mac’s keychain, not in config.json, and are never shown again." orientation="vertical">
+            <Field label="Headers" description={STORED_SECRET_DESCRIPTION} orientation="vertical">
               <McpSecretFields kind="headers" fields={headers} onChange={setHeaders} disabled={Boolean(authProvider)} />
             </Field>
             <Field
@@ -1073,8 +1032,8 @@ function McpEditor({
               />
             </Field>
             {transport === "http" ? <McpProviderAuthFields providerId={authProvider} endpoint={url.trim()} approved={providerApproved} busy={providerAuthorizing}
-              disabled={!name.trim() || !url.trim() || !authProvider || (!providerApproved && !providers.data?.some((provider) => provider.id === authProvider && provider.isBuiltin && provider.hasKey))}
-              providers={(providers.data ?? []).filter((provider) => provider.isBuiltin && (provider.hasKey || provider.id === authProvider))}
+              disabled={!name.trim() || !url.trim() || !authProvider || (!providerApproved && !mcpShareableProviders(providers.data ?? [], "").some((provider) => provider.id === authProvider))}
+              providers={mcpShareableProviders(providers.data ?? [], authProvider)}
               onProviderChange={(id) => { setAuthProvider(id); setApprovedProviderConnection(undefined); if (id) { setOauth(false); setHeaders([]); setAuthServerMetadataUrl(""); setOauthClientId(""); setOauthClientSecret({ value: "", saved: false }); } }}
               onConsent={(allowed) => { void handleProviderConsent(allowed); }} /> : null}
             {oauth ? (

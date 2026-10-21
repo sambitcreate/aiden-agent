@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { admitMcpProviderAuthServers, canUseProviderAuthenticatedMcp, createMcpProviderAuthenticatedFetch, mcpProviderGrantBinding, withMcpProviderOperation } from "./mcp-provider-auth-core.js";
+import { admitMcpProviderAuthServers, canUseProviderAuthenticatedMcp, createMcpProviderAuthenticatedFetch, McpProviderKeyRefusedError, mcpProviderGrantBinding, mcpProviderKeyFingerprint, parseMcpProviderKeySharing, resolveMcpProviderSharedKey, serializeMcpProviderKeySharing, withMcpProviderOperation, type McpProviderKeySharing, type McpProviderStoredCredential } from "./mcp-provider-auth-core.js";
 import type { McpServer } from "./types.js";
 
 const server: McpServer = { id: "docs", name: "Docs", enabled: true, transport: "http", url: "https://mcp.example.test/api?tenant=one", authProvider: "openai" };
@@ -179,4 +179,83 @@ test("owner revocation aborts a live operation's transport before credential ref
   await assert.rejects(operation, /owner closed/u);
   assert.equal(dispatches, 0);
   assert.ok(closed >= 1);
+});
+
+function credentialSource(stored: Record<string, McpProviderStoredCredential | undefined>, sharing: McpProviderKeySharing) {
+  let reads = 0;
+  return {
+    reads: () => reads,
+    isBuiltin: (id: string) => id !== "custom-local",
+    storedCredential: async (id: string) => { reads++; return stored[id]; },
+    sharedFingerprint: async (id: string) => sharing.get(id),
+  };
+}
+
+const refusal = (promise: Promise<unknown>) => promise.then(() => undefined, (error: unknown) => {
+  assert.ok(error instanceof McpProviderKeyRefusedError);
+  return error.message;
+});
+
+test("only the opted-in saved API key may reach a custom connector; sign-in and subscription credentials never do", async () => {
+  const stored: Record<string, McpProviderStoredCredential | undefined> = {
+    openai: { type: "api_key", key: "sk-first" },
+    groq: { type: "api_key", key: "gsk" },
+    anthropic: { type: "oauth" },
+    "github-copilot": { type: "oauth" },
+    "openai-codex": { type: "oauth" },
+    "env-only": { type: "api_key" },
+  };
+  const sharing: McpProviderKeySharing = new Map([
+    ["openai", mcpProviderKeyFingerprint("sk-first")],
+    ["anthropic", mcpProviderKeyFingerprint("anything")],
+    ["openai-codex", mcpProviderKeyFingerprint("anything")],
+  ]);
+  const source = credentialSource(stored, sharing);
+  assert.equal((await resolveMcpProviderSharedKey("openai", source)).key, "sk-first");
+  assert.equal(source.reads(), 1, "type and key come from one read, so an OAuth token cannot slip in between");
+  assert.match((await refusal(resolveMcpProviderSharedKey("anthropic", source))) ?? "", /never shared/u, "a Claude sign-in stays private even if opted in");
+  assert.match((await refusal(resolveMcpProviderSharedKey("github-copilot", source))) ?? "", /never shared/u);
+  assert.match((await refusal(resolveMcpProviderSharedKey("openai-codex", source))) ?? "", /built-in provider’s API key/u, "the ChatGPT subscription never qualifies");
+  assert.match((await refusal(resolveMcpProviderSharedKey("groq", source))) ?? "", /Settings → Providers/u, "an API key still needs the provider's opt-in");
+  assert.equal((await resolveMcpProviderSharedKey("groq", source, { checkSharing: false })).fingerprint, mcpProviderKeyFingerprint("gsk"));
+  assert.match((await refusal(resolveMcpProviderSharedKey("env-only", source))) ?? "", /no saved API key/u);
+  assert.match((await refusal(resolveMcpProviderSharedKey("mistral", source))) ?? "", /no saved API key/u);
+  assert.match((await refusal(resolveMcpProviderSharedKey("custom-local", source))) ?? "", /built-in/u);
+});
+
+test("an opt-in covers only the key it was given: a replaced key, a sign-in or a logout is not shared", async () => {
+  const stored: Record<string, McpProviderStoredCredential | undefined> = { openai: { type: "api_key", key: "sk-first" } };
+  const sharing: McpProviderKeySharing = new Map([["openai", mcpProviderKeyFingerprint("sk-first")]]);
+  const source = credentialSource(stored, sharing);
+  assert.equal((await resolveMcpProviderSharedKey("openai", source)).key, "sk-first");
+  stored.openai = { type: "api_key", key: "sk-replaced" };
+  assert.match((await refusal(resolveMcpProviderSharedKey("openai", source))) ?? "", /Settings → Providers/u);
+  stored.openai = { type: "oauth" };
+  assert.match((await refusal(resolveMcpProviderSharedKey("openai", source))) ?? "", /never shared/u);
+  stored.openai = undefined;
+  assert.match((await refusal(resolveMcpProviderSharedKey("openai", source))) ?? "", /no saved API key/u);
+  // The original key coming back is the key that was approved.
+  stored.openai = { type: "api_key", key: "sk-first" };
+  assert.equal((await resolveMcpProviderSharedKey("openai", source)).key, "sk-first");
+});
+
+test("a refused provider key stops the request with its reason, and nothing is dispatched", async () => {
+  let dispatched = 0;
+  const fetch = createMcpProviderAuthenticatedFetch({
+    server, readGrant: async () => mcpProviderGrantBinding(server), assertCurrent() {},
+    resolveToken: async () => { throw new McpProviderKeyRefusedError("Sign-in and subscription credentials are never shared with connectors."); },
+    fetch: async () => { dispatched++; return Response.json({}); },
+  });
+  await assert.rejects(fetch(server.url!), /never shared with connectors/u);
+  assert.equal(dispatched, 0);
+});
+
+test("the opt-in record round-trips and ignores malformed entries", () => {
+  const fingerprint = mcpProviderKeyFingerprint("k");
+  const sharing: McpProviderKeySharing = new Map([["openai", fingerprint], ["groq", fingerprint]]);
+  assert.deepEqual([...parseMcpProviderKeySharing(serializeMcpProviderKeySharing(sharing))], [["groq", fingerprint], ["openai", fingerprint]]);
+  assert.equal(parseMcpProviderKeySharing(null).size, 0);
+  assert.equal(parseMcpProviderKeySharing("{not json").size, 0);
+  assert.equal(parseMcpProviderKeySharing(JSON.stringify(["openai"])).size, 0, "the earlier id-only list shares nothing");
+  assert.deepEqual([...parseMcpProviderKeySharing(JSON.stringify({ openai: fingerprint, groq: "short", "": fingerprint }))], [["openai", fingerprint]]);
 });

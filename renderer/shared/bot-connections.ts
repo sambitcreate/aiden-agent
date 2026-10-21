@@ -1,12 +1,12 @@
-// Connection suggestions for Bots: which catalog plugin to offer, how to name it,
+// Connection suggestions for Bots: which connector to offer, how to name it,
 // and where its setup starts. Shared by the create-flow chips, transcript connect
 // cards, the Bot-only `suggest_connection` tool, and Remote clients.
 
-import { isConnectablePlugin, PLUGIN_CATALOG, type PluginCatalogEntry } from "./plugin-catalog.js";
+import { COMPOSIO_APPS, CONNECTOR_CATALOG, isConnectorAvailable } from "./connector-catalog.js";
 
 /** Where the existing preset setup flow (`mcp-preset-setup.tsx`) starts for a suggestion. */
 export type BotConnectionSetupEntry =
-  /** The plugin is itself a connectable preset. */
+  /** The suggestion is itself a connector preset. */
   | { kind: "mcp-preset"; presetId: string }
   /** Aiden cannot sign in to this app directly; Composio's preset covers it. */
   | { kind: "composio"; presetId: "composio"; appName: string };
@@ -34,16 +34,6 @@ export interface ConnectCardEntry {
 
 export const CONNECT_CARD_REASON_MAX_CHARS = 280;
 
-/** Apps that Composio connects when Aiden cannot complete their own sign-in. */
-const COMPOSIO_COVERED_PLUGIN_IDS: ReadonlySet<string> = new Set([
-  "gmail",
-  "google-calendar",
-  "outlook-email",
-  "outlook-calendar",
-  "slack",
-  "teams",
-]);
-
 const CHIP_LABELS: Readonly<Record<string, string>> = {
   composio: "More apps (Composio)",
   "google-calendar": "Calendar",
@@ -51,27 +41,29 @@ const CHIP_LABELS: Readonly<Record<string, string>> = {
   "outlook-calendar": "Outlook Calendar",
 };
 
-const CATALOG_BY_ID: ReadonlyMap<string, PluginCatalogEntry> = new Map(
-  PLUGIN_CATALOG.map((plugin) => [plugin.id, plugin]),
-);
+type SuggestionTarget = { name: string; setupEntry: BotConnectionSetupEntry };
+
+/** Connectors that can be set up now, plus the apps Composio covers, by id. */
+const SUGGESTIONS_BY_ID: ReadonlyMap<string, SuggestionTarget> = new Map<string, SuggestionTarget>([
+  ...CONNECTOR_CATALOG.filter(isConnectorAvailable).map((entry): [string, SuggestionTarget] => [
+    entry.id,
+    { name: entry.name, setupEntry: { kind: "mcp-preset", presetId: entry.id } },
+  ]),
+  ...COMPOSIO_APPS.map((app): [string, SuggestionTarget] => [
+    app.id,
+    { name: app.name, setupEntry: { kind: "composio", presetId: "composio", appName: app.name } },
+  ]),
+]);
 
 export function connectionSuggestionFor(pluginId: string): BotConnectionSuggestion | null {
-  const plugin = CATALOG_BY_ID.get(pluginId);
-  if (!plugin) return null;
-  let setupEntry: BotConnectionSetupEntry;
-  if (isConnectablePlugin(plugin)) {
-    setupEntry = { kind: "mcp-preset", presetId: plugin.id };
-  } else if (COMPOSIO_COVERED_PLUGIN_IDS.has(plugin.id)) {
-    setupEntry = { kind: "composio", presetId: "composio", appName: plugin.name };
-  } else {
-    return null;
-  }
+  const match = SUGGESTIONS_BY_ID.get(pluginId);
+  if (!match) return null;
   return {
-    pluginId: plugin.id,
-    name: plugin.name,
-    chipLabel: CHIP_LABELS[plugin.id] ?? plugin.name,
-    iconId: plugin.id,
-    setupEntry,
+    pluginId,
+    name: match.name,
+    chipLabel: CHIP_LABELS[pluginId] ?? match.name,
+    iconId: pluginId,
+    setupEntry: match.setupEntry,
   };
 }
 

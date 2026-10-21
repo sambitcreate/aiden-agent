@@ -1,6 +1,6 @@
 # MCP audit and move to Pi's MCP client
 
-Status: **In progress** (2026-10-21). Phases 0 and 1 committed; Phase 2 implemented (see `.memory/mcp-pi-migration.md`). Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
+Status: **In progress** (2026-10-21). Phases 0–3 committed; Phases 4 and 5 implemented (see `.memory/mcp-pi-migration.md`). The owner accepted decisions 1–5. Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
 
 ## Why
 
@@ -95,6 +95,8 @@ Pi's `coding-agent` MCP extension (`extensions/mcp/oauth.ts`) is a reference for
 
 ## Decisions for the owner
 
+Accepted 2026-10-21 as recommended (decision 2: the plumbing exists, the metadata URL is not hosted yet).
+
 1. **Figma identity.** Recommended: stop registering as "Codex", ask Figma to allowlist "Aiden Agent", and in the meantime add a **Figma Desktop** preset for Figma's local MCP server (`http://127.0.0.1:3845/mcp`), which needs no OAuth. The alternative is to keep the "Codex" name knowingly, as a documented exception.
 2. **CIMD.** 11 of the 19 OAuth presets support Client ID Metadata Documents. CIMD needs a stable Aiden-owned HTTPS URL that serves the client metadata (for example a GitHub Pages file on `sambitcreate`). Recommended: yes, with DCR as the fallback.
 3. **Catalog scope.** Recommended: ship only connectable presets, under an Aiden-owned catalog. Drop the Codex mirror, `PLUGIN_CATALOG_SOURCE_URL`, `PLUGIN_CATALOG_VERIFIED_ON` and `plugins:refresh`.
@@ -174,6 +176,15 @@ Implemented 2026-10-21. Outcome:
 
 ### Phase 4 — Aiden-owned connector catalog
 
+Implemented 2026-10-21 (owner accepted decisions 1–4). Outcome:
+
+- `renderer/shared/connector-catalog.ts` replaces `plugin-catalog.ts`: 22 connectable entries (21 hosted plus Figma Desktop), no `source`/`compatibility` fields, no Codex notes, source URL or verified-on date. `scripts/plugins-refresh*` and `npm run plugins:refresh` are gone. `main/services/mcp-presets.ts` derives `MCP_PRESETS` from it.
+- Every `docsUrl` points at the vendor's own MCP page (checked 2026-10-21; Canva's help page answers bots with 403 and was confirmed through canva.dev, which links to it; Sentry's MCP docs live on `mcp.sentry.dev`).
+- Figma: the `clientName` override and `McpPresetAuth.clientName` are deleted, so every server registers as "Aiden Agent". Hosted Figma carries `availability: { kind: "unavailable", reason, alternativeId: "figma-desktop" }`; `assertMcpPresetServer` refuses it (save, authorize, test, connect, Bots), and a saved record reads as needs-repair with that reason. New **Figma Desktop** preset: auth kind `"none"`, `local: true`, exact origin `http://127.0.0.1:3845` (every other preset stays HTTPS-only on its catalog origin).
+- Composio carries search aliases (Gmail, Google Calendar/Drive/Docs/Sheets, Slack, Teams, Outlook, OneDrive, SharePoint, Zoom, Shopify, HubSpot, Salesforce, Asana, Trello, Discord) and the hint "Gmail, Slack and 500+ apps through Composio". Bots' Composio-covered suggestions come from the catalog's `COMPOSIO_APPS`; unavailable connectors are never suggested.
+- CIMD (decision 2): plumbing exists (`AIDEN_MCP_CLIENT_METADATA_URL`), the URL is still not hosted.
+- Not changed: Atlassian's endpoint stays `https://mcp.atlassian.com/v1/mcp/authv2`; Atlassian's docs now use `/v2/mcp` (v1 moves to v2 tools on 2027-03-01). Switching changes the session binding, so it waits for Phase 7 live acceptance.
+
 - **Replace the catalog:** swap `plugin-catalog.ts` for an Aiden catalog of connectable presets only. Remove the `source`, `compatibility` and `compatibilityNote` fields, the four Codex notes, the source URL, the verified-on date, and `scripts/plugins-refresh*`.
 - **Docs links:** point every `docsUrl` at the vendor's MCP docs.
 - **Figma:** apply decision 1. If the hosted preset stays without allowlisting, it shows a clear "Figma has not approved Aiden yet" state instead of Set Up.
@@ -182,6 +193,15 @@ Implemented 2026-10-21. Outcome:
 - **Tests:** replace the source-URL test with behavioral catalog tests: every preset builds a valid server, its origin is pinned, and auth kinds resolve.
 
 ### Phase 5 — Settings and naming
+
+Implemented 2026-10-21. Outcome:
+
+- "Connectors" everywhere users see the feature: the Settings page and sidebar entry (internal section id stays `mcp`), the onboarding tile, the schedule editor and Scheduled tasks settings, error and help strings that named "Settings → Plugins", and `/connectors` (with `/mcp` as its alias; `/plugins` is gone).
+- Cards: the status badge comes from `mcpPresetCardStatus(state, liveStatus)`, so only a live connection shows green "Connected"; the transport and "built-in" badges and the Details dialog are gone. Hosted Figma shows its reason and **Use Figma Desktop**, which clears the filters and focuses that card.
+- Layout: page heading with ⓘ, **Add custom connector** plus a ⋯ menu holding **Reset connections**; "Your connectors" is a `FieldSet` group; the directory has its own group title with ⓘ. The long paragraphs moved into `InfoHint`s. Secret fields say "Stored encrypted on this device" (no "this Mac's keychain").
+- Provider key sharing: the custom-connector picker lists only built-in providers with a saved **API key** that were opted in with **Let custom connectors use this key** (Settings → Providers → Manage, default off). The opt-in records a fingerprint of the exact saved key, so a replaced key, a sign-in or a logout is never shared (logout also clears it). Main enforces this on approval and on every request from one read of the stored credential (`resolveMcpProviderSharedKey`): OAuth/subscription credentials (ChatGPT/Codex, Claude, GitHub Copilot and any other sign-in) are never sent.
+- `explainMcpOAuthFailure`: a registration 403 now says the server only lets approved apps sign in and has not approved Aiden.
+- Tests: catalog and preset behavior, unavailable refusal through register-and-invoke, live-status card state, auth-less setup, provider-key enforcement, and `tests/e2e/settings-connectors.spec.ts` (adds a custom stdio connector and sees it connect with its tools).
 
 - **Naming:** rename the page and all user-facing copy per decision 4. Update onboarding (`renderer/components/onboarding-feature-gallery.tsx`), Bots, the schedule editor and slash commands.
 - **Status:**
@@ -200,6 +220,7 @@ Implemented 2026-10-21. Outcome:
 - Record the error class, HTTP status, OAuth `error` code and server host (never URLs with secrets or tokens) on `mcp-degraded` and on sign-in failures.
 - Deduplicate repeats per server within a time window.
 - Tests: extend the diagnostics suites with an independent oracle for the redaction and dedupe rules.
+- Implemented on the branch (2026-10-21): `main/services/mcp-failure-diagnostics.ts` classifies failures into a fixed `mcpFailure` set (auth-required, auth-rejected, auth-refresh-unavailable, oauth-error, oauth-registration-rejected, oauth-issuer-mismatch, oauth-insecure-endpoint, session-expired, http-4xx, http-5xx, timeout, network, tls, protocol, connection-closed, stdio-exit, stdio-spawn, stdio-approval, credentials-unavailable, oversized, cancelled, unknown) and records `httpStatus`, a registered `oauthError` code, `errno`, `transport`, `serverHost` (only a bundled connector's own public host) or else `serverHostKind` (loopback, private-ip, public-ip, custom; none for stdio), `serverRef` (hash of the server id with a per-install salt kept beside the journal and deleted with it) and the error class. Identical (server, failure) `mcp-degraded` lines are coalesced per 60 s window into one line with `suppressed` (windows for different failures of one server coexist); `mcp-recovered` is written once per degraded episode; failed Authorize writes `mcp-failed` (`failurePhase: mcp-sign-in`).
 
 ### Phase 7 — Live acceptance and docs
 
