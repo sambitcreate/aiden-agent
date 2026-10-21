@@ -425,7 +425,8 @@ enum AidenMarkdownChunkSpacing {
 ///   shows as its label.
 /// - Inline code, `**strong**`, `*emphasis*` and `~~strike~~` opened on the
 ///   line being written are closed, or dropped when nothing follows them
-///   yet. Spans may still close across lines; an opener left unmatched on a
+///   yet. Spans may still close on a later line of the same block (not in a
+///   new heading, list item or quote); an opener left unmatched on a
 ///   finished line is literal and drawn as written.
 ///
 /// Only the last paragraph is examined, and nothing inside an open fenced
@@ -509,12 +510,16 @@ enum AidenStreamingMarkdownTail {
         var open: [(marker: Marker, offset: Int)] = []
         var index = 0
         var lineStart = true
+        var currentLineStart = 0
         while index < text.count {
             let character = text[index]
             if character == "\n" {
-                // Spans may close on a later line, so `open` carries over.
+                // Spans may close on a later line of the same block, so `open`
+                // carries over, but never into a new heading or list item.
+                if isBlockBoundary(text, lineStart: currentLineStart, newline: index) { open.removeAll() }
                 lineStart = true
                 index += 1
+                currentLineStart = index
                 continue
             }
             if case .code(let length)? = open.last?.marker {
@@ -609,7 +614,14 @@ enum AidenStreamingMarkdownTail {
     private static func isInsideCodeSpan(_ text: [Character], at index: Int) -> Bool {
         var openRun: Int?
         var position = 0
+        var lineStart = 0
         while position < index {
+            if text[position] == "\n" {
+                if isBlockBoundary(text, lineStart: lineStart, newline: position) { openRun = nil }
+                position += 1
+                lineStart = position
+                continue
+            }
             guard text[position] == "`" else {
                 position += 1
                 continue
@@ -623,6 +635,43 @@ enum AidenStreamingMarkdownTail {
             position += run
         }
         return openRun != nil
+    }
+
+    /// Whether the newline at `newline` ends a block: the line before it (from
+    /// `lineStart`) is a heading, or the line after it starts a heading, list
+    /// item or block quote. Inline spans never continue across it.
+    private static func isBlockBoundary(_ text: [Character], lineStart: Int, newline: Int) -> Bool {
+        startsHeading(text, at: lineStart) || startsBlock(text, at: newline + 1)
+    }
+
+    /// The position after up to three leading spaces, or nil when the line is
+    /// indented further (indented code or a list continuation).
+    private static func contentStart(_ text: [Character], at start: Int) -> Int? {
+        var position = start
+        while position < text.count, text[position] == " ", position - start < 4 { position += 1 }
+        return position - start < 4 ? position : nil
+    }
+
+    private static func isSpaceOrLineEnd(_ text: [Character], at position: Int) -> Bool {
+        position >= text.count || text[position] == " " || text[position] == "\t" || text[position] == "\n"
+    }
+
+    /// An ATX heading: one to six `#`, then a space or the line's end.
+    private static func startsHeading(_ text: [Character], at start: Int) -> Bool {
+        guard let position = contentStart(text, at: start) else { return false }
+        let run = runLength(of: "#", in: text, from: position)
+        return (1...6).contains(run) && isSpaceOrLineEnd(text, at: position + run)
+    }
+
+    /// A heading, a bullet or ordered list item, or a block quote.
+    private static func startsBlock(_ text: [Character], at start: Int) -> Bool {
+        guard let position = contentStart(text, at: start), position < text.count else { return false }
+        if startsHeading(text, at: start) || text[position] == ">" { return true }
+        if "-*+".contains(text[position]) { return isSpaceOrLineEnd(text, at: position + 1) }
+        var end = position
+        while end < text.count, end - position < 9, text[end].isASCII, text[end].isNumber { end += 1 }
+        guard end > position, end < text.count, text[end] == "." || text[end] == ")" else { return false }
+        return isSpaceOrLineEnd(text, at: end + 1)
     }
 
     private static func runLength(of character: Character, in text: [Character], from start: Int) -> Int {

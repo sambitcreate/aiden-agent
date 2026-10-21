@@ -516,9 +516,14 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             "    [label](url",
             "    **code",
             "``[label](url``",
+            // A span never continues into a new heading or list item.
+            "# Heading with `literal\nUse `code`",
+            "- literal `marker\n- Use `code`",
         ] {
             XCTAssertEqual(tail(text), text, text)
         }
+        // So a span opened in a new list item is the one being written.
+        XCTAssertEqual(tail("- literal `marker\n- Use `code"), "- literal `marker\n- Use `code`")
     }
 
     func testStreamingTailShowsALinkStillArrivingAsItsLabel() {
