@@ -224,6 +224,30 @@ test("a viewer's first frame is the whole screen, never an unpainted framebuffer
   }
 });
 
+test("after the screen changes size, the next frame is the repainted screen, never the blank new framebuffer", async () => {
+  const { server, screen, encoder } = await setup({}, 10);
+  try {
+    server.paint({ x: 0, y: 0, width: 40, height: 30 }, [0, 200, 0]);
+    await screen.jpeg({ quality: 70, maxWidth: 100 });
+    // A viewer asks for a frame as soon as it hears of the resize, before the server has repainted.
+    let frame: Promise<{ width: number; height: number }> | undefined;
+    const stop = screen.watch((update) => {
+      if (update.resized) frame ??= screen.jpeg({ quality: 70, maxWidth: 100 });
+    });
+    server.resize(50, 40);
+    server.paint({ x: 0, y: 0, width: 50, height: 40 }, [0, 0, 200]);
+    await until(() => frame !== undefined);
+    const shot = await frame!;
+    assert.deepEqual([shot.width, shot.height], [50, 40]);
+    const encoded = encoder.calls[encoder.calls.length - 1];
+    assert.deepEqual(pixelAt(encoded.bgra, 50, 3, 3), [200, 0, 0, 255], "the server's blue screen, not black");
+    stop();
+  } finally {
+    await screen.close();
+    await server.close();
+  }
+});
+
 test("watching a new connection asks for everything first, then only for changes", async () => {
   const { server, screen, requested } = await setup({}, 20);
   try {

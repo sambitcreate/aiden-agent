@@ -145,7 +145,9 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
     version += 1;
     next.onUpdate((update: RfbUpdate) => {
       if (client !== next) return;
-      if (update.full) pictured = true;
+      // A resized framebuffer starts blank, so it is pictured again only once the server repaints all of it.
+      if (update.resized) pictured = update.full;
+      else if (update.full) pictured = true;
       version += 1;
       for (const watcher of [...watchers]) {
         try {

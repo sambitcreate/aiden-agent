@@ -477,6 +477,73 @@ test("an open viewer keeps the computer awake, and the last one closing restarts
   );
 });
 
+test("input left over from a computer's last run never ends the viewers of its next run", async () => {
+  const servers = [new FakeRfbServer({ width: 40, height: 30, password: "run-1" }), new FakeRfbServer({ width: 40, height: 30, password: "run-2" })];
+  const screens: BotComputerLiveScreen[] = [];
+  for (const [index, server] of servers.entries()) {
+    const port = await server.listen();
+    const password = `run-${index + 1}`;
+    screens.push(
+      await createRfbScreen({
+        connect: (signal) => connectRfb(connect({ host: "127.0.0.1", port }), { password, signal }),
+        encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }),
+      }),
+    );
+  }
+  // The first run's first key is still on its way when the run ends, so a second key waits behind it.
+  let release = () => undefined as void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const lastRun = screens[0];
+  let holding = true;
+  const slowFirstRun: BotComputerLiveScreen = {
+    ...lastRun,
+    key: async (event, signal) => {
+      if (holding) {
+        holding = false;
+        await held;
+      }
+      return lastRun.key(event, signal);
+    },
+  };
+  let current = slowFirstRun;
+  const control = createBotComputerControl();
+  control.takeOver(BOT, "viewer");
+  const key = randomBytes(32).toString("base64url");
+  const hub = await startBotComputerViewerHub({ key, botForVm: (vm) => (vm === VM ? BOT : undefined), screen: async () => current, control, touch: () => undefined });
+  const path = `/vendor/serve-sim/helper/ws?device=${VM}`;
+  try {
+    const first = await openSocket(hub.origin, path, { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
+    // Each key leaves at once rather than waiting on the first one's acknowledgement.
+    first.socket.setNoDelay(true);
+    first.send(0x06, { type: "down", usage: 0x04 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    first.send(0x06, { type: "down", usage: 0x05 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The run ends: its screen closes and main ends its viewers. The next run gets a viewer of its own.
+    await lastRun.close();
+    hub.closeVm(VM);
+    await until(() => first.closed());
+    current = screens[1];
+    const next = await openSocket(hub.origin, path, { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
+    assert.equal(next.status(), 101);
+    await until(() => hub.viewers(BOT) === 1);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(next.closed(), false, "the next run's viewer stays connected");
+    assert.equal(hub.viewers(BOT), 1);
+    next.send(0x06, { type: "down", usage: 0x06 });
+    await until(() => servers[1].connections[0]?.keys.length === 1);
+    assert.deepEqual(servers[1].connections[0].keys, [{ keysym: 0x63, down: true }], "and only its own input reaches its computer");
+    next.close();
+  } finally {
+    await hub.close();
+    await screens[1].close();
+    for (const server of servers) await server.close();
+  }
+});
+
 test("closing a VM ends its streams and sockets", async () => {
   await withHub(async ({ hub, key }) => {
     const stream = await get(hub.origin, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`, hubHeaders(hub, key));

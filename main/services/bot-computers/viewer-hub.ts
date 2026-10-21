@@ -259,12 +259,17 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
     return created;
   };
 
+  /** Ends `target` only while it is still the VM's current device, so a newer run's viewers are never touched. */
+  const endDevice = (target: Device) => {
+    if (devices.get(target.vmName) === target) closeVm(target.vmName);
+  };
+
   const openScreen = (target: Device): Promise<BotComputerLiveScreen> => {
     if (!target.screen) {
       const opening = options.screen(target.botId, target.abort.signal).then((screen) => {
         // The run this screen belonged to ended (the computer stopped or restarted): start over.
         if (screen.closed()) {
-          closeVm(target.vmName);
+          endDevice(target);
           throw new Error("The computer's screen was closed.");
         }
         return screen;
@@ -277,7 +282,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
     }
     return target.screen.then((screen) => {
       if (!screen.closed()) return screen;
-      closeVm(target.vmName);
+      endDevice(target);
       throw new Error("The computer's screen was closed.");
     });
   };
@@ -425,6 +430,8 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
   function enqueue(target: Device, input: InputClient, run: (screen: BotComputerLiveScreen) => Promise<void>) {
     input.queue = input.queue
       .then(async () => {
+        // Input queued behind a run that has since ended goes nowhere.
+        if (devices.get(target.vmName) !== target) return;
         const screen = await openScreen(target);
         await run(screen);
       })
