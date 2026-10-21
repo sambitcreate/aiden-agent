@@ -327,11 +327,29 @@ export function FilesPanel({
     else searchRef.current?.focus();
   }, [compact, selectedPath]);
 
+  const revealFolder = React.useCallback(
+    (path: string) => {
+      setQuery("");
+      setExpanded((current) => expandAncestors(path, current).add(path));
+      if (compact && selectedPath && !dirty) setSelectedPath(null);
+      window.requestAnimationFrame(() => {
+        const button = fileButtonRefs.current.get(path);
+        button?.scrollIntoView({ block: "nearest" });
+        button?.focus({ preventScroll: true });
+      });
+    },
+    [compact, dirty, selectedPath],
+  );
+
   React.useEffect(() => {
     if (!requestedPath || consumedRequestKeyRef.current === requestedPathKey) return;
+    // A request can name a folder (a chat link to one); wait for the index to tell.
+    if (available && !interactionBlocked && !index.data && !index.error) return;
     consumedRequestKeyRef.current = requestedPathKey;
-    chooseFile(requestedPath);
-  }, [chooseFile, requestedPath, requestedPathKey]);
+    const entry = index.data?.entries.find((candidate) => candidate.path === requestedPath);
+    if (entry?.kind === "directory") revealFolder(requestedPath);
+    else chooseFile(requestedPath);
+  }, [available, chooseFile, index.data, index.error, interactionBlocked, requestedPath, requestedPathKey, revealFolder]);
 
   const loadFile = React.useCallback(async () => {
     if (!workspace?.id || !selectedPath || !active || interactionBlocked) return;

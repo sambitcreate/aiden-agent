@@ -89,19 +89,29 @@ export function useBrowserSurfaceBlocker(active: boolean): void {
 type Pending = { url: string; workspaceId: string | null; remember: boolean; inApp: boolean };
 type Menu = { url: string; x: number; y: number; web: boolean; workspaceId: string | null };
 
-export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChildren<{ workspaceId: string | null }>) {
+export function LinkOpenerProvider({
+  workspaceId,
+  workspaceFolder = null,
+  onOpenWorkspaceFile,
+  children,
+}: React.PropsWithChildren<{
+  workspaceId: string | null;
+  workspaceFolder?: string | null;
+  /** Shows a workspace-relative file or folder in the Files panel ("" is the folder itself). */
+  onOpenWorkspaceFile?: (path: string) => void;
+}>) {
   const [preference, setPreference] = React.useState<BrowserLinkOpening>("ask");
   const [surfaces, setSurfaces] = React.useState(0);
   const [blockers, setBlockers] = React.useState(0);
   const [pending, setPending] = React.useState<Pending | null>(null);
   const [menu, setMenu] = React.useState<Menu | null>(null);
-  const state = React.useRef({ preference, surfaces, blockers, workspaceId });
+  const state = React.useRef({ preference, surfaces, blockers, workspaceId, workspaceFolder, onOpenWorkspaceFile });
   // Keep the latest render's values available to stable callbacks without
   // writing a ref during render (a discarded concurrent render would corrupt
   // it); the layout effect runs only for a render that actually committed.
   React.useLayoutEffect(() => {
-    state.current = { preference, surfaces, blockers, workspaceId };
-  }, [preference, surfaces, blockers, workspaceId]);
+    state.current = { preference, surfaces, blockers, workspaceId, workspaceFolder, onOpenWorkspaceFile };
+  }, [preference, surfaces, blockers, workspaceId, workspaceFolder, onOpenWorkspaceFile]);
 
   // True once the saved preference has loaded (or failed to). A click that
   // arrives first must not show the ask dialog based on the "ask" default
@@ -153,16 +163,22 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
       else if (route.kind === "ask")
         setPending({ url: route.url, workspaceId: target, remember: route.remember, inApp: route.inApp && Boolean(target) });
       else if (route.kind === "browser" && target) openInBrowser(target, route.url);
-      else if (route.kind === "file" && target)
-        void browserApi.command(target, { action: "open_file", path: route.path }).catch((error: unknown) =>
-          toast.error(message(error, "Couldn't open this file.")),
-        );
+      else if (route.kind === "file" && target) {
+        // HTML and PDF preview in the Aiden browser; other files and folders open in Files.
+        if (route.preview)
+          void browserApi.command(target, { action: "open_file", path: route.path }).catch((error: unknown) =>
+            toast.error(message(error, "Couldn't open this file.")),
+          );
+        else if (route.workspacePath === null || target !== state.current.workspaceId)
+          toast.error("Aiden can only open files inside this workspace.");
+        else state.current.onOpenWorkspaceFile?.(route.workspacePath);
+      }
     },
     [openInBrowser],
   );
 
   const route = React.useCallback((href: string, options: OpenLinkOptions = {}) => {
-    const { preference: current, surfaces: count, blockers: blocked, workspaceId: active } = state.current;
+    const { preference: current, surfaces: count, blockers: blocked, workspaceId: active, workspaceFolder: folder } = state.current;
     const target = options.workspaceId === undefined ? active : options.workspaceId;
     const resolved = resolveLinkOpen({
       href,
@@ -171,6 +187,7 @@ export function LinkOpenerProvider({ workspaceId, children }: React.PropsWithChi
       browserAvailable: Boolean(target) && count > 0 && blocked === 0,
       forcePrompt: options.forcePrompt,
       forceExternal: options.forceExternal,
+      workspaceFolder: target === active ? folder : null,
     });
     return { resolved, target: target ?? null };
   }, []);

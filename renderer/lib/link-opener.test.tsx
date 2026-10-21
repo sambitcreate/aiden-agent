@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
 import { LinkOpenerProvider, useBrowserSurface, useBrowserSurfaceBlocker, useLinkOpener } from "./link-opener";
+import { Toaster } from "../components/ui";
 
 afterEach(cleanup);
 const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
@@ -300,4 +301,35 @@ test("openLink with forcePrompt asks even when a preference is saved, without re
   fireEvent.click(screen.getByRole("button", { name: "Open in system browser" }));
   await flush();
   assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/x"] }]);
+});
+
+test("chat links to local files: HTML previews in Aiden, other files and folders open in Files", async () => {
+  const calls = ipc("ask");
+  const opened: string[] = [];
+  render(
+    <LinkOpenerProvider workspaceId="ws-1" workspaceFolder="/Users/me/prompt-lab" onOpenWorkspaceFile={(path) => opened.push(path)}>
+      <Surface />
+      <Toaster />
+      <a href="file:///Users/me/prompt-lab/thermostat/index.html">index.html</a>
+      <a href="thermostat/style.css">style.css</a>
+      <a href="/Users/me/prompt-lab/thermostat/">folder</a>
+      <a href="file:///etc/hosts">hosts</a>
+    </LinkOpenerProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByText("index.html"));
+  fireEvent.click(screen.getByText("style.css"));
+  fireEvent.click(screen.getByText("folder"));
+  await flush();
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:command", args: ["ws-1", { action: "open_file", path: "/Users/me/prompt-lab/thermostat/index.html" }] },
+  ]);
+  assert.deepEqual(opened, ["thermostat/style.css", "thermostat"]);
+
+  // A file outside the workspace says why instead of silently doing nothing.
+  fireEvent.click(screen.getByText("hosts"));
+  await screen.findByText("Aiden can only open files inside this workspace.");
+  assert.deepEqual(opened, ["thermostat/style.css", "thermostat"]);
+  assert.equal(sent(calls).length, 1);
 });

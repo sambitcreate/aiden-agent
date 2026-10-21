@@ -395,6 +395,34 @@ test("direct user document links discover static sidecars without widening agent
   await command(page, { action: "close", tabId: userTab.id });
 });
 
+test("file links in an agent reply open in the Aiden browser and Files", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const folder = path.join(aiden.workspaceDir, "thermostat");
+  await mkdir(folder, { recursive: true });
+  await writeFile(path.join(folder, "index.html"), '<!doctype html><title>Thermostat preview</title><h1>Thermostat</h1>');
+  await writeFile(path.join(folder, "style.css"), "h1 { color: tomato; }");
+  // Agents write file:// URLs, workspace-relative paths, and folder links.
+  const indexUrl = new URL(`file://${path.join(folder, "index.html")}`).href;
+  const prompt = "Reply with links to the thermostat files.";
+  const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [],
+    finalText: `Files: [index.html](${indexUrl}), [style.css](thermostat/style.css) and [the folder](thermostat/).` });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("link", { name: "index.html" })).toBeVisible({ timeout: 45_000 });
+  expect(scenario.error).toBeUndefined();
+
+  await page.getByRole("link", { name: "index.html" }).click();
+  await expect.poll(async () => (await state(page)).tabs.map((tab) => tab.title)).toContain("Thermostat preview");
+
+  await page.getByRole("link", { name: "style.css" }).click();
+  await expect(page.getByRole("textbox", { name: "Edit thermostat/style.css" })).toHaveValue("h1 { color: tomato; }");
+
+  await page.getByRole("link", { name: "the folder" }).click();
+  await expect(page.getByRole("region", { name: "Workspace files" }).getByRole("button", { name: "thermostat", exact: true }))
+    .toHaveAttribute("aria-expanded", "true");
+});
+
 test("browser recording produces a real bounded WebM artifact", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
