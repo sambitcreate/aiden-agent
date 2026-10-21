@@ -151,7 +151,7 @@ test("a tab the person holds says so and names the Bot, and an empty Bot browser
   let state = browserState([browserTab({ heldForPerson: { reason: "sign_in" } })]);
   installBotTestIpc(browserIpc(() => state));
   const view = render(<BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />);
-  const notice = await screen.findByText(/This tab is yours: sign in, then press Done on Planner’s card/u);
+  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u);
   assert.equal(notice.getAttribute("role"), "status");
   view.unmount();
 

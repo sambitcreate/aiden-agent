@@ -26,7 +26,7 @@ export type BrowserPanelVariant = "workspace" | "bot";
 export function browserHoldNotice(reason: NonNullable<BrowserTab["heldForPerson"]>["reason"], agentName = "The Bot"): string {
   switch (reason) {
     case "sign_in":
-      return `This tab is yours: sign in, then press Done on ${agentName}’s card. ${agentName} can’t see or use it until then.`;
+      return `This tab is yours: sign in, then choose I’m signed in on ${agentName}’s card. ${agentName} can’t see or use it until then.`;
     case "handoff":
       return `This tab is yours until you finish ${agentName}’s hand-off. ${agentName} can’t see or use it until then.`;
     case "takeover":
