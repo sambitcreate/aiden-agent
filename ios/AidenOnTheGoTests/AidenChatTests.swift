@@ -11548,6 +11548,41 @@ final class AidenRunAlertTests: XCTestCase {
         XCTAssertEqual(center.posted.count, 3)
     }
 
+    /// Contract revision 37 (G24): a hand-off alerts once while the person is
+    /// away, in fixed words, and opens the Bot's chat on its Mac.
+    func testABotHandoffAlertsOnceWhileAwayAndOpensTheBotsChat() async throws {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+        func handoff(_ waitID: String, kind: AidenBotHandoffKind = .action, onScreen: Bool = true) async {
+            await notifier.notifyBotHandoff(
+                waitID: waitID,
+                kind: kind,
+                instanceID: "mac-a",
+                botID: "bot_fixture_01",
+                botName: "Scout",
+                isChatOnScreen: onScreen
+            )
+        }
+
+        appState = .active
+        await handoff("wait-active")
+        XCTAssertTrue(center.posted.isEmpty, "the open app already shows the card")
+
+        appState = .background
+        await handoff("wait-1")
+        await handoff("wait-1")
+        await handoff("wait-2", kind: .signIn)
+        XCTAssertEqual(center.posted.count, 2, "each wait alerts once")
+        XCTAssertEqual(center.posted.map(\.content.title), ["Scout", "Scout"])
+        XCTAssertEqual(center.posted.map(\.content.body), ["Handed you a step", "Needs you to sign in"])
+        let content = try XCTUnwrap(center.posted.first?.content)
+        XCTAssertEqual(content.interruptionLevel, .timeSensitive)
+        let url = try XCTUnwrap(AidenRunAlertNotifier.deepLink(from: content.userInfo))
+        let request = try XCTUnwrap(AidenDeepLink.request(from: url))
+        XCTAssertEqual(request.destination, .botChat("bot_fixture_01"))
+        XCTAssertEqual(request.instanceId, "mac-a")
+    }
+
     func testCompletionAndFailureAlertsNameTheChatWithoutTimeSensitivity() async throws {
         let center = FakeRunAlertCenter()
         let notifier = notifier(center)

@@ -3,12 +3,21 @@ import test from "node:test";
 import type { PeerBotSessionMessage } from "../../shared/peer-bot-session";
 import type { PeerOperationOutcome } from "../../shared/peer-host";
 import { botTranscriptRows } from "../../main/bots/bot-transcript-rows";
-import type {
-  AidenRemoteBotSession,
-  AidenRemoteBotSessionEvent,
+import contract from "../../../protocol/aiden-remote/v1/fixtures/contract.json";
+import {
+  parseAidenRemoteBotSession,
+  parseAidenRemoteBotSessionEvent,
+  type AidenRemoteBotSession,
+  type AidenRemoteBotSessionEvent,
 } from "../../../main/services/aiden-remote-protocol";
 import { RemoteBotSessionFollower, type RemoteBotSessionTransport } from "./remote-bot-session-follower";
-import { hostSharesBotSessions, remoteBotSessionView } from "./remote-bot-session";
+import {
+  applyRemoteBotSessionEvent,
+  hostServesBotHandoffs,
+  hostSharesBotSessions,
+  remoteBotSessionView,
+  type RemoteBotSessionView,
+} from "./remote-bot-session";
 
 function session(change: Partial<AidenRemoteBotSession> = {}): AidenRemoteBotSession {
   return {
@@ -223,4 +232,67 @@ test("only hosts that serve durable Bot sessions to this Mac get the Bot convers
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: grants }), true);
   assert.equal(hostSharesBotSessions({ features: [], capabilities: grants }), false);
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: ["bot:read", "chat:read"] }), false);
+});
+
+/** The shared fixture's frames, applied in order as the follower would. */
+function applyAll(view: RemoteBotSessionView, events: readonly unknown[]): RemoteBotSessionView[] {
+  const steps: RemoteBotSessionView[] = [];
+  let current = view;
+  for (const raw of events) {
+    const next = applyRemoteBotSessionEvent(current, parseAidenRemoteBotSessionEvent(raw));
+    assert.ok(next, "every fixture frame follows the one before it");
+    current = next;
+    steps.push(current);
+  }
+  return steps;
+}
+
+test("a host's hand-off card, its answer and the person's pause reach this Mac as the shared fixture has them", () => {
+  const fixture = contract.botHandoffs;
+  const opened = remoteBotSessionView(parseAidenRemoteBotSession(fixture.session));
+  assert.deepEqual(opened.handoff, fixture.session.handoff);
+  assert.equal(opened.paused, false);
+  assert.equal(opened.snapshot.state.kind, "running");
+
+  const [shown, settled, answered, paused] = applyAll(opened, fixture.events);
+  assert.equal(shown!.handoff?.waitId, fixture.session.handoff.waitId);
+  assert.equal(settled!.handoff, null, "a settled card goes away");
+  const rows = botTranscriptRows(answered!.snapshot.entries, null, { running: true, level: "summary", queued: [] });
+  const mine = rows.filter((row) => row.kind === "user").map((row) => (row.kind === "user" ? row.text : ""));
+  assert.ok(
+    mine.includes("You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01."),
+    "the person's answer reads as their own message, with the note",
+  );
+  assert.equal(paused!.paused, true);
+  assert.equal(paused!.snapshot.state.kind, "idle", "nothing runs while the Bot is paused");
+
+  // The pause lifts onto the turn it cut short.
+  const resumed = applyRemoteBotSessionEvent(
+    paused!,
+    parseAidenRemoteBotSessionEvent({ ...fixture.events[3], seq: 45, payload: { state: "interrupted", interrupted: true } }),
+  );
+  assert.equal(resumed?.paused, false);
+  assert.equal(resumed?.snapshot.state.kind, "interrupted");
+
+  const reread = remoteBotSessionView(parseAidenRemoteBotSession(fixture.pausedSession));
+  assert.equal(reread.paused, true);
+  assert.equal(reread.handoff, null);
+});
+
+test("a host that does not send this Mac hand-offs shows the Mac-only line, and a pause as unavailable", () => {
+  const legacy = contract.botHandoffs.legacy;
+  const opened = remoteBotSessionView(parseAidenRemoteBotSession(legacy.session));
+  assert.equal(opened.handoff, null);
+  const notice = opened.snapshot.entries.find((entry) => entry.id.startsWith("handoff-notice:"));
+  assert.equal(notice?.type === "assistant" && notice.text, "Scout needs you on your Mac: Enter the 2FA code your bank sent you");
+  const steps = applyAll(opened, legacy.events);
+  const last = steps[steps.length - 1]!;
+  assert.equal(last.paused, false);
+  assert.equal(last.snapshot.state.kind, "unavailable");
+  assert.ok(steps.every((step) => step.handoff === null));
+});
+
+test("only a host that granted this Mac bot:handoffs gets hand-off answers and Pause from here", () => {
+  assert.equal(hostServesBotHandoffs({ capabilities: ["bot:read", "bot:write", "bot:handoffs"] }), true);
+  assert.equal(hostServesBotHandoffs({ capabilities: ["bot:read", "bot:write", "bot:activity"] }), false);
 });

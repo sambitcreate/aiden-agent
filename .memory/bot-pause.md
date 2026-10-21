@@ -30,7 +30,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §7. Code names say *pau
 
 ## Seams for later packages
 - Hand-offs (P1): withdrawn by the close like other waits; no code needed. Anything that keeps running on its own (P6/P8 Bot computer stop) goes into `botPauseEffects` in `bot-session-main.ts` (runs via `afterPaused`, after the turn is closed; failures are logged, never block the pause).
-- Rev-36 Remote pause/unpause routes and the `paused` wire state are done host-side in P4 (`.memory/remote-rev37-bot-handoffs.md`; a phone pause is `by: "phone"`); iOS `pausedSubtitle` / Android `PAUSED_ROW` copy (G2) is P5.
+- Rev-36 Remote pause/unpause routes and the `paused` wire state are done host-side in P4 (`.memory/remote-rev37-bot-handoffs.md`; a phone pause is `by: "phone"`); the phone and paired-desktop clients (iOS `pausedSubtitle` / Android `PAUSED_ROW` copy (G2), Pause/Resume, the paused card) landed in P5 (`.memory/bot-handoffs-clients.md`).
 
 ## Tests
 `npm run test:bot-pause` (store, runtime with a real harness + faux model, IPC handler, chat UI). `bot-pause.test.ts` also covers a memory review held at its marker lookup while the pause closes a running turn (cancelled: no marker; not cancelled: passive marker), and the real `llmClient.stopChatWork` (loaded with controlled ports) stopping a Bot's legacy streams through `pause()`. `aiden-remote-chats.test.ts` covers a pause landing mid-admission. The runtime and handler tests need `build/native/aiden-lease-flock` (runtime-subagents lane). Extended: `harness-host`, `scheduled-bot-routines`, `schedule-store`, Telegram outbox/core, `aiden-remote-bot-session`, sidebar/header/profile, CLI `parity.test.mjs`.

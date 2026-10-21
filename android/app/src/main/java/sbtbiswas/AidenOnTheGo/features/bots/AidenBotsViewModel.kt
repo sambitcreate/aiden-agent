@@ -30,6 +30,7 @@ fun AidenBotDetail.summary(): AidenBotSummary = AidenBotSummary(
     avatar = avatar,
     health = health,
     sessionState = sessionState,
+    paused = paused,
     createdAt = createdAt,
     updatedAt = updatedAt,
     revision = revision

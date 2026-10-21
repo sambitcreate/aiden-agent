@@ -2288,4 +2288,174 @@ class AidenBotSessionControllerTest {
         hanging.hung = false
         again.cancel()
     }
+
+    // --- Revision 37 (`bot:handoffs`): hand-off cards and the paused state ---
+
+    private val handoffFixture by lazy { fixture.getValue("botHandoffs").jsonObject }
+    private val handoffSession by lazy { json.decodeFromJsonElement(AidenBotSession.serializer(), handoffFixture.getValue("session")) }
+    private val pausedSession by lazy { json.decodeFromJsonElement(AidenBotSession.serializer(), handoffFixture.getValue("pausedSession")) }
+    private val handoffEvents by lazy {
+        json.decodeFromJsonElement(ListSerializer(AidenBotSessionEvent.serializer()), handoffFixture.getValue("events"))
+    }
+
+    /** Hand-off answers, Finish on your Mac and Resume, recorded with their keys; failures thrown in order. */
+    private class HandoffTransport(session: AidenBotSession) : AidenBotSessionTransport by FakeTransport(session) {
+        data class Answer(val waitId: String, val request: AidenBotHandoffAnswerRequest, val key: UUID)
+        val answers = mutableListOf<Answer>()
+        val answerFailures = ArrayDeque<Exception>()
+        val openKeys = mutableListOf<UUID>()
+        var opened = true
+        val unpauseKeys = mutableListOf<UUID>()
+        val unpauseFailures = ArrayDeque<Exception>()
+        var unpauseGate: CompletableDeferred<Unit>? = null
+        var unpauseView = AidenBotSessionStateView(AidenBotSessionState.IDLE, false)
+        val sent = mutableListOf<String>()
+
+        override suspend fun send(botId: String, text: String, key: UUID, whenBusy: AidenStreamInputMode?): AidenBotSessionSendResponse {
+            sent += text
+            return AidenBotSessionSendResponse("1", false, AidenBotSessionState.RUNNING, false)
+        }
+
+        override suspend fun answerHandoff(
+            botId: String,
+            waitId: String,
+            request: AidenBotHandoffAnswerRequest,
+            key: UUID
+        ): AidenBotHandoffAnswerReceipt {
+            answers += Answer(waitId, request, key)
+            answerFailures.removeFirstOrNull()?.let { throw it }
+            return AidenBotHandoffAnswerReceipt(waitId)
+        }
+
+        override suspend fun openHandoffOnMac(botId: String, waitId: String, key: UUID): AidenBotHandoffOpenOnMacReceipt {
+            openKeys += key
+            return AidenBotHandoffOpenOnMacReceipt(waitId, opened)
+        }
+
+        override suspend fun unpause(botId: String, key: UUID): AidenBotSessionStateView {
+            unpauseKeys += key
+            unpauseGate?.await()
+            unpauseFailures.removeFirstOrNull()?.let { throw it }
+            return unpauseView
+        }
+    }
+
+    @Test
+    fun doneWithANoteAnswersTheCardOnceAndALostAnswerIsRetriedUnderItsKey() = runTest {
+        val transport = HandoffTransport(handoffSession)
+        val controller = AidenBotSessionController(handoffSession.botId, transport, backgroundScope)
+        controller.refetch()
+        val card = requireNotNull(controller.state.value.handoff)
+        assertEquals(AidenBotComposerMode.HANDOFF_NOTE, controller.state.value.composerMode)
+        assertTrue(controller.state.value.composerEnabled)
+
+        transport.answerFailures += IOException("offline")
+        assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.DONE, "  The code was from 9:01.\n"))
+        // It didn't reach the Mac: the card comes back with a word about it.
+        assertEquals(card, controller.state.value.handoff)
+        assertEquals(AidenBotSessionController.HANDOFF_NOT_SENT, controller.state.value.actionError)
+
+        assertTrue(controller.answerHandoff(AidenBotHandoffOutcome.DONE, "The code was from 9:01."))
+        assertNull(controller.state.value.handoff)
+        assertEquals(2, transport.answers.size)
+        assertEquals("the same answer replays its key", transport.answers[0].key, transport.answers[1].key)
+        // The note goes out trimmed, exactly as the fixture's request.
+        assertEquals(
+            handoffFixture.getValue("answer").jsonObject.getValue("request"),
+            json.encodeToJsonElement(AidenBotHandoffAnswerRequest.serializer(), transport.answers[1].request)
+        )
+        assertEquals(card.waitId, transport.answers[1].waitId)
+        // Nothing waits any more: a second tap sends nothing.
+        assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.SKIPPED))
+        assertEquals(2, transport.answers.size)
+        assertEquals(AidenBotComposerMode.MESSAGE, controller.state.value.composerMode)
+    }
+
+    @Test
+    fun aCardAnsweredElsewhereStaysGoneAndAnOverlongNoteIsNeverSent() = runTest {
+        val transport = HandoffTransport(handoffSession)
+        val controller = AidenBotSessionController(handoffSession.botId, transport, backgroundScope)
+        controller.refetch()
+
+        assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.DONE, "n".repeat(AidenBotHandoffWire.MAX_NOTE_LENGTH + 1)))
+        assertEquals(AidenBotSessionController.HANDOFF_NOTE_TOO_LONG, controller.state.value.actionError)
+        assertTrue(transport.answers.isEmpty())
+        assertNotEquals(null, controller.state.value.handoff)
+
+        transport.answerFailures += serverError(409, AidenRemoteErrorCode.HANDOFF_EXPIRED)
+        assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.SKIPPED))
+        assertNull("answered on the Mac or withdrawn", controller.state.value.handoff)
+        assertEquals(AidenBotSessionController.HANDOFF_EXPIRED, controller.state.value.actionError)
+    }
+
+    @Test
+    fun aSignInIsFinishedOnTheMacOrSkippedNeverMarkedDone() = runTest {
+        val signIn = handoffSession.copy(handoff = handoffSession.handoff!!.copy(kind = AidenBotHandoffKind.SIGN_IN, openUrl = null))
+        val transport = HandoffTransport(signIn)
+        val controller = AidenBotSessionController(signIn.botId, transport, backgroundScope)
+        controller.refetch()
+        assertEquals(AidenBotComposerMode.HELD_FOR_SIGN_IN, controller.state.value.composerMode)
+        assertFalse("the composer waits for the Mac", controller.state.value.composerEnabled)
+
+        assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.DONE))
+        assertTrue("a phone can't finish a sign-in", transport.answers.isEmpty())
+
+        transport.opened = false
+        assertTrue(controller.finishHandoffOnMac())
+        assertEquals(AidenBotHandoffMacPrompt(signIn.handoff!!.waitId, opened = false), controller.state.value.handoffMacPrompt)
+        assertNotEquals("the card stays", null, controller.state.value.handoff)
+
+        assertTrue(controller.answerHandoff(AidenBotHandoffOutcome.SKIPPED))
+        assertEquals(AidenBotHandoffAnswerRequest(AidenBotHandoffOutcome.SKIPPED), transport.answers.single().request)
+        assertNull(controller.state.value.handoffMacPrompt)
+    }
+
+    @Test
+    fun theFeedShowsAndSettlesTheCardAndAnnouncesEachNewOneOnce() = runTest {
+        val controller = AidenBotSessionController(handoffSession.botId, HandoffTransport(handoffSession), backgroundScope)
+        val announced = mutableListOf<String>()
+        controller.onHandoffArrived = { announced += it.waitId }
+        assertTrue(controller.handle(snapshotOf(handoffSession)))
+        // The same card again in its own frame is not news.
+        assertTrue(controller.handle(handoffEvents[0]))
+        assertTrue(controller.handle(handoffEvents[1]))
+        assertNull(controller.state.value.handoff)
+        val next = AidenBotHandoff("0a1b2c3d-0000-4000-8000-000000000001", AidenBotHandoffKind.SIGN_IN, "Sign in to your bank")
+        assertTrue(controller.handle(AidenBotSessionEvent(handoffSession.botId, handoffSession.epoch, 43, AidenBotSessionEventPayload.Handoff(next))))
+        assertEquals(next, controller.state.value.handoff)
+        assertEquals(listOf(handoffSession.handoff!!.waitId, next.waitId), announced)
+    }
+
+    @Test
+    fun aPausedBotTakesNoMessageAndResumeWaitsForTheMacsWord() = runTest {
+        val transport = HandoffTransport(pausedSession)
+        val controller = AidenBotSessionController(pausedSession.botId, transport, backgroundScope)
+        controller.refetch()
+        assertTrue(controller.state.value.isPaused)
+        assertFalse(controller.state.value.canSend)
+        assertEquals(AidenBotComposerMode.PAUSED, controller.state.value.composerMode)
+        assertFalse(controller.send("Are you there?"))
+        assertTrue(transport.sent.isEmpty())
+
+        // A lost Resume changes nothing and keeps its key.
+        transport.unpauseFailures += IOException("offline")
+        assertFalse(controller.unpause())
+        assertTrue(controller.state.value.isPaused)
+        assertEquals(AidenBotSessionController.UNREACHABLE, controller.state.value.actionError)
+
+        // Nothing is shown before the Mac answers; a reply the pause cut short comes back interrupted.
+        transport.unpauseGate = CompletableDeferred()
+        transport.unpauseView = AidenBotSessionStateView(AidenBotSessionState.INTERRUPTED, true)
+        val resumed = async { controller.unpause() }
+        runCurrent()
+        assertTrue(controller.state.value.isUnpausing)
+        assertTrue(controller.state.value.isPaused)
+        assertFalse("one Resume at a time", controller.unpause())
+        transport.unpauseGate!!.complete(Unit)
+        assertTrue(resumed.await())
+        assertEquals(AidenBotSessionState.INTERRUPTED, controller.state.value.state)
+        assertTrue(controller.state.value.isInterrupted)
+        assertEquals(transport.unpauseKeys[0], transport.unpauseKeys[1])
+        assertEquals(2, transport.unpauseKeys.size)
+    }
 }

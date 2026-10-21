@@ -155,11 +155,13 @@ struct AidenBotHomeRow: Equatable, Identifiable {
 
     var id: String { bot.id }
 
-    /// The durable session state comes first: a paused turn or a missing
-    /// model says so; otherwise the last message, or a greeting prompt.
+    /// The durable session state comes first: an interrupted turn, a Bot the
+    /// person paused (revision 37) or a missing model says so; otherwise the
+    /// last message, or a greeting prompt.
     var preview: String {
         switch bot.sessionState {
-        case .interrupted: return AidenBotSessionCopy.pausedSubtitle
+        case .interrupted: return AidenBotSessionCopy.interruptedSubtitle
+        case .paused: return AidenBotSessionCopy.pausedSubtitle
         case .needsModel: return AidenBotSessionCopy.needsModel
         default: break
         }

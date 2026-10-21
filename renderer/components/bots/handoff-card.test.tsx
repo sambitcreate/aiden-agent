@@ -72,3 +72,30 @@ test("while an answer is on its way, no button can be pressed again", () => {
   assert.deepEqual(answers, []);
   assert.equal(opens(), 0);
 });
+
+test("on a Bot that lives on another Mac, a sign-in offers Finish there and Skip, while other steps keep Open and Done", () => {
+  let finishes = 0;
+  const answers: BotHandoffOutcome[] = [];
+  const draw = (handoff: Pick<BotPendingHandoff, "kind" | "action" | "open">) =>
+    render(
+      <HandoffCard
+        name="Ada"
+        avatar={DEFAULT_BOT_AVATAR}
+        handoff={handoff}
+        finishOn="Studio"
+        onOpen={() => undefined}
+        onFinish={() => (finishes += 1)}
+        onAnswer={(outcome) => answers.push(outcome)}
+      />,
+    );
+  draw({ kind: "sign_in", action: "Sign in to github.com", open: { url: "https://github.com" } });
+  assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip"]);
+  assert.equal(screen.queryByText(/^Opens /u), null, "the page opens over there, not here");
+  fireEvent.click(screen.getByRole("button", { name: "Finish on Studio" }));
+  fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+  assert.equal(finishes, 1);
+  assert.deepEqual(answers, ["skipped"]);
+  cleanup();
+  draw({ kind: "action", action: HANDOFF.action, open: HANDOFF.open });
+  assert.deepEqual(buttonNames(), ["Open bank.example", "Skip", "Done"]);
+});

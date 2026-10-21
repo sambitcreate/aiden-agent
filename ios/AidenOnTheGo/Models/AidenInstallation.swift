@@ -335,7 +335,7 @@ final class AidenInstallationStore {
         }
         let progress = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity,
+            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .appControlsRead, .appControlsRespond,
         ])
         let existingNonProgress = Set(installations[index].deviceCapabilities).subtracting(progress)

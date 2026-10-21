@@ -3,7 +3,8 @@ import Foundation
 // Contract revision 25 (`bot-durable-session-v1`): a Bot's one durable
 // conversation, its live event stream, and the turn controls. Revision 27 adds
 // the `memory_update` and `routine_proposal` entries (`bot:cards`) and skips
-// entry types this client does not know.
+// entry types this client does not know. Revision 37 (`bot:handoffs`) adds the
+// waiting hand-off, the `paused` state, and pause and resume.
 
 enum AidenBotSessionWire {
     static let maxEntries = 200
@@ -80,6 +81,10 @@ enum AidenBotSessionStateKind: String, Codable, CaseIterable, Sendable {
     case idle, running, interrupted
     case needsModel = "needs_model"
     case unavailable
+    /// Revision 37 (`bot:handoffs`): the person paused the Bot. Nothing runs
+    /// until they resume it. A Mac sends it only to a device holding
+    /// `bot:handoffs`; any other device reads a paused Bot as `unavailable`.
+    case paused
 }
 
 enum AidenBotSessionBlockedReason: String, Codable, Sendable {
@@ -545,6 +550,196 @@ struct AidenBotQuestionAnswerReceipt: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: Contract revision 37 (`bot:handoffs`)
+
+enum AidenBotHandoffWire {
+    static let maxActionLength = 160
+    static let maxWhyLength = 400
+    static let maxNoteLength = 4_000
+    static let maxURLLength = 2_048
+
+    /// `^[A-Za-z0-9-]{1,64}$`, the host's Bot wait id grammar.
+    static func validateWaitID(_ value: String) throws {
+        let scalars = Array(value.unicodeScalars)
+        guard (1...64).contains(scalars.count),
+              scalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 48...57, 65...90, 97...122, 45: true
+                  default: false
+                  }
+              }) else {
+            throw AidenBotContractError.invalidField("waitId")
+        }
+    }
+
+    /// An https page with a host and no user name or password, with nothing
+    /// around it, at most 2,048 characters: what the Mac's own parser accepts.
+    /// The Mac stores a page as its WHATWG `href`, which keeps characters
+    /// RFC 3986 does not allow (`[`, `]`, `|`, `^` in a path or query), so the
+    /// parse encodes them instead of refusing the card.
+    static func isOpenURL(_ value: String) -> Bool {
+        guard !value.isEmpty,
+              value.unicodeScalars.count <= maxURLLength,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
+              let components = URLComponents(string: value, encodingInvalidCharacters: true),
+              components.scheme?.lowercased() == "https",
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil else {
+            return false
+        }
+        return true
+    }
+
+    static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// What a hand-off asks for: a step the person does (`action`), or signing in
+/// to a site in the Bot's own browser on the Mac (`sign_in`).
+enum AidenBotHandoffKind: String, Codable, Sendable {
+    case action
+    case signIn = "sign_in"
+}
+
+/// The hand-off a Bot waits on (`handoff` on the session and `handoff` frames).
+/// Answered once, by `waitId`: Done or Skip, with an optional note. A sign-in
+/// is finished on the Mac, so the phone offers Finish on your Mac and Skip.
+struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
+    struct Open: Codable, Equatable, Sendable {
+        let url: String
+
+        init(url: String) throws {
+            guard AidenBotHandoffWire.isOpenURL(url) else { throw AidenBotContractError.invalidField("open.url") }
+            self.url = url
+        }
+
+        init(from decoder: Decoder) throws {
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["url"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            try self.init(url: try values.decode(String.self, forKey: .url))
+        }
+
+        private enum CodingKeys: String, CodingKey { case url }
+    }
+
+    let waitId: String
+    let kind: AidenBotHandoffKind
+    /// The card's title after "Your turn: ".
+    let action: String
+    let why: String?
+    let open: Open?
+
+    init(waitId: String, kind: AidenBotHandoffKind, action: String, why: String? = nil, open: Open? = nil) throws {
+        try AidenBotHandoffWire.validateWaitID(waitId)
+        try AidenBotWire.validateString(action, field: "action", maxLength: AidenBotHandoffWire.maxActionLength, allowEmpty: false)
+        guard !AidenBotHandoffWire.isBlank(action) else { throw AidenBotContractError.invalidField("action") }
+        if let why {
+            try AidenBotWire.validateString(why, field: "why", maxLength: AidenBotHandoffWire.maxWhyLength, allowEmpty: false)
+        }
+        self.waitId = waitId
+        self.kind = kind
+        self.action = action
+        self.why = why
+        self.open = open
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "kind", "action", "why", "open"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            waitId: try values.decode(String.self, forKey: .waitId),
+            kind: try values.decode(AidenBotHandoffKind.self, forKey: .kind),
+            action: try values.decode(String.self, forKey: .action),
+            why: try AidenBotWire.optional(String.self, from: values, forKey: .why),
+            open: try AidenBotWire.optional(Open.self, from: values, forKey: .open)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(waitId, forKey: .waitId)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(action, forKey: .action)
+        try values.encodeIfPresent(why, forKey: .why)
+        try values.encodeIfPresent(open, forKey: .open)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case waitId, kind, action, why, open
+    }
+}
+
+enum AidenBotHandoffOutcome: String, Codable, Sendable {
+    case done, skipped
+}
+
+/// `POST /bots/{botId}/handoffs/{waitId}/answer` body. A note is non-blank
+/// and at most 4,000 characters; a sign-in can only be skipped from a phone.
+struct AidenBotHandoffAnswerRequest: Codable, Equatable, Sendable {
+    let outcome: AidenBotHandoffOutcome
+    let note: String?
+
+    init(outcome: AidenBotHandoffOutcome, note: String? = nil) throws {
+        if let note {
+            guard !AidenBotHandoffWire.isBlank(note),
+                  note.unicodeScalars.count <= AidenBotHandoffWire.maxNoteLength else {
+                throw AidenBotContractError.invalidField("note")
+            }
+        }
+        self.outcome = outcome
+        self.note = note
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["outcome", "note"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            outcome: try values.decode(AidenBotHandoffOutcome.self, forKey: .outcome),
+            note: try AidenBotWire.optional(String.self, from: values, forKey: .note)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(outcome, forKey: .outcome)
+        try values.encodeIfPresent(note, forKey: .note)
+    }
+
+    private enum CodingKeys: String, CodingKey { case outcome, note }
+}
+
+/// The hand-off answer receipt: the wait it settled.
+struct AidenBotHandoffAnswerReceipt: Codable, Equatable, Sendable {
+    let waitId: String
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        waitId = try values.decode(String.self, forKey: .waitId)
+        try AidenBotHandoffWire.validateWaitID(waitId)
+    }
+
+    private enum CodingKeys: String, CodingKey { case waitId }
+}
+
+/// `POST /bots/{botId}/handoffs/{waitId}/open-on-mac` receipt: whether the Mac
+/// brought the hand-off forward. The wait stays open either way.
+struct AidenBotHandoffOpenOnMacReceipt: Codable, Equatable, Sendable {
+    let waitId: String
+    let opened: Bool
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "opened"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        waitId = try values.decode(String.self, forKey: .waitId)
+        try AidenBotHandoffWire.validateWaitID(waitId)
+        opened = try values.decode(Bool.self, forKey: .opened)
+    }
+
+    private enum CodingKeys: String, CodingKey { case waitId, opened }
+}
+
 // MARK: Contract revision 30 (`bot-activity-v1`, `bot:activity`)
 
 /// What a Bot in a running turn is doing (spec §5). Exactly `phase`, `app`
@@ -648,6 +843,8 @@ struct AidenBotSession: Codable, Equatable, Sendable {
     let activity: AidenBotSessionActivity?
     /// Revision 30 (`bot:activity`): the person's messages waiting for the turn.
     let queued: [AidenBotQueuedMessage]
+    /// Revision 37 (`bot:handoffs`): the hand-off the Bot waits on, or nil.
+    let handoff: AidenRemoteBotHandoff?
 
     var state: AidenBotSessionStateKind { stateView.state }
 
@@ -662,7 +859,8 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         question: AidenRemoteBotQuestion? = nil,
         approval: AidenRemoteBotApproval? = nil,
         activity: AidenBotSessionActivity? = nil,
-        queued: [AidenBotQueuedMessage] = []
+        queued: [AidenBotQueuedMessage] = [],
+        handoff: AidenRemoteBotHandoff? = nil
     ) {
         self.botId = botId
         self.epoch = epoch
@@ -675,12 +873,16 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         self.approval = approval
         self.activity = activity
         self.queued = queued
+        self.handoff = handoff
     }
 
     init(from decoder: Decoder) throws {
         try AidenBotWire.requireOnlyKeys(
             decoder,
-            allowed: ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval", "activity", "queued"]
+            allowed: [
+                "botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder",
+                "question", "approval", "activity", "queued", "handoff",
+            ]
         )
         let values = try decoder.container(keyedBy: CodingKeys.self)
         botId = try AidenBotWire.identifier(values, forKey: .botId, maxLength: AidenRemoteProtocol.maxBotIdentifierLength)
@@ -709,6 +911,8 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         } else {
             queued = []
         }
+        // Present (possibly null) only for a device holding `bot:handoffs`.
+        handoff = try values.decodeIfPresent(AidenRemoteBotHandoff.self, forKey: .handoff)
         guard entries.count <= AidenBotSessionWire.maxEntries,
               Set(entries.map(\.id)).count == entries.count else {
             throw AidenBotContractError.invalidField("entries")
@@ -728,10 +932,11 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         try values.encode(approval, forKey: .approval)
         try values.encodeIfPresent(activity, forKey: .activity)
         if !queued.isEmpty { try values.encode(queued, forKey: .queued) }
+        try values.encodeIfPresent(handoff, forKey: .handoff)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case botId, epoch, seq, partial, entries, hasOlder, question, approval, activity, queued
+        case botId, epoch, seq, partial, entries, hasOlder, question, approval, activity, queued, handoff
     }
 }
 
@@ -756,6 +961,8 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case activity(AidenBotSessionActivity?)
         /// Revision 30: the person's messages still waiting for the turn.
         case queued([AidenBotQueuedMessage])
+        /// Revision 37: the waiting hand-off appeared (`handoff`) or was settled (nil).
+        case handoff(AidenRemoteBotHandoff?)
         /// The host closed this session; reconnect for a new epoch.
         case closed
     }
@@ -782,6 +989,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case .approval: "approval"
         case .activity: "activity"
         case .queued: "queued"
+        case .handoff: "handoff"
         case .closed: "closed"
         }
     }
@@ -840,6 +1048,10 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case "queued":
             try AidenBotWire.requireOnlyKeys(payload, allowed: ["queued"])
             kind = .queued(try AidenBotQueuedMessage.decodeList(from: fields, forKey: .queued))
+        case "handoff":
+            try AidenBotWire.requireOnlyKeys(payload, allowed: ["handoff"])
+            guard fields.contains(.handoff) else { throw AidenBotContractError.invalidField("handoff") }
+            kind = .handoff(try fields.decode(AidenRemoteBotHandoff?.self, forKey: .handoff))
         case "closed":
             try AidenBotWire.requireOnlyKeys(payload, allowed: [])
             kind = .closed
@@ -869,6 +1081,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case let .approval(approval): try fields.encode(approval, forKey: .approval)
         case let .activity(activity): try fields.encode(activity, forKey: .activity)
         case let .queued(list): try fields.encode(list, forKey: .queued)
+        case let .handoff(handoff): try fields.encode(handoff, forKey: .handoff)
         case .closed: break
         }
     }
@@ -878,7 +1091,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
     }
 
     private enum PayloadKeys: String, CodingKey {
-        case session, text, entry, question, approval, activity, queued
+        case session, text, entry, question, approval, activity, queued, handoff
     }
 }
 
@@ -922,7 +1135,7 @@ struct AidenBotMessageRequest: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case text, whenBusy, attachmentIds }
 }
 
-/// The empty `{}` body of resume, dismiss, and stop.
+/// The empty `{}` body of resume, dismiss, stop, pause, and hand-off open-on-Mac.
 struct AidenBotSessionActionRequest: Codable, Equatable, Sendable {
     init() {}
 

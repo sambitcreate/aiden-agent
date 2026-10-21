@@ -147,3 +147,166 @@ test("a host too old to share its Bots' conversation says so instead of opening 
   assert.ok(await screen.findByText("This Bot's chat isn't shared"));
   assert.equal(peerCalls().length, 0);
 });
+
+const HANDOFF_HOST: PeerHostView = { ...HOST, capabilities: [...HOST.capabilities, "bot:handoffs"] };
+
+const BANK_HANDOFF = {
+  waitId: "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+  kind: "action",
+  action: "Enter the 2FA code your bank sent you",
+  why: "The bank asks for a code only you can see.",
+  open: { url: "https://bank.example.com/verify" },
+};
+
+/** A host that serves hand-offs; `answer` decides each hand-off answer's outcome. */
+async function mountHandoff(
+  session: Record<string, unknown>,
+  answer: (operation: PeerOperation, attempt: number) => unknown = (operation) => ({ ok: true, value: { waitId: operation.itemId } }),
+  extra: Record<string, (...args: unknown[]) => unknown> = {},
+) {
+  let answers = 0;
+  const mounted = await mount(HANDOFF_HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      switch (operation.operation) {
+        case "botSession":
+          return { ok: true, value: session };
+        case "botAnswerHandoff":
+          return answer(operation, answers++);
+        case "botHandoffOpenOnMac":
+          return { ok: true, value: { waitId: operation.itemId, opened: true } };
+        case "botPause":
+          return { ok: true, value: { state: "paused", interrupted: false } };
+        case "botUnpause":
+          return { ok: true, value: { state: "idle", interrupted: false } };
+        default:
+          return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+      }
+    },
+    ...extra,
+  });
+  return { ...mounted, handoffAnswers: () => mounted.peerCalls().filter((call) => call.operation === "botAnswerHandoff") };
+}
+
+const RUNNING_WITH_HANDOFF = { ...SESSION, state: "running", handoff: BANK_HANDOFF };
+
+test("a hand-off from a Bot on another Mac shows its card here, and Done answers it there by wait id", async () => {
+  const { handoffAnswers } = await mountHandoff(RUNNING_WITH_HANDOFF);
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(screen.getByText("Your turn: Enter the 2FA code your bank sent you"));
+  assert.deepEqual(
+    [...card.querySelectorAll("button")].map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    ["Open bank.example.com", "Skip", "Done"],
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers().length, 1));
+  const sent = handoffAnswers()[0]!;
+  assert.equal(sent.resourceId, "bot_1");
+  assert.equal(sent.itemId, BANK_HANDOFF.waitId);
+  assert.deepEqual(sent.body, { outcome: "done" });
+  assert.ok(typeof sent.idempotencyKey === "string" && sent.idempotencyKey.length >= 16);
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+});
+
+test("typing while a hand-off waits answers it as done with a note, and Open opens the page on this Mac", async () => {
+  const { calls, handoffAnswers } = await mountHandoff(RUNNING_WITH_HANDOFF);
+  fireEvent.click(await screen.findByRole("button", { name: "Open bank.example.com" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "browser:open-external")?.args, [BANK_HANDOFF.open.url]),
+  );
+  const box = await screen.findByPlaceholderText("Add a note and send to mark it done");
+  fireEvent.change(box, { target: { value: "  The code was from 9:01.  " } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(handoffAnswers().length, 1));
+  assert.deepEqual(handoffAnswers()[0]!.body, { outcome: "done", note: "The code was from 9:01." });
+  // The note answered the card: nothing went to the Bot as a message.
+  assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
+});
+
+test("a card already settled on the other Mac goes away quietly", async () => {
+  const expired = await mountHandoff(RUNNING_WITH_HANDOFF, () => ({
+    ok: false,
+    error: { code: "request_failed", status: 409, remoteCode: "handoff_expired", message: "The other device could not complete this request." },
+  }));
+  fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
+  await waitFor(() => assert.equal(expired.handoffAnswers().length, 1));
+  assert.deepEqual(expired.handoffAnswers()[0]!.body, { outcome: "skipped" });
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+
+  // A pause withdrew it; once the turn resumes, the host asks again under the same wait id.
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "handoff", { handoff: null }));
+    // Each frame crosses IPC as a fresh copy.
+    emitBotTestNotification("remote:peer-bot-session", event(5, "handoff", { handoff: structuredClone(BANK_HANDOFF) }));
+  });
+  assert.ok(await screen.findByRole("group", { name: "Planner needs you" }), "the card asked again can be answered here");
+});
+
+test("a lost hand-off answer is resent under its key", async () => {
+  const lost = await mountHandoff(RUNNING_WITH_HANDOFF, (operation, attempt) =>
+    attempt === 0 ? { ok: false, error: { code: "outcome_unknown", message: "No answer." } } : { ok: true, value: { waitId: operation.itemId } },
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(lost.handoffAnswers().length, 1));
+  // The card stays so the person can try again; the retry is the same request to the host.
+  const done = await screen.findByRole("button", { name: "Done" });
+  await waitFor(() => assert.equal((done as HTMLButtonElement).disabled, false));
+  fireEvent.click(done);
+  await waitFor(() => assert.equal(lost.handoffAnswers().length, 2));
+  const [first, second] = lost.handoffAnswers();
+  assert.equal(first!.idempotencyKey, second!.idempotencyKey);
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+});
+
+test("a sign-in is finished on the Bot's own Mac: the card offers Finish there and Skip, never Done", async () => {
+  const { peerCalls, handoffAnswers } = await mountHandoff({
+    ...RUNNING_WITH_HANDOFF,
+    handoff: { waitId: "wait-sign-in", kind: "sign_in", action: "Sign in to github.com", open: { url: "https://github.com" } },
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.deepEqual(
+    [...card.querySelectorAll("button")].map((button) => button.textContent),
+    ["Finish on Studio", "Skip"],
+  );
+  assert.ok(
+    screen.getByText("Finish signing in on Studio, or skip it.", { selector: "[role=status]" }),
+    "the composer says why it can't send",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Finish on Studio" }));
+  await waitFor(() => {
+    const finish = peerCalls().find((call) => call.operation === "botHandoffOpenOnMac");
+    assert.equal(finish?.itemId, "wait-sign-in");
+    assert.ok(typeof finish?.idempotencyKey === "string");
+  });
+  assert.equal(handoffAnswers().length, 0);
+});
+
+test("a paused Bot on another Mac says so, blocks the composer, and Resume lifts the pause there", async () => {
+  const { peerCalls } = await mountHandoff(SESSION);
+  await screen.findByText("Two meetings and a dentist.");
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
+  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botPause").length, 1));
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "paused", interrupted: false }));
+  });
+  assert.ok(await screen.findByRole("group", { name: "Planner is paused." }));
+  assert.ok(screen.getByText("Planner is paused.", { selector: "[role=status]" }), "the composer says why it can't send");
+  fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+  await waitFor(() => {
+    const lift = peerCalls().find((call) => call.operation === "botUnpause");
+    assert.equal(lift?.resourceId, "bot_1");
+    assert.ok(typeof lift?.idempotencyKey === "string");
+  });
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(5, "state", { state: "interrupted", interrupted: true }));
+  });
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner is paused." }), null));
+  assert.ok(await screen.findByRole("button", { name: "Resume" }), "the turn the pause cut short offers its own Resume");
+});
+
+test("a host that does not serve hand-offs to this Mac offers no Pause here", async () => {
+  await mount();
+  await screen.findByText("Two meetings and a dentist.");
+  assert.equal(screen.queryByRole("button", { name: "More for Planner" }), null);
+});
