@@ -314,7 +314,7 @@ export function isMcpServer(value: unknown): value is McpServer {
     value.id.trim().length > 0 &&
     value.id.length <= MAX_CONFIG_ID_LENGTH &&
     typeof value.name === "string" &&
-    (value.transport === "stdio" || value.transport === "http" || value.transport === "sse") &&
+    (value.transport === "stdio" || value.transport === "http") &&
     typeof value.enabled === "boolean" &&
     (value.command === undefined || typeof value.command === "string") &&
     (value.args === undefined ||
@@ -329,6 +329,23 @@ export function isMcpServer(value: unknown): value is McpServer {
 
 export function isSkill(value: unknown): value is Skill {
   return isConfiguredSkill(value);
+}
+
+/**
+ * Legacy HTTP+SSE MCP servers are no longer supported. Pre-1.0 there is no
+ * migration: saved entries are dropped so the rest of the list stays valid.
+ */
+export function withoutRetiredMcpServers(value: unknown): unknown {
+  return Array.isArray(value)
+    ? value.filter((entry) => !(isRecord(entry) && entry.transport === "sse"))
+    : value;
+}
+
+/** Ids of saved legacy SSE servers, whose stored credentials still need cleanup. */
+export function retiredMcpServerIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) =>
+    isRecord(entry) && entry.transport === "sse" && typeof entry.id === "string" && entry.id ? [entry.id] : []);
 }
 
 export function isMcpServerList(value: unknown): value is McpServer[] {
@@ -1332,8 +1349,9 @@ export function createPortableConfigStores(
       await ensureReadme();
       return false;
     }
-    const safeExistingMcpServers = isMcpServerList(existingPortable.mcpServers)
-      ? existingPortable.mcpServers
+    const existingMcpServers = withoutRetiredMcpServers(existingPortable.mcpServers);
+    const safeExistingMcpServers = isMcpServerList(existingMcpServers)
+      ? existingMcpServers
       : undefined;
     if (has("mcpServers") && !safeExistingMcpServers) {
       await ensureReadme();

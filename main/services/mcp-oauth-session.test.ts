@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   hasMcpOAuthSessionData,
   mcpAuthorizationBinding,
+  mcpScopeTokens,
   McpOAuthSessionTransaction,
   McpOAuthAuthorizationFlow,
   parseMcpOAuthSession,
@@ -16,8 +17,14 @@ import {
   usableMcpClientInformation,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
-import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { McpClient } from "@earendil-works/pi-mcp";
+import {
+  authorizeMcp,
+  McpOAuthAuthorizationRequiredError,
+  type OAuthClientInformationMixed,
+  type OAuthClientProvider,
+} from "@earendil-works/pi-mcp/oauth";
+import { createMcpRemoteFetch, createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { MCP_OAUTH_REDIRECT_URI, mcpOAuthClientMetadata } from "./mcp-oauth-client-metadata.js";
 
 test("fresh MCP authorization drops the registration, tokens and verifier but keeps granted scope", () => {
@@ -243,7 +250,7 @@ test("step-up authorization retains granted scopes only for the same protected-r
   });
 });
 
-test("pinned SDK discovery and token exchange use the issuer bound before the browser opens", async () => {
+test("OAuth discovery and token exchange use the issuer bound before the browser opens", async () => {
   const flow = new McpOAuthAuthorizationFlow();
   let browserUrl: URL | undefined;
   let verifier: string | undefined;
@@ -278,8 +285,8 @@ test("pinned SDK discovery and token exchange use the issuer bound before the br
     }
     throw new Error(`Unexpected OAuth request: ${url}`);
   };
-  const options = { serverUrl: "https://mcp.example.test/mcp", scope: "files.write", fetchFn };
-  assert.equal(await auth(provider, options), "REDIRECT");
+  const options = { serverUrl: "https://mcp.example.test/mcp", scope: "files.write", fetch: fetchFn };
+  assert.equal(await authorizeMcp(provider, options), "REDIRECT");
   assert.equal(browserUrl?.searchParams.get("scope"), "files.read files.write");
   const callback = new URL(`http://127.0.0.1:49152/callback?state=${flow.state}&code=trusted-code&iss=https://wrong.example.test`);
   assert.throws(() => flow.callback(callback), /issuer/u);
@@ -287,7 +294,7 @@ test("pinned SDK discovery and token exchange use the issuer bound before the br
   callback.searchParams.set("iss", "https://accounts.example.test");
   const accepted = flow.callback(callback);
   assert.ok("code" in accepted);
-  assert.equal(await auth(provider, { ...options, authorizationCode: accepted.code }), "AUTHORIZED");
+  assert.equal(await authorizeMcp(provider, { ...options, ...flow.codeExchange(accepted.code) }), "AUTHORIZED");
   assert.equal(exchanged, 1);
 });
 
@@ -343,13 +350,13 @@ test("configured OAuth metadata bypasses a wrong advertised issuer without chang
     saveCodeVerifier(value) { verifier = value; }, codeVerifier: () => verifier,
     redirectToAuthorization(url) { browser = flow.authorizationUrl(url, "files.old"); },
   };
-  assert.equal(await auth(provider, { serverUrl: "https://service.test/mcp", fetchFn }), "REDIRECT");
+  assert.equal(await authorizeMcp(provider, { serverUrl: "https://service.test/mcp", fetch: fetchFn }), "REDIRECT");
   assert.equal(browser?.origin, "https://identity.test");
   assert.equal(browser?.searchParams.get("scope"), "files.old files.read");
   assert.throws(() => flow.callback(new URL(`http://127.0.0.1:41390/callback?state=${flow.state}&code=code&iss=https://wrong.test`)), /issuer/u);
   const accepted = flow.callback(new URL(`http://127.0.0.1:41390/callback?state=${flow.state}&code=code&iss=https://identity.test`));
   assert.ok("code" in accepted);
-  assert.equal(await auth(provider, { serverUrl: "https://service.test/mcp", authorizationCode: accepted.code, fetchFn }), "AUTHORIZED");
+  assert.equal(await authorizeMcp(provider, { serverUrl: "https://service.test/mcp", ...flow.codeExchange(accepted.code), fetch: fetchFn }), "AUTHORIZED");
   assert.equal(requests.filter((url) => url === "https://identity.test/config").length, 1);
   assert.ok(requests.every((url) => !url.includes("wrong.test")));
 });
@@ -369,7 +376,7 @@ test("OAuth metadata overrides reject oversized, insecure and stale discovery be
 });
 
 
-test("SDK token exchanges normalize optional null and empty fields before saving without weakening required credentials", async () => {
+test("token exchanges normalize optional null and empty fields before saving without weakening required credentials", async () => {
   const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
   const responses = [
     { access_token: "valid", token_type: "Bearer", scope: null, refresh_token: "", id_token: null, expires_in: null },
@@ -386,8 +393,8 @@ test("SDK token exchanges normalize optional null and empty fields before saving
   };
   for (const response of responses) {
     const fetchFn = createMcpFetchPolicy({ serviceUrl: "https://service.test/mcp", fetch: async () => Response.json(response) });
-    if (response.access_token && response.token_type) assert.equal(await auth(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetchFn }), "AUTHORIZED");
-    else await assert.rejects(auth(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetchFn }), /required credentials/u);
+    if (response.access_token && response.token_type) assert.equal(await authorizeMcp(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetch: fetchFn }), "AUTHORIZED");
+    else await assert.rejects(authorizeMcp(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetch: fetchFn }), /required credentials/u);
   }
   assert.deepEqual(saved, [{ access_token: "valid", token_type: "Bearer" }, { access_token: "valid", token_type: "Bearer", expires_in: 3600 }]);
 });
@@ -396,8 +403,6 @@ test("SDK token exchanges normalize optional null and empty fields before saving
 for (const oidc of [false, true]) {
   for (const issuerMismatch of [false, true]) {
     test(`real MCP transport ${oidc ? "OIDC fallback" : "OAuth discovery"} ${issuerMismatch ? "rejects an inconsistent issuer before consent" : "preserves mandatory callback issuer policy"}`, async (t) => {
-      const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-      const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
       const flow = new McpOAuthAuthorizationFlow();
       let browser: URL | undefined;
       let verifier: string | undefined;
@@ -418,9 +423,9 @@ for (const oidc of [false, true]) {
         codeVerifier: () => verifier!,
         redirectToAuthorization: (url) => { browser = flow.authorizationUrl(url); },
       };
-      const transport = createMcpRemoteTransport({
-        transport: "http", serviceUrl: "https://resource.example.test/mcp", authProvider: provider,
-        fetch: async (input) => {
+      const policy = {
+        serviceUrl: "https://resource.example.test/mcp", authProvider: provider,
+        fetch: async (input: Parameters<typeof globalThis.fetch>[0]) => {
           const url = new URL(String(input));
           requested.push(url.pathname);
           if (url.pathname === "/mcp") return new Response(null, { status: 401 });
@@ -437,10 +442,11 @@ for (const oidc of [false, true]) {
           if (url.pathname === "/token") { exchanges++; return Response.json({ access_token: "token", token_type: "Bearer" }); }
           throw new Error(`Unexpected request ${url}`);
         },
-      });
-      const client = new Client({ name: "issuer-regression", version: "1" });
+      };
+      const transport = createMcpRemoteTransport(policy);
+      const client = new McpClient({ name: "issuer-regression", version: "1" });
       t.after(async () => { await client.close(); await transport.close(); });
-      await assert.rejects(client.connect(transport), issuerMismatch ? /metadata issuer/u : /Unauthorized/u);
+      await assert.rejects(client.connect(transport), issuerMismatch ? /issuer/u : McpOAuthAuthorizationRequiredError);
       assert.equal(exchanges, 0);
       assert.equal(requested.some((path) => path.includes("openid-configuration")), oidc);
       if (issuerMismatch) {
@@ -450,14 +456,16 @@ for (const oidc of [false, true]) {
       }
       assert.ok(browser);
       const callback = new URL(`http://127.0.0.1:49152/callback?state=${flow.state}&code=trusted`);
-      assert.throws(() => flow.callback(callback), /issuer/u, "OIDC extension must survive the SDK's stripping schema");
+      assert.throws(() => flow.callback(callback), /issuer/u, "the OIDC issuer-parameter extension must survive metadata parsing");
       callback.searchParams.set("iss", `${issuer}/`);
       assert.throws(() => flow.callback(callback), /issuer/u);
       assert.equal(exchanges, 0);
       callback.searchParams.set("iss", issuer);
       const accepted = flow.callback(callback);
       assert.ok("code" in accepted);
-      await transport.finishAuth(accepted.code);
+      assert.equal(await authorizeMcp(provider, {
+        serverUrl: policy.serviceUrl, ...flow.codeExchange(accepted.code), fetch: createMcpRemoteFetch(policy),
+      }), "AUTHORIZED");
       assert.equal(exchanges, 1);
     });
   }
@@ -479,7 +487,7 @@ test("metadata observation rejects oversized wire documents and forgets policy a
   assert.deepEqual(flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&code=allowed`)), { code: "allowed" });
 });
 
-test("an SDK token refresh keeps the same grant; re-authorization, revocation and sign-out do not", async () => {
+test("a token refresh keeps the same grant; re-authorization, revocation and sign-out do not", async () => {
   const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
   const granted = sessionWithSavedMcpTokens(
     // The interactive attempt registers a client before the code exchange.
@@ -518,7 +526,7 @@ test("an SDK token refresh keeps the same grant; re-authorization, revocation an
     throw new Error(`Unexpected OAuth request: ${url}`);
   };
 
-  assert.equal(await auth(provider, { serverUrl: "https://mcp.example.test/mcp", fetchFn }), "AUTHORIZED");
+  assert.equal(await authorizeMcp(provider, { serverUrl: "https://mcp.example.test/mcp", fetch: fetchFn }), "AUTHORIZED");
   assert.equal(refreshes, 1);
   assert.equal(stored.tokens?.access_token, "access-2");
   assert.equal(stored.tokens?.refresh_token, "refresh-2");
@@ -546,7 +554,7 @@ test("an SDK token refresh keeps the same grant; re-authorization, revocation an
   );
 });
 
-/** Minimal interactive-style provider recording what the SDK persists and opens. */
+/** Minimal interactive-style provider recording what the OAuth flow persists and opens. */
 function recordingProvider(flow: McpOAuthAuthorizationFlow, overrides: Partial<OAuthClientProvider> = {}) {
   const record: { browser?: URL; client?: unknown } = {};
   let verifier: string | undefined;
@@ -569,12 +577,10 @@ function recordingProvider(flow: McpOAuthAuthorizationFlow, overrides: Partial<O
 }
 
 async function connectExpectingSignIn(serviceUrl: string, provider: OAuthClientProvider, fetch: typeof globalThis.fetch) {
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
-  const transport = createMcpRemoteTransport({ transport: "http", serviceUrl, authProvider: provider, fetch });
-  const client = new Client({ name: "oauth-regression", version: "1" });
+  const transport = createMcpRemoteTransport({ serviceUrl, authProvider: provider, fetch });
+  const client = new McpClient({ name: "oauth-regression", version: "1" });
   try {
-    await assert.rejects(client.connect(transport), /Unauthorized/u);
+    await assert.rejects(client.connect(transport), McpOAuthAuthorizationRequiredError);
   } finally {
     await client.close();
   }
@@ -628,31 +634,29 @@ test("null and empty optional members in metadata and registration responses do 
 test("required registration and metadata members stay strict when null or empty", async () => {
   const flow = new McpOAuthAuthorizationFlow();
   const { provider, record } = recordingProvider(flow);
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
-  const transport = createMcpRemoteTransport({ transport: "http", serviceUrl: "https://mcp.example.test/mcp", authProvider: provider, fetch: async (input) => {
+  const transport = createMcpRemoteTransport({ serviceUrl: "https://mcp.example.test/mcp", authProvider: provider, fetch: async (input) => {
     const url = new URL(String(input));
     if (url.pathname === "/mcp") return new Response(null, { status: 401 });
     if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: "https://mcp.example.test/mcp", authorization_servers: ["https://login.example.test"] });
     if (url.pathname === "/register") return Response.json({ client_id: null, redirect_uris: ["http://127.0.0.1:49152/callback"] }, { status: 201 });
     return rootMetadata("https://login.example.test", { registration_endpoint: "https://login.example.test/register" });
   } });
-  const client = new Client({ name: "oauth-regression", version: "1" });
+  const client = new McpClient({ name: "oauth-regression", version: "1" });
   try {
-    await assert.rejects(client.connect(transport), (error: unknown) => !/Unauthorized/u.test(String(error)));
+    await assert.rejects(client.connect(transport), (error: unknown) => !(error instanceof McpOAuthAuthorizationRequiredError));
   } finally { await client.close(); }
   assert.equal(record.client, undefined);
   assert.equal(record.browser, undefined);
 });
 
-test("a root issuer without trailing slash matches the SDK's root fallback, and the callback issuer agrees", async () => {
+test("a root issuer without trailing slash matches the root fallback, and the callback issuer agrees", async () => {
   const flow = new McpOAuthAuthorizationFlow();
   const { provider, record } = recordingProvider(flow, { clientInformation: () => ({ client_id: "registered" }) });
   await connectExpectingSignIn("https://mcp.example.test/mcp", provider, async (input) => {
     const url = new URL(String(input));
     if (url.pathname === "/mcp") return new Response(null, { status: 401 });
     if (url.pathname.includes("oauth-protected-resource")) return new Response(null, { status: 404 });
-    // No protected-resource metadata: the SDK selects new URL("/", serverUrl).
+    // No protected-resource metadata: the flow selects new URL("/", serverUrl).
     return Response.json({ issuer: "https://mcp.example.test", authorization_endpoint: "https://mcp.example.test/authorize",
       token_endpoint: "https://mcp.example.test/token", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"],
       authorization_response_iss_parameter_supported: true });
@@ -673,8 +677,6 @@ test("a root issuer without trailing slash matches the SDK's root fallback, and 
 });
 
 test("a background 403 insufficient_scope challenge is requested by the next interactive authorization", async () => {
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
   const { mcpInteractiveAuthorizationScope, clearMcpStepUpScope } = await import("./mcp-oauth-session.js");
   const serviceUrl = "https://step-up.example.test/mcp";
   const background: OAuthClientProvider = {
@@ -685,7 +687,7 @@ test("a background 403 insufficient_scope challenge is requested by the next int
     saveTokens: () => {}, saveCodeVerifier: () => {}, codeVerifier: () => "v",
     redirectToAuthorization: () => { throw new Error("This MCP server needs sign-in."); },
   };
-  const transport = createMcpRemoteTransport({ transport: "http", serviceUrl, authProvider: background, fetch: async (input, init) => {
+  const transport = createMcpRemoteTransport({ serviceUrl, authProvider: background, fetch: async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: serviceUrl, authorization_servers: ["https://login.example.test"] });
     if (url.pathname.includes("/.well-known/")) return rootMetadata("https://login.example.test");
@@ -697,11 +699,11 @@ test("a background 403 insufficient_scope challenge is requested by the next int
     if (request.id === undefined) return new Response(null, { status: 202 });
     return Response.json({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "s", version: "1" } } });
   } });
-  const client = new Client({ name: "step-up", version: "1" });
-  client.onerror = () => {};
+  const client = new McpClient({ name: "step-up", version: "1" });
+  client.onError(() => {});
   try {
     await client.connect(transport);
-    await assert.rejects(client.callTool({ name: "write", arguments: {} }), /sign-in/u);
+    await assert.rejects(client.callTool("write", {}), /sign-in/u);
   } finally { await client.close(); }
   const scope = mcpInteractiveAuthorizationScope(`${serviceUrl}/`, "files.read offline_access");
   const flow = new McpOAuthAuthorizationFlow();
@@ -722,7 +724,7 @@ test("a late refresh response neither overwrites newer tokens nor restores a sig
   assert.equal(sessionWithRefreshedMcpTokens({ authorizationBinding: binding }, binding, presented, late), undefined);
 });
 
-test("a 403 insufficient_scope on a legacy SSE message endpoint is remembered for the server", async () => {
+test("a 403 insufficient_scope on another path of the service origin is remembered for the server", async () => {
   const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
   const { mcpInteractiveAuthorizationScope, clearMcpStepUpScope } = await import("./mcp-oauth-session.js");
   const serviceUrl = "https://sse-step-up.example.test/sse";
@@ -746,7 +748,7 @@ test("a 403 insufficient_scope on a legacy SSE message endpoint is remembered fo
  * accepts confidential clients: registration issues a client secret and the
  * token endpoint rejects any request that does not present it.
  */
-async function startConfidentialOnlyAuthorizationServer() {
+async function startConfidentialOnlyAuthorizationServer(options: { scopesSupported?: string[] } = {}) {
   const { createServer } = await import("node:http");
   const clients = new Map<string, string>();
   const codes = new Map<string, string>();
@@ -765,7 +767,7 @@ async function startConfidentialOnlyAuthorizationServer() {
         response.end(JSON.stringify(value));
       };
       if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
-        return json(200, { resource: `${base}/mcp`, authorization_servers: [base] });
+        return json(200, { resource: `${base}/mcp`, authorization_servers: [base], ...(options.scopesSupported ? { scopes_supported: options.scopesSupported } : {}) });
       }
       if (url.pathname.startsWith("/.well-known/oauth-authorization-server")) {
         return json(200, {
@@ -860,7 +862,7 @@ function storeBackedProvider(
     discoveryState: () => flow.discoveryState(),
     clientInformation: () => usableMcpClientInformation(read().clientInformation),
     // Dynamic registration always returns the full RFC 7591 document.
-    saveClientInformation: (information) => write(sessionWithMcpClientInformation(read(), binding, information as OAuthClientInformationFull)),
+    saveClientInformation: (information) => write(sessionWithMcpClientInformation(read(), binding, information as OAuthClientInformationMixed)),
     tokens: () => read().tokens,
     saveTokens: (tokens) => write(sessionWithSavedMcpTokens(read(), binding, tokens, flow.requestedScope)),
     saveCodeVerifier: (codeVerifier) => write({ ...read(), codeVerifier }),
@@ -881,12 +883,12 @@ async function interactiveSignIn(store: Map<string, string>, serverId: string, s
   const transaction = new McpOAuthSessionTransaction(sessionForMcpAuthorizationAttempt(previous, binding));
   const { provider, flow, browser } = storeBackedProvider(store, serverId, binding, { transaction });
   const fetchFn = createMcpFetchPolicy({ serviceUrl });
-  assert.equal(await auth(provider, { serverUrl: serviceUrl, fetchFn }), "REDIRECT");
+  assert.equal(await authorizeMcp(provider, { serverUrl: serviceUrl, fetch: fetchFn }), "REDIRECT");
   const consent = await fetch(browser.url!, { redirect: "manual" });
   assert.equal(consent.status, 302, "the authorization server accepted the client and called back");
   const callback = flow.callback(new URL(consent.headers.get("location")!));
   assert.ok("code" in callback);
-  assert.equal(await auth(provider, { serverUrl: serviceUrl, fetchFn, authorizationCode: callback.code }), "AUTHORIZED");
+  assert.equal(await authorizeMcp(provider, { serverUrl: serviceUrl, fetch: fetchFn, ...flow.codeExchange(callback.code) }), "AUTHORIZED");
   store.set(serverId, JSON.stringify(transaction.read()));
 }
 
@@ -905,7 +907,7 @@ test("a confidential-only authorization server completes sign-in and refreshes a
 
     // Restart: a background provider reads the persisted session and refreshes.
     const { provider } = storeBackedProvider(store, "preset-figma", mcpAuthorizationBinding(serviceUrl));
-    assert.equal(await auth(provider, { serverUrl: serviceUrl, fetchFn: createMcpFetchPolicy({ serviceUrl }) }), "AUTHORIZED");
+    assert.equal(await authorizeMcp(provider, { serverUrl: serviceUrl, fetch: createMcpFetchPolicy({ serviceUrl }) }), "AUTHORIZED");
     assert.deepEqual(seen.grants, ["authorization_code", "refresh_token"]);
     assert.equal(seen.rejectedTokenRequests, 0);
     assert.equal(seen.registrations, 1, "a background refresh reuses the stored registration");
@@ -929,6 +931,22 @@ test("an interactive Authorize registers a fresh client instead of reusing one t
     assert.equal(seen.registrations, 1);
     assert.deepEqual(seen.authorizeClientIds, ["client-1"]);
     assert.equal(parseMcpOAuthSession(JSON.parse(store.get("preset-figma")!)).clientInformation?.client_id, "client-1");
+  } finally {
+    await authorizationServer.close();
+  }
+});
+
+test("re-authorizing keeps earlier granted scopes when the token response omits scope", async () => {
+  const authorizationServer = await startConfidentialOnlyAuthorizationServer({ scopesSupported: ["files.read"] });
+  try {
+    const { serviceUrl } = authorizationServer;
+    const binding = mcpAuthorizationBinding(serviceUrl);
+    // An earlier step-up granted files.write; the resource advertises only files.read.
+    const store = new Map([["server", JSON.stringify({ authorizationBinding: binding, grantedScope: "files.write" } satisfies McpOAuthSession)]]);
+    await interactiveSignIn(store, "server", serviceUrl);
+    const session = parseMcpOAuthSession(JSON.parse(store.get("server")!));
+    assert.deepEqual(mcpScopeTokens(session.tokens?.scope).sort(), ["files.read", "files.write"]);
+    assert.deepEqual(mcpScopeTokens(session.grantedScope).sort(), ["files.read", "files.write"]);
   } finally {
     await authorizationServer.close();
   }

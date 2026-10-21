@@ -288,12 +288,12 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     const requestHeaders = new Headers(init?.headers ?? request?.headers);
     const headers = new Headers(url.origin === service.origin ? configuredHeaders : undefined);
     requestHeaders.forEach((value, name) => headers.set(name, value));
-    // MCP calls already have SDK request deadlines; SSE notifications may stay
+    // MCP calls already have client request deadlines; SSE streams may stay
     // idle indefinitely. OAuth metadata/registration/token requests do not.
     const acceptsSse = (requestHeaders.get("accept") ?? "").includes("text/event-stream");
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const contentType = (requestHeaders.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
-    // Metadata GETs also carry MCP-Protocol-Version. SSE initialize sends a
+    // Metadata GETs also carry MCP-Protocol-Version. Initialize sends a
     // JSON-RPC body before that header is available, while OAuth registration
     // is JSON without a JSON-RPC envelope and token requests are form POSTs.
     const mcpRequest = acceptsSse || (method === "POST" && contentType === "application/json" &&
@@ -332,7 +332,7 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
       const response = await fetchImpl(input, { ...init, headers, signal, redirect: "error" });
       assertCurrent();
       // OAuth consumes JSON regardless of a server's advertised MIME type.
-      // Only successful SDK SSE requests get a per-frame (not total) budget.
+      // Only successful MCP SSE responses get a per-frame (not total) budget.
       const sse = acceptsSse && response.ok && (response.headers.get("content-type") ?? "")
         .split(";", 1)[0].trim().toLowerCase() === "text/event-stream";
       const declared = response.headers.get("content-length");
@@ -344,8 +344,8 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
       let responseHeaders = response.headers;
       const challenge = response.headers.get("www-authenticate");
       if ((response.status === 401 || response.status === 403) && challenge) {
-        // Legacy SSE servers take JSON-RPC POSTs at a separate message path
-        // (e.g. /messages), so any MCP request to the server's origin counts.
+        // A server may take JSON-RPC at another path of its origin, so any
+        // MCP request to the server's origin counts.
         if (response.status === 403 && mcpRequest && url.origin === service.origin &&
             challengeParameter(challenge, "error") === "insufficient_scope") {
           const scope = challengeParameter(challenge, "scope");

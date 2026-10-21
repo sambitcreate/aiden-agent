@@ -510,7 +510,8 @@ test("MCP validates transports and redacts configured secrets from listing", asy
   for (const id of ["+remote", "-remote"]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /cannot begin with/);
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "-Remote", transport: "stdio", command: "node", enabled: true }), /name cannot begin with/);
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", enabled: true }), /needs a url/);
-  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "not a url", enabled: true }), /not a valid URL/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "not a url", enabled: true }), /not a valid URL/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "https://example.com/sse", enabled: true }), /Unknown MCP transport/);
   writeFileSync(file, JSON.stringify({ id: "local", name: "Local", transport: "stdio", command: "node", enabled: false, env: { SECRET: "do-not-list" } }));
   await api.mcpCommand(dir, ["add", file]);
   const listed = await api.mcpCommand(dir, ["list"]);

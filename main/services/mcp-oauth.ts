@@ -1,22 +1,22 @@
 import { mcpOAuthMetadataUrlForServer } from "../../renderer/shared/mcp-oauth-config.js";
 import { loadMcpOAuthMetadataOverride } from "./mcp-oauth-metadata.js";
 // OAuth 2.0 (PKCE + dynamic client registration) for remote MCP servers, per the
-// MCP authorization spec. Uses the official SDK's `OAuthClientProvider` contract
-// and a loopback redirect (RFC 8252 native-app flow): we open the provider's
+// MCP authorization spec. Implements Pi's (`@earendil-works/pi-mcp/oauth`)
+// `OAuthClientProvider` contract and a loopback redirect (RFC 8252 native-app flow): we open the provider's
 // consent page in the user's browser and capture the authorization code on a
 // short-lived localhost server.
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthClientProvider, OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
-import type {
-  OAuthClientInformation,
-  OAuthClientInformationFull,
-  OAuthClientMetadata,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { McpClient, StreamableHttpTransport } from "@earendil-works/pi-mcp";
+import {
+  authorizeMcp,
+  McpOAuthAuthorizationRequiredError,
+  type OAuthClientInformationMixed,
+  type OAuthClientMetadata,
+  type OAuthClientProvider,
+  type OAuthDiscoveryState,
+  type OAuthTokens,
+} from "@earendil-works/pi-mcp/oauth";
+import { connectMcpClient, createMcpClient } from "./mcp-client.js";
 import { app, shell, logger } from "../platform.js";
 import { McpOAuthCredentialStorageError, mcpOAuthStore } from "./mcp-oauth-store.js";
 import {
@@ -50,13 +50,13 @@ import { assertMcpPresetServer, mcpOAuthClientNameForServer } from "./mcp-preset
 import { closeAgainAfterSettled } from "./generation-bound-connection-cache.js";
 import type { McpServer } from "./types.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
-import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
+import { createMcpRemoteFetch, createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { startMcpOAuthLoopback, type McpOAuthLoopback } from "./mcp-oauth-loopback.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
 
 /** MCP `clientInfo` for sign-in connections: the running Aiden release, not a hard-coded build. */
-function oauthClientInfo(): { name: string; version: string } {
-  return { name: "aiden-agent", version: app.getVersion() };
+function oauthClient(): McpClient {
+  return createMcpClient("aiden-agent", app.getVersion());
 }
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
@@ -73,7 +73,7 @@ h1{font-size:17px;font-weight:600;margin:0 0 6px}p{font-size:13px;color:#98989d;
 <body><div><h1>Connected</h1><p>You can return to Aiden Agent and close this tab.</p></div></body></html>`;
 
 /**
- * SDK OAuthClientProvider backed by the encrypted session store. One instance
+ * OAuthClientProvider backed by the encrypted session store. One instance
  * per MCP server id; `redirectToAuthorization` opens the system browser.
  */
 class McpOAuthProvider implements OAuthClientProvider {
@@ -167,24 +167,24 @@ class McpOAuthProvider implements OAuthClientProvider {
     return this.authorization.discoveryState();
   }
 
-  async clientInformation(): Promise<OAuthClientInformation | undefined> {
+  async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
     return usableMcpClientInformation((await this.boundSession()).clientInformation);
   }
 
-  async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
+  async saveClientInformation(info: OAuthClientInformationMixed): Promise<void> {
     this.assertCanMutate();
     const session = await this.boundSession();
     this.assertCanMutate();
     await this.saveSession(sessionWithMcpClientInformation(session, this.binding, info));
   }
 
-  /** The tokens this provider last handed to (or received from) the SDK. */
+  /** The tokens this provider last handed to (or received from) the OAuth flow. */
   private lastTokens?: Pick<OAuthTokens, "access_token" | "refresh_token">;
   /** Whether this connection found a stored sign-in at all (sticky across invalidation). */
   private hadStoredTokens = false;
   /**
-   * The SDK reads the PKCE verifier only to exchange an authorization code and
-   * reads tokens() only before a refresh, so this tells the two saves apart.
+   * The flow reads the PKCE verifier only to exchange an authorization code and
+   * reads tokens() before a refresh, so this tells the two saves apart.
    */
   private exchangingCode = false;
 
@@ -269,7 +269,7 @@ class McpOAuthProvider implements OAuthClientProvider {
   ): Promise<void> {
     this.assertCanMutate();
     if (!("signal" in this.generation) && (scope === "all" || scope === "tokens")) {
-      // The SDK drops tokens after `invalid_grant` or a rejected refresh.
+      // The flow drops tokens after `invalid_grant`.
       mcpLiveStatus.authFailure(this.serverId, "invalid-grant");
     }
     if (scope === "all" || scope === "discovery") this.authorization.clearDiscovery();
@@ -301,12 +301,11 @@ export function makeOAuthTransport(
   server: McpServer,
   provider: OAuthClientProvider,
   signal?: AbortSignal,
-): StreamableHTTPClientTransport | SSEClientTransport {
+): StreamableHttpTransport {
   assertMcpPresetServer(server);
   if (!server.url) throw new Error("This MCP server needs a URL.");
   if (server.transport === "stdio") throw new Error("OAuth requires a remote MCP server.");
   return createMcpRemoteTransport({
-    transport: server.transport,
     serviceUrl: server.url,
     serviceHeaders: server.headers,
     signal,
@@ -433,8 +432,8 @@ function raceMcpOAuthCancellation<T>(
 }
 
 async function connectWithMcpOAuthCancellation(
-  client: Client,
-  connection: Promise<void>,
+  client: McpClient,
+  connection: Promise<unknown>,
   signals: ReadonlyArray<AbortSignal | undefined>,
 ): Promise<void> {
   try {
@@ -442,7 +441,7 @@ async function connectWithMcpOAuthCancellation(
   } catch (error) {
     await client.close().catch(() => {});
     if (signals.some((signal) => signal?.aborted)) {
-      // Some SDK transports do not become closeable until connect settles.
+      // A transport may not become closeable until connect settles.
       // Keep the raw promise and close once more at that boundary.
       closeAgainAfterSettled(connection, () => client.close());
     }
@@ -463,7 +462,7 @@ export async function authorizeMcpServer(
 ): Promise<void> {
   assertMcpPresetServer(server);
   if (server.transport === "stdio")
-    throw new Error("OAuth applies only to remote (HTTP/SSE) MCP servers.");
+    throw new Error("OAuth applies only to remote (HTTP) MCP servers.");
   if (!server.url) throw new Error("Add the server URL before authorizing.");
 
   const binding = mcpAuthorizationBinding(server.url, mcpOAuthMetadataUrlForServer(server), server.oauthClientName);
@@ -513,7 +512,7 @@ export async function authorizeMcpServer(
       signal: ownerSignal ? AbortSignal.any([operation.signal, ownerSignal]) : operation.signal,
     });
     // Re-authorization is transactional: preserve the durable old session
-    // while the SDK mutates a private replacement buffer. A renderer reload,
+    // while the OAuth flow mutates a private replacement buffer. A renderer reload,
     // failed provider, or process crash before final verification cannot erase
     // credentials that were still valid when the user started.
     const transportSignal = AbortSignal.any([
@@ -521,10 +520,7 @@ export async function authorizeMcpServer(
       ...(ownerSignal ? [ownerSignal] : []),
     ]);
     const transport = makeOAuthTransport(server, provider, transportSignal);
-    const client = new Client(
-      oauthClientInfo(),
-      { capabilities: {} },
-    );
+    const client = oauthClient();
     try {
       const connection = client.connect(transport);
       await connectWithMcpOAuthCancellation(client, connection, [
@@ -543,32 +539,34 @@ export async function authorizeMcpServer(
       return;
     } catch (error) {
       await client.close().catch(() => {});
-      if (!(error instanceof UnauthorizedError)) throw error;
-      // Expected: connect() triggered redirectToAuthorization (browser opened).
+      if (!(error instanceof McpOAuthAuthorizationRequiredError)) throw error;
+      // Expected: the 401 led to redirectToAuthorization (browser opened).
     }
 
-    try {
-      const code = await raceMcpOAuthCancellation(loopback.waitForCode(), [
-        operation.signal,
-        ownerSignal,
-      ]);
-      await raceMcpOAuthCancellation(transport.finishAuth(code), [
-        operation.signal,
-        ownerSignal,
-      ]);
-    } finally {
-      await transport.close().catch(() => {});
-    }
+    const code = await raceMcpOAuthCancellation(loopback.waitForCode(), [
+      operation.signal,
+      ownerSignal,
+    ]);
+    // The code exchange is a new network phase, still fenced by the original
+    // owner signal. The flow reuses this sign-in's discovery state.
+    const exchanged = await raceMcpOAuthCancellation(authorizeMcp(provider, {
+      serverUrl: server.url,
+      ...authorization.codeExchange(code),
+      fetch: createMcpRemoteFetch({
+        serviceUrl: server.url,
+        serviceHeaders: server.headers,
+        signal: transportSignal,
+        authProvider: provider,
+      }),
+      signal: transportSignal,
+    }), [operation.signal, ownerSignal]);
+    if (exchanged !== "AUTHORIZED") throw new Error("MCP authorization did not complete.");
 
     // Verify the freshly minted tokens actually authorize a connection.
     const verifyTransport = makeOAuthTransport(server, provider, transportSignal);
-    const verifyClient = new Client(
-      oauthClientInfo(),
-      { capabilities: {} },
-    );
+    const verifyClient = oauthClient();
     try {
-      const connection = verifyClient.connect(verifyTransport);
-      await connectWithMcpOAuthCancellation(verifyClient, connection, [
+      await connectWithMcpOAuthCancellation(verifyClient, connectMcpClient(verifyClient, verifyTransport), [
         operation.signal,
         ownerSignal,
       ]);

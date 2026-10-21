@@ -71,6 +71,8 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
   if (
     Object.keys(record).some((key) => !allowed.has(key)) ||
     typeof record.id !== "string" ||
+    // "sse" names a retired transport; a cleanup queued for such a server
+    // must still run so its stored credentials are removed.
     !["stdio", "http", "sse"].includes(String(record.transport)) ||
     (record.url !== undefined && typeof record.url !== "string") ||
     (record.command !== undefined && typeof record.command !== "string") ||

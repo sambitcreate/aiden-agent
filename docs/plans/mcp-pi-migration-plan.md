@@ -1,6 +1,6 @@
 # MCP audit and move to Pi's MCP client
 
-Status: **Proposed** (2026-10-20). Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
+Status: **In progress** (2026-10-20). Phase 0 committed; Phase 1 implemented (see `.memory/mcp-pi-migration.md`). Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
 
 ## Why
 

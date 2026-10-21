@@ -160,7 +160,7 @@ test("preset validation binds credentials to exact identities and HTTPS origins"
     /official secure server/,
   );
   assert.throws(
-    () => assertMcpPresetServer({ ...valid, transport: "sse" }),
+    () => assertMcpPresetServer({ ...valid, transport: "stdio" }),
     /secure HTTP connection/,
   );
   assert.throws(

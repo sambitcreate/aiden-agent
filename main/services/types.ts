@@ -607,7 +607,7 @@ export interface ScheduledTaskSettings {
   defaultTimezone: string;
 }
 
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 
 /** A user-configured MCP server connection. */
 export interface McpServer {

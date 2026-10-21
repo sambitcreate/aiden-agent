@@ -37,7 +37,7 @@ export function createCliSubagentHosts(agentDir: string) {
         assertCurrent();
         // The guard of the inventory this operation last inspected on this client.
         let guard: ReturnType<typeof createMcpToolCallGuard> | undefined;
-        const options = (currentSignal: AbortSignal) => ({ signal: AbortSignal.any([signal, currentSignal]), timeout: 30_000 });
+        const options = (currentSignal: AbortSignal) => ({ signal: AbortSignal.any([signal, currentSignal]), timeoutMs: 30_000 });
         return await operation({ credentialRevision: expected,
           credentialRevisionIsCurrent: async (currentSignal) => !currentSignal.aborted && !signal.aborted && revision() === expected,
           redactCredentialText: (text) => secrets.reduce((value, secret) => value.replaceAll(secret, "[REDACTED MCP CREDENTIAL]"), text),

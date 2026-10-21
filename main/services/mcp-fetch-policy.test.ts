@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { UnauthorizedError, discoverAuthorizationServerMetadata, discoverOAuthProtectedResourceMetadata,
-  type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { McpClient } from "@earendil-works/pi-mcp";
+import {
+  authorizeMcp,
+  discoverAuthorizationServerMetadata,
+  discoverProtectedResourceMetadata,
+  McpOAuthAuthorizationRequiredError,
+  type OAuthClientProvider,
+  type OAuthTokens,
+} from "@earendil-works/pi-mcp/oauth";
 import { createMcpFetchPolicy } from "./mcp-fetch-policy.js";
-import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
+import { createMcpRemoteFetch, createMcpRemoteTransport } from "./mcp-remote-transport.js";
 
 const serviceUrl = "https://service.example/mcp";
 
-for (const transportKind of ["http", "sse"] as const) {
-  test(`${transportKind}: real SDK discovery and exchange isolate service headers and preserve OAuth`, async () => {
+{
+  test("real discovery and exchange isolate service headers and preserve OAuth", async () => {
     const calls: { url: string; headers: Headers }[] = [];
     let tokens: OAuthTokens | undefined;
     let redirected = false;
@@ -47,16 +52,15 @@ for (const transportKind of ["http", "sse"] as const) {
         token_endpoint: "https://auth.example/token", response_types_supported: ["code"],
         code_challenge_methods_supported: ["S256"] });
     };
-    const transport = createMcpRemoteTransport({ transport: transportKind, serviceUrl,
-      serviceHeaders: { "X-Service-Key": "synthetic-marker" }, authProvider: provider, fetch: fake });
-    const client = new Client({ name: "test", version: "1" });
+    const policy = { serviceUrl, serviceHeaders: { "X-Service-Key": "synthetic-marker" }, authProvider: provider, fetch: fake };
+    const transport = createMcpRemoteTransport(policy);
+    const client = new McpClient({ name: "test", version: "1" });
     try {
-      await assert.rejects(client.connect(transport), UnauthorizedError);
+      await assert.rejects(client.connect(transport), McpOAuthAuthorizationRequiredError);
       assert.equal(redirected, true);
-      // HTTP connect already closes on auth redirection. Explicit close also
-      // covers SSE; exchange must retain metadata but start a fresh phase.
-      await client.close();
-      await transport.finishAuth("test-code");
+      // Connect already closed the transport; the exchange is a fresh phase
+      // through the same fetch policy.
+      assert.equal(await authorizeMcp(provider, { serverUrl: serviceUrl, authorizationCode: "test-code", fetch: createMcpRemoteFetch(policy) }), "AUTHORIZED");
       assert.equal(tokens?.access_token, "test-oauth-token");
       assert.ok(calls.some(({ url }) => url === "https://auth.example/token"));
       assert.ok(calls.some(({ url }) => url.includes("auth.example/.well-known")));
@@ -64,7 +68,7 @@ for (const transportKind of ["http", "sse"] as const) {
   });
 }
 
-test("origin matching and case-insensitive SDK headers take precedence, also for Request inputs", async () => {
+test("origin matching and case-insensitive client headers take precedence, also for Request inputs", async () => {
   const calls: Headers[] = [];
   const fetch = createMcpFetchPolicy({ serviceUrl, serviceHeaders: { Authorization: "configured", "X-Key": "marker" },
     fetch: async (_input, init) => { calls.push(new Headers(init?.headers)); return Response.json({}); } });
@@ -202,10 +206,10 @@ test("MCP JSON errors advertised as SSE still have a cumulative body bound", asy
   await assert.rejects((await fetch(serviceUrl, { headers: { accept: "text/event-stream" } })).text(), /transport limit/);
 });
 
-test("real SDK metadata discovery keeps its deadline despite MCP-Protocol-Version headers", async () => {
+test("real metadata discovery keeps its deadline despite MCP-Protocol-Version headers", async () => {
   for (const discover of [
-    (fetchFn: typeof fetch) => discoverAuthorizationServerMetadata("https://auth.example", { fetchFn }),
-    (fetchFn: typeof fetch) => discoverOAuthProtectedResourceMetadata(new URL(serviceUrl), undefined, fetchFn),
+    (fetchFn: typeof fetch) => discoverAuthorizationServerMetadata("https://auth.example", { fetch: fetchFn }),
+    (fetchFn: typeof fetch) => discoverProtectedResourceMetadata(new URL(serviceUrl), { fetch: fetchFn }),
   ]) {
     const owner = new AbortController();
     const fetch = createMcpFetchPolicy({ serviceUrl, signal: owner.signal, oauthTimeoutMs: 10,
@@ -221,7 +225,7 @@ test("real SDK metadata discovery keeps its deadline despite MCP-Protocol-Versio
   }
 });
 
-test("MCP RPC retains its SDK deadline instead of the shorter OAuth timeout", async () => {
+test("MCP RPC retains its request deadline instead of the shorter OAuth timeout", async () => {
   const fetch = createMcpFetchPolicy({ serviceUrl, oauthTimeoutMs: 10,
     fetch: async () => { await delay(25); return Response.json({ ok: true }); } });
   const response = await fetch(new Request(serviceUrl, { method: "POST",
@@ -231,7 +235,7 @@ test("MCP RPC retains its SDK deadline instead of the shorter OAuth timeout", as
   assert.deepEqual(await response.json(), { ok: true });
 });
 
-test("SSE initialize JSON-RPC without a protocol header retains the SDK deadline", async () => {
+test("initialize JSON-RPC without a protocol header retains the request deadline", async () => {
   const fetch = createMcpFetchPolicy({ serviceUrl, oauthTimeoutMs: 10,
     fetch: async () => { await delay(25); return Response.json({ jsonrpc: "2.0", id: 1, result: {} }); } });
   const response = await fetch(serviceUrl, { method: "POST", headers: { "content-type": "application/json" },
@@ -250,8 +254,8 @@ test("same-origin OAuth registration JSON still receives the authorization deadl
   }), /authorization request timed out/);
 });
 
-test("real SDK authorization metadata body cannot stall after headers arrive", async () => {
+test("real authorization metadata body cannot stall after headers arrive", async () => {
   const fetchFn = createMcpFetchPolicy({ serviceUrl, oauthTimeoutMs: 10,
     fetch: async () => new Response(new ReadableStream(), { headers: { "content-type": "application/json" } }) });
-  await assert.rejects(discoverAuthorizationServerMetadata("https://auth.example", { fetchFn }), /timed out/);
+  await assert.rejects(discoverAuthorizationServerMetadata("https://auth.example", { fetch: fetchFn }), /timed out/);
 });

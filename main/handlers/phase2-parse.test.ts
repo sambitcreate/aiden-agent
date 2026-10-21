@@ -69,9 +69,9 @@ test("parseMcpServer parses a stdio server with command/args/env", () => {
   assert.equal(server.enabled, true);
 });
 
-test("parseMcpServer parses http/sse transports and defaults unknown transport to stdio", () => {
+test("parseMcpServer parses http, rejects retired SSE, and defaults unknown transport to stdio", () => {
   assert.equal(parseMcpServer({ id: "a", name: "A", transport: "http" }).transport, "http");
-  assert.equal(parseMcpServer({ id: "b", name: "B", transport: "sse" }).transport, "sse");
+  assert.throws(() => parseMcpServer({ id: "b", name: "B", transport: "sse" }), /SSE MCP servers are no longer supported/u);
   assert.equal(parseMcpServer({ id: "c", name: "C", transport: "weird" }).transport, "stdio");
   assert.equal(parseMcpServer({ id: "d", name: "D" }).transport, "stdio");
 });
@@ -156,5 +156,5 @@ test("custom MCP descriptions and OAuth registration names are bounded and prese
 test("MCP provider references require HTTPS HTTP and cannot mix credential sources", () => {
   const input = { id: "custom", name: "Custom", enabled: true, transport: "http", url: "https://tools.test/mcp", authProvider: "openai" };
   assert.equal(parseMcpServer(input).authProvider, "openai");
-  for (const change of [{ transport: "stdio" }, { transport: "sse" }, { url: "http://localhost/mcp" }, { oauth: true }, { headers: { Authorization: "secret" } }, { presetId: "figma" }, { authProvider: "../secret" }]) assert.throws(() => parseMcpServer({ ...input, ...change }), /authentication|provider|OAuth/u);
+  for (const change of [{ transport: "stdio" }, { url: "http://localhost/mcp" }, { oauth: true }, { headers: { Authorization: "secret" } }, { presetId: "figma" }, { authProvider: "../secret" }]) assert.throws(() => parseMcpServer({ ...input, ...change }), /authentication|provider|OAuth/u);
 });

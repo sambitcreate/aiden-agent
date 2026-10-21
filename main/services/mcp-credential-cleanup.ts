@@ -146,6 +146,27 @@ async function reconcileNow(
   }
 }
 
+/**
+ * Saved legacy SSE servers are dropped when config loads (pre-1.0, no
+ * migration). Remove their stored OAuth sign-ins and env/header values as a
+ * server removal would; an id reused by a loaded server is left alone.
+ */
+export function cleanupRetiredMcpServerCredentials(): Promise<void> {
+  return serialized(async () => {
+    const retired = await configStore.retiredMcpServerIds();
+    if (retired.length === 0) return;
+    const live = new Set((await configStore.listMcpServers()).map(({ id }) => id));
+    for (const id of retired) {
+      if (live.has(id)) continue;
+      invalidateMcpOAuthOperation(id);
+      await clearOAuth(id);
+      await pruneStoredMcpFieldSecrets(id, undefined);
+      logger.info("mcp", `Removed stored credentials of retired SSE MCP server "${id}".`);
+    }
+    configStore.forgetRetiredMcpServerIds(retired);
+  });
+}
+
 export function reconcilePendingMcpCredentialCleanup(): Promise<void> {
   // Nothing to reconcile and nothing that could write the journal is queued.
   if (journal.knownEmpty() && !queue.exclusiveBusy()) return Promise.resolve();

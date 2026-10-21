@@ -52,8 +52,10 @@ export function parseStringRecord(value: unknown): Record<string, string> | unde
 export function parseMcpServer(value: unknown): McpServer {
   if (typeof value !== "object" || value === null) throw new Error("Invalid MCP server payload.");
   const s = value as Record<string, unknown>;
-  const transport: McpTransport =
-    s.transport === "http" || s.transport === "sse" ? s.transport : "stdio";
+  if (s.transport === "sse") {
+    throw new Error("Legacy SSE MCP servers are no longer supported. Use the server's Streamable HTTP URL instead.");
+  }
+  const transport: McpTransport = s.transport === "http" ? "http" : "stdio";
   validateMcpServerMetadata({ ...s, transport });
   const args = Array.isArray(s.args)
     ? s.args.filter((argument): argument is string => typeof argument === "string")

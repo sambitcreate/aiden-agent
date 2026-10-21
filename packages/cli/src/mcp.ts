@@ -8,8 +8,8 @@ import { createBoundedSubagentMcpFetch } from "../../../main/services/subagents/
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { ResultSchema, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { OAuthTokens, OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
@@ -54,7 +54,7 @@ export function validateMcpServer(value: unknown): McpServer {
   if (typeof server.enabled !== "boolean") throw new Error("MCP server needs a boolean enabled flag.");
   if (server.transport === "stdio") {
     if (typeof server.command !== "string" || !server.command.trim() || (server.args !== undefined && (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string")))) throw new Error("Invalid MCP stdio command or arguments.");
-  } else if (server.transport === "http" || server.transport === "sse") {
+  } else if (server.transport === "http") {
     if (typeof server.url !== "string" || !server.url.trim()) throw new Error("Remote MCP needs a url.");
     let url: URL;
     try { url = new URL(server.url); } catch { throw new Error("Remote MCP url is not a valid URL."); }
@@ -218,7 +218,34 @@ const CLI_MCP_INVENTORY_MAX_BYTES = 1_048_576;
 type McpListedTool = Awaited<ReturnType<typeof listMcpToolPage>>["tools"][number];
 interface McpInventory { tools: McpListedTool[]; guard: ReturnType<typeof createMcpToolCallGuard>; }
 /** `attempt` is the client being connected (closable mid-connect); `client` is set once it is live. */
-interface PoolEntry { key: string; pending: Promise<Client>; attempt?: Client; client?: Client; }
+interface PoolEntry { key: string; pending: Promise<CliMcpClient>; attempt?: CliMcpClient; client?: CliMcpClient; }
+
+/**
+ * The CLI's SDK client in the shape the shared desktop MCP helpers drive
+ * (Pi's `McpClient` surface). Phase 3 of the Pi MCP migration replaces it.
+ */
+export interface CliMcpClient {
+  request<T = unknown>(method: string, params?: Record<string, unknown>, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<T>;
+  onNotification(method: string, listener: (params: unknown) => void): void;
+  readonly serverCapabilities: ReturnType<Client["getServerCapabilities"]>;
+  close(): Promise<void>;
+}
+
+function cliMcpClient(client: Client): CliMcpClient {
+  return {
+    request: <T>(method: string, params?: Record<string, unknown>, options?: { signal?: AbortSignal; timeoutMs?: number }) =>
+      client.request({ method, ...(params === undefined ? {} : { params }) }, ResultSchema, {
+        ...(options?.signal ? { signal: options.signal } : {}),
+        ...(options?.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, maxTotalTimeout: options.timeoutMs }),
+      }) as Promise<T>,
+    onNotification(method, listener) {
+      if (method !== ToolListChangedNotificationSchema.shape.method.value) throw new Error(`Unsupported MCP notification ${method}.`);
+      client.setNotificationHandler(ToolListChangedNotificationSchema, (notification) => listener(notification.params));
+    },
+    get serverCapabilities() { return client.getServerCapabilities(); },
+    close: () => client.close(),
+  };
+}
 
 function errorText(error: unknown): string {
   const text = error instanceof Error ? (error.name === "TimeoutError" ? "timed out" : error.message) : String(error);
@@ -260,7 +287,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     // Synchronous from here to clients.set: concurrent callers share one attempt.
     const cached = clients.get(server.id);
     if (cached?.key === key) return cached.pending;
-    const entry: PoolEntry = { key, pending: undefined as unknown as Promise<Client> };
+    const entry: PoolEntry = { key, pending: undefined as unknown as Promise<CliMcpClient> };
     // Published before the attempt runs, so its synchronous prefix already sees itself as current.
     clients.set(server.id, entry);
     entry.pending = (async () => {
@@ -268,7 +295,8 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
         await (cached.attempt ?? await cached.pending.catch(() => undefined))?.close().catch(() => {});
         if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
       }
-      const client = new Client({ name: "aiden-cli", version: "0.1.0" });
+      const sdkClient = new Client({ name: "aiden-cli", version: "0.1.0" });
+      const client = cliMcpClient(sdkClient);
       entry.attempt = client;
       inventories.watch(client);
       try {
@@ -276,9 +304,9 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
         // Shutdown or a newer attempt may have landed during the credential read; start nothing then.
         if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
         const transport = server.transport === "stdio" ? new StdioClientTransport({ command: server.command!, args: server.args, env: { ...getDefaultEnvironment(), ...server.env }, stderr: "pipe" })
-          : server.transport === "http" ? new StreamableHTTPClientTransport(new URL(server.url!), options) : new SSEClientTransport(new URL(server.url!), options);
+          : new StreamableHTTPClientTransport(new URL(server.url!), options);
         if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
-        await client.connect(transport, { timeout: 10_000 });
+        await sdkClient.connect(transport, { timeout: 10_000 });
         if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
         entry.client = client;
         return client;
@@ -288,18 +316,18 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     catch (error) { if (clients.get(server.id) === entry) clients.delete(server.id); throw error; }
   }
   /** The complete guarded inventory for the server's current live client. */
-  async function inventory(server: McpServer, signal?: AbortSignal): Promise<McpInventory & { client: Client }> {
+  async function inventory(server: McpServer, signal?: AbortSignal): Promise<McpInventory & { client: CliMcpClient }> {
     const client = await connection(server);
     const assertCurrent = () => { if (closed || clients.get(server.id)?.client !== client) throw new Error("MCP connection changed or was closed."); };
     // A shared (cached) read is bounded by the inventory deadline, not one caller's signal.
-    const shared = client.getServerCapabilities()?.tools?.listChanged === true;
+    const shared = client.serverCapabilities?.tools?.listChanged === true;
     const read = async (): Promise<McpInventory> => {
       // Each page is transport-bounded; this bounds what the whole inventory retains.
       let retained = 0;
-      const tools = client.getServerCapabilities()?.tools ? await listMcpToolInventory({
+      const tools = client.serverCapabilities?.tools ? await listMcpToolInventory({
         signal: shared ? undefined : signal, assertCurrent,
         listPage: async (cursor, pageSignal) => {
-          const page = await listMcpToolPage(client, cursor, { signal: pageSignal, timeout: 10_000 });
+          const page = await listMcpToolPage(client, cursor, { signal: pageSignal, timeoutMs: 10_000 });
           retained += Buffer.byteLength(JSON.stringify(page.tools ?? []));
           if (retained > CLI_MCP_INVENTORY_MAX_BYTES) throw new Error("MCP tool inventory exceeds its schema byte budget.");
           return page;
@@ -327,7 +355,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
         if (JSON.stringify(fresh) !== JSON.stringify(tool)) throw new Error("MCP tool schema or effects changed. Refresh the connection before using it.");
         current.guard.assertCallable(tool.name);
         return executeMcpAgentTool(async () => {
-          const result = await callMcpTool(current.client, { name: tool.name, arguments: input as Record<string, unknown> }, { signal, timeout: 60_000 });
+          const result = await callMcpTool(current.client, { name: tool.name, arguments: input as Record<string, unknown> }, { signal, timeoutMs: 60_000 });
           current.guard.validateResult(tool.name, result);
           return result;
         });

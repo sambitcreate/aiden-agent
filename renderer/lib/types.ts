@@ -777,7 +777,7 @@ export interface ChatTitleRenameResult extends ChatMetadataUpdated {
   changed: boolean;
 }
 
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 
 export interface McpServer {
   id: string;

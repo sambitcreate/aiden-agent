@@ -1,16 +1,16 @@
 import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
-import type {
-  OAuthClientInformationFull,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+import {
+  buildAuthorizationServerDiscoveryUrls,
+  type OAuthClientInformationMixed,
+  type OAuthDiscoveryState,
+  type OAuthTokens,
+} from "@earendil-works/pi-mcp/oauth";
 import { randomBytes, randomUUID } from "node:crypto";
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
-import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export interface McpOAuthSession {
   /** Normalized protected-resource URL this registration and tokens belong to. */
   authorizationBinding?: string;
-  clientInformation?: OAuthClientInformationFull;
+  clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
   codeVerifier?: string;
   /** Last granted scopes survive token invalidation and explicit step-up sign-in. */
@@ -108,9 +108,9 @@ export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: stri
  * it stays in the encrypted session and is handed back to the SDK.
  */
 export function usableMcpClientInformation(
-  information: OAuthClientInformationFull | undefined,
+  information: OAuthClientInformationMixed | undefined,
   nowMs: number = Date.now(),
-): OAuthClientInformationFull | undefined {
+): OAuthClientInformationMixed | undefined {
   const expiresAt = information?.client_secret_expires_at;
   if (information?.client_secret && typeof expiresAt === "number" && expiresAt > 0 && expiresAt * 1000 <= nowMs) {
     return undefined;
@@ -122,7 +122,7 @@ export function usableMcpClientInformation(
 export function sessionWithMcpClientInformation(
   session: McpOAuthSession,
   binding: string,
-  information: OAuthClientInformationFull,
+  information: OAuthClientInformationMixed,
 ): McpOAuthSession {
   const clientInformation = structuredClone(information);
   // Public clients sometimes come back with `"client_secret": ""`; keeping it
@@ -339,6 +339,12 @@ export class McpOAuthAuthorizationFlow {
   private started = false;
   private consumed = false;
   requestedScope?: string;
+  /**
+   * The `iss` to hand the code exchange (RFC 9207) once this flow validated
+   * the callback's issuer: the discovered metadata's own issuer, so a root
+   * issuer's trailing-slash spelling cannot fail the exchange's exact check.
+   */
+  responseIssuer?: string;
   private observedMetadata?: { url: string; issuer: string; issuerRequired: boolean };
 
   observeAuthorizationMetadata(url: URL, document: unknown): void {
@@ -354,7 +360,7 @@ export class McpOAuthAuthorizationFlow {
     const discovery = structuredClone(state);
     const observed = this.observedMetadata;
     if (metadata && observed?.issuer === metadata.issuer && observed.issuerRequired &&
-        buildDiscoveryUrls(state.authorizationServerUrl).some(({ url }) => url.href === observed.url)) {
+        buildAuthorizationServerDiscoveryUrls(state.authorizationServerUrl).some(({ url }) => url.href === observed.url)) {
       discovery.authorizationServerMetadata = { ...metadata, authorization_response_iss_parameter_supported: true };
     }
     this.discovery = discovery;
@@ -385,6 +391,20 @@ export class McpOAuthAuthorizationFlow {
     return result;
   }
 
+  /**
+   * Options for exchanging this sign-in's authorization code: the validated
+   * response issuer, and the scope the browser was actually sent to. Without
+   * that scope the flow records its own recomputed one on tokens whose
+   * response omits `scope`, which would drop scopes granted earlier.
+   */
+  codeExchange(code: string): { authorizationCode: string; iss?: string; scope?: string } {
+    return {
+      authorizationCode: code,
+      ...(this.responseIssuer === undefined ? {} : { iss: this.responseIssuer }),
+      ...(this.requestedScope ? { scope: this.requestedScope } : {}),
+    };
+  }
+
   callback(url: URL): { code: string } | { error: Error } {
     if (!this.started || this.consumed || url.searchParams.getAll("state").length !== 1 || url.searchParams.get("state") !== this.state) {
       throw new Error("Invalid OAuth callback state.");
@@ -398,6 +418,7 @@ export class McpOAuthAuthorizationFlow {
     const errors = url.searchParams.getAll("error");
     if (codes.length + errors.length !== 1 || !(codes[0] || errors[0])) throw new Error("Invalid OAuth callback result.");
     this.consumed = true;
+    this.responseIssuer = issuers.length === 1 ? this.discovery?.authorizationServerMetadata?.issuer : undefined;
     return errors.length ? { error: new Error("Authorization was denied by the provider.") } : { code: codes[0] };
   }
 }

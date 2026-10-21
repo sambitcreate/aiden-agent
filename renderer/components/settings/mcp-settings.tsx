@@ -1012,7 +1012,6 @@ function McpEditor({
             <SelectContent>
               <SelectItem value="stdio">Local command (stdio)</SelectItem>
               <SelectItem value="http">Remote URL (Streamable HTTP)</SelectItem>
-              <SelectItem value="sse">Remote URL (SSE, legacy)</SelectItem>
             </SelectContent>
           </Select>
         </Field>
@@ -1042,14 +1041,7 @@ function McpEditor({
           </>
         ) : (
           <>
-            <Field
-              label="Server URL"
-              description={
-                transport === "sse"
-                  ? "SSE is the older MCP transport and is deprecated. Prefer Streamable HTTP unless this server only supports SSE."
-                  : undefined
-              }
-            >
+            <Field label="Server URL">
               <Input aria-label="Server URL" value={url} onChange={(e) => { setUrl(e.target.value); setApprovedProviderConnection(undefined); }} placeholder="https://example.com/mcp" />
             </Field>
             <Field label="Headers" description="Values are encrypted in this Mac’s keychain, not in config.json, and are never shown again." orientation="vertical">

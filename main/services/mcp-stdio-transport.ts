@@ -1,19 +1,18 @@
-// Stdio MCP transport that owns its server's whole process tree. The SDK's
-// StdioClientTransport spawns the server in Aiden's own process group and on
-// close signals only that direct child, so `npx`/`uvx` wrappers leave the real
-// server (a grandchild) running. On POSIX this transport starts the server in
-// a new process group and signals the group; message framing is the SDK's.
-import { spawn, type ChildProcess } from "node:child_process";
+// Stdio MCP transport that owns its server's whole process tree. Pi's
+// StdioTransport starts the server in its own process group on POSIX and
+// signals that group when Aiden closes the transport. A wrapper (`npx`,
+// `uvx`) that exits on its own can still leave the real server (a
+// grandchild) running, so this transport also terminates the group whenever
+// the server's pipes close, and on Aiden's exit. Close is bounded even when
+// a process outside the group holds the server's stdout.
+import type { ChildProcess } from "node:child_process";
 import process from "node:process";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { StdioTransport, type McpTransport, type StdioTransportOptions } from "@earendil-works/pi-mcp";
 
 export interface McpStdioTransportOptions {
   command: string;
   args?: readonly string[];
-  /** The server's declared environment, layered over the SDK's safe default set. */
+  /** The server's declared environment, layered over a safe default set. */
   env?: Record<string, string>;
   cwd?: string;
   maxBufferSize?: number;
@@ -24,6 +23,26 @@ export interface McpStdioTransportOptions {
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
 const liveGroups = new Set<number>();
 let exitHookInstalled = false;
+
+/** The environment every stdio server may see, matching the MCP SDK's default set. */
+const DEFAULT_INHERITED_ENV_VARS = process.platform === "win32"
+  ? ["APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PROCESSOR_ARCHITECTURE", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERNAME", "USERPROFILE", "PROGRAMFILES"]
+  : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
+
+/**
+ * Safe default environment for a spawned MCP server: login identity, PATH
+ * and terminal basics only, never Aiden's tokens or proxy secrets. Values
+ * that look like exported shell functions are skipped.
+ */
+export function defaultMcpStdioEnvironment(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of DEFAULT_INHERITED_ENV_VARS) {
+    const value = process.env[key];
+    if (value === undefined || value.startsWith("()")) continue;
+    env[key] = value;
+  }
+  return env;
+}
 
 function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
@@ -42,153 +61,109 @@ function installExitHook(): void {
   });
 }
 
-function settlesWithin(operation: Promise<void>, ms: number): Promise<boolean> {
+function settlesWithin(operation: Promise<unknown>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), ms);
     timer.unref?.();
-    void operation.then(() => {
-      clearTimeout(timer);
-      resolve(true);
-    });
+    void operation.then(
+      () => { clearTimeout(timer); resolve(true); },
+      () => { clearTimeout(timer); resolve(true); },
+    );
   });
 }
 
-class ProcessGroupStdioTransport implements Transport {
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  onmessage?: (message: JSONRPCMessage) => void;
-  private child?: ChildProcess;
-  private started = false;
+const OVERSIZED_MESSAGE = /^MCP stdio message exceeds \d+ bytes$/u;
+
+/**
+ * Pi's stdio transport with Aiden's lifecycle guarantees: close never waits
+ * forever, an oversized message ends the connection, and on POSIX the
+ * server's whole process group is reaped.
+ */
+class AidenStdioTransport extends StdioTransport {
+  private groupPid?: number;
   /** Set once the process group's teardown has begun; it runs exactly once. */
   private groupReaped = false;
-  private readonly readBuffer: ReadBuffer;
 
-  constructor(private readonly options: McpStdioTransportOptions) {
-    this.readBuffer = new ReadBuffer({ maxBufferSize: options.maxBufferSize });
-  }
-
-  get pid(): number | undefined {
-    return this.child?.pid;
-  }
-
-  start(): Promise<void> {
-    if (this.started) throw new Error("MCP stdio transport already started.");
-    this.started = true;
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.options.command, [...(this.options.args ?? [])], {
-        env: { ...getDefaultEnvironment(), ...this.options.env },
-        stdio: ["pipe", "pipe", "inherit"],
-        shell: false,
-        cwd: this.options.cwd,
-        // Leader of a new process group: close can then reach grandchildren.
-        detached: true,
-      });
-      this.child = child;
-      const pid = child.pid;
-      if (pid !== undefined) {
-        installExitHook();
-        liveGroups.add(pid);
-      }
-      child.on("error", (error) => {
-        reject(error);
-        this.onerror?.(error);
-      });
-      child.on("spawn", () => resolve());
-      child.on("close", () => {
-        if (this.child === child) this.child = undefined;
-        // Every pipe is closed, so nothing left in the group can reach Aiden.
-        // A wrapper that exited on its own may still have left its server there.
-        if (pid !== undefined) this.reapGroup(pid);
-        this.onclose?.();
-      });
-      child.stdin?.on("error", (error) => this.onerror?.(error));
-      child.stdout?.on("data", (chunk: Buffer) => {
-        try {
-          this.readBuffer.append(chunk);
-          this.processReadBuffer();
-        } catch (error) {
-          this.onerror?.(error as Error);
-          void this.close().catch(() => undefined);
-        }
-      });
-      child.stdout?.on("error", (error) => this.onerror?.(error));
+  constructor(
+    options: StdioTransportOptions,
+    private readonly graceMs: number,
+    private readonly processGroups: boolean,
+  ) {
+    super(options);
+    // Every pipe is closed, so nothing left in the group can reach Aiden. A
+    // wrapper that exited on its own may still have left its server there.
+    this.onClose(() => this.reapGroup());
+    // Pi drops an oversized line but keeps the connection, so a request it
+    // answered would wait out its whole timeout. Close instead: pending
+    // requests fail at once.
+    this.onError((error) => {
+      if (OVERSIZED_MESSAGE.test(error.message)) void this.close().catch(() => undefined);
     });
   }
 
-  private processReadBuffer(): void {
-    while (true) {
-      try {
-        const message = this.readBuffer.readMessage();
-        if (message === null) return;
-        this.onmessage?.(message);
-      } catch (error) {
-        this.onerror?.(error as Error);
-      }
+  override async start(): Promise<void> {
+    await super.start();
+    const pid = this.pid;
+    if (pid === undefined || !this.processGroups) return;
+    this.groupPid = pid;
+    installExitHook();
+    liveGroups.add(pid);
+  }
+
+  /**
+   * Pi waits for the child's pipes to close. A process outside the group (a
+   * `setsid` grandchild) that inherited stdout would hold them open forever,
+   * so after twice the grace the pipes are destroyed and the server killed.
+   */
+  override async close(): Promise<void> {
+    const closing = super.close();
+    if (!(await settlesWithin(closing, 2 * this.graceMs))) {
+      // Pi keeps the child private; only its pipes and process are touched.
+      const child = (this as unknown as { child?: ChildProcess }).child;
+      child?.stdin?.destroy();
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+      if (this.groupPid !== undefined) signalGroup(this.groupPid, "SIGKILL");
+      else child?.kill("SIGKILL");
+      await settlesWithin(closing, this.graceMs);
     }
-  }
-
-  send(message: JSONRPCMessage): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const stdin = this.child?.stdin;
-      if (!stdin) {
-        reject(new Error("Not connected"));
-        return;
-      }
-      if (stdin.write(serializeMessage(message))) resolve();
-      else stdin.once("drain", resolve);
-    });
-  }
-
-  async close(): Promise<void> {
-    const child = this.child;
-    this.child = undefined;
-    this.readBuffer.clear();
-    const pid = child?.pid;
-    if (!child || pid === undefined) return;
-    const grace = this.options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS;
-    const exited = new Promise<void>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) resolve();
-      else child.once("close", () => resolve());
-    });
-    // Spec shutdown: close stdin and let the server exit, then SIGTERM, then SIGKILL.
-    try { child.stdin?.end(); } catch { /* already closed */ }
-    if (!await settlesWithin(exited, grace)) {
-      signalGroup(pid, "SIGTERM");
-      if (!await settlesWithin(exited, grace)) signalGroup(pid, "SIGKILL");
-    }
-    this.reapGroup(pid);
+    // A wrapper that already exited while its server holds the pipes never
+    // reports a pipe close; the group is still reaped here.
+    this.reapGroup();
   }
 
   /** Terminate whatever remains of the group, then forget it: SIGTERM, then SIGKILL after the grace. */
-  private reapGroup(pid: number): void {
-    if (this.groupReaped) return;
+  private reapGroup(): void {
+    const pid = this.groupPid;
+    if (pid === undefined || this.groupReaped) return;
     this.groupReaped = true;
     signalGroup(pid, "SIGTERM");
     const straggler = setTimeout(() => {
       signalGroup(pid, "SIGKILL");
       liveGroups.delete(pid);
-    }, this.options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS);
+    }, this.graceMs);
     straggler.unref?.();
   }
 }
 
 /**
- * Stdio transport for a configured server. The child receives only the SDK's
+ * Stdio transport for a configured server. The child receives only the safe
  * default environment (HOME, LOGNAME, PATH, SHELL, TERM, USER on POSIX) plus
- * the server's declared `env`, never Aiden's whole environment. Windows keeps
- * the SDK transport, which runs `.cmd` shims through cross-spawn.
+ * the server's declared `env`, never Aiden's whole environment. On Windows,
+ * Pi's transport runs `.cmd` shims through cross-spawn and ends the tree with
+ * `taskkill /T`.
  */
-export function createMcpStdioTransport(options: McpStdioTransportOptions): Transport {
-  if (process.platform === "win32") {
-    return new StdioClientTransport({
-      command: options.command,
-      args: [...(options.args ?? [])],
-      // The pinned SDK already layers env over its defaults; spell it out so
-      // this contract does not depend on SDK internals.
-      env: { ...getDefaultEnvironment(), ...options.env },
-      cwd: options.cwd,
-      maxBufferSize: options.maxBufferSize,
-    });
-  }
-  return new ProcessGroupStdioTransport(options);
+export function createMcpStdioTransport(options: McpStdioTransportOptions): McpTransport {
+  const graceMs = options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS;
+  const transportOptions: StdioTransportOptions = {
+    command: options.command,
+    args: [...(options.args ?? [])],
+    env: { ...defaultMcpStdioEnvironment(), ...options.env },
+    inheritEnv: false,
+    cwd: options.cwd,
+    stderr: "inherit",
+    ...(options.maxBufferSize === undefined ? {} : { maxMessageBytes: options.maxBufferSize }),
+    closeTimeoutMs: graceMs,
+  };
+  return new AidenStdioTransport(transportOptions, graceMs, process.platform !== "win32");
 }
