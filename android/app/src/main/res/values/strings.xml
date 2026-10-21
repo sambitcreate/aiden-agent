@@ -857,6 +857,23 @@
     <string name="chat_visual_show_more">Show more</string>
     <string name="chat_visual_show_less">Show less</string>
 
+    <!-- Chat: interactive visual viewer (contract revision 35) -->
+    <string name="chat_visual_open_interactive">Open interactive</string>
+    <string name="chat_visual_viewer_close">Close visual</string>
+    <string name="chat_visual_viewer_show_image">Show snapshot image</string>
+    <string name="chat_visual_viewer_loading">Loading visual</string>
+    <string name="chat_visual_viewer_stale">Showing a saved copy. May be out of date.</string>
+    <string name="chat_visual_viewer_failed">Couldn’t load this visual. Check that your Mac is reachable.</string>
+    <string name="chat_visual_viewer_unavailable">This visual isn’t available on your Mac.</string>
+    <string name="chat_visual_viewer_stopped">The visual stopped responding.</string>
+    <string name="chat_visual_prompt_title">Add to message?</string>
+    <string name="chat_visual_prompt_body">The visual suggests this follow-up. It’s added to your message so you can edit it before sending.</string>
+    <string name="chat_visual_prompt_quote">“%1$s”</string>
+    <string name="chat_visual_prompt_add">Add to message</string>
+    <string name="chat_visual_prompt_dismiss">Dismiss</string>
+    <string name="chat_visual_link_title">Open link?</string>
+    <string name="chat_visual_link_open">Open</string>
+
     <!-- Chat: message actions -->
     <string name="chat_message_actions">Message actions</string>
     <string name="chat_message_select_text_action">Select text</string>

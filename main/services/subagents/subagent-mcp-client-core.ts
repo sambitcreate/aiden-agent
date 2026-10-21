@@ -13,26 +13,26 @@ export const MAX_SUBAGENT_MCP_CLIENT_REDACTORS = 512;
 
 interface RequestOptions {
   signal: AbortSignal;
-  timeout: number;
-  maxTotalTimeout: number;
+  timeoutMs: number;
 }
 
-export interface IsolatedSubagentMcpSdkClient {
+/** One isolated MCP client connection, as the main process drives it. */
+export interface IsolatedSubagentMcpClient {
   connect(transport: unknown, options: RequestOptions): Promise<void>;
   close(): Promise<void>;
+  /** One raw tools/list page. */
   listTools(
-    params: { cursor: string } | undefined,
+    cursor: string | undefined,
     options: RequestOptions,
   ): Promise<{ tools: readonly SubagentMcpRemoteTool[]; nextCursor?: string }>;
   callTool(
     params: { name: string; arguments: Record<string, unknown> },
-    resultSchema: undefined,
     options: RequestOptions,
   ): Promise<unknown>;
 }
 
 export interface IsolatedSubagentMcpClientDependencies {
-  createClient(): IsolatedSubagentMcpSdkClient;
+  createClient(): IsolatedSubagentMcpClient;
   resolveAuth(server: McpServer, isCurrent: () => boolean): Promise<McpServer>;
   resolveCredentialBoundary(
     server: McpServer,
@@ -114,7 +114,7 @@ function redactTextResult(result: unknown, boundary: SubagentMcpCredentialBounda
   };
 }
 
-/** Isolated SDK lifecycle; credentials and transports remain behind injected main-owned ports. */
+/** Isolated MCP client lifecycle; credentials and transports remain behind injected main-owned ports. */
 export async function withIsolatedSubagentMcpClientCore<T>(input: {
   server: McpServer;
   signal: AbortSignal;
@@ -139,8 +139,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
       input.signal.addEventListener("abort", closeOnAbort, { once: true });
       const requestOptions = (signal: AbortSignal): RequestOptions => ({
         signal,
-        timeout: SUBAGENT_MCP_REQUEST_TIMEOUT_MS,
-        maxTotalTimeout: SUBAGENT_MCP_REQUEST_TIMEOUT_MS,
+        timeoutMs: SUBAGENT_MCP_REQUEST_TIMEOUT_MS,
       });
       try {
         const credentialBeforeConnect = await input.dependencies.resolveCredentialBoundary(
@@ -162,7 +161,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
           registerCredentialRedactor,
         });
         // No await may be inserted between this main-owned config fence and
-        // the SDK instruction that emits raw connection request bytes.
+        // the client instruction that emits raw connection request bytes.
         assertRawRequestCurrent(input.configurationLease, input.signal);
         await client.connect(transport, requestOptions(input.signal));
         if (input.signal.aborted) throw abortReason(input.signal);
@@ -192,9 +191,9 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
               signal: AbortSignal.any([requestSignal, input.signal, input.configurationLease.signal]),
               assertCurrent: () => assertRawRequestCurrent(input.configurationLease, requestSignal),
               listPage: async (cursor, pageSignal) => {
-                // Exact synchronous fence immediately before each raw SDK request.
+                // Exact synchronous fence immediately before each raw MCP request.
                 assertRawRequestCurrent(input.configurationLease, pageSignal);
-                const result = await client.listTools(cursor === undefined ? undefined : { cursor }, requestOptions(pageSignal));
+                const result = await client.listTools(cursor, requestOptions(pageSignal));
                 if (!(await credentialRevisionIsCurrent(pageSignal))) throw new Error("MCP credential revision changed.");
                 return result;
               },
@@ -221,11 +220,10 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
               guard?.assertCallable(toolName);
               beforeEffect?.();
               // No await may be inserted between this main-owned config
-              // fence and the SDK instruction that emits raw request bytes.
+              // fence and the client instruction that emits raw request bytes.
               assertRawRequestCurrent(input.configurationLease, requestSignal);
               const result = await client.callTool(
                 { name: toolName, arguments: args },
-                undefined,
                 requestOptions(requestSignal),
               );
               const currentBoundary = await input.dependencies.resolveCredentialBoundary(
@@ -246,7 +244,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
           callToolRaw: (toolName, args, requestSignal, beforeRawBytes) => {
             // This mutation-only path is valid only after the caller has
             // reinspected the exact credential-bound inventory on this client.
-            // No await may be inserted between these fences and the one SDK
+            // No await may be inserted between these fences and the one client
             // invocation that can emit request bytes.
             assertRawRequestCurrent(input.configurationLease, requestSignal);
             const guard = callGuard;
@@ -254,7 +252,6 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
             beforeRawBytes();
             const raw = client.callTool(
               { name: toolName, arguments: args },
-              undefined,
               requestOptions(requestSignal),
             );
             return raw.then(async (result) => {

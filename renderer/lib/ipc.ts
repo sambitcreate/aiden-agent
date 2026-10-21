@@ -256,7 +256,14 @@ import type {
   PeerRunTarget,
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
+import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../shared/peer-bot-session";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
+import type {
+  WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactV1,
+  WorkspaceArtifactSourceResultV1,
+  WorkspaceArtifactView,
+} from "../shared/workspace-artifacts";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -316,6 +323,13 @@ export const peerHostsApi = {
     invoke<PeerRunSubscription>("remote:peerRunSubscribe", hostId, target, afterSequence),
   runUnsubscribe: (subscriptionId: string) =>
     invoke<boolean>("remote:peerRunUnsubscribe", subscriptionId),
+  /** Follow a host Bot's durable conversation; frames arrive on `onBotSession`. */
+  botSessionSubscribe: (hostId: string, botId: string) =>
+    invoke<PeerBotSessionSubscription>("remote:peerBotSessionSubscribe", hostId, botId),
+  botSessionUnsubscribe: (subscriptionId: string) =>
+    invoke<boolean>("remote:peerBotSessionUnsubscribe", subscriptionId),
+  onBotSession: (handler: (message: PeerBotSessionMessage) => void) =>
+    onNotification<PeerBotSessionMessage>("remote:peer-bot-session", handler),
   onHostFeed: (handler: (message: PeerHostFeedMessage) => void) =>
     onNotification<PeerHostFeedMessage>("remote:host-feed", handler),
   onRunFrame: (handler: (message: PeerRunFrameMessage) => void) =>
@@ -413,6 +427,9 @@ export const providersApi = {
       request,
     ),
   logout: (providerId: string) => invoke<unknown>("providers:logout", providerId),
+  /** Settings → Providers: let custom connectors use this provider's saved API key. */
+  setConnectorKeySharing: (providerId: string, allowed: boolean) =>
+    invoke<{ connectorKeySharing: boolean }>("providers:setConnectorKeySharing", providerId, allowed),
   onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
     onNotification("providers:auth:prompt", handler),
   onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>
@@ -592,7 +609,8 @@ export const mcpApi = {
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
-  authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
+  /** `connectionError`: signed in and stored, but the follow-up connection failed for another reason. */
+  authorize: (server: McpServer) => invoke<{ authorized: boolean; connectionError?: string }>("mcp:authorize", server),
   /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
   cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
   /** Forget this server's OAuth session and disconnect it. */
@@ -608,7 +626,7 @@ export const mcpApi = {
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>
-    invoke<{ authorized: boolean; needsSignIn?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+    invoke<{ authorized: boolean; needsSignIn?: boolean; hasSession?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
   providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
@@ -967,6 +985,7 @@ export const browserApi = {
   setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
+  openFileExternal: (workspaceId: string, path: string) => invoke<void>("browser:open-file-external", workspaceId, path),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
@@ -1184,6 +1203,29 @@ export const pullRequestsApi = {
     invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
   adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
     invoke<ChatPullRequestLinkResult>("pullRequests:adopt", chatId, operationId, ref),
+};
+
+// ── Workspace artifacts ───────────────────────────────────────────────
+// Pages a workspace keeps in the Tools panel's Artifacts tab. Main owns the
+// files and runs every source; the renderer only names ids.
+export const workspaceArtifactsApi = {
+  list: (workspaceId: string) => invoke<WorkspaceArtifactView[]>("workspaces:artifacts:list", workspaceId),
+  rename: (workspaceId: string, artifactId: string, title: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
+  delete: (workspaceId: string, artifactId: string) =>
+    invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
+  saveState: (workspaceId: string, artifactId: string, state: Record<string, unknown>) =>
+    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
+  approve: (workspaceId: string, artifactId: string, digest: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
+  /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
+  refresh: (workspaceId: string, artifactId: string) =>
+    invoke<Record<string, WorkspaceArtifactSourceResultV1>>("workspaces:artifacts:refresh", workspaceId, artifactId),
+  /** Runs one of the page's buttons; main fills in the saved command. */
+  run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
+    invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
+  onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
+    onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────

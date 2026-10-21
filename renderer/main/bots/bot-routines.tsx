@@ -38,7 +38,19 @@ export function BotRoutines({
     setEditingState(next);
   };
   const list = routines.data ?? [];
-  const refresh = () => qc.invalidateQueries({ queryKey: botRoutinesKey(bot.id) });
+  const key = botRoutinesKey(bot.id);
+  // The editor's answer is placed in the list at once; the reread follows in the background.
+  const placeSaved = (saved: BotRoutine) => {
+    qc.setQueryData<BotRoutine[]>(key, (current) => {
+      const rows = current ?? [];
+      return rows.some((row) => row.id === saved.id) ? rows.map((row) => (row.id === saved.id ? saved : row)) : [...rows, saved];
+    });
+    void qc.invalidateQueries({ queryKey: key });
+  };
+  const dropDeleted = (id: string) => {
+    qc.setQueryData<BotRoutine[]>(key, (current) => current?.filter((row) => row.id !== id));
+    void qc.invalidateQueries({ queryKey: key });
+  };
 
   const titleId = `routines-${bot.id}`;
   const rowClass =
@@ -139,8 +151,8 @@ export function BotRoutines({
         onOpenChange={(open) => {
           if (!open) setEditing(null);
         }}
-        onSaved={() => void refresh()}
-        onDeleted={() => void refresh()}
+        onSaved={placeSaved}
+        onDeleted={dropDeleted}
       />
     </section>
   );

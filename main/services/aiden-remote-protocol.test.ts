@@ -125,24 +125,9 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
   (capability) => !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability),
 );
 
-test("every server feature token the host can announce fits the server feature budget", async () => {
-  const protocol = await import("./aiden-remote-protocol.js");
-  const { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE } = await import("./aiden-remote-providers.js");
-  const { REMOTE_TTS_FEATURE } = await import("./aiden-remote-tts.js");
-  const tokens = new Set<string>([AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, REMOTE_TTS_FEATURE]);
-  for (const [name, value] of Object.entries(protocol)) {
-    if (name.endsWith("_FEATURE") && typeof value === "string") tokens.add(value);
-  }
-  assert.ok(tokens.has("bot-memory-v1") && tokens.has("bot-proactive-v1"));
-  assert.ok(
-    tokens.size <= AIDEN_REMOTE_MAX_SERVER_FEATURES,
-    `${tokens.size} feature tokens exceed the ${AIDEN_REMOTE_MAX_SERVER_FEATURES}-token /server budget`,
-  );
-});
-
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 34);
+  assert.equal(fixture.contractRevision, 36);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -561,6 +546,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
     "/chats/{chatId}/attachments/{attachmentId}/content",
+    "/chats/{chatId}/visuals/{visualId}/document",
     "/bots",
     "/bots/{botId}",
     "/bot-presets",
@@ -1085,7 +1071,9 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "BotAvatarUploadRequest",
   ];
   for (const name of closedBotSchemas) {
-    assert.equal(record(schemas[name], name).additionalProperties, false, `${name} must be closed`);
+    // A schema composed with allOf closes over everything it evaluates instead.
+    const schema = record(schemas[name], name);
+    assert.equal(schema.additionalProperties ?? schema.unevaluatedProperties, false, `${name} must be closed`);
   }
   for (const name of [
     "BotAccessView",

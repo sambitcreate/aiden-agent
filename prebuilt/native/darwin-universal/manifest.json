@@ -16,7 +16,7 @@
     },
     "subagent-shell-runner": {
       "sha256": "cdf992e9a63d104577a27c0ddc2833fdd50bb65c123c925a4ff73a15f0dfb18e",
-      "source": "6679af2569fb7fea609dce1eedf99059481256f0e57c2bd7946aa59194d70575"
+      "source": "4dbcd343b4f0c0546f7a64b21d67c3115d29f50128e03c02d9ca149cc62b8cb7"
     },
     "subagent-file-mutator": {
       "sha256": "44b6f97501f6a1fd77a214c97d79c96422c145b52ce85706ca13cf7a3b73fa9a",

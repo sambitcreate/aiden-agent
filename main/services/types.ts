@@ -93,6 +93,10 @@ export interface Provider extends StoredProvider {
   canLogout?: boolean;
   /** Former custom IDs remapped during a safe provider-identity migration. */
   legacyIds?: string[];
+  /** Built-in providers: the kind of credential Aiden stores (never the value). */
+  credentialType?: "api_key" | "oauth";
+  /** Built-in API-key providers: custom connectors may use this key on this device (Settings → Providers). */
+  connectorKeySharing?: boolean;
   /** Pi-owned setup options. No credentials or provider environment values cross IPC. */
   authMethods?: Array<{
     type: "api_key" | "oauth";
@@ -465,6 +469,11 @@ export interface ChatMeta {
    */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  /**
+   * The message at `lastAssistantAt` ended its turn in failure, so an unread
+   * row says Failed instead of showing a new-reply dot. Absent when false.
+   */
+  lastAssistantFailed?: boolean;
   /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
   forkedFrom?: ChatForkLineageV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
@@ -602,7 +611,7 @@ export interface ScheduledTaskSettings {
   defaultTimezone: string;
 }
 
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 
 /** A user-configured MCP server connection. */
 export interface McpServer {
@@ -620,7 +629,16 @@ export interface McpServer {
   oauth?: boolean;
   /** Explicit authorization-server metadata document for custom remote OAuth connections. */
   authServerMetadataUrl?: string;
-  oauthClientName?: string;
+  /**
+   * Custom remote OAuth servers without dynamic registration: a client the
+   * person registered with the provider. Sign-in uses it instead of registering.
+   */
+  oauthClientId?: string;
+  /**
+   * That client's secret. config.json holds only a keychain marker (see
+   * mcp-field-secrets-core.ts); the value never reaches the renderer.
+   */
+  oauthClientSecret?: string;
   /** Built-in provider reference; requires separate device-local consent before use. */
   authProvider?: string;
   /** Optional bounded server description used for tool discovery. */

@@ -10,6 +10,9 @@ import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
+import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import { buildVisualViewerDocument, type VisualViewerAppearance, type VisualViewerSource } from "./visual-viewer-document.js";
+import { loadVisualViewerBundle, loadVisualViewerLibraries, visualViewerInstalled } from "./visual-viewer-main.js";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -150,6 +153,8 @@ import {
   filterBotSkillSnapshot,
 } from "./bot-tool-authority.js";
 import { skillRegistry } from "./skill-registry-main.js";
+import { withoutSkills } from "./skill-registry.js";
+import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { simulatorShareRelay } from "./devices/device-share.js";
 import {
@@ -548,11 +553,22 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             ...(botsSupported
               ? {
                   retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
+                  durableBotSessions: () => activeBotSessions !== undefined,
                   botTurnAuthorityPreflight: preflightBotTurnAuthority,
                 }
               : {}),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            // Revision 35: phones open visuals full screen when this build ships the viewer.
+            ...(visualViewerInstalled()
+              ? {
+                  visualViewer: {
+                    htmlFor: (chatId: string, mediaId: string) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
+                    render: async (source: VisualViewerSource, appearance: VisualViewerAppearance) =>
+                      buildVisualViewerDocument(source, appearance, await loadVisualViewerBundle(), await loadVisualViewerLibraries()),
+                  },
+                }
+              : {}),
             // Paired devices see visuals as snapshots, so turns follow Appearance.
             inlineVisuals: async () =>
               normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
@@ -576,7 +592,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.capabilities.includes("skills:invoke")
               );
             },
-            skillCatalog: (workspaceId) => skillRegistry.catalog(workspaceId),
+            // Phones never get workspace_artifact, so they do not list its skill either.
+            skillCatalog: async (workspaceId) =>
+              withoutSkills(await skillRegistry.snapshot(workspaceId), DESKTOP_ARTIFACT_SKILLS).catalog,
             botSkillCatalog: async (deviceId, botId, chatId, workspaceId) => {
               // The same Full/Custom narrowing the generation path enforces:
               // admit fresh, revalidate, then filter the workspace snapshot

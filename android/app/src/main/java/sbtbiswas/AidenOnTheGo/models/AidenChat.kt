@@ -865,9 +865,20 @@ data class AidenChatSummary(
     /** True only when assistant output arrived after the chat was last viewed. */
     val unread: Boolean = false,
     /** Fork lineage (revision 21); rows never carry the summary. */
-    val forkedFrom: AidenChatForkLineageRow? = null
+    val forkedFrom: AidenChatForkLineageRow? = null,
+    /**
+     * Revision 36: the chat's newest assistant output is a failed turn. The
+     * server sends it only when true; older Macs omit it.
+     */
+    val lastRunFailed: Boolean = false
 ) {
     val rowState: AidenChatRowState? get() = AidenChatRowState.fromWire(rowStateWire)
+
+    /**
+     * The row says Failed in place of the unread dot: the unseen output is a
+     * failed turn. Viewing the chat clears unread, and with it Failed.
+     */
+    val showsFailed: Boolean get() = unread && lastRunFailed
 
     /**
      * The state a list row renders. Local activity is authoritative for

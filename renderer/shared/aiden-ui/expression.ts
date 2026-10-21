@@ -7,7 +7,7 @@ import type { AidenUiActionV1, AidenUiExprV1, AidenUiFunctionName } from "./type
  */
 
 const FUNCTIONS = new Set<AidenUiFunctionName>(["fmt", "len", "sum", "max", "min", "round", "filter", "sort"]);
-const ACTIONS = new Set(["sendPrompt", "setState", "openUrl", "copy"]);
+const ACTIONS = new Set(["sendPrompt", "setState", "openUrl", "copy", "compose", "run"]);
 const MAX_SOURCE_CHARS = 16_384;
 
 type Token =
@@ -121,6 +121,16 @@ class Parser {
       case "openUrl":
         if (args.length !== 1) throw new ExpressionError("openUrl takes one argument");
         return { act: "open", url: args[0]! };
+      case "compose":
+        if (args.length !== 1) throw new ExpressionError("compose takes one argument");
+        return { act: "compose", text: args[0]! };
+      case "run": {
+        const name = args[0];
+        if (name?.op !== "lit" || typeof name.v !== "string" || !name.v) {
+          throw new ExpressionError('run needs the action name first: run("merge", $pr.number)');
+        }
+        return { act: "run", name: name.v, a: args.slice(1) };
+      }
       default: {
         const key = args[0];
         if (args.length !== 2 || key?.op !== "lit" || typeof key.v !== "string" || !key.v) {

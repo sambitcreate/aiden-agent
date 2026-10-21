@@ -124,6 +124,7 @@
         "main/services/gemini-live-transcription-core.test.ts",
         "main/services/generation-bound-connection-cache.test.ts",
         "main/services/generation-context.test.ts",
+        "main/services/prompt-cache-lifetimes.test.ts",
         "main/services/generation-emergency-outcome.test.ts",
         "main/services/generation-git-context.test.ts",
         "main/services/generation-harness.test.ts",
@@ -327,7 +328,11 @@
         "main/services/schedule-script.test.ts",
         "main/services/shortcut-registration-core.test.ts",
         "main/services/shortcut-transaction-core.test.ts",
-        "main/services/superseding-task-core.test.ts"
+        "main/services/superseding-task-core.test.ts",
+        "main/services/workspace-artifacts/store.test.ts",
+        "main/services/workspace-artifacts/tool.test.ts",
+        "main/handlers/workspace-artifacts.test.ts",
+        "main/services/workspace-artifacts/runner.test.ts"
       ],
       "preserved": [
         "browser",
@@ -369,6 +374,8 @@
         "main/services/mcp-field-secrets-core.test.ts",
         "main/services/mcp-stdio-approvals.test.ts",
         "main/services/mcp-oauth-loopback.test.ts",
+        "main/services/mcp-oauth-flow.test.ts",
+        "main/services/mcp-failure-diagnostics.test.ts",
         "main/services/mcp-status-events.test.ts",
         "main/handlers/peer-host-live.test.ts",
         "main/handlers/peer-intents.test.ts",
@@ -399,6 +406,7 @@
         "main/services/aiden-remote-chat-progress.test.ts",
         "main/services/aiden-remote-chat-summaries.test.ts",
         "main/services/aiden-remote-chats.test.ts",
+        "main/services/visual-viewer-document.test.ts",
         "main/services/aiden-remote-files.test.ts",
         "main/services/aiden-remote-git.test.ts",
         "main/services/aiden-remote-host-feed.test.ts",
@@ -508,6 +516,7 @@
         "main/services/devices/device-feature-ipc.test.ts",
         "main/services/devices/device-features.test.ts",
         "main/services/devices/device-hub-proxy.test.ts",
+        "main/services/devices/mjpeg-still-frame.test.ts",
         "main/services/devices/device-ipc.test.ts",
         "main/services/devices/device-recording.test.ts",
         "main/services/devices/device-save-path.test.ts",
@@ -550,6 +559,7 @@
         "main/services/mcp-selection.test.ts",
         "main/services/mcp-tool-result.test.ts",
         "main/services/peer-bootstrap-transport.test.ts",
+        "main/services/peer-bot-sessions.test.ts",
         "main/services/peer-discovery.test.ts",
         "main/services/peer-host-feed-cache.test.ts",
         "main/services/peer-host-manager.test.ts",
@@ -808,6 +818,7 @@
         "renderer/lib/composer-type-focus.test.ts",
         "renderer/lib/composer-submission.test.ts",
         "renderer/lib/context-pressure-feed.test.ts",
+        "renderer/lib/expired-cache-return.test.ts",
         "renderer/lib/design-ipc.test.ts",
         "renderer/lib/device-ax.test.ts",
         "renderer/lib/device-clipboard.test.ts",
@@ -864,6 +875,7 @@
         "renderer/lib/hosts/new-chat-targets.test.ts",
         "renderer/lib/hosts/observed-local-run.test.ts",
         "renderer/lib/hosts/peer-host-feed-state.test.ts",
+        "renderer/lib/hosts/remote-bot-session.test.ts",
         "renderer/lib/hosts/remote-chat-mapper.test.ts",
         "renderer/lib/hosts/remote-new-chat.test.ts",
         "renderer/lib/hosts/remote-stream-translator.test.ts",
@@ -946,6 +958,7 @@
         "main/handlers/bot-renderer-errors.test.ts",
         "renderer/main/chat-transition.test.tsx",
         "renderer/components/settings/compaction-budget-settings.test.tsx",
+        "renderer/main/remote-bot-chat-view.test.tsx",
         "renderer/main/remote-chat-view.test.tsx",
         "renderer/main/remote-new-chat-view.test.tsx",
         "renderer/main/studio-capability-route.test.tsx",
@@ -965,6 +978,7 @@
         "renderer/shared/chat-row-state.test.ts",
         "renderer/shared/chat-visibility.test.ts",
         "renderer/shared/compaction.test.ts",
+        "renderer/shared/connector-catalog.test.ts",
         "renderer/shared/context-pressure.test.ts",
         "renderer/shared/device-features.test.ts",
         "renderer/shared/device-ssh-hosts.test.ts",
@@ -973,7 +987,6 @@
         "renderer/shared/dictation-preferences.test.ts",
         "renderer/shared/gemini-usage-scope.test.ts",
         "renderer/shared/onboarding.test.ts",
-        "renderer/shared/plugin-catalog.test.ts",
         "renderer/shared/provider-deployment.test.ts",
         "renderer/shared/provider-thinking.test.ts",
         "renderer/shared/slash-commands.test.ts",
@@ -1005,7 +1018,6 @@
         "scripts/sign-macos.test.mjs",
         "scripts/subagent-packaged-soak.test.mjs",
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
-        "scripts/plugins-refresh-core.test.mjs",
         "scripts/update-model-capabilities.test.mjs",
         "scripts/vendor-cua-driver.test.mjs",
         "scripts/verify-macos-package.test.mjs",
@@ -1061,7 +1073,10 @@
         "renderer/shared/keybindings.test.ts",
         "renderer/components/workspace-picker.test.tsx",
         "renderer/lib/workspace-menu.test.ts",
-        "renderer/lib/draft-workspace-menu.test.ts"
+        "renderer/lib/draft-workspace-menu.test.ts",
+        "renderer/shared/workspace-artifacts.test.ts",
+        "renderer/components/artifacts-panel.test.tsx",
+        "renderer/lib/chat-prompt-bridge.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",
@@ -1225,6 +1240,18 @@
       "reason": "VCC tests and child compaction budget recovery require the built worker."
     },
     {
+      "id": "visual-viewer-build",
+      "for": [
+        "generative-ui-chromium"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:visual-viewer"
+      ],
+      "reason": "pretest:generative-ui phone visual viewer bundle."
+    },
+    {
       "id": "worktree-file-io-build",
       "command": [
         "npm",
@@ -1267,6 +1294,9 @@
         "npm",
         "run",
         "test:generative-ui"
+      ],
+      "requires": [
+        "visual-viewer-build"
       ],
       "reason": "Preserve the Playwright Chromium containment and fail-on-flaky gate."
     },

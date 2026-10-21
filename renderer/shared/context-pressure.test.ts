@@ -90,6 +90,10 @@ test("token formatting stays compact and approximate", () => {
   assert.equal(formatContextTokenCount(1_000_000), "1M");
   assert.equal(formatContextTokenCount(1_572_000), "1.6M");
   assert.equal(formatContextTokenCount(-4), "0");
+  // Rounding never produces "1000.0K" or a trailing ".0".
+  assert.equal(formatContextTokenCount(999_950), "1M");
+  assert.equal(formatContextTokenCount(99_960), "100K");
+  assert.equal(formatContextTokenCount(1_040), "1K");
 });
 
 test("the meter reads usable-input pressure, not raw window occupancy", () => {
@@ -156,4 +160,14 @@ test("a pressure without a breakdown still parses", () => {
   const parsed = parseChatContextPressure(pressure());
   assert.ok(parsed);
   assert.equal("breakdown" in parsed, false);
+});
+
+test("a prompt cache window survives parsing, and a malformed one is dropped without losing the projection", () => {
+  const promptCache = { ttlMs: 300_000, lastRequestAt: 1_700_000_000_000 };
+  assert.deepEqual(parseChatContextPressure({ ...pressure(), promptCache })?.promptCache, promptCache);
+  for (const bad of [{ ttlMs: 0, lastRequestAt: 1 }, { ttlMs: -5, lastRequestAt: 1 }, { ttlMs: 300_000 }, "5m"]) {
+    const parsed = parseChatContextPressure({ ...pressure(), promptCache: bad });
+    assert.ok(parsed);
+    assert.equal("promptCache" in parsed, false);
+  }
 });

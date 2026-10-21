@@ -102,7 +102,8 @@ uncertain connection.
 ## Platform behavior
 
 The workspace agent, providers, local models, MCP, skills, Web Search,
-schedules, terminal, Git, file editor, generative UI artifacts, diagnostics,
+schedules, terminal, Git, file editor, generative UI artifacts, workspace
+artifacts, diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents use the same contracts as macOS. Linux-specific integrations include:
 

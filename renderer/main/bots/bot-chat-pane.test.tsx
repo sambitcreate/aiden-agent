@@ -184,25 +184,58 @@ test("a new epoch from a reopened Bot replaces the view with a fresh snapshot", 
   assert.equal(screen.queryByText("Old session message"), null);
 });
 
-test("an interrupted Bot offers Resume and Dismiss, each sent once with a request id", async () => {
+test("an interrupted Bot offers Resume and Dismiss, each sent once with a request id, and the card leaves on the click", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1" } }),
-    "bots:resume": () => ({ kind: "running", submissionId: "s1" }),
+    // Still paused after the Resume (say, the readmission was refused): the card comes back.
+    "bots:resume": () => ({ kind: "interrupted", submissionId: "s1" }),
     "bots:dismiss": () => ({ kind: "idle" }),
   });
   const card = await screen.findByRole("group", { name: "Planner was interrupted" });
   assert.ok(within(card).getByText("I got interrupted while working on this."));
   fireEvent.click(within(card).getByRole("button", { name: "Resume" }));
+  assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null, "the card leaves before main answers");
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
   const resume = calls.find((call) => call.channel === "bots:resume")!;
   const resumeInput = resume.args[0] as { botId: string; requestId: string };
   assert.equal(resumeInput.botId, "bot-1");
   assert.match(resumeInput.requestId, UUID);
-  fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
+  const back = await screen.findByRole("group", { name: "Planner was interrupted" });
+  // Main answered (and remembers that answer per id), so the next Resume is a new request.
+  fireEvent.click(within(back).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 2));
+  const secondResume = calls.filter((call) => call.channel === "bots:resume")[1]!.args[0] as { requestId: string };
+  assert.notEqual(secondResume.requestId, resumeInput.requestId);
+  const backAgain = await screen.findByRole("group", { name: "Planner was interrupted" });
+  fireEvent.click(within(backAgain).getByRole("button", { name: "Dismiss" }));
+  assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null);
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 1));
   const dismissInput = calls.find((call) => call.channel === "bots:dismiss")!.args[0] as { botId: string; requestId: string };
   assert.equal(dismissInput.botId, "bot-1");
   assert.match(dismissInput.requestId, UUID);
+  assert.notEqual(dismissInput.requestId, resumeInput.requestId);
+});
+
+test("a Resume that fails brings the card back, and the next Resume replays the same request id", async () => {
+  let fail = true;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1" } }),
+    "bots:resume": () => {
+      if (fail) throw new Error("Error invoking remote method 'bots:resume': Error: Bots are starting.");
+      return { kind: "running", submissionId: "s1" };
+    },
+  });
+  const card = await screen.findByRole("group", { name: "Planner was interrupted" });
+  fireEvent.click(within(card).getByRole("button", { name: "Resume" }));
+  const back = await screen.findByRole("group", { name: "Planner was interrupted" });
+  fail = false;
+  fireEvent.click(within(back).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 2));
+  const [first, second] = calls.filter((call) => call.channel === "bots:resume").map((call) => (call.args[0] as { requestId: string }).requestId);
+  assert.equal(first, second, "main deduplicates the replay by its request id");
+  // Running now: the card stays away until the live state says otherwise.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null);
 });
 
 test("an interrupted Bot whose access changed points to Advanced instead of resuming", async () => {
@@ -372,10 +405,11 @@ test("Resume clicked twice, or Resume then Dismiss, sends one request until the 
   fireEvent.click(dismiss);
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
   assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 0);
-  answer({ kind: "running", submissionId: "s1" });
-  // Once answered, the card works again (the live state decides whether it stays).
-  await waitFor(() => assert.equal(within(card).getByRole("button", { name: "Dismiss" }).hasAttribute("disabled"), false));
-  fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
+  assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null, "the card is gone while main answers");
+  // Answered as still paused: the card is back and works again.
+  answer({ kind: "interrupted", submissionId: "s1" });
+  const back = await screen.findByRole("group", { name: "Planner was interrupted" });
+  fireEvent.click(within(back).getByRole("button", { name: "Dismiss" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 1));
 });
 
@@ -1001,3 +1035,82 @@ test("an open chat keeps its Bot read: a reply that finishes while it is open is
   assert.ok((stored().lastViewed["bot-1"] ?? 0) > opened, "leaving records when it was last open");
   assert.equal(stored().seenReplyAt["bot-1"], replyAt, "leaving never claims a reply the chat didn't show");
 });
+
+test("a sent message shows at once as a pending echo, which settles when its entry arrives", async () => {
+  let answer: (result: unknown) => void = () => undefined;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => new Promise((resolve) => (answer = resolve)),
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "Plan dinner" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  const echo = await screen.findByText("Plan dinner");
+  assert.ok(echo.closest("[data-bot-pending-send]"), "the message is on screen before main answers");
+  assert.ok(screen.getByText("Sending…"));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+  answer({ submissionId: "s1", deduped: false });
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "entry",
+    entry: userEntry("u1", "Plan dinner"),
+  }));
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+  assert.equal(screen.getAllByText("Plan dinner").length, 1, "the echo gave way to the entry, not doubled it");
+});
+
+test("a send that fails drops its echo, and the same words sent again replay the same request id", async () => {
+  let fail = true;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => {
+      if (fail) throw new Error("Error invoking remote method 'bots:send': Error: Bots are starting.");
+      return { submissionId: "s1", deduped: false };
+    },
+  });
+  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Plan dinner" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+  // The composer gave the words back; sending them again is the same request.
+  await waitFor(() => assert.equal(box.value, "Plan dinner"));
+  fail = false;
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 2));
+  const [first, second] = calls.filter((call) => call.channel === "bots:send").map((call) => (call.args[0] as { requestId: string }).requestId);
+  assert.equal(first, second);
+  // Different words are a new request.
+  fireEvent.change(box, { target: { value: "Plan lunch" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 3));
+  const third = (calls.filter((call) => call.channel === "bots:send")[2]!.args[0] as { requestId: string }).requestId;
+  assert.notEqual(third, first);
+});
+
+test("Retry hides the failed card and echoes the message at once, under one request id per failed turn", async () => {
+  let fail = true;
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ entries: [userEntry("u1", "Plan dinner"), { id: "a1:failed", type: "failed_turn", retryText: "Plan dinner" }] }),
+    "bots:send": () => {
+      if (fail) throw new Error("Error invoking remote method 'bots:send': Error: Bots are starting.");
+      return { submissionId: "s2", deduped: false };
+    },
+  });
+  const card = await screen.findByRole("group", { name: "Planner couldn’t finish a reply" });
+  fireEvent.click(within(card).getByRole("button", { name: "Retry" }));
+  assert.equal(screen.queryByRole("group", { name: "Planner couldn’t finish a reply" }), null, "the card leaves on the click");
+  assert.ok(document.querySelector("[data-bot-pending-send]"), "the message is echoed");
+  // The retry failed: the card is back and the echo is gone.
+  const back = await screen.findByRole("group", { name: "Planner couldn’t finish a reply" });
+  assert.equal(document.querySelector("[data-bot-pending-send]"), null);
+  fail = false;
+  fireEvent.click(within(back).getByRole("button", { name: "Retry" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 2));
+  const [first, second] = calls.filter((call) => call.channel === "bots:send").map((call) => (call.args[0] as { requestId: string }).requestId);
+  assert.equal(first, second, "the same failed turn retries under one request id");
+});
+

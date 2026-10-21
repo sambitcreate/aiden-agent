@@ -16,6 +16,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenVisualDocumentCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
@@ -28,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.OkHttpClient
 import java.io.File
@@ -115,8 +117,12 @@ class AidenRemoteCoordinator(
     /** Where unsent Bot messages wait on disk; the app passes `noBackupFilesDir` so they never reach a backup. */
     botOutboxDir: File = storageDir,
     /** Runs the Bot outbox's disk work in order; null uses its own thread. Tests hold it to order a read against a switch. */
-    botOutboxIo: java.util.concurrent.Executor? = null
+    botOutboxIo: java.util.concurrent.Executor? = null,
+    /** Saved visual viewer documents; the app passes a directory under `cacheDir`. */
+    visualDocumentDir: File = File(storageDir, "visual_documents")
 ) {
+    /** Visual viewer documents (revision 35), purged whenever a pairing is removed or revoked. */
+    val visualDocumentCache = AidenVisualDocumentCache(visualDocumentDir)
     val archiveStore = AidenWorkspaceArchiveStore(storageDir)
     val workspaceCache = AidenWorkspaceEnvironmentCache(File(storageDir, "workspace_cache"))
     val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
@@ -146,6 +152,19 @@ class AidenRemoteCoordinator(
 
     private val _client = MutableStateFlow<AidenRemoteClient?>(null)
     val client: StateFlow<AidenRemoteClient?> = _client.asStateFlow()
+
+    /**
+     * The Mac's feature tokens: this connection's `/server` answer, else those the active pairing
+     * saved from its last answer, else null for a pairing that never heard `/server`. Gates read
+     * these so a connecting or cold open behaves like the last connected one instead of falling
+     * to a legacy path.
+     */
+    fun knownServerFeatures(server: AidenServer? = _serverInfo.value): List<String>? =
+        server?.features ?: installationStore.activeInstallation?.serverFeatures
+
+    /** Revision 25: Bots open their durable session, read from [knownServerFeatures]. */
+    fun supportsBotDurableSession(server: AidenServer? = _serverInfo.value): Boolean =
+        knownServerFeatures(server)?.contains(AidenRemoteProtocol.BOT_DURABLE_SESSION_FEATURE) == true
     /** The client [refreshClient] last made, with the pairing it was made for. */
     @Volatile
     private var clientOwner: Pair<AidenPairingIdentity, AidenRemoteClient>? = null
@@ -487,6 +506,7 @@ class AidenRemoteCoordinator(
         draftStore.purge(installation.instanceId)
         modelPreferenceStore.purge(installation.instanceId)
         navigationStore.purge(installation.instanceId)
+        visualDocumentCache.purgeAll()
         installationStore.removeInstallation(id)
         if (!wasActive) refreshIntentCatalog()
     }

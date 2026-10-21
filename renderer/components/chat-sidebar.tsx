@@ -571,6 +571,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           // The open chat is being viewed, so its own output never reads as unread.
           chat.id !== activeChatId &&
             isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence),
+          chat.lastAssistantFailed === true,
         ),
       ),
     [activeChatId, busyChatId, chatActivity, chats.data, readMarkers, workspaces],
@@ -1195,7 +1196,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                   pullRequests={sidebarPullRequests[chat.id]}
                   live={liveContext && sidebarPullRequestsKnown.has(chat.id)}
                 />
-                <ChatRowStatus state={rowState} unread={unread} />
+                <ChatRowStatus state={rowState} unread={unread} failed={chat.lastAssistantFailed === true} />
               </>
             }
             aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
@@ -1263,7 +1264,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       trailing={
         <span className="flex items-center gap-1">
           <RemoteHostMarker hostLabel={chat.hostLabel} stale={chat.stale} />
-          <ChatRowStatus state={chat.rowState} unread={chat.unread} />
+          <ChatRowStatus state={chat.rowState} unread={chat.unread} failed={chat.lastRunFailed} />
         </span>
       }
       selected={

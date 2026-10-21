@@ -19,6 +19,8 @@ import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { visualSnapshotImages } from "./visual-snapshot-core.js";
+import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   parseChatForkLineageV1,
@@ -235,14 +237,19 @@ export interface AidenRemoteChatSummaryProjection {
   rowState?: ChatRowState;
   /** Additive (protocol revision 18): assistant output arrived after the last view. */
   unread?: boolean;
+  /**
+   * Additive (protocol revision 36): the newest assistant output is a failed
+   * turn. Present only when true; clients say Failed while the row is unread.
+   */
+  lastRunFailed?: true;
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
 }
 
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
-  "titlePending" | "activity" | "rowState" | "unread"
-> & { lastAssistantAt?: number; lastAssistantSequence?: number };
+  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed"
+> & { lastAssistantAt?: number; lastAssistantSequence?: number; lastAssistantFailed?: boolean };
 
 /** Shared, main-owned read markers used for honest unread summaries. */
 export interface AidenRemoteChatReadMarkers {
@@ -575,7 +582,11 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
     revision: chatSummaryRevision(meta),
     ...(forkedFrom ? { forkedFrom } : {}),
     ...(typeof meta.lastAssistantAt === "number" && Number.isSafeInteger(meta.lastAssistantAt)
-      ? { lastAssistantAt: meta.lastAssistantAt, lastAssistantSequence: meta.lastAssistantSequence }
+      ? {
+          lastAssistantAt: meta.lastAssistantAt,
+          lastAssistantSequence: meta.lastAssistantSequence,
+          ...(meta.lastAssistantFailed === true ? { lastAssistantFailed: true } : {}),
+        }
       : {}),
   };
 }
@@ -1058,6 +1069,10 @@ function requireRevision(expected: string, chat: Chat): void {
   }
 }
 
+/** What an older Mac sees when it sends to a Bot through the workspace chat routes. */
+export const AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE =
+  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the Mac that runs them.";
+
 export class AidenRemoteChatService {
   private readonly idempotency: AidenIdempotencyLedger;
   private readonly attachments: AidenRemoteAttachmentStore;
@@ -1117,6 +1132,13 @@ export class AidenRemoteChatService {
        * retained Bot-chat read and write even when device grants are present.
        */
       retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
+      /**
+       * True while this host serves Bots' durable sessions. Their workspace
+       * chat rows are then kept only for history, and a turn sent to one is
+       * refused: it would run outside the Bot's one conversation, where the
+       * host's app, phones and Telegram never show it.
+       */
+      durableBotSessions?: () => boolean;
       botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
@@ -1129,6 +1151,14 @@ export class AidenRemoteChatService {
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
+      /**
+       * Revision 35 (`chat-visual-viewer-v1`): builds the document a phone
+       * opens for one visual. Absent on hosts without the viewer bundle.
+       */
+      visualViewer?: {
+        htmlFor(chatId: string, mediaId: string): Promise<string | undefined>;
+        render(source: VisualViewerSource, appearance: VisualViewerAppearance): Promise<string>;
+      };
       /**
        * Device-declared `skills:invoke` grant lookup. A turn carrying `skill`
        * is rejected with `capability_denied` unless the device negotiated the
@@ -1284,8 +1314,9 @@ export class AidenRemoteChatService {
     const inputChatIds = new Set(activity?.inputChatIds ?? []);
     // A marker read failure hides unread dots rather than failing the list.
     const markers = await this.options.readMarkers?.snapshot().catch(() => null);
-    return summaries.map(({ lastAssistantAt, lastAssistantSequence, ...summary }) => ({
+    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => ({
       ...summary,
+      ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
       titlePending: this.options.isTitlePending?.(summary.id) === true,
       activity: activeChatIds.has(summary.id) ? "active" : "idle",
       rowState: chatRowState({
@@ -1752,6 +1783,50 @@ export class AidenRemoteChatService {
     }
   }
 
+  /** Whether this host serves visuals to the phone viewer (`chat-visual-viewer-v1`). */
+  get supportsVisualViewer(): boolean {
+    return this.options.visualViewer !== undefined;
+  }
+
+  /**
+   * The phone viewer document for one visual a message projects. Only visuals
+   * the chat projection lists can be opened, with the same images the desktop
+   * draws them with; anything else is `not_found`.
+   */
+  async visualDocument(chatId: string, visualId: string, appearance: VisualViewerAppearance): Promise<string> {
+    const viewer = this.options.visualViewer;
+    if (!viewer) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    if (!VISUAL_ID.test(visualId)) {
+      throw new AidenRemoteServiceError("invalid_request", "The visual identifier is invalid.", 400);
+    }
+    const chat = await this.chat(chatId);
+    const unavailable = () => new AidenRemoteServiceError("not_found", "This visual is unavailable.", 404);
+    for (const message of chat.messages) {
+      const projected = projectMessageVisuals(message, projectMessageAttachments(message.attachments))
+        .find((visual) => visual.id === visualId);
+      if (!projected) continue;
+      let source: VisualViewerSource;
+      if (projected.kind === "html") {
+        const html = await viewer.htmlFor(chat.id, visualId);
+        if (!html) throw unavailable();
+        source = { kind: "html", title: projected.title, html, ...(projected.layout ? { layout: projected.layout } : {}) };
+      } else {
+        const visual = parseChatUiVisuals(message.uiVisuals)?.find((candidate) => candidate.id === visualId);
+        if (!visual) throw unavailable();
+        const attachments = visualSnapshotImages(visual, safeStoredAttachments(message.attachments) ?? [])
+          .flatMap((attachment) => (attachment.data ? [{ id: attachment.id, mimeType: attachment.mimeType, data: attachment.data }] : []));
+        source = { kind: "ui", title: projected.title, visual, attachments, ...(projected.layout ? { layout: projected.layout } : {}) };
+      }
+      try {
+        return await viewer.render(source, appearance);
+      } catch (error) {
+        if (error instanceof AidenRemoteServiceError) throw error;
+        throw unavailable();
+      }
+    }
+    throw unavailable();
+  }
+
   /** Whether this host can fork chats (`chat-fork-v1`). */
   get supportsForks(): boolean {
     return this.options.forks !== undefined;
@@ -1979,6 +2054,9 @@ export class AidenRemoteChatService {
     message: AidenRemoteMessageProjection;
   }> {
     const parsed = parseTurn(input);
+    if (this.options.durableBotSessions?.() && (await this.chat(chatId)).botId) {
+      throw new AidenRemoteServiceError("invalid_request", AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE, 400);
+    }
     if (
       parsed.skill &&
       (await this.options.deviceSupportsSkillInvocation?.(deviceId)) !== true

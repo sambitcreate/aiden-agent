@@ -11,6 +11,8 @@ export type PeerHostLiveManager = Pick<
   | "call"
   | "runSubscribe"
   | "runUnsubscribe"
+  | "botSessionSubscribe"
+  | "botSessionUnsubscribe"
   | "releaseOwner"
   | "setEnabled"
   | "remove"
@@ -134,18 +136,22 @@ export function registerPeerHostLiveHandlers<Event>(
     await dependencies.manager().reconnect(hostIdentifier(hostId));
   });
 
+  /** Live subscriptions die with their document. */
+  const watch = (owner: PeerHostLiveOwner, manager: PeerHostLiveManager) => {
+    if (watched.has(owner.key)) return;
+    watched.set(
+      owner.key,
+      owner.onInvalidated(() => {
+        watched.delete(owner.key);
+        manager.releaseOwner(owner.key);
+      }),
+    );
+  };
+
   handle("remote:peerRunSubscribe", async (event, hostId, target, afterSequence) => {
     const owner = active(event);
     const manager = dependencies.manager();
-    if (!watched.has(owner.key)) {
-      watched.set(
-        owner.key,
-        owner.onInvalidated(() => {
-          watched.delete(owner.key);
-          manager.releaseOwner(owner.key);
-        }),
-      );
-    }
+    watch(owner, manager);
     const subscription = await manager.runSubscribe(hostId, target, afterSequence, owner.key);
     if (owner.isDestroyed()) {
       manager.runUnsubscribe(subscription.subscriptionId, owner.key);
@@ -157,5 +163,22 @@ export function registerPeerHostLiveHandlers<Event>(
   handle("remote:peerRunUnsubscribe", (event, subscriptionId) => {
     const owner = active(event);
     return dependencies.manager().runUnsubscribe(subscriptionId, owner.key);
+  });
+
+  handle("remote:peerBotSessionSubscribe", async (event, hostId, botId) => {
+    const owner = active(event);
+    const manager = dependencies.manager();
+    watch(owner, manager);
+    const subscription = await manager.botSessionSubscribe(hostId, botId, owner.key);
+    if (owner.isDestroyed()) {
+      manager.botSessionUnsubscribe(subscription.subscriptionId, owner.key);
+      throw new Error(INACTIVE);
+    }
+    return subscription;
+  });
+
+  handle("remote:peerBotSessionUnsubscribe", (event, subscriptionId) => {
+    const owner = active(event);
+    return dependencies.manager().botSessionUnsubscribe(subscriptionId, owner.key);
   });
 }

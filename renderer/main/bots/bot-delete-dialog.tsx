@@ -7,6 +7,8 @@ import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { queryKeys } from "../../lib/queries";
 import type { BotDefinition } from "../../shared/bots";
+import { forgetBotLiveView } from "../../lib/use-bot-live";
+import { removeBotFromCache } from "./bot-identity";
 import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 
 export function botDeleteTitle(name: string): string {
@@ -44,9 +46,13 @@ export function BotDeleteDialog({
       await botsApi.delete(bot.id);
       // Here, not in a list prune: deleting the last Bot leaves an empty list, which never prunes.
       botSidebarPreferenceActions.forget(bot.id);
+      forgetBotLiveView(bot.id);
+      // The row leaves the list now; the list reread confirms it in the background.
+      removeBotFromCache(qc, bot.id);
       qc.removeQueries({ queryKey: queryKeys.bot(bot.id) });
       qc.removeQueries({ queryKey: queryKeys.botChats(bot.id) });
-      await qc.invalidateQueries({ queryKey: queryKeys.bots });
+      qc.removeQueries({ queryKey: queryKeys.botLiveSummary(bot.id) });
+      void qc.invalidateQueries({ queryKey: queryKeys.bots });
       onOpenChange(false);
       if (botRouteBotId(router.state.location.pathname) === bot.id) await navigate({ to: "/bots" });
     } catch (error) {

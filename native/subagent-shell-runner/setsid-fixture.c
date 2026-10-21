@@ -24,7 +24,7 @@ static long long monotonic_ms(void) {
 static int await_publication(int fd) {
   long long started = monotonic_ms();
   if (started < 0) return 0;
-  long long deadline = started + 1500;
+  long long deadline = started + 1000;
   for (;;) {
     long long now = monotonic_ms();
     if (now < 0 || now >= deadline) return 0;
@@ -41,11 +41,11 @@ static int await_publication(int fd) {
 
 int main(int argc, char **argv) {
   if (argc != 2 && argc != 3) return 64;
-  unsigned int detach_delay = 0;
+  long detach_delay_ms = 0;
   int stall_publication = 0;
   if (argc == 3) {
-    if (strcmp(argv[2], "--delay-detach") == 0) detach_delay = 1;
-    else if (strcmp(argv[2], "--stall-detach") == 0) detach_delay = 3;
+    if (strcmp(argv[2], "--delay-detach") == 0) detach_delay_ms = 200;
+    else if (strcmp(argv[2], "--stall-detach") == 0) detach_delay_ms = 3000;
     else if (strcmp(argv[2], "--stall-publish") == 0) stall_publication = 1;
     else return 64;
   }
@@ -59,7 +59,8 @@ int main(int argc, char **argv) {
     close(ready[1]);
     close(grant[0]);
     // Stay in the command until detachment and PID publication are confirmed.
-    // Bound the wait below the shell test's existing two-second deadline.
+    // Bound the wait to half the shell test's two-second deadline, leaving
+    // the other half for process startup on a loaded runner.
     int confirmed = await_publication(ready[0]);
     close(ready[0]);
     unsigned char allowed = 1;
@@ -78,7 +79,10 @@ int main(int argc, char **argv) {
   }
   close(ready[0]);
   close(grant[1]);
-  if (detach_delay) sleep(detach_delay);
+  if (detach_delay_ms) {
+    struct timespec delay = {.tv_sec = detach_delay_ms / 1000, .tv_nsec = (detach_delay_ms % 1000) * 1000000L};
+    while (nanosleep(&delay, &delay) < 0 && errno == EINTR) {}
+  }
   if (setsid() < 0) _exit(71);
   pid_t second = fork();
   if (second < 0) _exit(72);

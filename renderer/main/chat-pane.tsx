@@ -13,6 +13,7 @@ import {
   updateChatDraft,
   updateChatDraftWorktree,
 } from "../lib/chat-draft";
+import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
 import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
@@ -428,6 +429,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => true,
   );
   const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
+  // The latest reading without the draft, and its chat, for compacting on
+  // return to an expired cache: a pasted draft is not history compaction can
+  // shrink, and a chat switch must never judge the new chat by the old one.
+  const [contextHistory, setContextHistory] = React.useState<{
+    chatId: string | null;
+    pressure: ChatContextPressureV1 | null;
+  }>({ chatId: null, pressure: null });
   const [contextCompactPending, setContextCompactPending] = React.useState(false);
   const [contextCompactedFlash, setContextCompactedFlash] = React.useState(false);
   const contextCompactedTimerRef = React.useRef<number | null>(null);
@@ -442,6 +450,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       new ContextPressureFeed<ContextDraft>({
         fetch: (targetChatId, visibleDraft) => contextFetchRef.current(targetChatId, visibleDraft),
         publish: setContextPressure,
+        publishHistory: (pressure, owner) => setContextHistory({ chatId: owner, pressure }),
       }),
   );
   // ChatPane stays mounted across chat navigation (see chat-transition tests),
@@ -1976,6 +1985,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [chatId, handleSend],
   );
+  // Follow-ups confirmed on a workspace artifact go through the same path.
+  React.useEffect(
+    () => registerChatPromptTarget(chatId, (text) => handleVisualPrompt(text, "")),
+    [chatId, handleVisualPrompt],
+  );
 
   const handleStop = React.useCallback(() => {
     if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
@@ -3425,6 +3439,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   )
                 }
                 onDraftChange={onDraftContextChange}
+                contextHistoryPressure={
+                  draft ? undefined : contextHistory.chatId === chatId ? contextHistory.pressure : null
+                }
                 modelPicker={
                   <ModelPicker
                     providers={pickerProviders}

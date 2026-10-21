@@ -19,7 +19,9 @@ export * from "./extensions/artifacts.ts";
 export { SessionManager, ModelRegistry, SettingsManager } from "@earendil-works/pi-coding-agent";
 export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 
-export { mcpCommand, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature } from "./mcp.ts";
+export { mcpCommand, mcpLogin, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature, cliMcpOAuthLoopback } from "./mcp.ts";
+export { mcpOAuthBindingForServer } from "../../../main/services/mcp-oauth-identity.js";
+export { startFakeOAuthServer } from "../../../main/services/mcp-oauth-test-server.js";
 
 export { importSession } from "./session-import.ts";
 export { createCurrentPiSessionRepository } from "../../../main/services/pi-session-repository-port.js";

@@ -109,6 +109,10 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// shown as the Mac's snapshot at its tool step. The field is additive, so
     /// the transcript renders visuals whenever a message carries them.
     static let chatVisualsFeature = "chat-visuals-v1"
+    /// Contract revision 35: any visual may be opened full screen from
+    /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
+    /// no new key, so the token alone gates the viewer.
+    static let chatVisualViewerFeature = "chat-visual-viewer-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -284,6 +288,12 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// actions. Meaningful only alongside chat-fork-v1.
     var supportsChatForkSummary: Bool {
         supportsChatFork && features.contains(Self.chatForkSummaryFeature)
+    }
+
+    /// Tapping a visual opens the interactive viewer (revision 35) instead of
+    /// the snapshot's image viewer.
+    var supportsChatVisualViewer: Bool {
+        features.contains(Self.chatVisualViewerFeature)
     }
 
     /// The Mac offers the phone-scoped `runs:observe` / `runs:control` subset.
@@ -1469,6 +1479,51 @@ final class AidenRemoteClient: @unchecked Sendable {
               contentType == "image/jpeg" || contentType == "image/png"
         else { try rejectContractResponse() }
         return AidenAttachmentContent(data: data, mimeType: contentType)
+    }
+
+    /// Revision 35 (`chat-visual-viewer-v1`): the self-contained HTML page
+    /// that draws one visual interactively. `scheme` is `light` or `dark`;
+    /// `theme` is a preset id from `protocol/aiden-appearance-v1.json`.
+    func visualDocument(
+        chatId: String,
+        visualId: String,
+        scheme: String,
+        theme: String
+    ) async throws -> String {
+        try validateRemoteIdentifier(chatId)
+        try validateSafeIdentifier(visualId, maximumScalars: AidenRemoteProtocol.maxVisualIdentifierLength)
+        guard scheme == "light" || scheme == "dark",
+              AidenRemoteProtocol.isVisualThemeIdentifier(theme) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        var request = try makeRequest(
+            method: "GET",
+            path: ["chats", chatId, "visuals", visualId, "document"],
+            query: [
+                URLQueryItem(name: "scheme", value: scheme),
+                URLQueryItem(name: "theme", value: theme),
+            ],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        // URLSession offers and transparently decodes gzip; the bound below
+        // applies to the decoded document.
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenRemoteProtocol.maxVisualDocumentBytes
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let response = response as? HTTPURLResponse,
+              let rawContentType = response.value(forHTTPHeaderField: "Content-Type"),
+              rawContentType.split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == "text/html",
+              !data.isEmpty,
+              let html = String(data: data, encoding: .utf8)
+        else { try rejectContractResponse() }
+        return html
     }
 
     func moveChat(

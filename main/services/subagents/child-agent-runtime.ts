@@ -457,6 +457,18 @@ export class SubagentRuntimeRegistry {
     return this.hasMatching((authority) => authority.chatId === chatId);
   }
 
+  /**
+   * Children that can still act for this chat. A cancelled child that has not
+   * drained yet is excluded: its parent already settled it as interrupted, its
+   * deployment stays quarantined until it exits, and it must not hold the chat
+   * busy (and so trap queued sends) for as long as a stuck provider stream lasts.
+   */
+  hasLiveChatChildren(chatId: string): boolean {
+    return [...this.children.values()].some(
+      (entry) => entry.authority.chatId === chatId && !entry.cancellation.signal.aborted,
+    );
+  }
+
   /** True only once a child has crossed Pi's actual provider-response boundary. */
   hasChatProviderResponse(chatId: string): boolean {
     return [...this.children.values()].some(

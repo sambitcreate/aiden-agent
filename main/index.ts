@@ -135,6 +135,7 @@ import {
 import {
   reconcileExternalMcpCredentialChanges,
   reconcilePendingMcpCredentialCleanup,
+  cleanupRetiredMcpServerCredentials,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
@@ -164,6 +165,7 @@ import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from ".
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
+import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
 if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
   process.stdout.write(`${app.getVersion()}\n`);
@@ -2117,8 +2119,10 @@ if (!ownsSingleInstanceLock) {
             managed.worktreeInode,
           );
         },
-        removeWorkspaceRecord: (workspaceId) =>
-          configStore.removeWorkspace(workspaceId),
+        removeWorkspaceRecord: async (workspaceId) => {
+          await configStore.removeWorkspace(workspaceId);
+          await removeWorkspaceArtifacts(workspaceId);
+        },
         finalizeDeletion: async (workspace) => {
           const managed = workspace.managedWorktree!;
           await gitFinalizeManagedWorktreeDeletion(
@@ -2166,6 +2170,11 @@ if (!ownsSingleInstanceLock) {
           "Could not reconcile an interrupted MCP credential cleanup.",
           error,
         );
+      }
+      try {
+        await cleanupRetiredMcpServerCredentials();
+      } catch (error) {
+        logger.error("mcp", "Could not remove credentials of retired SSE MCP servers.", error);
       }
       // Env and header values still written in config.json move into the keychain.
       await sealPlaintextMcpServerFields().catch((error: unknown) =>

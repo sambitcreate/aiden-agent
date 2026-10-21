@@ -117,7 +117,7 @@ export function BotRoutineEditor({
   open: boolean;
   onOpenChange(open: boolean): void;
   onSaved(routine: BotRoutine): void;
-  onDeleted?(): void;
+  onDeleted?(id: string): void;
 }) {
   const source = routine ?? draft;
   const initial = source ? formFromRoutine(source) : { ...defaultSchedule(), name: "", prompt: "" };
@@ -139,7 +139,7 @@ export function BotRoutineEditor({
     setBusy(true);
     try {
       await botsApi.routines.delete({ botId: bot.id, id: routine.id, expectedUpdatedAt: routine.updatedAt });
-      onDeleted?.();
+      onDeleted?.(routine.id);
       onOpenChange(false);
     } catch (caught) {
       setError(userFacingErrorMessage(caught, "Aiden couldn’t delete this routine."));

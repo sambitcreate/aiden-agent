@@ -148,6 +148,61 @@ class AidenChatTest {
     }
 
     @Test
+    fun chatKeepsLoadingWithThePairingsRefreshedClient() {
+        val root = kotlin.io.path.createTempDirectory("aiden-client-refresh").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val owners = ViewModelStore()
+        val server = MockWebServer()
+        val initial = sampleChat()
+        val chatReads = java.util.concurrent.atomic.AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.requestUrl!!.encodedPath == "/api/aiden/v1/chats/${initial.id}") {
+                    chatReads.incrementAndGet()
+                    MockResponse().setBody(json.encodeToString(initial))
+                } else MockResponse().setResponseCode(404)
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(root, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(instanceId = "refresh", deviceId = "device-refresh", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)), null)
+                val cache = AidenChatCache(root)
+                val drafts = AidenChatDraftStore(root)
+                val coordinator = AidenRemoteCoordinator(installations, root, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                owners.put("chat", model)
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                withTimeout(5_000) { while (chatReads.get() < 1) yield() }
+                val before = chatReads.get()
+                check(model.isConnected) { "the chat is bound to the pairing's first client" }
+                val errorBefore = model.presentedError.value
+
+                // Retry after a failed connection gives the same pairing a new client object.
+                val firstClient = coordinator.client.value
+                coordinator.refreshClient()
+                check(coordinator.client.value !== firstClient) { "refreshClient must make a new client for the same pairing" }
+                withTimeout(5_000) { while (chatReads.get() <= before) yield() }
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                check(model.isConnected) { "the chat sends and loads with the pairing's new client" }
+                // The reread with the new client adds no error of its own.
+                assertEquals(errorBefore, model.presentedError.value)
+
+                // A removed pairing still takes the client away.
+                installations.setActiveInstallation(null)
+                coordinator.refreshClient()
+                check(!model.isConnected) { "a removed pairing takes the client away" }
+            }
+        } finally {
+            runBlocking(dispatcher) { owners.clearAndJoin() }
+            Dispatchers.resetMain(); dispatcher.close(); server.shutdown(); root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun corruptPendingSendFailsClosedAndCannotOverwriteAnUnresolvedKey() {
         val root = kotlin.io.path.createTempDirectory("aiden-corrupt-attempt").toFile()
         try {
@@ -3745,6 +3800,39 @@ class AidenChatTest {
 
             assertTrue(store.save("Fresh text", session2))
             assertEquals("Fresh text", store.load(session2))
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDraftStoreConsumesAdmittedRunInputFromAnOlderSession() {
+        val tempDir = File(System.getProperty("java.io.tmpdir"), "aiden-drafts-test-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val store = AidenChatDraftStore(root = tempDir)
+            val submitting = store.beginSession("inst-1", "chat-1")
+            assertTrue(store.save("Fix the tests\nthen ship", submitting))
+            val otherMac = store.beginSession("inst-2", "chat-1")
+            assertTrue(store.save("Fix the tests", otherMac))
+
+            // The chat was reopened before the Mac admitted the input: the older session still
+            // retires the admitted text, and only that text.
+            val reopened = store.beginSession("inst-1", "chat-1")
+            store.consumeDraft("Fix the tests", "Fix the tests\nthen ship", submitting)
+            assertEquals("then ship", store.load(reopened))
+            assertEquals("Fix the tests", store.load(otherMac))
+
+            // A draft typed after the composer cleared is a different draft, even when it starts
+            // with the admitted text.
+            assertTrue(store.save("then ship it today", reopened))
+            store.consumeDraft("then ship", "then ship", submitting)
+            assertEquals("then ship it today", store.load(reopened))
+
+            store.consumeDraft("then ship it today", "then ship it today", submitting)
+            assertNull(store.load(reopened))
+            // Nothing saved: nothing is written back.
+            store.consumeDraft("anything", "anything", submitting)
+            assertNull(store.load(reopened))
         } finally {
             tempDir.deleteRecursively()
         }

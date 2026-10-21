@@ -222,3 +222,29 @@ test("the fallback stops expanding once it is full, so the work tracks the cap, 
   // Each item adds at least a few characters, so reads stay within a small multiple of the cap.
   assert.ok(reads <= 2 * AIDEN_UI_LIMITS.fallbackChars, `read ${reads} item fields`);
 });
+
+test("run() and compose() compile only for workspace artifacts", () => {
+  const markup = `<Visual title="PRs"><Each in={$pulls} as="pr"><Button action={run("merge", $pr.number, "squash")}>Merge</Button></Each><Button action={compose("Summarize these")}>Ask</Button></Visual>`;
+  const inline = compileAum(markup);
+  const buttons = (tree: AidenUiNodeV1 | undefined): AidenUiNodeV1[] =>
+    tree ? [...(tree.t === "Button" ? [tree] : []), ...(tree.c ?? []).flatMap(buttons)] : [];
+  assert.ok(buttons(inline.tree).every((button) => button.p?.action === undefined));
+  assert.ok(inline.diagnostics.some((diagnostic) => /works only in workspace artifacts/u.test(diagnostic.message)));
+
+  const artifact = compileAum(markup, { artifactActions: true });
+  assert.deepEqual(artifact.diagnostics, []);
+  const [merge, ask] = buttons(artifact.tree);
+  assert.deepEqual(merge!.p?.action, {
+    act: "run",
+    name: "merge",
+    a: [
+      { op: "get", of: { op: "var", name: "pr" }, key: { op: "lit", v: "number" } },
+      { op: "lit", v: "squash" },
+    ],
+  });
+  assert.deepEqual(ask!.p?.action, { act: "compose", text: { op: "lit", v: "Summarize these" } });
+  assert.ok(asVisual(artifact), "run and compose trees stay storable and wire-safe");
+
+  const unnamed = compileAum(`<Visual title="X"><Button action={run($name)}>Go</Button></Visual>`, { artifactActions: true });
+  assert.ok(unnamed.diagnostics.some((diagnostic) => /action name first/u.test(diagnostic.message)));
+});

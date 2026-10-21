@@ -58,10 +58,11 @@ function InlineField({
   onSave(next: string): Promise<void>;
 }) {
   const [draft, setDraft] = React.useState(value);
-  const [saving, setSaving] = React.useState(false);
   // Escape blurs to leave the field; the blur must not save the abandoned edit.
   const discarding = React.useRef(false);
   React.useEffect(() => setDraft(value), [value]);
+  // The save shows at once (the Bot's cache takes the new value) and the field
+  // stays usable meanwhile; a failed save puts the stored value back.
   const commit = async () => {
     if (discarding.current) {
       discarding.current = false;
@@ -73,13 +74,10 @@ function InlineField({
       setDraft(value);
       return;
     }
-    setSaving(true);
     try {
       await onSave(next);
     } catch {
       setDraft(value);
-    } finally {
-      setSaving(false);
     }
   };
   return (
@@ -88,7 +86,6 @@ function InlineField({
       value={draft}
       maxLength={maxLength}
       placeholder={placeholder}
-      disabled={saving}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => void commit()}
       onKeyDown={(event) => {

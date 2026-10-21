@@ -18,6 +18,8 @@ export interface CreateSubagentMcpCredentialBoundaryInput {
   configuredHeaders?: Readonly<Record<string, string>>;
   endpointCredentials?: readonly string[];
   presetApiKey?: string | null;
+  /** A custom server's pre-registered OAuth client secret (resolved value). */
+  oauthClientSecret?: string;
   oauthSession?: McpOAuthSession;
   oauthGeneration?: number;
 }
@@ -90,6 +92,7 @@ function rawSecretValues(
     ...configuredHeaderValues,
     ...(input.endpointCredentials ?? []),
     input.presetApiKey ?? undefined,
+    input.oauthClientSecret,
     input.oauthSession?.codeVerifier,
     input.oauthSession?.clientInformation?.client_secret,
   ];
@@ -249,6 +252,8 @@ export function createSubagentMcpCredentialBoundary(
     frame(hmac, `endpoint_credential.${index}`, value);
   }
   frame(hmac, "preset_api_key", input.presetApiKey ?? undefined);
+  // Only when set, so revisions of servers without one are unchanged.
+  if (input.oauthClientSecret !== undefined) frame(hmac, "oauth_client_secret", input.oauthClientSecret);
   frame(hmac, "oauth_generation", input.oauthGeneration);
   for (const [label, value] of oauthRevisionFields(input.oauthSession))
     frame(hmac, label, value);

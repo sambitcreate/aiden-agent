@@ -15,6 +15,7 @@ import { createAppQueryClient } from "../lib/query-client";
 import { ErrorBoundaryView } from "../components/ui";
 import { RemoteChatView } from "./remote-chat-view";
 import { RemoteNewChatView } from "./remote-new-chat-view";
+import { RemoteBotChatView } from "./remote-bot-chat-view";
 import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -157,6 +158,17 @@ const hostChatRoute = createRoute({
   staticData: { title: "Remote chat" },
 });
 
+// A Bot that lives on a paired host: its one durable conversation, run there.
+const hostBotChatRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/host/$hostId/bots/$botId/chat",
+  component: function HostBotChatRoute() {
+    const { hostId, botId } = hostBotChatRoute.useParams();
+    return <RemoteBotChatView key={`${hostId}/${botId}`} hostId={hostId} botId={botId} />;
+  },
+  staticData: { title: "Remote Bot conversation" },
+});
+
 // A new chat that runs on a paired host, in one of that host's projects.
 const hostNewChatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
@@ -254,6 +266,7 @@ const routeTree = rootRoute.addChildren([
     botRoute,
     botChatRoute,
     hostChatRoute,
+    hostBotChatRoute,
     hostNewChatRoute,
     designRoute,
     designProjectRoute,

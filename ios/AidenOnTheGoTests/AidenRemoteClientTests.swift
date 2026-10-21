@@ -525,7 +525,35 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(page.summaries.map(\.rowState), [.needsApproval, .idle])
         XCTAssertEqual(page.summaries.map(\.displayRowState), [.needsApproval, .idle])
         XCTAssertEqual(page.summaries.map(\.unread), [false, true])
+        XCTAssertEqual(page.summaries.map(\.lastRunFailed), [false, true])
+        XCTAssertEqual(page.summaries.map(\.showsFailed), [false, true])
         XCTAssertNotNil(page.nextCursor)
+    }
+
+    func testChatSummaryFailedRunIsAdditiveAndSaysFailedOnlyWhileUnread() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        // A pre-revision-36 Mac omits the hint: an unread row keeps its dot.
+        summaries[1].removeValue(forKey: "lastRunFailed")
+        object["summaries"] = summaries
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let page = try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data)
+        let legacy = try XCTUnwrap(page.summaries.last)
+        XCTAssertTrue(legacy.unread)
+        XCTAssertFalse(legacy.lastRunFailed)
+        XCTAssertFalse(legacy.showsFailed)
+
+        let fixture: AidenRemoteContractFixture = try botFixtureValue(at: [])
+        var failed = try XCTUnwrap(
+            fixture.chatSummaries.summaries.first { $0.id == "chat_fixture_summary_01" }
+        )
+        XCTAssertTrue(failed.showsFailed)
+        // Viewing the chat clears unread, and Failed goes with the dot.
+        failed.unread = false
+        XCTAssertTrue(failed.lastRunFailed)
+        XCTAssertFalse(failed.showsFailed)
     }
 
     func testChatSummaryRowStateIsAdditiveAndLocalActivityOutranksAStaleServerState() throws {
@@ -2367,6 +2395,141 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testVisualDocumentRequestsThePhonesAppearanceAndReturnsTheHTML() async throws {
+        let client = makeClient()
+        let html = "<!doctype html><meta charset=\"utf-8\"><title>Revenue</title><p>Q3 € 1.2M</p>"
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat-1/visuals/visual_chart:01/document")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            XCTAssertEqual(query, [
+                URLQueryItem(name: "scheme", value: "dark"),
+                URLQueryItem(name: "theme", value: "dusk"),
+            ])
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Protocol-Version"), "1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/html")
+            XCTAssertNil(request.httpBody)
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "text/html; charset=utf-8",
+                        "Cache-Control": "no-store",
+                        "ETag": "\"visual-etag\"",
+                    ]
+                )!,
+                Data(html.utf8)
+            )
+        }
+
+        let document = try await client.visualDocument(
+            chatId: "chat-1",
+            visualId: "visual_chart:01",
+            scheme: "dark",
+            theme: "dusk"
+        )
+        XCTAssertEqual(document, html)
+    }
+
+    func testVisualDocumentMapsErrorsAndRejectsWhatIsNotADocument() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            Self.response(
+                for: request,
+                status: 404,
+                json: #"{"error":{"code":"not_found","message":"Visual not found.","requestId":"request-1","retryable":false}}"#
+            )
+        }
+        do {
+            _ = try await client.visualDocument(chatId: "chat-1", visualId: "visual-1", scheme: "light", theme: "aiden")
+            XCTFail("A missing visual must fail.")
+        } catch let AidenRemoteClientError.server(statusCode, body) {
+            XCTAssertEqual(statusCode, 404)
+            XCTAssertEqual(body.code.rawValue, "not_found")
+        }
+
+        // A 200 that is not HTML, or not UTF-8, is a contract violation.
+        let wrongBodies: [(String, Data)] = [
+            ("application/json", Data("{}".utf8)),
+            ("text/html; charset=utf-8", Data([0xff, 0xfe, 0xfd])),
+            ("text/html; charset=utf-8", Data()),
+        ]
+        for (contentType, body) in wrongBodies {
+            AidenRemoteMockURLProtocol.handler = { request in
+                (
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": contentType])!,
+                    body
+                )
+            }
+            do {
+                _ = try await client.visualDocument(chatId: "chat-1", visualId: "visual-1", scheme: "light", theme: "aiden")
+                XCTFail("Expected \(contentType) with \(body.count) bytes to fail closed.")
+            } catch {
+                XCTAssertTrue(error is AidenRemoteClientError, "\(error)")
+            }
+        }
+
+        // A document over 12 MiB is refused before it is read.
+        AidenRemoteMockURLProtocol.handler = { request in
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "text/html; charset=utf-8",
+                        "Content-Length": "\(AidenRemoteProtocol.maxVisualDocumentBytes + 1)",
+                    ]
+                )!,
+                Data("<p>".utf8)
+            )
+        }
+        do {
+            _ = try await client.visualDocument(chatId: "chat-1", visualId: "visual-1", scheme: "light", theme: "aiden")
+            XCTFail("An oversized document must be refused.")
+        } catch {
+            XCTAssertEqual(error as? AidenRemoteContractError, .payloadTooLarge)
+        }
+    }
+
+    func testVisualDocumentRefusesUnsafeInputsWithoutCallingTheMac() async {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTFail("No request may leave for \(request.url?.absoluteString ?? "")")
+            return Self.response(for: request, status: 500, json: "{}")
+        }
+        let unsafe: [(chatId: String, visualId: String, scheme: String, theme: String)] = [
+            ("chat-1", "../attachments", "light", "aiden"),
+            ("chat-1", "visual 1", "light", "aiden"),
+            ("chat-1", String(repeating: "v", count: 257), "light", "aiden"),
+            ("chat/1", "visual-1", "light", "aiden"),
+            ("", "visual-1", "light", "aiden"),
+            ("chat-1", "visual-1", "sepia", "aiden"),
+            ("chat-1", "visual-1", "Dark", "aiden"),
+            ("chat-1", "visual-1", "light", "Dusk"),
+            ("chat-1", "visual-1", "light", "1dusk"),
+            ("chat-1", "visual-1", "light", ""),
+            ("chat-1", "visual-1", "light", String(repeating: "a", count: 33)),
+            ("chat-1", "visual-1", "light", "dusk&scheme=dark"),
+        ]
+        for input in unsafe {
+            do {
+                _ = try await client.visualDocument(
+                    chatId: input.chatId,
+                    visualId: input.visualId,
+                    scheme: input.scheme,
+                    theme: input.theme
+                )
+                XCTFail("Expected \(input) to be refused.")
+            } catch {
+                XCTAssertTrue(error is AidenRemoteClientError, "\(error)")
+            }
+        }
+    }
+
     func testForeignRunControlUsesRunScopedRoutesBodiesAndIdempotencyKeys() async throws {
         let client = makeClient()
         var requests: [(method: String?, path: String?, key: String?, body: [String: Any])] = []
@@ -3564,6 +3727,62 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(restored.deviceCapabilities, refreshed.deviceCapabilities)
         XCTAssertEqual(restored.serverCapabilities, refreshed.serverCapabilities)
         XCTAssertTrue(restored.isBotsEligible)
+    }
+
+    @MainActor
+    func testInstallationKeepsTheLastServerFeaturesForGatesWhileConnecting() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-features",
+            deviceId: "device-features",
+            credential: String(repeating: "F", count: 43),
+            capabilities: [.serverRead, .botRead]
+        )
+        let paired = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Feature Mac")
+        XCTAssertEqual(paired.serverFeatures, [], "A pairing that never heard /server has no features to go on.")
+
+        let coordinator = AidenRemoteCoordinator(installationStore: store)
+        XCTAssertNil(coordinator.server)
+        XCTAssertNil(coordinator.knownServerFeatures)
+        XCTAssertFalse(AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator))
+
+        try store.updateServer(AidenServer(
+            protocolVersion: 1,
+            instanceId: "instance-features",
+            name: "Feature Mac",
+            appVersion: "1.0",
+            capabilities: [.serverRead, .botRead],
+            serverCapabilities: [.serverRead, .workspaceRead, .botRead],
+            connectionMode: .lan,
+            minimumClientVersion: nil,
+            serverTime: Date(),
+            features: [AidenBotHostFeature.durableSession, "chat-summaries-v1"]
+        ))
+        XCTAssertEqual(
+            store.activeInstallation?.serverFeatures,
+            [AidenBotHostFeature.durableSession, "chat-summaries-v1"]
+        )
+        // Until this connection's /server answers, the saved features decide the Bot chat route.
+        XCTAssertNil(coordinator.server)
+        XCTAssertEqual(coordinator.knownServerFeatures, [AidenBotHostFeature.durableSession, "chat-summaries-v1"])
+        XCTAssertTrue(AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator))
+        if case .durableSession = AidenBotChatRoute.resolve(botID: "bot-1", hostFeatures: coordinator.knownServerFeatures) {} else {
+            XCTFail("A durable-session Mac must open the durable route while the phone is still connecting.")
+        }
+
+        // The features survive a relaunch with the pairing.
+        let restored = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertEqual(restored.serverFeatures, [AidenBotHostFeature.durableSession, "chat-summaries-v1"])
+
+        // Pairings saved before the features were kept decode with none.
+        let saved = try XCTUnwrap(keychain.values[.remoteInstallations])
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(saved.utf8)) as? [String: Any])
+        var rows = try XCTUnwrap(payload["installations"] as? [[String: Any]])
+        rows[0].removeValue(forKey: "serverFeatures")
+        payload["installations"] = rows
+        keychain.values[.remoteInstallations] = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        XCTAssertEqual(AidenInstallationStore(keychain: keychain).activeInstallation?.serverFeatures, [])
     }
 
     @MainActor

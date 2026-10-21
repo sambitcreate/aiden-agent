@@ -131,6 +131,14 @@ test("phones can relabel Connect without changing its accessible name", () => {
   assert.ok(view.buttons.some((button) => button.name === "Connect Gmail"));
 });
 
+test("a card on a paired Mac that cannot dismiss it offers only the host's Connect", () => {
+  const view = renderDocument(
+    <ConnectCard card={card("pending")} connectLabel="Finish on Studio" onConnect={noop} />,
+  );
+  assert.match(view.text, /Finish on Studio/u);
+  assert.deepEqual(view.buttons.map((button) => button.name), ["Connect Gmail"]);
+});
+
 test("a card for an unknown plugin renders nothing", () => {
   assert.equal(
     renderToStaticMarkup(

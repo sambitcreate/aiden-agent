@@ -1,4 +1,4 @@
-// Types for the shared 0.34.1 fake driver used by the TypeScript tests.
+// Types for the shared 0.36.0 fake driver used by the TypeScript tests.
 
 export interface FakeToolResult {
   content: Array<Record<string, unknown>>;
@@ -44,9 +44,14 @@ export const TOOL_DEFINITIONS: Record<
   { inputSchema: Record<string, unknown>; capabilities: string[] }
 >;
 export const ACTION_RESULT_TOOLS: ReadonlySet<string>;
+export const UNFORWARDED_TOOLS: ReadonlySet<string>;
 export const DEFAULT_WINDOWS: FakeWindow[];
 export const DEFAULT_APPS: Array<Record<string, unknown>>;
 export const DEFAULT_ELEMENTS: FakeElementRow[];
+/** A dialog with an echo text row the driver keeps in `elements` but omits from `tree_markdown`. */
+export const ECHO_ROW_ELEMENTS: FakeElementRow[];
+/** The same dialog after that unrendered row vanished, shifting later indices. */
+export const ECHO_ROW_PRUNED_ELEMENTS: FakeElementRow[];
 
 export function toolListEntries(names: readonly string[]): Array<Record<string, unknown>>;
 export function toolListResult(names: readonly string[]): Record<string, unknown>;
@@ -56,6 +61,8 @@ export function codedRefusal(
   message: string,
   extra?: Record<string, unknown>,
 ): FakeToolResult;
+export function dragAndDropSessionRefusal(pid: number, windowId: number): FakeToolResult;
+export function windowServerConnectionRefusal(pid: number, windowId: number): FakeToolResult;
 export function actionResult(name: string, overrides?: Record<string, unknown>): FakeToolResult;
 export function staleTokenRefusal(pid: number): FakeToolResult;
 export function screenshotContextRefusal(pid: number, windowId: number): FakeToolResult;
@@ -67,6 +74,13 @@ export class FakeSnapshotStore {
     id: number;
     invalidated: string[];
   };
+  remember(
+    snapshotId: string,
+    pid: number,
+    windowId: number,
+    viewKey: number | null,
+    markdown: string,
+  ): void;
   admit(name: string, args: Record<string, unknown>): FakeToolResult | null;
 }
 

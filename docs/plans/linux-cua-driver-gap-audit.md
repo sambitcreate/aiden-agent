@@ -78,3 +78,21 @@ Source-only re-read of `cua-driver-rs-v0.8.3..cua-driver-rs-v0.34.1` while the m
 | Linux artifact provenance | Improved: every asset ships a cosign `.sigstore.json` bundle | `cd-rust-cua-driver.yml` |
 
 The blocker is now Aiden's trust boundary rather than GNOME compatibility. Minimal path: re-pin the full `linux-*.tar.gz` package (it bundles the API 10 helper), run upstream's `scripts/ci/linux/run-rust-e2e-desktop.sh gnome` and Aiden's GTK/Electron matrix on the Fedora VM, then either land sender authentication in WinRects plus a root-owned system-wide install (fork or upstream PR) or record an explicit residual-risk decision. KWin and Hyprland helpers added upstream do not apply to the GNOME target. Other ACP hosts now co-install the same `winrects@cua` UUID, so a per-user install would inherit their install and downgrade races.
+
+## 2026-10-19 addendum: upstream 0.36.0 delta
+
+Source-only re-read of `cua-driver-rs-v0.34.1..cua-driver-rs-v0.36.0` while the macOS pin moved to 0.36.0 ([upgrade plan](cua-driver-0-36-upgrade-plan.md)). Linux stays disabled; nothing here was installed or exercised on the Fedora VM.
+
+- WinRects helper API 10 captures GNOME windows from their own actor (#4882).
+- Embedded and worker processes no longer launch Orca (#5179).
+- AT-SPI bus deadlocks fixed (#4903).
+- Linux reports the actual permission status instead of "not granted" (1ff756b).
+- `CUA_DRIVER_RS_ENABLE_WAYLAND` passes through to embedded hosts (#4877); the Wayland gate is still opt-in.
+- Untitled X11 windows are listed (#5341).
+- Long text is typed in spare-keycode batches (#5168).
+
+None of these adds caller authentication to `org.cua.WinRects` or a protected extension install. The blocker is unchanged: Aiden's trust boundary, not GNOME compatibility.
+
+## 2026-10-19 correction: #4882 timing
+
+The 2026-10-19 addendum lists WinRects helper API 10 (#4882) as new since 0.34.1. It is not: `cua-driver-rs-v0.34.1` was tagged from a release branch that already carried #4882 (6c7b96cf7), and both tags ship the same API 10 helper (`winrects@cua/metadata.json` `version: 10`, Shell 45–50). It appears in `git log cua-driver-rs-v0.34.1..cua-driver-rs-v0.36.0` only because main carries its own copy (78212adac) and 0.34.1 is not an ancestor of 0.36.0. The 2026-10-09 rows that cite #4882 stand.

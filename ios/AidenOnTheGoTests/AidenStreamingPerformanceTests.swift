@@ -349,16 +349,67 @@ final class AidenStreamingPerformanceTests: XCTestCase {
 
     // MARK: - Streaming reveal gate
 
-    func testRevealCutsAtTheLastWhitespaceAndHoldsThePartialWord() {
-        let cut = AidenStreamingRevealGate.cut("alpha beta gam", heldPreviousTick: false)
-        XCTAssertEqual(cut.shown, "alpha beta ")
-        XCTAssertEqual(cut.held, "gam")
+    /// Runs reveal ticks over `text` with nothing more arriving, returning
+    /// what each tick showed.
+    private func drain(_ text: String, maximumTicks: Int = 500) -> [String] {
+        var pending = text
+        var held = false
+        var shown: [String] = []
+        for _ in 0..<maximumTicks where !pending.isEmpty {
+            let cut = AidenStreamingRevealGate.cut(pending, heldPreviousTick: held)
+            XCTAssertEqual(cut.shown + cut.held, pending, "a cut must reproduce the buffer")
+            shown.append(cut.shown)
+            pending = cut.held
+            held = !cut.held.isEmpty
+        }
+        XCTAssertEqual(pending, "", "the buffer drains")
+        return shown
     }
 
-    func testRevealTrailingWhitespaceShowsEverything() {
-        let cut = AidenStreamingRevealGate.cut("alpha beta\n", heldPreviousTick: false)
-        XCTAssertEqual(cut.shown, "alpha beta\n")
-        XCTAssertEqual(cut.held, "")
+    func testRevealShowsWholeWordsAndHoldsThePartialWord() {
+        let cut = AidenStreamingRevealGate.cut("alpha beta gam", heldPreviousTick: false)
+        XCTAssertEqual(cut.shown, "alpha ")
+        XCTAssertEqual(cut.held, "beta gam")
+    }
+
+    func testRevealDrainsABufferInWholeWordsWithoutStalling() {
+        let text = "alpha beta gamma delta epsilon zeta eta theta"
+        let ticks = drain(text)
+        XCTAssertEqual(ticks.joined(), text)
+        XCTAssertFalse(ticks.contains(""), "every tick with text buffered shows some")
+        for tick in ticks.dropLast() {
+            XCTAssertEqual(tick.last?.isWhitespace, true, "no half-typed word: \(tick)")
+        }
+    }
+
+    func testRevealPacesABurstOverSeveralTicks() {
+        let words = (0..<100).map { "word\($0) " }.joined()
+        let ticks = drain(words)
+        XCTAssertEqual(ticks.joined(), words)
+        XCTAssertLessThan(ticks[0].count, words.count / 4, "a burst does not land in one tick")
+        XCTAssertGreaterThanOrEqual(ticks[0].count, words.count / AidenStreamingRevealGate.drainTicks)
+        // ~700 characters drain in a second or two of ticks, not tens of seconds.
+        XCTAssertLessThan(ticks.count, 60)
+    }
+
+    func testRevealCatchesUpAtOnceWhenFarBehind() {
+        let words = String(repeating: "lorem ipsum ", count: 500)
+        let first = AidenStreamingRevealGate.cut(words, heldPreviousTick: false)
+        XCTAssertLessThanOrEqual(
+            first.held.count,
+            AidenStreamingRevealGate.maximumBacklogCharacters,
+            "the display never trails received text by more than the cap"
+        )
+        XCTAssertEqual(first.shown + first.held, words)
+    }
+
+    func testUnpacedRevealShowsEveryWholeWordInOneTick() {
+        // Reduce Motion: no pacing, just the word boundary.
+        let cut = AidenStreamingRevealGate.cut("alpha beta gam", heldPreviousTick: false, paced: false)
+        XCTAssertEqual(cut.shown, "alpha beta ")
+        XCTAssertEqual(cut.held, "gam")
+        let words = (0..<100).map { "word\($0) " }.joined()
+        XCTAssertEqual(AidenStreamingRevealGate.cut(words + "tail", heldPreviousTick: false, paced: false).shown, words)
     }
 
     func testRevealReleasesAFragmentHeldLastTickWithoutNewWhitespace() {
@@ -383,11 +434,12 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         XCTAssertEqual(second.held, "")
     }
 
-    func testRevealShowsABurstInOneCut() {
-        let words = (0..<100).map { "word\($0) " }.joined()
-        let cut = AidenStreamingRevealGate.cut(words + "tail", heldPreviousTick: false)
-        XCTAssertEqual(cut.shown, words)
-        XCTAssertEqual(cut.held, "tail")
+    func testRevealPacesALongRunWithoutWhitespaceInsteadOfStalling() {
+        let url = "https://example.com/" + String(repeating: "a", count: 300)
+        let ticks = drain(url)
+        XCTAssertEqual(ticks.first, "", "held for one tick in case whitespace follows")
+        XCTAssertGreaterThan(ticks.count, 3, "then paced out")
+        XCTAssertEqual(ticks.joined(), url)
     }
 
     func testRevealOfAnEmptyBufferShowsAndHoldsNothing() {
@@ -408,6 +460,120 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         let decomposedCut = AidenStreamingRevealGate.cut(decomposed, heldPreviousTick: false)
         XCTAssertEqual(decomposedCut.shown, "cafe\u{301} ")
         XCTAssertEqual(decomposedCut.held, "x")
+        let family = String(repeating: "👩‍👩‍👧‍👦", count: 40)
+        XCTAssertEqual(drain(family).joined(), family)
+    }
+
+    // MARK: - Streaming Markdown tail
+
+    private func tail(_ text: String) -> String {
+        AidenStreamingMarkdownTail.displayText(text)
+    }
+
+    func testStreamingTailClosesOpenInlineMarkup() {
+        XCTAssertEqual(tail("Hello **wor"), "Hello **wor**")
+        XCTAssertEqual(tail("Run `npm ins"), "Run `npm ins`")
+        XCTAssertEqual(tail("**done** and *it"), "**done** and *it*")
+        XCTAssertEqual(tail("That was ~~wro"), "That was ~~wro~~")
+        XCTAssertEqual(tail("- item **bo"), "- item **bo**")
+        XCTAssertEqual(tail("Nested **bold *ita"), "Nested **bold *ita***")
+    }
+
+    func testStreamingTailRepairsOnlyTheLastLine() {
+        XCTAssertEqual(tail("- 2*3\n- next **bo"), "- 2*3\n- next **bo**")
+    }
+
+    func testFinishingRevealDrainsFasterThanStreaming() {
+        let words = (0..<100).map { "word\($0) " }.joined()
+        let streaming = AidenStreamingRevealGate.cut(words, heldPreviousTick: false)
+        let finishing = AidenStreamingRevealGate.cut(words, heldPreviousTick: false, finishing: true)
+        XCTAssertGreaterThan(finishing.shown.count, streaming.shown.count)
+        XCTAssertFalse(finishing.held.isEmpty, "still paced, not dumped")
+    }
+
+    func testStreamingTailHidesAnOpenerWithNothingAfterIt() {
+        XCTAssertEqual(tail("Hello **"), "Hello ")
+        XCTAssertEqual(tail("Run `"), "Run ")
+    }
+
+    func testStreamingTailLeavesFinishedOrLiteralMarkupAlone() {
+        for text in [
+            "**a** and *b* and `c`",
+            "5 * 3 = 15",
+            "snake_case_name and __init__",
+            "* bullet item",
+            "Escaped \\*star",
+            "A [link](https://example.com) here",
+            "`code with ** inside`",
+            // A finished line's unbalanced marker is literal, not open.
+            "- 2*3\n- next item",
+            "Cost: 5 `units\nand more",
+            // Spans that close on a later line of the paragraph.
+            "**foo\nbar**",
+            "*foo\nbar*",
+            "`foo\nbar`",
+            // Literal code: indented code lines and double-backtick spans.
+            "    [label](url",
+            "    **code",
+            "``[label](url``",
+            // A span never continues into a new heading or list item.
+            "# Heading with `literal\nUse `code`",
+            "- literal `marker\n- Use `code`",
+            // But it does continue through a quote or a line that only looks
+            // like a list item (`2.` cannot interrupt a paragraph).
+            "> *foo\n> bar*",
+            "> **foo\n> bar**",
+            "> `foo\n> bar`",
+            "*foo\n2. bar*",
+            "> *foo\nbar*",
+            // Blocks inside a quote are still separate blocks.
+            "> # Heading with `literal\n> Use `code`",
+            "> - literal `marker\n> - Use `code`",
+            "> `old\n> # Use `code`",
+            // Omitted nested-quote markers may resume within one paragraph.
+            "> > *foo\n> bar\n> > baz*",
+            "> > `foo\n> bar\n> > [label](url`",
+            // A quoted blank line ends the quoted paragraph.
+            "> > `literal\n>\n> > Use `code`",
+        ] {
+            XCTAssertEqual(tail(text), text, text)
+        }
+        // So a span opened in a new list item is the one being written.
+        XCTAssertEqual(tail("- literal `marker\n- Use `code"), "- literal `marker\n- Use `code`")
+    }
+
+    func testStreamingTailShowsALinkStillArrivingAsItsLabel() {
+        XCTAssertEqual(tail("See [the docs](https://exa"), "See the docs")
+        XCTAssertEqual(tail("Look ![chart](https://exa"), "Look ")
+    }
+
+    func testStreamingTailHidesAnUnfinishedBlockMarkerLine() {
+        // Under a paragraph a lone `-` would make it a setext heading.
+        XCTAssertEqual(tail("Intro\n-"), "Intro\n")
+        XCTAssertEqual(tail("Intro\n- "), "Intro\n")
+        XCTAssertEqual(tail("Steps\n\n1."), "Steps\n\n")
+        XCTAssertEqual(tail("#"), "")
+        // A finished line, or one with content, stays.
+        XCTAssertEqual(tail("Intro\n- one"), "Intro\n- one")
+        XCTAssertEqual(tail("Total\n42"), "Total\n42")
+    }
+
+    func testStreamingTailLeavesAnOpenCodeFenceAlone() {
+        let fenced = "```swift\nlet a = **b\n"
+        XCTAssertEqual(tail(fenced), fenced)
+    }
+
+    @MainActor
+    func testStreamingTailOnlyChangesTheOpenTailNeverSealedChunks() {
+        let cache = AidenMarkdownContentCache()
+        let text = "First **paragraph** done.\n\nSecond line.\nThird **par"
+        let streaming = cache.chunks(for: text, streaming: true)
+        let settled = cache.chunks(for: text)
+        XCTAssertEqual(streaming.count, settled.count)
+        XCTAssertEqual(streaming.dropLast().map(\.text), settled.dropLast().map(\.text))
+        XCTAssertGreaterThan(streaming.count, 1, "the first paragraph sealed")
+        XCTAssertEqual(streaming.last?.text, "Second line.\nThird **par**")
+        XCTAssertEqual(settled.last?.text, "Second line.\nThird **par")
     }
 
     // MARK: - Scene refresh

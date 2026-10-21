@@ -853,6 +853,8 @@ export class PiAgentRuntimeHarness {
     message: AgentMessage;
     fingerprint: string;
     visibleChatMessageId?: string;
+    /** Accepted through queueSteer: due at the next tool-batch boundary. */
+    steer?: true;
   }> = [];
   /** Visible-chat projections that app cancellation stopped waiting for. */
   private uncertainQueuedProjections: Array<{ fingerprint: string; operation: Promise<unknown> }> = [];
@@ -2476,9 +2478,18 @@ export class PiAgentRuntimeHarness {
     if (rejected) return rejected;
     const queued = snapshotQueuedMessage(message);
     if (!queued) return { accepted: false, reason: "invalid-message" };
-    this.acceptedQueuedMessages.push({ ...queued, visibleChatMessageId: options?.visibleChatMessageId });
+    this.acceptedQueuedMessages.push({
+      ...queued,
+      visibleChatMessageId: options?.visibleChatMessageId,
+      steer: true,
+    });
     this.agent.steer(queued.message);
     return { accepted: true, queue: "steer" };
+  }
+
+  /** Whether accepted steering input is still waiting for Pi to deliver it. */
+  hasUndeliveredSteer(): boolean {
+    return this.acceptedQueuedMessages.some((item) => item.steer);
   }
 
   queueFollowUp(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt {

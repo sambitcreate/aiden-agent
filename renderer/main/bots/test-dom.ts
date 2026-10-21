@@ -3,6 +3,7 @@ import "./test-env";
 import { isServer } from "@tanstack/router-core/isServer";
 import { Window } from "happy-dom";
 import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
+import { resetBotLiveViewsForTests } from "../../lib/use-bot-live";
 
 // With the router's server build, routed pages never follow a navigation and
 // tests that navigate pass while showing the wrong page. Fail loudly instead.
@@ -124,6 +125,8 @@ export function installBotTestIpc(
   notificationListeners.clear();
   // The photo cache is process-wide; a photo cached by an earlier test must not answer this one.
   invalidateBotCanonicalPhotos();
+  // So are the remembered live views: a conversation from an earlier test must not open this one.
+  resetBotLiveViewsForTests();
   (window as unknown as { aidenAPI: unknown }).aidenAPI = {
     ipc: {
       invoke: async (channel: string, ...args: unknown[]) => {

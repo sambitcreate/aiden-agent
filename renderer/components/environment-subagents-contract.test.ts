@@ -54,13 +54,13 @@ test("fresh renderer capabilities fail closed until main explicitly enables feat
   assert.equal(parseAppCapabilities({ geminiLive: true }).geminiLive, true);
   assert.equal(parseAppCapabilities({ devices: true }).devices, true);
   assert.equal(parseAppCapabilities({ devices: "true" }).devices, false);
-  assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser", "new-tab", "context", "terminal"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser", "new-tab", "context", "terminal", "artifacts"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), [
     "review",
     "subagents",
     "files",
     "browser",
-    "new-tab", "context", "terminal",
+    "new-tab", "context", "terminal", "artifacts",
   ]);
 });
 

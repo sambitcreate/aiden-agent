@@ -119,9 +119,10 @@ import {
 } from "./bot-tool-authority.js";
 import { mcpAgentToolIdentity, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
-import { type SkillRegistrySnapshot } from "./skill-registry.js";
+import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
+import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -172,6 +173,7 @@ import type {
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
@@ -254,9 +256,11 @@ import {
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
+import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 import {
   invalidateChatContextJournal,
   rememberChatContextProfile,
+  rememberPromptCacheRefresh,
 } from "./context-pressure.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
@@ -290,6 +294,7 @@ import {
   scheduledProviderFingerprint,
 } from "./schedule-provider-binding.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
+import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
@@ -461,6 +466,17 @@ import {
 } from "./ask-user-question-coordinator.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
+import {
+  createWorkspaceArtifactTool,
+  WORKSPACE_ARTIFACT_TOOL_NAME,
+  workspaceArtifactCallApproval,
+  type WorkspaceArtifactCallApproval,
+} from "./workspace-artifacts/tool.js";
+import {
+  notifyWorkspaceArtifactsChanged,
+  workspaceArtifactRunner,
+  workspaceArtifactStore,
+} from "./workspace-artifacts/main.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
 import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
@@ -475,6 +491,21 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+/**
+ * Per stream, the command digest each allowed workspace_artifact approval card
+ * showed, by tool call id. The tool consumes its entry first thing, and only
+ * a save whose commands match that digest records an approval. A stream's
+ * entries go when it ends.
+ */
+const approvedWorkspaceArtifactCalls = new Map<string, Map<string, string>>();
+
+function takeApprovedWorkspaceArtifactCall(streamId: string, toolCallId: string): string | undefined {
+  const calls = approvedWorkspaceArtifactCalls.get(streamId);
+  const digest = calls?.get(toolCallId);
+  calls?.delete(toolCallId);
+  return digest;
+}
 
 function uniqueResponseImages(
   sharedImages: readonly Attachment[],
@@ -556,6 +587,8 @@ interface ActiveGeneration {
   releaseBotAuthority: () => void;
   /** Runs that take no mid-flight input (Design Studio). */
   inputClosed: boolean;
+  /** A steered send stops this run's still-running subagents. */
+  stopSubagentsForGuidance?: () => void;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -595,12 +628,22 @@ const geminiContextCache = new GeminiContextCache({
   onWarning: (message, error) => logger.warn("pi", message, error),
 });
 
+/**
+ * Work that holds the chat's turn. A cancelled subagent that is still draining
+ * is left out: its parent already settled it, so it must not trap queued sends
+ * or new turns behind a stuck provider stream.
+ */
 function chatHasGenerationOwnership(chatId: string): boolean {
   return (
     [...initializing.values()].some((entry) => entry.chatId === chatId) ||
     [...active.values()].some((entry) => entry.chatId === chatId) ||
-    subagentRuntimeRegistry.hasChatChildren(chatId)
+    subagentRuntimeRegistry.hasLiveChatChildren(chatId)
   );
+}
+
+/** A started turn, or the chat's turn is held by live generation work. */
+function chatTurnIsHeld(chatId: string): boolean {
+  return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
 }
 
 function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
@@ -1382,8 +1425,22 @@ async function prepareGeneration(
   // Assistant modes use positive allowlists: the dock gets safe metadata plus
   // scheduling, while an approved automation gets only its project tools and
   // exact MCP identities. Computer Use, skills, and delegation stay out.
+  // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
+  // Telegram and Bot turns get neither the tool nor its skill.
+  const offerWorkspaceArtifacts =
+    !botContext &&
+    !assistantMode &&
+    Boolean(workspace) &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    options.visualAudience !== "remote" &&
+    permission !== "read-only" &&
+    !options.excludeToolNames?.has(WORKSPACE_ARTIFACT_TOOL_NAME);
   let skillSnapshot =
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
+  if (skillSnapshot && !offerWorkspaceArtifacts) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
+  }
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
     if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
@@ -1948,6 +2005,26 @@ async function prepareGeneration(
     });
     generationExtensions.push(generativeUiRuntime.extension);
   }
+  if (offerWorkspaceArtifacts && workspace) {
+    // Gated by offerWorkspaceArtifacts above.
+    generationExtensions.push({
+      id: "aiden.workspace-artifacts",
+      tools: [
+        createWorkspaceArtifactTool({
+          workspaceId: workspace.id,
+          chatId: params.chatId,
+          permission,
+          hasFolder: Boolean(folderPath),
+          store: workspaceArtifactStore,
+          takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
+          refresh: (artifact, refreshSignal) =>
+            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
+          onChanged: notifyWorkspaceArtifactsChanged,
+        }),
+      ],
+    });
+  }
   if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
     const outputs = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
       () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)), workspace);
@@ -2336,6 +2413,7 @@ export const llmClient = {
         });
         releaseGenerationSkillReservation(initialization);
         releaseGenerationBotAuthority(initialization);
+        approvedWorkspaceArtifactCalls.delete(streamId);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
@@ -2351,6 +2429,7 @@ export const llmClient = {
       await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -2606,7 +2685,10 @@ export const llmClient = {
               : undefined,
             providerFailure,
             timeline:
-              finalTimeline.steps.length || finalTimeline.status === "cancelled"
+              // A failed status is kept so a partial reply still reads as Failed in the chat list.
+              finalTimeline.steps.length ||
+              finalTimeline.status === "cancelled" ||
+              finalTimeline.status === "failed"
                 ? finalTimeline
                 : undefined,
             turnStats: {
@@ -2707,6 +2789,7 @@ export const llmClient = {
     let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
     let cacheWarmer: PiCacheWarmer | undefined;
+    let lastContextPressure: ChatContextPressureV1 | undefined;
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
@@ -3241,6 +3324,7 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
+      let attendedToolRecoveryRequested = false;
       if (canWarmForegroundChat({
         enabled: cacheWarmingEnabled,
         local: isLocalModelProvider(runtime.provider),
@@ -3262,6 +3346,15 @@ export const llmClient = {
           recordUsage: async (message, freshRuntime) => {
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
+          // A warming read restarts the provider's cache lifetime without a
+          // new projection, so the countdown is re-sent from that request.
+          onCacheRefreshed: (requestStartedAt) => {
+            rememberPromptCacheRefresh(params.chatId, { provider: model.provider, model: model.id, requestStartedAt });
+            const pressure = lastContextPressure;
+            if (!pressure?.promptCache) return;
+            lastContextPressure = { ...pressure, promptCache: { ...pressure.promptCache, lastRequestAt: requestStartedAt } };
+            sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+          },
         });
       }
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
@@ -3278,6 +3371,7 @@ export const llmClient = {
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
       const observedStream: typeof realStream = pace.wrap(warmedStream);
+      const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
@@ -3307,10 +3401,16 @@ export const llmClient = {
             permission,
             toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
           });
+          lastContextPressure = {
+            ...chatContextPressureFromProjection(projection, projectionOptions),
+            // Projections are emitted as each request is prepared, so the
+            // cache window restarts now for models that declare one.
+            ...(promptCacheTtl > 0 ? { promptCache: { ttlMs: promptCacheTtl, lastRequestAt: Date.now() } } : {}),
+          };
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
             chatId: params.chatId,
-            pressure: chatContextPressureFromProjection(projection, projectionOptions),
+            pressure: lastContextPressure,
           });
         },
         ...agentRuntimeOptions,
@@ -3415,6 +3515,7 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
+        ...(attendedAssistant ? { finishTurn: endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested) } : {}),
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
           attended: attendedAssistant,
@@ -3428,6 +3529,7 @@ export const llmClient = {
             return mcpServersSection.apply(prepared);
           },
           onRecovery: () => {
+            attendedToolRecoveryRequested = true;
             logger.warn(
               "pi",
               `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
@@ -3440,6 +3542,8 @@ export const llmClient = {
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
+          /** Commands digest an allowed workspace_artifact card showed. */
+          let artifactApprovalDigest: string | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
@@ -3548,6 +3652,24 @@ export const llmClient = {
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
               context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
+            let artifactApproval: WorkspaceArtifactCallApproval | undefined;
+            if (context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && workspaceId) {
+              try {
+                artifactApproval = await workspaceArtifactCallApproval(context.args, {
+                  workspaceId,
+                  permission: permission === "read-only" ? "none" : permission,
+                  store: workspaceArtifactStore,
+                });
+              } catch (error) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason: error instanceof Error ? error.message : "The artifact could not be read for approval.",
+                };
+              }
+            }
+            if (artifactApproval?.required) artifactApprovalDigest = artifactApproval.digest;
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             if (
@@ -3556,6 +3678,7 @@ export const llmClient = {
               !disclosureApproval &&
               !memoryApproval &&
               !botMcpApproval &&
+              !artifactApproval?.required &&
               !browserFileApproval?.requiresApproval
             ) {
               timeline.toolRunning(context.toolCall.id);
@@ -3699,7 +3822,9 @@ export const llmClient = {
               }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
-            } else
+            } else if (artifactApproval?.required)
+              summary = artifactApproval.summary ?? "Save this artifact.";
+            else
               summary = editScheduleApproval
                 ? summarizeEditAutomationToolCall(context.args)
                 : preparedStandardScheduleSummary
@@ -3787,6 +3912,11 @@ export const llmClient = {
             owner.documentId,
           );
           const allowed = approvalOutcome === "allowed";
+          if (allowed && context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && artifactApprovalDigest) {
+            const calls = approvedWorkspaceArtifactCalls.get(streamId) ?? new Map<string, string>();
+            calls.set(context.toolCall.id, artifactApprovalDigest);
+            approvedWorkspaceArtifactCalls.set(streamId, calls);
+          }
           if (allowed && scopedRuleTarget) {
             const toolCallId = timeline.publicToolCallId(context.toolCall.id);
             const scope = toolCallId
@@ -4116,6 +4246,7 @@ export const llmClient = {
         });
         releaseGenerationSkillReservation(initialization);
         releaseGenerationBotAuthority(initialization);
+        approvedWorkspaceArtifactCalls.delete(streamId);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
@@ -4131,6 +4262,7 @@ export const llmClient = {
       await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -4144,6 +4276,7 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
       releaseGenerationBotAuthority(initialization);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -4302,6 +4435,7 @@ export const llmClient = {
         }
       }
     };
+    subagentSupervisor?.observePendingUserGuidance(() => agent.hasUndeliveredSteer());
     const activeGeneration: ActiveGeneration = {
       agent,
       chatId: params.chatId,
@@ -4315,6 +4449,13 @@ export const llmClient = {
       computerUse,
       formFill,
       inputClosed: designWiring?.inputClosed ?? false,
+      ...(subagentSupervisor
+        ? {
+            stopSubagentsForGuidance: () => {
+              subagentSupervisor.stopLiveChildrenForGuidance();
+            },
+          }
+        : {}),
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -4351,6 +4492,7 @@ export const llmClient = {
       });
       releaseGenerationSkillReservation(activeGeneration);
       releaseGenerationBotAuthority(activeGeneration);
+      approvedWorkspaceArtifactCalls.delete(streamId);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -4634,10 +4776,14 @@ export const llmClient = {
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
+          // A run that ended for any reason (failure included) owns no more
+          // child work; nothing may keep acting for it after it settles.
+          subagentRuntimeRegistry.abortGeneration(streamId);
           unregisterAcpHost?.();
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
+          approvedWorkspaceArtifactCalls.delete(streamId);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
@@ -4784,8 +4930,13 @@ export const llmClient = {
     return runInputAdmission.admit(input);
   },
 
+  /**
+   * Any work on the chat, including a cancelled subagent still draining (it
+   * may be inside a tool call), so deletion, copy, export and workspace moves
+   * wait for it.
+   */
   isChatBusy(chatId: string): boolean {
-    return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+    return chatTurnIsHeld(chatId) || subagentRuntimeRegistry.hasChatChildren(chatId);
   },
 
   /** Whether this exact generation is still starting or running, whoever owns it. */
@@ -4805,10 +4956,14 @@ export const llmClient = {
     );
   },
 
-  /** Wait for terminal persistence without cancelling work owned by another document. */
+  /**
+   * Wait for terminal persistence without cancelling work owned by another
+   * document. Only the turn matters here, so a draining child never holds the
+   * queue or a waiting send.
+   */
   async waitForChatIdle(chatId: string): Promise<boolean> {
     const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
-    while (this.isChatBusy(chatId)) {
+    while (chatTurnIsHeld(chatId)) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) return false;
       const completions = [...active.values()]

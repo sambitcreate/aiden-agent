@@ -1315,10 +1315,16 @@ test("cleanup quarantine rejects new deployment work until an unresponsive child
   const running = child(registry, runtime);
   const prompt = running.prompt("Hold the local request.");
   await started.promise;
+  assert.equal(registry.hasLiveChatChildren("compatibility-chat"), true);
   running.cancel(new Error("deadline elapsed"));
   running.markCleanupPending?.();
 
   assert.equal(registry.isDeploymentQuarantined("local"), true);
+  // The undrained child still owns its deployment and workspace, but it can no
+  // longer act for the chat, so it must not keep the chat busy for new turns.
+  assert.equal(registry.hasChatChildren("compatibility-chat"), true);
+  assert.equal(registry.hasWorkspaceChildren("compatibility-workspace"), true);
+  assert.equal(registry.hasLiveChatChildren("compatibility-chat"), false);
   assert.throws(() => child(registry, runtime), /waiting for an unresponsive request to settle/u);
   assert.equal(registry.activeCount, 1);
 

@@ -40,7 +40,11 @@ export type AidenUiActionV1 =
   | { act: "send"; text: AidenUiExprV1 }
   | { act: "set"; key: string; value: AidenUiExprV1 }
   | { act: "open"; url: AidenUiExprV1 }
-  | { act: "copy"; text: AidenUiExprV1 };
+  | { act: "copy"; text: AidenUiExprV1 }
+  /** Workspace artifacts only: put text in the chat's composer without sending. */
+  | { act: "compose"; text: AidenUiExprV1 }
+  /** Workspace artifacts only: run the artifact's named action with these values. */
+  | { act: "run"; name: string; a: AidenUiExprV1[] };
 
 export type AidenUiPropValueV1 = AidenUiExprV1 | AidenUiActionV1;
 

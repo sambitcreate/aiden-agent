@@ -13,6 +13,7 @@ import {
   FolderGit2,
   GitBranch,
   Globe2,
+  LayoutDashboard,
   Lightbulb,
   MessageSquare,
   Mic2,
@@ -98,6 +99,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description:
       "Ask for a chart, dashboard, or checklist and Aiden draws it right in the reply with the app's own components. Tabs, filters, and sliders work without another message, and your phone shows each one as a picture.",
     icon: ChartColumn,
+    size: "standard",
+  },
+  {
+    id: "workspaceArtifacts",
+    group: "create",
+    title: "Workspace Artifacts",
+    description:
+      "Ask for a page you'll come back to, like your open pull requests or a release checklist. Aiden keeps it in an Artifacts tab beside the chat, refreshes it from your workspace under its access setting, and its buttons can ask Aiden or run commands you approve.",
+    icon: LayoutDashboard,
     size: "standard",
   },
   {
@@ -206,8 +216,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
   {
     id: "mcp",
     group: "extend",
-    title: "MCP Connectors",
-    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools. Sharing a provider sign-in requires approval on each device.",
+    title: "Connectors",
+    description: "Connect apps like Linear, Notion and GitHub, or any MCP server, to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
     icon: Plug,
     size: "wide",
   },

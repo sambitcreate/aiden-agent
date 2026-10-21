@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -345,7 +345,7 @@ test("Aiden commands are available over the RPC (GUI-interop) surface", () => {
 			.map((line) => JSON.parse(line))
 			.filter((message) => message.type === "response" && message.command === "get_commands")
 			.flatMap((message) => message.data.commands.map((command) => command.name));
-		for (const expected of ["usage", "voice", "dictate", "btw", "mcp", "aiden-mcp"]) {
+		for (const expected of ["usage", "voice", "dictate", "btw", "mcp"]) {
 			assert.ok(commands.includes(expected), `/${expected} missing over RPC; got: ${commands.join(", ")}`);
 		}
 	} finally {
@@ -407,17 +407,42 @@ console.log(JSON.stringify({ early, missing, unhandled }));
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("native MCP command routing leaves Aiden's migrated inventory intact", () => {
-  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
+test("aiden help names Aiden's MCP commands and no native pi-mcp routing", () => {
+  const result = runCli(["help"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^ {2}mcp list\|presets\|add\|preset\|login\|logout\|remove /m);
+  assert.doesNotMatch(result.stdout, /pi-mcp/);
+});
+
+test("Pi's built-in MCP extension stays off: /mcp is Aiden's and native mcp.json servers never start", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-native-mcp-"));
   try {
-    const server = { id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" };
-    writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify([server]));
-    const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
-    const native = runCli(["pi-mcp", "list"], options);
-    assert.equal(native.status, 0, native.stderr);
-    const legacy = runCli(["mcp", "list"], options);
-    assert.equal(legacy.status, 0, legacy.stderr);
-    assert.deepEqual(JSON.parse(legacy.stdout), [server]);
+    const marker = path.join(agentDir, "native-server-started");
+    // A server in Pi's native configuration that records being launched.
+    writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { probe: {
+      command: process.execPath, args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started"); setInterval(() => {}, 1000);`],
+    } } }));
+    const child = spawn(process.execPath, [cli, "--mode", "rpc", "--no-session"], {
+      env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.stdin.write('{"id":"mcp-probe","type":"get_commands"}\n');
+    // Long enough for a native connection to have spawned its server.
+    const deadline = Date.now() + 30_000;
+    while (!stdout.includes('"mcp-probe"') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    child.stdin.end();
+    await exited;
+    const response = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((message) => message.id === "mcp-probe");
+    assert.ok(response?.success, stdout);
+    const mcp = response.data.commands.filter((command) => command.name === "mcp");
+    assert.equal(mcp.length, 1, JSON.stringify(mcp));
+    assert.match(JSON.stringify(mcp[0].sourceInfo), /aiden-mcp/u, "/mcp must come from Aiden's extension");
+    assert.equal(existsSync(marker), false, "a native mcp.json server was started");
+    assert.doesNotMatch(stderr, /was not loaded|builtin:mcp/u, "turning Pi's MCP off must not print a replacement diagnostic");
   } finally { rmSync(agentDir, { recursive: true, force: true }); }
 });
 

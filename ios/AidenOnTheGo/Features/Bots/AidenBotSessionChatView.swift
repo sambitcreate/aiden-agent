@@ -348,7 +348,7 @@ struct AidenBotSessionChatView: View {
                             rowView(row, model: model)
                                 .id(row.id)
                         }
-                        if let partial = model.partial {
+                        if let partial = model.revealedPartial, !partial.isEmpty {
                             assistantBubble(partial, interrupted: false, isStreaming: true)
                                 .id("partial")
                         }
@@ -378,11 +378,14 @@ struct AidenBotSessionChatView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .modifier(AidenBotSoftScrollEdge())
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
-                .onChange(of: model.partial) { _, _ in followIfAtEnd(proxy) }
+                .onChange(of: model.revealedPartial) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.queued.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.outgoing.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: ownSendScroll) { _, _ in followIfAtEnd(proxy, userInitiated: true) }
                 .onAppear { follow.setStreaming(model.isRunning) }
+                .onChange(of: reduceMotion, initial: true) { _, reduce in
+                    model.pacesPartialReveal = !reduce
+                }
                 .onChange(of: model.isRunning) { _, running in follow.setStreaming(running) }
                 .overlay(alignment: .bottom) {
                     if follow.showsJumpButton {

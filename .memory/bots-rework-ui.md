@@ -2,7 +2,7 @@
 
 Status: merged in PR #377 (2026-10-08), shipped in 0.55.0. Physical-device acceptance is pending. Spec: `docs/superpowers/specs/2026-10-07-bots-rework-design.md`. Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Runtime: `.memory/bot-durable-runtime.md`.
 
-See `.memory/bot-chat-activity.md` for the status line, Chat activity and recaps.
+See `.memory/bot-chat-activity.md` for the status line, Chat activity and recaps, and `.memory/instant-ui-optimistic-updates.md` (2026-10-21) for the pending send echo, remembered live views and optimistic Profile/create/delete/routine edits on desktop.
 
 ## Screen map (desktop, iOS, Android)
 - **List:** desktop = the Bots sidebar (`bot-sidebar.tsx`; `/bots` opens the most recent Bot's chat, there is no list page); phones = a list of Bots with search and +. Row: avatar whose face glances while working, name, last-message preview ("Thinking…" while working, "Waiting for you" when it needs an answer), unread dot. A paused Bot shows "Paused — tap to resume". Tapping a row opens its chat. Context menu on desktop (same order as ••• everywhere): Profile, Files, Memory, Routines, Advanced, Pin to top | Unpin, separator, Delete Bot; phones: Profile, Memory (only when the Mac serves `bot-memory-v1`), Advanced, separator, Delete (2026-10-14). Bots from a paired Mac show a small Mac badge on phones; on desktop they sit under "On {Mac}" in the sidebar.

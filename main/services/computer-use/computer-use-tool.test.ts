@@ -13,17 +13,22 @@ import {
   type CuaDriverSessionLike,
 } from "./controller.js";
 import { normalizeComputerUseArgs } from "./safety.js";
+import { ComputerUseParameters } from "./schema.js";
 import { createComputerUseAgentTool } from "./tool.js";
-import { authorizeAllowedComputerUseAction } from "./access-gate.js";
+import { COMPUTER_USE_SETUP_REASON, authorizeAllowedComputerUseAction } from "./access-gate.js";
 import {
   BOT_COMPUTER_USE_REVOKED_REASON,
   botComputerUseApproval,
 } from "../bot-runtime/bot-computer-use-approval.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import {
+  ECHO_ROW_ELEMENTS,
+  ECHO_ROW_PRUNED_ELEMENTS,
   FakeCuaDriver,
   actionResult,
   codedRefusal,
+  dragAndDropSessionRefusal,
+  windowServerConnectionRefusal,
   toolListResult,
 } from "./fixtures/cua-driver-catalog.mjs";
 
@@ -40,7 +45,7 @@ interface Call {
   signal?: AbortSignal;
 }
 
-/** Aiden's allowlisted 0.34.1 catalog, parsed exactly as a live session parses it. */
+/** Aiden's allowlisted 0.36.0 catalog, parsed exactly as a live session parses it. */
 function pinnedCatalog(): Map<string, CuaDriverToolInfo> {
   return parseCuaDriverTools(toolListResult([...CUA_DRIVER_ALLOWED_TOOLS])).tools;
 }
@@ -115,7 +120,7 @@ class FakeHost implements CuaDriverHostLike {
   }
 }
 
-/** The 0.34.1 driver's answer, with extra driver data Aiden must not forward. */
+/** The 0.36.0 driver's answer, with extra driver data Aiden must not forward. */
 function fakeResponse(call: Call, driver: FakeCuaDriver): unknown {
   const result = driver.call(call.name, call.args) as {
     structuredContent?: Record<string, unknown>;
@@ -529,20 +534,23 @@ test("successful mutations invalidate element and screenshot snapshots", async (
   await controller.close();
 });
 
-test("element drag resolves screenshot-frame centres and always delivers in the foreground", async () => {
+test("drag sends delivery_mode background by default and needs only the chat grant", async () => {
   const { controller, session } = harness(true);
   await capture(controller, "som");
   const args = { action: "drag", from_element: 0, to_element: 1 } as const;
   const approval = await controller.approvalFor(args);
   assert.ok(approval);
-  assert.match(approval.summary, /VISIBLE FOREGROUND/u);
+  // A background drag is an ordinary action under the chat grant, not a
+  // visible-foreground approval.
+  assert.doesNotMatch(approval.summary, /VISIBLE FOREGROUND/u);
   controller.authorize("drag-elements", args, approval);
   const result = await controller.execute("drag-elements", args);
   const drag = session.calls.find((call) => call.name === "drag");
   assert.ok(drag);
   // Safari's elements sit at screen points (110,60) and (250,100), 20pt
   // square, in a window at (100,50) captured at 2x: their screenshot-pixel
-  // centres are (40,40) and (320,120).
+  // centres are (40,40) and (320,120). No delivery_mode means the driver's
+  // background default.
   assert.deepEqual(drag.args, {
     target: SAFARI_TARGET,
     from_x: 40,
@@ -550,9 +558,21 @@ test("element drag resolves screenshot-frame centres and always delivers in the 
     to_x: 320,
     to_y: 120,
     button: "left",
-    delivery_mode: "foreground",
   });
-  assert.equal(result.details.deliveryMode, "foreground");
+  assert.equal(result.details.deliveryMode, "background");
+
+  // An explicit foreground drag is still its own visible-foreground approval.
+  await capture(controller, "som");
+  const foregroundArgs = { ...args, delivery_mode: "foreground" } as const;
+  const foregroundApproval = await controller.approvalFor(foregroundArgs);
+  assert.ok(foregroundApproval);
+  assert.match(foregroundApproval.summary, /VISIBLE FOREGROUND/u);
+  controller.authorize("drag-foreground", foregroundArgs, foregroundApproval);
+  const foreground = await controller.execute("drag-foreground", foregroundArgs);
+  const drags = session.calls.filter((call) => call.name === "drag");
+  assert.equal(drags.length, 2);
+  assert.equal(drags[1].args.delivery_mode, "foreground");
+  assert.equal(foreground.details.deliveryMode, "foreground");
   await controller.close();
 });
 
@@ -570,14 +590,55 @@ test("element drag without a screenshot frame is refused before approval", async
   await controller.close();
 });
 
-test("a driver refusing background drag asks for an approved foreground retry", async () => {
+test("a background drag that started a drag-and-drop session drops the capture and asks to check first", async () => {
   const { controller, session } = harness(true);
   await capture(controller, "som");
-  // A drag the driver still refuses (e.g. a policy that strips foreground).
+  // drag.rs: the press and moves were already posted when macOS started a
+  // drag-and-drop session; the driver released at once (effect no_drop), so
+  // the window may have changed and nothing captured before is trustworthy.
+  session.handler = (call) =>
+    call.name === "drag" ? dragAndDropSessionRefusal(42, 7) : fakeResponse(call, session.driver);
+  let raised: (Error & { code?: string }) | undefined;
+  await assert.rejects(
+    () => approved(controller, "drag-dnd", { action: "drag", from_coordinate: [1, 1], to_coordinate: [9, 9] }),
+    (error: Error & { code?: string }) => {
+      raised = error;
+      return true;
+    },
+  );
+  assert.equal(raised?.code, "drag_released");
+  assert.match(raised!.message, /started a macOS drag-and-drop session and was released/u);
+  assert.match(raised!.message, /Capture the window again/u);
+  assert.match(raised!.message, /only if nothing changed/u);
+  const drags = session.calls.filter((call) => call.name === "drag");
+  assert.equal(drags.length, 1);
+  assert.equal(drags[0].args.delivery_mode, undefined);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  // A foreground retry cannot reuse the old screenshot's coordinates either.
+  await assert.rejects(
+    () =>
+      controller.approvalFor({
+        action: "drag",
+        from_coordinate: [1, 1],
+        to_coordinate: [9, 9],
+        delivery_mode: "foreground",
+      }),
+    /screenshot/u,
+  );
+  await controller.close();
+});
+
+test("a background drag refused before any input offers a foreground retry and keeps the capture", async () => {
+  const { controller, session } = harness(true);
+  await capture(controller, "som");
+  // drag.rs Electron route: refused before dispatch (effect refused).
   session.handler = (call) =>
     call.name === "drag"
-      ? codedRefusal("background_unavailable", "Background drag is unavailable on macOS.", {
-          escalation: { recommended: "foreground", reason: "no background drag route" },
+      ? codedRefusal("background_unavailable", "Background drag is unavailable for this Electron window.", {
+          event_kind: "mouse_drag",
+          suggestion: 'Retry this action with delivery_mode:"foreground".',
+          escalation: { recommended: "foreground", reason: "Electron windows lose the release" },
         })
       : fakeResponse(call, session.driver);
   await assert.rejects(
@@ -585,7 +646,47 @@ test("a driver refusing background drag asks for an approved foreground retry", 
     (error: Error & { code?: string }) =>
       error.code === "foreground_required" && /delivery_mode "foreground"/u.test(error.message),
   );
+  assert.equal(session.calls.filter((call) => call.name === "drag").length, 1);
   assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), true);
+  await controller.close();
+});
+
+test("a background_unavailable refusal after input was sent is an unknown execution", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "type_text"
+      ? codedRefusal("background_unavailable", "Stopped after the first characters.", { effect: "partial" })
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "bg-partial", { action: "type", text: "hello" }),
+    (error: Error & { code?: string }) =>
+      error.code === "execution_unknown" && /never repeat it blindly/u.test(error.message),
+  );
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+test("a WindowServer connection refusal is reported as setup, not a foreground retry", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  // tools/mod.rs: code background_unavailable with reason windowserver_connection_invalid.
+  session.handler = (call) =>
+    call.name === "type_text" ? windowServerConnectionRefusal(42, 7) : fakeResponse(call, session.driver);
+  let raised: (Error & { code?: string }) | undefined;
+  await assert.rejects(
+    () => approved(controller, "ws-invalid", { action: "type", text: "hi" }),
+    (error: Error & { code?: string }) => {
+      raised = error;
+      return true;
+    },
+  );
+  assert.equal(raised?.code, "permission_required");
+  assert.ok(raised!.message.includes("windowserver_connection_invalid"), raised!.message);
+  assert.doesNotMatch(raised!.message, /delivery_mode/u);
+  assert.equal(await captureStillUsable(controller), true);
   await controller.close();
 });
 
@@ -634,12 +735,13 @@ test("maps capture modes to Pi images only for positively vision-capable models"
   assert.equal(JSON.stringify(som.details).includes(SCREENSHOT_SENTINEL), false);
   assert.equal(JSON.stringify(som.details).includes("SHOULD_NOT_LEAK"), false);
   const captureCall = vision.session.calls.find((call) => call.name === "get_window_state")!;
-  // 0.34 ignores the deprecated capture_mode, so Aiden never sends it.
+  // 0.36 ignores the deprecated capture_mode, so Aiden never sends it.
   assert.deepEqual(captureCall.args, {
     pid: 42,
     window_id: 7,
     include_screenshot: true,
     max_elements: 500,
+    tree_format: "elements",
   });
   assert.equal(som.details.elementCount, 2);
   const pixels = await capture(vision.controller, "vision");
@@ -650,6 +752,7 @@ test("maps capture modes to Pi images only for positively vision-capable models"
     window_id: 7,
     include_accessibility_tree: false,
     include_screenshot: true,
+    tree_format: "markdown",
   });
   // The screenshot-only snapshot still anchors pixel actions.
   await approved(vision.controller, "vision-click", { action: "click", coordinate: [10, 10] });
@@ -666,9 +769,260 @@ test("maps capture modes to Pi images only for positively vision-capable models"
     window_id: 7,
     include_screenshot: false,
     max_elements: 500,
+    tree_format: "elements",
   });
   assert.equal(JSON.stringify(degraded).includes(SCREENSHOT_SENTINEL), false);
   await textOnly.controller.close();
+});
+
+function capturedElements(result: { content: unknown[] }): Array<Record<string, unknown>> {
+  const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+    elements: Array<Record<string, unknown>>;
+  };
+  return payload.elements;
+}
+
+test("som capture requests the elements tree_format and still mints tokens", async () => {
+  const { controller, session } = harness(true);
+  const result = await capture(controller, "som");
+  const captureCall = session.calls.find((call) => call.name === "get_window_state")!;
+  assert.equal(captureCall.args.tree_format, "elements");
+  const elements = capturedElements(result);
+  assert.ok(elements.length > 0);
+  assert.deepEqual(
+    elements.map((element) => element.label),
+    ["First", "Second"],
+  );
+  // The numbered rows are actionable: element 1 resolves to its driver token.
+  await approved(controller, "lean-click", { action: "click", element: 1 });
+  const click = session.calls[session.calls.length - 1];
+  assert.equal(click.name, "click");
+  assert.equal(click.args.element_token, session.latestToken(1));
+  await controller.close();
+});
+
+test("capture by app filters list_windows host-side", async () => {
+  const { controller, session } = harness(false);
+  // The bundle id names no window directly: only the host-side filter's
+  // bundle match returns Safari's row, and nothing else is offered.
+  const result = await controller.execute("by-bundle", {
+    action: "capture",
+    mode: "ax",
+    app: "com.apple.Safari",
+  });
+  const listings = session.calls.filter((call) => call.name === "list_windows");
+  assert.deepEqual(
+    listings.map((call) => call.args),
+    [{ app: "com.apple.Safari" }],
+  );
+  const returned = session.results.find((entry) => entry.name === "list_windows")!.result as {
+    structuredContent: { windows: Array<{ pid: number }> };
+  };
+  assert.deepEqual(
+    returned.structuredContent.windows.map((window) => window.pid),
+    [42],
+  );
+  assert.equal(result.details.target?.pid, 42);
+  assert.equal(result.details.target?.windowId, 7);
+
+  // A name the filter does not match finds no window, even though an
+  // unfiltered host listing has three.
+  await assert.rejects(
+    () => controller.execute("no-match", { action: "capture", mode: "ax", app: "Notes" }),
+    /No window matched app "Notes"/u,
+  );
+  assert.deepEqual(
+    session.calls.filter((call) => call.name === "list_windows").map((call) => call.args),
+    [{ app: "com.apple.Safari" }, { app: "Notes" }],
+  );
+  await controller.close();
+});
+
+test("changes_only capture sends since and reports no_change", async () => {
+  const { controller, session } = harness(false);
+  const changesOnly = { action: "capture", mode: "ax", app: "Safari", changes_only: true } as const;
+  const payloadOf = (result: Awaited<ReturnType<typeof capture>>) =>
+    JSON.parse((result.content[0] as { text: string }).text) as Record<string, unknown>;
+  const snapshotOf = (index: number) =>
+    (
+      session.results.filter((entry) => entry.name === "get_window_state")[index].result as {
+        structuredContent: { snapshot_id: string };
+      }
+    ).structuredContent.snapshot_id;
+  const reads = () => session.calls.filter((call) => call.name === "get_window_state");
+
+  // No earlier snapshot of this window: a normal full capture, said so.
+  const first = payloadOf(await controller.execute("changes-first", changesOnly));
+  assert.equal(reads()[0].args.since, undefined);
+  assert.equal((first.elements as unknown[]).length, 2);
+  assert.match(String(first.note), /no previous capture/u);
+
+  // Nothing changed: the driver diffs against the first snapshot, but a
+  // changes_only read never carries or keeps element numbers.
+  const unchanged = payloadOf(await controller.execute("changes-none", changesOnly));
+  assert.equal(reads()[1].args.since, snapshotOf(0));
+  assert.equal(unchanged.no_change, true);
+  assert.equal(unchanged.elements, undefined);
+  assert.match(String(unchanged.note), /full capture/u);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: 1 }),
+    /latest capture/u,
+  );
+  assert.equal(session.calls.some((call) => call.name === "click"), false);
+
+  // Something changed: the diff rows come back without element numbers, and
+  // acting by number now needs a full capture.
+  session.driver.elements = () => [
+    { role: "AXButton", label: "First", frame: { x: 110, y: 60, w: 20, h: 20 }, depth: 1 },
+    { role: "AXButton", label: "Second", value: "on", frame: { x: 250, y: 100, w: 20, h: 20 }, depth: 1 },
+    { role: "AXButton", label: "Third", frame: { x: 150, y: 60, w: 20, h: 20 }, depth: 1 },
+  ];
+  const changed = payloadOf(await controller.execute("changes-some", changesOnly));
+  assert.equal(reads()[2].args.since, snapshotOf(1));
+  assert.equal(changed.no_change, undefined);
+  assert.equal(changed.elements, undefined);
+  assert.deepEqual(changed.diff_counts, { added: 1, changed: 1, removed: 0 });
+  assert.match(String(changed.changes), /^\+ .*Third/mu);
+  assert.match(String(changed.note), /full capture/u);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: 1 }),
+    /latest capture/u,
+  );
+
+  // A different element budget is a different view: the driver answers with
+  // a full read, which numbers elements like any full capture.
+  const fallback = payloadOf(
+    await controller.execute("changes-view", { ...changesOnly, max_elements: 400 }),
+  );
+  assert.equal(reads()[3].args.since, snapshotOf(2));
+  assert.equal((fallback.elements as unknown[]).length, 3);
+  assert.match(String(fallback.note), /view_changed/u);
+  await approved(controller, "after-fallback", { action: "click", element: 2 });
+  assert.equal(session.calls[session.calls.length - 1].args.element_token, `${snapshotOf(3)}:2`);
+  await controller.close();
+});
+
+test("a no_change read after an unrendered row vanished never keeps the old element numbers", async () => {
+  const { controller, session } = harness(false);
+  type PublicElement = { element_index: number; label?: string };
+  const payloadOf = (result: Awaited<ReturnType<typeof capture>>) =>
+    JSON.parse((result.content[0] as { text: string }).text) as Record<string, unknown>;
+  const labelled = (payload: Record<string, unknown>, label: string) =>
+    (payload.elements as PublicElement[]).find((element) => element.label === label);
+  const clicks = () => session.calls.filter((call) => call.name === "click");
+  const latestSnapshot = () =>
+    (
+      session.results.filter((entry) => entry.name === "get_window_state").slice(-1)[0].result as {
+        structuredContent: { snapshot_id: string };
+      }
+    ).structuredContent.snapshot_id;
+  session.driver.elements = () => ECHO_ROW_ELEMENTS;
+
+  const full = payloadOf(await capture(controller, "ax"));
+  const cancel = labelled(full, "Cancel");
+  assert.ok(cancel);
+
+  // The echo text row the driver never rendered disappears: the rendered rows
+  // are identical, so the driver says no_change, yet every later index moved.
+  session.driver.elements = () => ECHO_ROW_PRUNED_ELEMENTS;
+  const unchanged = payloadOf(
+    await controller.execute("echo-gone", { action: "capture", mode: "ax", app: "Safari", changes_only: true }),
+  );
+  assert.equal(unchanged.no_change, true);
+  assert.equal(unchanged.elements, undefined);
+  assert.match(String(unchanged.note), /full capture/u);
+
+  // The old Cancel number must not reach the driver, where it now names Delete.
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: cancel.element_index }),
+    /latest capture/u,
+  );
+  assert.equal(clicks().length, 0);
+
+  // A full capture renumbers the dialog: the old Cancel number is Delete now,
+  // and Cancel is reachable at its new number.
+  const fresh = payloadOf(await capture(controller, "ax"));
+  assert.equal(labelled(fresh, "Delete")?.element_index, cancel.element_index);
+  const freshCancel = labelled(fresh, "Cancel");
+  assert.ok(freshCancel);
+  await approved(controller, "cancel-after", { action: "click", element: freshCancel.element_index });
+  assert.equal(clicks().length, 1);
+  assert.equal(clicks()[0].args.element_token, `${latestSnapshot()}:${freshCancel.element_index}`);
+  assert.equal((session.results[session.results.length - 1].result as { isError?: boolean }).isError, undefined);
+  await controller.close();
+});
+
+test("changes_only reports the focused row on no_change and needs a baseline snapshot", async () => {
+  const { controller, session } = harness(false);
+  const changesOnly = { action: "capture", mode: "ax", app: "Safari", changes_only: true } as const;
+  const payloadOf = (result: Awaited<ReturnType<typeof capture>>) =>
+    JSON.parse((result.content[0] as { text: string }).text) as Record<string, unknown>;
+  const reads = () => session.calls.filter((call) => call.name === "get_window_state");
+  session.driver.elements = () => [
+    { role: "AXButton", label: "First", frame: { x: 110, y: 60, w: 20, h: 20 }, depth: 1 },
+    { role: "AXTextField", label: "Search", focused: true, frame: { x: 250, y: 100, w: 20, h: 20 }, depth: 1 },
+  ];
+  await capture(controller, "ax");
+  const unchanged = payloadOf(await controller.execute("focus-none", changesOnly));
+  assert.equal(unchanged.no_change, true);
+  assert.equal(unchanged.focused_element, '[1] AXTextField "Search"');
+
+  // A tree read that publishes no snapshot_id leaves nothing to diff against:
+  // the next changes_only read is a full capture, not a diff against an
+  // older snapshot.
+  session.handler = (call) => {
+    const result = fakeResponse(call, session.driver) as { structuredContent?: Record<string, unknown> };
+    if (call.name !== "get_window_state") return result;
+    const { snapshot_id: _dropped, ...rest } = result.structuredContent ?? {};
+    return { ...result, structuredContent: rest };
+  };
+  await capture(controller, "ax");
+  session.handler = (call) => fakeResponse(call, session.driver);
+  const full = payloadOf(await controller.execute("after-no-id", changesOnly));
+  assert.equal(reads()[reads().length - 1].args.since, undefined);
+  assert.equal((full.elements as unknown[]).length, 2);
+  assert.match(String(full.note), /no previous capture/u);
+  await controller.close();
+});
+
+test("capture with an open menu lists its items; a closed menu lists only titles", async () => {
+  const menuBar = [
+    { role: "AXMenuBarItem", label: "File", frame: { x: 110, y: 52, w: 30, h: 16 }, depth: 1 },
+    { role: "AXMenuBarItem", label: "Edit", frame: { x: 145, y: 52, w: 30, h: 16 }, depth: 1 },
+  ];
+  const openFileMenu = [
+    menuBar[0],
+    { role: "AXMenu", label: "File", frame: { x: 110, y: 68, w: 120, h: 60 }, depth: 2 },
+    { role: "AXMenuItem", label: "New Window", frame: { x: 112, y: 70, w: 116, h: 18 }, depth: 3 },
+    { role: "AXMenuItem", label: "Close Window", frame: { x: 112, y: 90, w: 116, h: 18 }, depth: 3 },
+    menuBar[1],
+  ];
+  const labelsAndRoles = (elements: Array<Record<string, unknown>>) =>
+    elements.map((element) => `${element.role}:${element.label}`);
+
+  const open = harness(false);
+  open.session.driver.elements = () => openFileMenu;
+  const openCapture = capturedElements(await capture(open.controller, "ax"));
+  assert.deepEqual(labelsAndRoles(openCapture), [
+    "AXMenuBarItem:File",
+    "AXMenu:File",
+    "AXMenuItem:New Window",
+    "AXMenuItem:Close Window",
+    "AXMenuBarItem:Edit",
+  ]);
+  // An open menu's item is addressable by the number the capture reported.
+  await approved(open.controller, "menu-item", { action: "click", element: 2 });
+  assert.equal(
+    open.session.calls[open.session.calls.length - 1].args.element_token,
+    open.session.latestToken(2),
+  );
+  await open.controller.close();
+
+  const closed = harness(false);
+  closed.session.driver.elements = () => menuBar;
+  const closedCapture = capturedElements(await capture(closed.controller, "ax"));
+  assert.deepEqual(labelsAndRoles(closedCapture), ["AXMenuBarItem:File", "AXMenuBarItem:Edit"]);
+  await closed.controller.close();
 });
 
 test("desktop capture resolves an actionable shell window without persistent driver config", async () => {
@@ -785,7 +1139,7 @@ test("desktop resolution ignores Finder folders and desktop-named third-party ap
   await missing.controller.close();
 });
 
-test("maps every action to arguments the pinned 0.34.1 schemas admit", async () => {
+test("maps every action to arguments the pinned 0.36.0 schemas admit", async () => {
   const { controller, session } = harness(true);
   const tokens: string[] = [];
   await capture(controller, "som");
@@ -1456,7 +1810,23 @@ test("the system prompt carries Computer Use guidance only when the tool is offe
     assert.match(guidance, /\bverify\b/u);
     assert.match(guidance, /untrusted/iu);
     assert.match(guidance, /foreground/iu);
+    // cua-driver 0.36 behavior the model must plan around.
+    assert.match(guidance, /changes_only read never carries or keeps element numbers/u);
+    assert.match(guidance, /take a full capture before acting by number/u);
+    assert.match(guidance, /closed menus do not appear in captures/iu);
+    assert.match(guidance, /never contain line breaks or tabs/iu);
+    assert.match(guidance, /only after a foreground_required error/u);
+    assert.match(guidance, /write_not_applied[^.;]*another route/u);
+    assert.match(guidance, /For any action, use delivery_mode foreground only after a foreground_required error/u);
+    assert.match(guidance, /drag_released[^.;]*capture and check/u);
   }
+  // The parameter schema repeats the rules where the model fills each field.
+  const describe = (field: keyof typeof ComputerUseParameters.properties) =>
+    String((ComputerUseParameters.properties[field] as { description?: string }).description);
+  assert.match(describe("text"), /line breaks or tabs/u);
+  assert.match(describe("delivery_mode"), /only after a foreground_required error/u);
+  assert.match(describe("delivery_mode"), /after drag_released once a fresh capture shows nothing changed/u);
+  assert.match(describe("changes_only"), /never vision/u);
 });
 
 test("element drag refuses an element whose centre lies outside the captured window", async () => {
@@ -1572,5 +1942,142 @@ test("a durable Bot's input action whose grant is revoked while its card waits n
     new RegExp(BOT_COMPUTER_USE_REVOKED_REASON),
   );
   assert.equal(revoked, 2);
+  await controller.close();
+});
+
+/** The closed 0.36 action result for a refusal: `effect:"refused"` with `error.code`. */
+function refusedAction(code: string) {
+  return {
+    content: [{ type: "text", text: "refused" }],
+    structuredContent: {
+      effect: "refused",
+      route: "accessibility",
+      error: { code, hint: `${code} from driver` },
+    },
+  };
+}
+
+/** Run one approved action the driver refuses with `code` after an ax capture. */
+async function refuseAfterCapture(
+  code: string,
+  tool: string,
+  args: Parameters<ComputerUseController["authorize"]>[1],
+) {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === tool ? refusedAction(code) : fakeResponse(call, session.driver);
+  let raised: (Error & { code?: string }) | undefined;
+  await assert.rejects(
+    () => approved(controller, code, args),
+    (error: Error & { code?: string }) => {
+      raised = error;
+      return true;
+    },
+  );
+  return { controller, session, error: raised! };
+}
+
+/** Whether the element numbers from the capture before the refusal still resolve. */
+async function captureStillUsable(controller: ComputerUseController): Promise<boolean> {
+  try {
+    await controller.approvalFor({ action: "click", element: 0 });
+    return true;
+  } catch (error) {
+    if (/latest capture/u.test((error as Error).message)) return false;
+    throw error;
+  }
+}
+
+test("write_not_applied invalidates the capture and asks for another route", async () => {
+  const { controller, error } = await refuseAfterCapture("write_not_applied", "set_value", {
+    action: "set_value",
+    element: 1,
+    value: "Blue",
+  });
+  assert.equal(error.code, "write_not_applied");
+  assert.match(
+    error.message,
+    /^cua-driver read the control back and the value did not change\. Capture the window again and choose another route \(an element click or the key action\) instead of repeating set_value\./u,
+  );
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+for (const code of ["window_not_key", "target_focus_unconfirmed"]) {
+  test(`${code} reports that nothing was sent and keeps the capture`, async () => {
+    const { controller, error } = await refuseAfterCapture(code, "type_text", {
+      action: "type",
+      text: "hi",
+    });
+    assert.equal(error.code, "focus_unconfirmed");
+    assert.match(
+      error.message,
+      /^The target did not have keyboard focus, so nothing was sent\. Click the element first or capture again\./u,
+    );
+    assert.equal(controller.lifecycleState, "ready");
+    assert.equal(await captureStillUsable(controller), true);
+    await controller.close();
+  });
+}
+
+for (const code of [
+  "windowserver_connection_invalid",
+  "permission_required",
+  "direct_capture_consent_required",
+]) {
+  test(`${code} is reported as unfinished macOS setup`, async () => {
+    const { controller, error } = await refuseAfterCapture(code, "type_text", {
+      action: "type",
+      text: "hi",
+    });
+    assert.equal(error.code, "permission_required");
+    assert.ok(error.message.includes(COMPUTER_USE_SETUP_REASON), error.message);
+    assert.ok(error.message.includes(code), error.message);
+    await controller.close();
+  });
+}
+
+for (const code of ["desktop_coordinate_scope_required", "element_bounds_unavailable"]) {
+  test(`${code} drops the active target and asks to recapture an exact window`, async () => {
+    const { controller, error } = await refuseAfterCapture(code, "type_text", {
+      action: "type",
+      text: "hi",
+    });
+    assert.equal(error.code, "target_unavailable");
+    assert.match(error.message, /list_windows/u);
+    assert.equal(controller.lifecycleState, "ready");
+    await assert.rejects(
+      () => controller.approvalFor({ action: "type", text: "hi" }),
+      /No active window/u,
+    );
+    await controller.close();
+  });
+}
+
+test("foreground_partial_unknown is an unknown execution that invalidates the capture", async () => {
+  const { controller, error } = await refuseAfterCapture("foreground_partial_unknown", "type_text", {
+    action: "type",
+    text: "hello",
+  });
+  assert.equal(error.code, "execution_unknown");
+  assert.match(error.message, /may already have taken effect/u);
+  assert.match(error.message, /never repeat/u);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+test("electron_main_process_unavailable asks for an approved foreground retry", async () => {
+  const { controller, error } = await refuseAfterCapture(
+    "electron_main_process_unavailable",
+    "type_text",
+    { action: "type", text: "hi" },
+  );
+  assert.equal(error.code, "foreground_required");
+  assert.match(error.message, /delivery_mode "foreground"/u);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), true);
   await controller.close();
 });
