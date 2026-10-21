@@ -46,6 +46,17 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
+/// Which of `bot:cards`, `bot:activity` and `bot:handoffs` the pairing holds.
+/// The Mac shapes a Bot session feed by these (its cards, Chat activity,
+/// hand-offs and the paused state) when the feed opens, and keeps that shape
+/// for the feed's life. A Bot chat can open from the pairing's saved features
+/// while the phone connects, before this connection has negotiated a grant, so
+/// the chat reopens a feed that opened without one
+/// (`AidenBotSessionModel.reopenFeed()`; Android parity).
+func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+}
+
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
 /// serves one durable session per Bot; older hosts keep the chatId path,
 /// including stream Stop (`POST /streams/{id}/cancel`).
@@ -213,6 +224,8 @@ enum AidenBotSessionCopy {
     static let handoffExpired = "That card was already answered or closed."
     static let handoffNotSent = "That answer wasn’t sent. Please try again."
     static let handoffNoteTooLong = "Keep the note under 4,000 characters."
+    static let handoffPhotosWait = "Send photos after you answer the card."
+    static let handoffFilesWait = "Send files after you answer the card."
     static let finishSigningInOnMac = "Finish signing in on your Mac."
     static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
     static let pauseBot = "Pause Bot"
@@ -1023,8 +1036,9 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
 final class AidenBotSessionModel {
     enum Action: Hashable, Sendable {
         case send, resume, dismiss, stop, answerQuestion, answerApproval, retry
-        /// Revision 37 (`bot:handoffs`).
-        case answerHandoff, openHandoffOnMac, pause, unpause
+        /// Revision 37 (`bot:handoffs`). Pausing is the Bot profile's own
+        /// call, made without showing a pause the Mac hasn't confirmed.
+        case answerHandoff, openHandoffOnMac, unpause
     }
 
     let botID: String
@@ -1066,6 +1080,10 @@ final class AidenBotSessionModel {
     private(set) var queued: [AidenBotQueuedMessage] = []
     /// The session stream dropped and is reconnecting.
     private(set) var isStreamDown = false
+    /// Ends the feed connection `listen()` follows now; nil between connections.
+    private var endFeedConnection: (() -> Void)?
+    /// `reopenFeed()` ended the connection, so the next one opens at once.
+    private var feedReopenRequested = false
     /// Messages sent from this phone the Mac's transcript doesn't show yet, oldest first.
     private(set) var outbox: [AidenBotOutgoingMessage] = [] {
         didSet { if outbox != oldValue { outboxDidChange() } }
@@ -1306,23 +1324,60 @@ final class AidenBotSessionModel {
         var failures = 0
         while !Task.isCancelled {
             do {
-                for try await event in transport.botSessionEvents(botId: botID) {
+                for try await event in openFeedConnection() {
                     failures = 0
                     isStreamDown = false
                     if await apply(event) == .closed { break }
                 }
             } catch is CancellationError {
+                endFeedConnection = nil
                 return
             } catch {
                 failures += 1
                 if Self.isAccessLoss(error) { purgeForAccessLoss() }
             }
+            endFeedConnection = nil
             guard !Task.isCancelled else { return }
+            if feedReopenRequested {
+                // Opened again for new grants: the next connection starts now, with its own snapshot.
+                feedReopenRequested = false
+                continue
+            }
             // A dropped connection says "Reconnecting to your Mac" until the next one's first
             // frame. A clean close reconnects at once, so it doesn't flash the word.
             if failures > 0 { isStreamDown = true }
             let delay = min(30.0, 0.5 * pow(2.0, Double(min(failures, 6))))
             try? await Task.sleep(for: .seconds(failures == 0 ? 0.2 : delay))
+        }
+    }
+
+    /// Opens the feed again: the Mac shapes a feed by this phone's grants when
+    /// it opens (`aidenBotSessionFeedGrants`), so a grant negotiated after this
+    /// chat's feed opened reaches it only on a new one, whose first frame is a
+    /// snapshot. Unsent messages, their keys and any answer on its way are left
+    /// as they are. Between connections it does nothing: the next one opens
+    /// with the grants held then.
+    func reopenFeed() {
+        guard let end = endFeedConnection else { return }
+        feedReopenRequested = true
+        end()
+    }
+
+    /// One connection of the feed, which `reopenFeed()` can end.
+    private func openFeedConnection() -> AsyncThrowingStream<AidenBotSessionEvent, Error> {
+        let feed = transport.botSessionEvents(botId: botID)
+        return AsyncThrowingStream { continuation in
+            let forwarding = Task {
+                do {
+                    for try await event in feed { continuation.yield(event) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            // Ending this stream, or its listener's cancellation, closes the connection.
+            continuation.onTermination = { _ in forwarding.cancel() }
+            endFeedConnection = { continuation.finish() }
         }
     }
 
@@ -1945,6 +2000,24 @@ final class AidenBotSessionModel {
         }
     }
 
+    /// Send while a step waits: the composer's text is the step's note, and
+    /// Send marks the step done (desktop parity). Photos and files staged
+    /// before the card came can't go with a note, so Send says so and leaves
+    /// them staged for the next message. Like the card's own Done and Skip, it
+    /// needs the Mac connected. Returns false when nothing was answered.
+    @discardableResult
+    func answerHandoffFromComposer(_ text: String, connected: Bool) async -> Bool {
+        guard composerAnswersHandoff, connected, canAnswerHandoff else { return false }
+        if !pendingAttachments.isEmpty {
+            errorMessage = pendingAttachments.contains { $0.kind == .image }
+                ? AidenBotSessionCopy.handoffPhotosWait
+                : AidenBotSessionCopy.handoffFilesWait
+            return false
+        }
+        guard !AidenBotHandoffWire.isBlank(text) else { return false }
+        return await answerHandoff(.done, note: text)
+    }
+
     /// Finish on your Mac: asks the Mac to bring the hand-off forward. The
     /// card stays; it says whether the Mac showed it.
     func finishHandoffOnMac() async {
@@ -1983,14 +2056,6 @@ final class AidenBotSessionModel {
         guard isPaused, !inFlight.contains(.unpause) else { return }
         await perform(.unpause) { [transport, botID] key in
             try await transport.unpauseBot(botId: botID, idempotencyKey: key)
-        }
-    }
-
-    /// Pause shows at once and goes back if the Mac didn't take it (R18).
-    func pause() async {
-        guard hasLoaded, !isPaused, !needsModel, state != .unavailable, !inFlight.contains(.pause) else { return }
-        await perform(.pause, optimistic: try? AidenBotSessionStateView(state: .paused)) { [transport, botID] key in
-            try await transport.pauseBot(botId: botID, idempotencyKey: key)
         }
     }
 

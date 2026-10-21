@@ -23,7 +23,7 @@
 //   routine's or the self-intro's prompt never reaches a phone. The person's
 //   own messages also carry the `submissionId` they were sent as, so a phone
 //   settles its optimistic bubble exactly; other devices never see the key.
-// - Contract revision 36 (`bot:handoffs`): devices holding it also get the
+// - Contract revision 37 (`bot:handoffs`): devices holding it also get the
 //   waiting hand-off (`handoff`, published after `approval`), the `paused`
 //   state and the `bot_paused` refusal, and may answer a hand-off, open it on
 //   the Mac, and pause or unpause the Bot. Other devices keep the revision-35
@@ -189,9 +189,9 @@ export interface AidenRemoteBotSessionRuntime {
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   /** Ends a running turn (serialized with send/resume/dismiss); a paused turn is left for Dismiss. */
   stop(botId: string): Promise<BotSessionState>;
-  /** Revision 36: pause the Bot (idempotent; the first pause's time and origin stay). */
+  /** Revision 37: pause the Bot (idempotent; the first pause's time and origin stay). */
   pause(botId: string, by: BotPauseOrigin): Promise<BotSessionState>;
-  /** Revision 36: clear the pause; an interrupted turn then waits for Resume. */
+  /** Revision 37: clear the pause; an interrupted turn then waits for Resume. */
   unpause(botId: string): Promise<BotSessionState>;
   state(botId: string): Promise<BotSessionState>;
   conversation(botId: string): Promise<Conversation>;
@@ -228,11 +228,11 @@ export interface AidenRemoteBotSessionServiceOptions {
   /** The Bot's waiting tool approvals (the same bridge the desktop answers through). */
   approvals?: Pick<BotApprovals, "pending" | "decide" | "onChange">;
   /**
-   * Revision 36: the Bot's waiting hand-off cards (the same bridge the desktop
+   * Revision 37: the Bot's waiting hand-off cards (the same bridge the desktop
    * answers through). With it the host announces `bot:handoffs`.
    */
   handoffs?: Pick<BotHandoffs, "pending" | "get" | "answer" | "onChange">;
-  /** Revision 36: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
+  /** Revision 37: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
   openHandoffOnMac?(botId: string, waitId: string): Promise<BotHandoffOpened>;
   /**
    * Hear a Bot's session state change on any surface (`onBotSessionStateChange`);
@@ -425,7 +425,7 @@ export function projectBotSessionEntries(
         break;
       }
       case "handoff_result": {
-        // Revision 36, for every device: Done or Skip on a hand-off card reads
+        // Revision 37, for every device: Done or Skip on a hand-off card reads
         // as the person's message ("You did this: …"), with their note under it.
         const createdAt = isoOf(entry.at);
         const note = entry.note?.trim();
@@ -606,7 +606,7 @@ function memberBytes(key: string, value: unknown): number {
 }
 
 /**
- * A session state on the wire. Revision 36: a device holding `bot:handoffs`
+ * A session state on the wire. Revision 37: a device holding `bot:handoffs`
  * sees a person's pause as `paused`; every other device as `unavailable`.
  */
 export function projectBotSessionState(
@@ -657,7 +657,7 @@ interface Audience {
   cards: boolean;
   /** `bot:activity`: the `activity` and `queued` frames and snapshot keys (revision 30). */
   activity: boolean;
-  /** `bot:handoffs`: the `handoff` frame and snapshot key, and the `paused` state (revision 36). */
+  /** `bot:handoffs`: the `handoff` frame and snapshot key, and the `paused` state (revision 37). */
   handoffs: boolean;
 }
 
@@ -670,7 +670,7 @@ interface Subscriber extends Audience {
 /** Frames only `bot:activity` devices can parse. */
 const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set(["activity", "queued"]);
 
-/** The Bot's waiting hand-off for both kinds of device (revision 36). */
+/** The Bot's waiting hand-off for both kinds of device (revision 37). */
 interface ProjectedHandoff {
   /** What a `bot:handoffs` device is sent. */
   handoff: AidenRemoteBotHandoff;
@@ -700,7 +700,7 @@ class BotLiveProjector {
   state: AidenRemoteBotSessionStateView = { state: "idle", interrupted: false };
   question: AidenRemoteBotQuestion | null = null;
   approval: AidenRemoteBotApproval | null = null;
-  /** The waiting hand-off (revision 36), with the line devices without `bot:handoffs` show for it. */
+  /** The waiting hand-off (revision 37), with the line devices without `bot:handoffs` show for it. */
   handoff: ProjectedHandoff | null = null;
   /** What the running turn is doing, in the §11 shape; null while no turn runs. */
   activity: AidenRemoteBotSessionActivity | null = null;
@@ -751,7 +751,7 @@ class BotLiveProjector {
     private readonly readApproval: () => AidenRemoteBotApproval | null = () => null,
     /** Revision 30; without it nothing is derived and no activity or queued frame is ever sent. */
     private readonly activityDeps?: ProjectorActivity,
-    /** Revision 36; without it no hand-off is ever projected. */
+    /** Revision 37; without it no hand-off is ever projected. */
     private readonly readHandoff: () => Promise<ProjectedHandoff | null> = async () => null,
   ) {
     this.classifier = activityDeps
@@ -888,7 +888,7 @@ class BotLiveProjector {
   }
 
   /**
-   * `notice` (revision 36, `handoff` frames only): what a device without
+   * `notice` (revision 37, `handoff` frames only): what a device without
    * `bot:handoffs` gets at this seq instead, an entry frame with the hand-off's
    * line; a settled hand-off (no notice) reaches it as a no-op state frame.
    */
@@ -1254,8 +1254,25 @@ async function unlessRefusedBeforeRunning<Result>(call: () => Promise<Result>): 
 }
 
 /**
+ * Runs the check-then-answer body of an answer request (a question, an
+ * approval or a hand-off). Every refusal it throws comes before the answer
+ * lands and changes nothing: the card or question stopped waiting, or it
+ * doesn't take that answer. The ledger forgets the request instead of
+ * recording a refusal it can only replay as `internal_error`, so a retry with
+ * the same request UUID is checked again and gets the same refusal.
+ */
+async function answerOrRefuseUnchanged<Result>(answer: () => Promise<Result>): Promise<Result> {
+  try {
+    return await answer();
+  } catch (error) {
+    if (error instanceof AidenRemoteServiceError) throw new AidenOperationNotExecutedError(error);
+    throw error;
+  }
+}
+
+/**
  * A session refusal as one device is told it. A person's pause is
- * `bot_paused` for a device holding `bot:handoffs` (revision 36) and
+ * `bot_paused` for a device holding `bot:handoffs` (revision 37) and
  * `operation_stale`, a code shipped clients already know, for every other.
  */
 function mapSessionError(error: unknown, audience: AidenRemoteBotHandoffAudience = LEGACY_AUDIENCE): never {
@@ -1461,7 +1478,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Hand-offs and pause on phones (revision 36, `bot:handoffs`): the hand-off
+   * Hand-offs and pause on phones (revision 37, `bot:handoffs`): the hand-off
    * bridge and the Mac opener are wired. Without them the host never offers
    * the capability and every device gets the revision-35 view.
    */
@@ -1668,7 +1685,7 @@ export class AidenRemoteBotSessionService {
     return this.options.bots.executeIdempotent(
       { deviceId, route: "POST /approvals/{id}/respond", resourceId: waitId, key },
       scope ? { approvalId: waitId, decision, scope } : { approvalId: waitId, decision },
-      async () => {
+      () => answerOrRefuseUnchanged(async () => {
         const prompt = approvals.pending().find((candidate) => candidate.waitId === waitId);
         if (!prompt) throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
         await this.options.bots.bot(prompt.botId);
@@ -1688,7 +1705,7 @@ export class AidenRemoteBotSessionService {
         this.answeredApprovals.add(waitId);
         if (this.answeredApprovals.size > 256) this.answeredApprovals.delete(this.answeredApprovals.values().next().value!);
         return { approvalId: waitId, decision, resolvedAt: new Date(this.options.now?.() ?? Date.now()).toISOString() };
-      },
+      }),
     );
   }
 
@@ -1719,7 +1736,7 @@ export class AidenRemoteBotSessionService {
       return await this.options.bots.executeIdempotent(
         { deviceId, route: "POST /bots/{id}/questions/{waitId}/answer", resourceId: `${bot.id}:${waitId}`, key },
         { waitId, ...parsed },
-        async () => {
+        () => answerOrRefuseUnchanged(async () => {
           const outcome = questions.answer(bot.id, waitId, {
             version: 1,
             promptId: waitId,
@@ -1733,7 +1750,7 @@ export class AidenRemoteBotSessionService {
             throw new AidenRemoteServiceError("question_expired", "This question prompt is no longer available.", 409);
           }
           return { waitId };
-        },
+        }),
       );
     } catch (error) {
       if (error instanceof AidenRemoteServiceError) throw error;
@@ -1749,7 +1766,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Revision 36: Done or Skip on the Bot's waiting hand-off. Idempotent per
+   * Revision 37: Done or Skip on the Bot's waiting hand-off. Idempotent per
    * request UUID: a repeat gets the same receipt. A card that is no longer
    * waiting is `handoff_expired`; an answer it does not accept is
    * `invalid_request`. A sign-in is finished on the Mac, so a phone may only skip it.
@@ -1770,7 +1787,7 @@ export class AidenRemoteBotSessionService {
       return await this.options.bots.executeIdempotent(
         { deviceId, route: "POST /bots/{id}/handoffs/{waitId}/answer", resourceId: `${bot.id}:${id}`, key },
         { waitId: id, ...parsed },
-        async () => {
+        () => answerOrRefuseUnchanged(async () => {
           const prompt = handoffs.get(bot.id, id);
           if (!prompt) throw handoffExpired();
           if (prompt.kind === "sign_in" && parsed.outcome === "done") {
@@ -1782,7 +1799,7 @@ export class AidenRemoteBotSessionService {
           }
           if (outcome === "not_waiting") throw handoffExpired();
           return { waitId: id };
-        },
+        }),
       );
     } catch (error) {
       if (error instanceof AidenRemoteServiceError) throw error;
@@ -1791,7 +1808,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Revision 36: bring the Bot's waiting hand-off forward on the Mac (its
+   * Revision 37: bring the Bot's waiting hand-off forward on the Mac (its
    * chat, and for a sign-in the Bot's own browser). Idempotent per request
    * UUID, like a connection request: a repeat never opens it twice.
    */
@@ -1810,7 +1827,8 @@ export class AidenRemoteBotSessionService {
       { deviceId, route: "POST /bots/{id}/handoffs/{waitId}/open-on-mac", resourceId: `${bot.id}:${id}`, key },
       { waitId: id },
       async () => {
-        if (!handoffs.get(bot.id, id)) throw handoffExpired();
+        // Nothing opened, so a retry with this request UUID is checked again.
+        if (!handoffs.get(bot.id, id)) throw new AidenOperationNotExecutedError(handoffExpired());
         const opened = await this.options.openHandoffOnMac!(bot.id, id);
         return { waitId: id, opened: opened !== "none" };
       },
@@ -1888,7 +1906,7 @@ export class AidenRemoteBotSessionService {
 
   /**
    * What a device that negotiated these opt-ins is sent; `activity` needs this
-   * host's revision 30 and `handoffs` its revision 36.
+   * host's revision 30 and `handoffs` its revision 37.
    */
   private audience(options: AudienceOptions): Audience {
     return {
@@ -2137,7 +2155,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Revision 36: pause the Bot from a phone (`by: "phone"`). Idempotent per
+   * Revision 37: pause the Bot from a phone (`by: "phone"`). Idempotent per
    * request UUID; pausing a paused Bot keeps the first pause. A running turn
    * is closed and left interrupted.
    */
@@ -2145,7 +2163,7 @@ export class AidenRemoteBotSessionService {
     return this.control("pause", deviceId, botId, key, input, options);
   }
 
-  /** Revision 36: clear the pause. An interrupted turn then waits for Resume. */
+  /** Revision 37: clear the pause. An interrupted turn then waits for Resume. */
   unpause(deviceId: string, botId: string, key: string, options: { handoffs?: boolean } = {}) {
     return this.control("unpause", deviceId, botId, key, {}, options);
   }

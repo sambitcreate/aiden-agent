@@ -401,6 +401,19 @@ test("the host's real Bot session, send receipt and controls pass this Mac's con
     };
     assert.equal(session.botId, (fixtures[key] as { botId: string }).botId, key);
   }
+  // A holder of bot:handoffs reads the waiting card and the paused state. The
+  // host test checks these fixtures are what its sessions really send.
+  const handoffs = contract.botHandoffs;
+  const waiting = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.session)) as {
+    handoff?: unknown;
+  };
+  assert.deepEqual(waiting.handoff, handoffs.session.handoff, "the card reaches the paired Mac");
+  const paused = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.pausedSession)) as {
+    state?: string;
+    handoff?: unknown;
+  };
+  assert.deepEqual([paused.state, paused.handoff], [handoffs.pausedSession.state, handoffs.pausedSession.handoff]);
+  assert.equal(paused.state, "paused");
   assert.deepEqual(
     await peerOperationResult({ operation: "botSend", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
     fixtures.botSessionSend!.response,

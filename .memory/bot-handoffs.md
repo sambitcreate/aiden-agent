@@ -65,7 +65,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §4.1 (package P1: the h
 
 ## Not yet
 - Paired desktops and phones don't receive `rule` on the wire (revision 37), so they can't tell a password-or-code card; a note they send with its answer is `400 invalid_request` and the card keeps waiting. Showing it needs a wire field in a later revision.
-- Remote and phones: P4 (host side, `.memory/remote-rev37-bot-handoffs.md`) maps `handoff_result` to the person's message for every device and adds the revision-36 answer and open-on-Mac routes; the phone and paired-desktop UI is P5 (`.memory/bot-handoffs-clients.md`).
+- Remote and phones: P4 (host side, `.memory/remote-rev37-bot-handoffs.md`) maps `handoff_result` to the person's message for every device and adds the revision-37 answer and open-on-Mac routes; the phone and paired-desktop UI is P5 (`.memory/bot-handoffs-clients.md`).
 - CLI: hand-offs are desktop-only. The CLI bundles `renderer/shared/bot-activity.ts`, which is why it names the `hand_off` literal instead of importing the constant.
 - Tests: `npm run test:bot-handoffs` (8 files), plus extensions in `live-projection` (including catch-up on subscribe with no refresh wired, and the list preview), `bot-attention`, `bot-chat-pane` (including a pasted photo refused while a card waits), `bot-transcript-rows`, `bot-activity-log`, `bot-params`, `bot-activity(-detail)` and `tests/e2e/bots-starter.spec.ts`.
 - Bot chat tests can paste an image by setting `window.aidenAPI.attachments.readClipboardImages` after `mountChat` (the Bot test IPC fake has no attachments bridge) and firing `paste` with `clipboardData.items`.

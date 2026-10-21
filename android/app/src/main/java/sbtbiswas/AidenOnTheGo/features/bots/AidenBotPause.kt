@@ -30,6 +30,14 @@ class AidenRemoteBotPauseTransport(private val client: AidenRemoteClient) : Aide
 fun aidenBotOffersPause(server: AidenServer?, canWriteBots: Boolean, bot: AidenBotDetail?): Boolean =
     server?.supportsBotHandoffs == true && canWriteBots && bot?.sessionState != null
 
+/**
+ * The chat's paused card offers Resume only while this phone may change Bots and the chat is
+ * connected to the Mac (iOS parity: the card's actions need both). Otherwise the card still says
+ * the Bot is paused, without a Resume that could only fail.
+ */
+fun aidenBotPausedChatOffersResume(canWriteBots: Boolean, ui: AidenBotSessionUiState): Boolean =
+    canWriteBots && ui.isConnected
+
 /** The Bot as the Mac's answer to Pause or Resume leaves it: its `paused` flag follows the state. */
 fun AidenBotDetail.withSessionState(view: AidenBotSessionStateView): AidenBotDetail =
     copy(sessionState = view.state, paused = view.state == AidenBotSessionState.PAUSED)

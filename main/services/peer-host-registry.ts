@@ -525,6 +525,12 @@ export class PeerHostRegistry {
       // A lost answer is tried again on the next reconnect.
       const answered = error instanceof PeerTransportError && error.code === "request_failed" && (error.status ?? 500) < 500;
       if (!answered) this.negotiated.delete(host.id);
+      // A credential the host no longer takes fails the connection like any other call,
+      // so the Mac asks to pair again instead of sending on with it.
+      if (error instanceof PeerTransportError && error.code === "authentication_required") {
+        this.clearVerification(host.id);
+        throw error;
+      }
     }
   }
   /** Persist the grants and features a host reports, so views and gates stay current. */

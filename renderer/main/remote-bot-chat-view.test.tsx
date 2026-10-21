@@ -168,6 +168,64 @@ test("live frames from the host stream into the chat, and a deny-only approval a
   });
 });
 
+const COLOUR_QUESTION = {
+  question: "Which colour should the banner use?",
+  header: "Colour",
+  multiSelect: false,
+  options: [
+    { label: "Blue", description: "Calm and cool." },
+    { label: "Red", description: "Loud and warm." },
+  ],
+};
+
+test("a question or approval answered here shows again when the host asks it again under the same wait id", async () => {
+  const { peerCalls } = await mount(HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      if (operation.operation === "botSession") return { ok: true, value: { ...SESSION, state: "running" } };
+      if (operation.operation === "botAnswerQuestion") return { ok: true, value: { waitId: operation.itemId } };
+      if (operation.operation === "respondApproval") {
+        return { ok: true, value: { approvalId: operation.resourceId, decision: "deny", resolvedAt: "2026-10-20T10:00:00.000Z" } };
+      }
+      return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+    },
+  });
+  await screen.findByText("Two meetings and a dentist.");
+  const asked = () => document.body.textContent?.includes(COLOUR_QUESTION.question) === true;
+  const question = { waitId: "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c", toolCallId: "call_q1", questions: [COLOUR_QUESTION] };
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "question", { question }));
+  });
+  assert.ok(await screen.findByRole("heading", { name: COLOUR_QUESTION.question }));
+  fireEvent.click(screen.getByRole("button", { name: /Blue/u }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botAnswerQuestion").length, 1));
+  await waitFor(() => assert.equal(asked(), false));
+  // The host quit before its Bot kept the answer; Resume asks the same question under the same wait id.
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(5, "question", { question: null }));
+    // Each frame crosses IPC as a fresh copy.
+    emitBotTestNotification("remote:peer-bot-session", event(6, "question", { question: structuredClone(question) }));
+  });
+  await waitFor(() => assert.equal(asked(), true, "the question asked again can be answered here"));
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(7, "question", { question: null }));
+  });
+
+  const approval = { waitId: "w1", toolCallId: "t1", toolName: "computer_use", summary: "Open Calendar", canAllow: false };
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(8, "approval", { approval }));
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Deny" }));
+  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "respondApproval").length, 1));
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Deny" }), null));
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(9, "approval", { approval: null }));
+    emitBotTestNotification("remote:peer-bot-session", event(10, "approval", { approval: structuredClone(approval) }));
+  });
+  assert.ok(await screen.findByRole("button", { name: "Deny" }), "the approval asked again can be answered here");
+});
+
 test("a host too old to share its Bots' conversation says so instead of opening a split chat", async () => {
   const { peerCalls } = await mount({ ...HOST, features: [] });
   assert.ok(await screen.findByText("This Bot's chat isn't shared"));
@@ -282,6 +340,41 @@ test("a lost hand-off answer is resent under its key", async () => {
   const [first, second] = lost.handoffAnswers();
   assert.equal(first!.idempotencyKey, second!.idempotencyKey);
   await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+});
+
+test("while the card's answer is on its way, Pause finishing first keeps the card waiting and the composer sends no second answer", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { peerCalls, handoffAnswers } = await mountHandoff(RUNNING_WITH_HANDOFF, async (operation) => {
+    await held;
+    return { ok: true, value: { waitId: operation.itemId } };
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers().length, 1));
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
+  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botPause").length, 1));
+  await act(async () => undefined);
+  assert.equal(
+    (screen.getByRole("button", { name: "Done" }) as HTMLButtonElement).disabled,
+    true,
+    "the card still waits for its own answer",
+  );
+
+  const box = (await screen.findByPlaceholderText("Add a note and send to mark it done")) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Finished on the website." } });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await act(async () => undefined);
+  assert.equal(handoffAnswers().length, 1, "one card, one answer");
+  await waitFor(() => assert.equal(box.value, "Finished on the website.", "the note stays in the composer"));
+
+  await act(async () => {
+    release();
+  });
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+  assert.equal(handoffAnswers().length, 1);
 });
 
 test("a sign-in is finished on the Bot's own Mac: the card offers Finish there and Skip, never Done", async () => {

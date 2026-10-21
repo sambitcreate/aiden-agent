@@ -34,7 +34,7 @@ import { BOT_HANDOFF_NOTE_MAX_CHARS, type BotHandoffOutcome } from "../shared/bo
 import type { BotPendingQuestion } from "../shared/bot-live";
 import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, type PeerOperationOutcome } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
-import type { AidenRemoteBotHandoff } from "../../main/services/aiden-remote-protocol";
+import type { AidenRemoteBotApproval, AidenRemoteBotHandoff } from "../../main/services/aiden-remote-protocol";
 import { BotApprovalCard, BotInterruptedCard, TranscriptEntries, questionPrompt } from "./bots/bot-chat-pane";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";
 import { botReplyQuote } from "./bots/bot-message-actions";
@@ -83,6 +83,25 @@ function photoIdentity(images: readonly Attachment[]): (readonly [string, string
   return images.map((image) => [image.name, image.mimeType, image.data ?? ""] as const);
 }
 
+type BusyOperation = "paused" | "answer" | "handoff" | "pause" | "retry" | "connect";
+
+/**
+ * The chat's operations in flight, each counted on its own, so one finishing
+ * never frees the buttons another is still waiting on.
+ */
+function useBusyOperations() {
+  const [counts, setCounts] = React.useState<Readonly<Partial<Record<BusyOperation, number>>>>({});
+  const run = React.useCallback(async <Result,>(operation: BusyOperation, work: () => Promise<Result>): Promise<Result> => {
+    setCounts((now) => ({ ...now, [operation]: (now[operation] ?? 0) + 1 }));
+    try {
+      return await work();
+    } finally {
+      setCounts((now) => ({ ...now, [operation]: Math.max(0, (now[operation] ?? 0) - 1) }));
+    }
+  }, []);
+  return { busy: (operation: BusyOperation) => (counts[operation] ?? 0) > 0, run };
+}
+
 function sameSend(pending: UnsettledBotSend, text: string, photos: readonly (readonly [string, string, string])[]): boolean {
   return (
     pending.text === text &&
@@ -102,14 +121,20 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // A host too old to share the conversation is told so below, without asking it.
   const shared = !host || hostSharesBotSessions(host);
   const live = useRemoteBotSession(hostId, botId, shared);
-  const [busy, setBusy] = React.useState<"paused" | "answer" | "handoff" | "pause" | "retry" | "connect" | null>(null);
+  const { busy, run } = useBusyOperations();
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
-  const [answered, setAnswered] = React.useState<ReadonlySet<string>>(new Set());
+  // A question or approval this Mac answered, hidden only while the host's view
+  // still holds that same prompt. A Resume asks it again under the same wait
+  // id: the host's frame (or a fresh snapshot) for it is a new prompt, and it shows.
+  const [settledQuestion, setSettledQuestion] = React.useState<BotPendingQuestion | null>(null);
+  const [settledApproval, setSettledApproval] = React.useState<AidenRemoteBotApproval | null>(null);
   const [statusLayout, setStatusLayout] = React.useState("");
   // A send whose acknowledgement was lost keeps its key and staged photos, so
   // sending the same thing again is deduplicated by the host, not repeated.
   const unsettledSend = React.useRef<UnsettledBotSend | null>(null);
   const unsettledHandoff = React.useRef<UnsettledHandoffAnswer | null>(null);
+  // The card whose answer is on its way: one card gets one answer at a time.
+  const answeringHandoff = React.useRef<string | null>(null);
   // The hand-off card this Mac settled, hidden only while the host's view still
   // holds that same card. Resume asks a hand-off again under the same wait id:
   // the host's frame (or a fresh snapshot) for it is a new card, and it shows.
@@ -139,21 +164,19 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   };
 
   /** Pause the Bot on its own Mac, or lift the pause. The host's stream then carries the new state. */
-  const setPaused = async (pause: boolean) => {
-    setBusy("pause");
-    try {
-      await call(
-        { operation: pause ? "botPause" : "botUnpause", resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: {} },
-        pause ? `Aiden couldn’t pause ${name}.` : `Aiden couldn’t resume ${name}.`,
-      );
-      // While the stream reconnects, read the session so the change shows now.
-      if (live.stream !== "streaming") live.reload();
-    } catch {
-      // The toast said why.
-    } finally {
-      setBusy(null);
-    }
-  };
+  const setPaused = (pause: boolean) =>
+    run("pause", async () => {
+      try {
+        await call(
+          { operation: pause ? "botPause" : "botUnpause", resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: {} },
+          pause ? `Aiden couldn’t pause ${name}.` : `Aiden couldn’t resume ${name}.`,
+        );
+        // While the stream reconnects, read the session so the change shows now.
+        if (live.stream !== "streaming") live.reload();
+      } catch {
+        // The toast said why.
+      }
+    });
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
     <ScrollArea
@@ -170,7 +193,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       }
       actions={
         handoffs && snapshot ? (
-          <RemoteBotMenu name={name} paused={isPaused} disabled={busy === "pause"} onPause={(pause) => void setPaused(pause)} />
+          <RemoteBotMenu name={name} paused={isPaused} disabled={busy("pause")} onPause={(pause) => void setPaused(pause)} />
         ) : null
       }
       autoScrollToBottom
@@ -283,8 +306,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const replyStreaming =
     running && (snapshot.partial?.trim().length ?? 0) > 0 && (activityPhase === "writing" || activityPhase === "thinking");
   const statusActivity = snapshot.activity && !replyStreaming ? snapshot.activity : null;
-  const question = snapshot.question && !answered.has(snapshot.question.waitId) ? snapshot.question : null;
-  const approval = view.approval && !answered.has(view.approval.waitId) ? view.approval : null;
+  const question = snapshot.question && snapshot.question !== settledQuestion ? snapshot.question : null;
+  const approval = view.approval && view.approval !== settledApproval ? view.approval : null;
   const handoff = view.handoff && view.handoff !== settledHandoff ? view.handoff : null;
   // A sign-in happens in the Bot's own browser on its Mac: typing here can't finish it.
   const signInElsewhere = handoff?.kind === "sign_in";
@@ -345,34 +368,28 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const keyed = (operation: "botResume" | "botDismiss" | "botStop") =>
     call({ operation, resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: {} }, `Aiden couldn’t reach ${name}.`);
 
-  const paused = async (operation: "botResume" | "botDismiss") => {
-    setBusy("paused");
-    await keyed(operation).catch(() => undefined);
-    setBusy(null);
-  };
+  const paused = (operation: "botResume" | "botDismiss") => run("paused", () => keyed(operation).catch(() => undefined));
 
   const stop = () => void keyed("botStop").catch(() => undefined);
 
-  const answerQuestion = async (pending: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
-    setBusy("answer");
-    try {
-      await call(
-        {
-          operation: "botAnswerQuestion",
-          resourceId: botId,
-          itemId: pending.waitId,
-          idempotencyKey: mintPeerIdempotencyKey(),
-          body: response,
-        },
-        "Aiden couldn’t send that answer.",
-      );
-      setAnswered((ids) => new Set(ids).add(pending.waitId));
-    } catch {
-      // The toast said why; the question stays so it can be answered again.
-    } finally {
-      setBusy(null);
-    }
-  };
+  const answerQuestion = (pending: BotPendingQuestion, response: AskUserQuestionResponseV1) =>
+    run("answer", async () => {
+      try {
+        await call(
+          {
+            operation: "botAnswerQuestion",
+            resourceId: botId,
+            itemId: pending.waitId,
+            idempotencyKey: mintPeerIdempotencyKey(),
+            body: response,
+          },
+          "Aiden couldn’t send that answer.",
+        );
+        setSettledQuestion(pending);
+      } catch {
+        // The toast said why; the question stays so it can be answered again.
+      }
+    });
 
   /** Hide a settled hand-off card, unless the host's view has already moved past it. */
   const hideCard = (waitId: string) => {
@@ -390,6 +407,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     outcome: BotHandoffOutcome,
     note?: string,
   ): Promise<string | null> => {
+    if (answeringHandoff.current === pending.waitId) return "Your answer to this card is still on its way.";
     const retry = unsettledHandoff.current;
     // The same answer after a lost acknowledgement goes again under its key, so the host records it once.
     const key =
@@ -397,32 +415,34 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         ? retry.key
         : mintPeerIdempotencyKey();
     unsettledHandoff.current = null;
-    setBusy("handoff");
+    answeringHandoff.current = pending.waitId;
     try {
-      const outcomeOf = await peerHostsApi.call(hostId, {
-        operation: "botAnswerHandoff",
-        resourceId: botId,
-        itemId: pending.waitId,
-        idempotencyKey: key,
-        body: note === undefined ? { outcome } : { outcome, note },
+      return await run("handoff", async () => {
+        const outcomeOf = await peerHostsApi.call(hostId, {
+          operation: "botAnswerHandoff",
+          resourceId: botId,
+          itemId: pending.waitId,
+          idempotencyKey: key,
+          body: note === undefined ? { outcome } : { outcome, note },
+        });
+        if (outcomeOf.ok) {
+          hideCard(pending.waitId);
+          return null;
+        }
+        if (outcomeOf.error.remoteCode === "handoff_expired") {
+          // Answered on the host or another device, or withdrawn: it stays gone.
+          hideCard(pending.waitId);
+          toast.info("That card was already answered or closed.");
+          return null;
+        }
+        if (outcomeOf.error.code === "outcome_unknown") {
+          unsettledHandoff.current = { waitId: pending.waitId, outcome, note, key };
+          return `${hostName} may not have received that. Check the chat before trying again.`;
+        }
+        return outcomeOf.error.message || "Aiden couldn’t send that answer.";
       });
-      if (outcomeOf.ok) {
-        hideCard(pending.waitId);
-        return null;
-      }
-      if (outcomeOf.error.remoteCode === "handoff_expired") {
-        // Answered on the host or another device, or withdrawn: it stays gone.
-        hideCard(pending.waitId);
-        toast.info("That card was already answered or closed.");
-        return null;
-      }
-      if (outcomeOf.error.code === "outcome_unknown") {
-        unsettledHandoff.current = { waitId: pending.waitId, outcome, note, key };
-        return `${hostName} may not have received that. Check the chat before trying again.`;
-      }
-      return outcomeOf.error.message || "Aiden couldn’t send that answer.";
     } finally {
-      setBusy(null);
+      answeringHandoff.current = null;
     }
   };
 
@@ -463,9 +483,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   };
 
   /** Finish on <Mac>: bring the sign-in forward in the Bot's own browser there. */
-  const finishHandoff = async (pending: AidenRemoteBotHandoff) => {
-    setBusy("handoff");
-    try {
+  const finishHandoff = (pending: AidenRemoteBotHandoff) =>
+    run("handoff", async () => {
       const outcome = await peerHostsApi.call(hostId, {
         operation: "botHandoffOpenOnMac",
         resourceId: botId,
@@ -487,16 +506,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
             : outcome.error.message || `Aiden couldn’t reach ${hostName}.`,
         );
       }
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
 
-  const retry = async (text: string) => {
-    setBusy("retry");
-    await send(text, []).catch(() => undefined);
-    setBusy(null);
-  };
+  const retry = (text: string) => run("retry", () => send(text, []).catch(() => undefined));
 
   const reply = (text: string) => {
     const composer = composerRef.current;
@@ -514,19 +526,18 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       toast.info(`Connect it on ${hostName}.`);
       return;
     }
-    setBusy("connect");
-    try {
-      const sent = await call(
-        { operation: "botConnectionRequest", resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: { pluginId } },
-        "Aiden couldn’t ask for that connection.",
-      );
-      const label = (sent.value as { name?: unknown } | null)?.name;
-      toast.success(`Finish connecting ${typeof label === "string" ? label : "it"} on ${hostName}.`);
-    } catch {
-      // The toast said why.
-    } finally {
-      setBusy(null);
-    }
+    await run("connect", async () => {
+      try {
+        const sent = await call(
+          { operation: "botConnectionRequest", resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: { pluginId } },
+          "Aiden couldn’t ask for that connection.",
+        );
+        const label = (sent.value as { name?: unknown } | null)?.name;
+        toast.success(`Finish connecting ${typeof label === "string" ? label : "it"} on ${hostName}.`);
+      } catch {
+        // The toast said why.
+      }
+    });
   };
 
   const footer = (
@@ -539,7 +550,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
               name={name}
               avatar={avatar}
               handoff={handoff}
-              busy={busy === "handoff"}
+              busy={busy("handoff")}
               finishOn={hostName}
               onOpen={() => void openHandoff(handoff)}
               onFinish={() => void finishHandoff(handoff)}
@@ -553,17 +564,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
               prompt={{ botId, waitId: approval.waitId, toolCallId: approval.toolCallId, toolName: approval.toolName, summary: approval.summary }}
               {...(approval.canAllow ? {} : { allowElsewhere: hostName })}
               onAnswer={(decision) => {
-                setAnswered((ids) => new Set(ids).add(approval.waitId));
+                setSettledApproval(approval);
                 void call(
                   { operation: "respondApproval", resourceId: approval.waitId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
                   "Aiden couldn’t send that answer.",
-                ).catch(() =>
-                  setAnswered((ids) => {
-                    const rest = new Set(ids);
-                    rest.delete(approval.waitId);
-                    return rest;
-                  }),
-                );
+                ).catch(() => setSettledApproval((settled) => (settled === approval ? null : settled)));
               }}
             />
           ) : null}
@@ -574,7 +579,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           <AskUserQuestionComposer
             key={question.waitId}
             prompt={questionPrompt(question)}
-            submitting={busy === "answer"}
+            submitting={busy("answer")}
             onRespond={(response) => answerQuestion(question, response)}
           />
           <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
@@ -643,10 +648,10 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           level={chatActivity.level}
           queued={snapshot.queued}
           removing={new Set()}
-          retrying={busy === "retry"}
+          retrying={busy("retry")}
           onConnect={(pluginId) => void connect(pluginId)}
           connectLabel={`Finish on ${hostName}`}
-          connecting={busy === "connect"}
+          connecting={busy("connect")}
           onReply={reply}
           // The failed turn's id comes first; the host only needs its words.
           onRetry={(_failedId, text) => void retry(text)}
@@ -655,12 +660,12 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       {statusActivity ? (
         <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onStop={stop} onLayoutChange={setStatusLayout} />
       ) : null}
-      {isPaused ? <BotPausedNotice name={name} busy={busy === "pause"} onResume={() => void setPaused(false)} /> : null}
+      {isPaused ? <BotPausedNotice name={name} busy={busy("pause")} onResume={() => void setPaused(false)} /> : null}
       {state?.kind === "interrupted" ? (
         <BotInterruptedCard
           name={name}
           {...(state.blocked ? { blocked: state.blocked } : {})}
-          busy={busy === "paused"}
+          busy={busy("paused")}
           onResume={() => void paused("botResume")}
           onDismiss={() => void paused("botDismiss")}
           onReviewAccess={() => toast.info(`Review ${name}'s access on ${hostName}.`)}

@@ -434,7 +434,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botActivityPrivacy;
   // Bot message attachments are revision 33.
   delete revision19.botAttachments;
-  // Bot hand-offs and pause are revision 36.
+  // Bot hand-offs and pause are revision 37.
   delete revision19.botHandoffs;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
@@ -2599,10 +2599,10 @@ test("the shared phase table is the one the Mac draws, and an unknown phase read
 });
 
 // ---------------------------------------------------------------------------
-// Contract revision 36: Bot hand-offs and pause on phones
+// Contract revision 37: Bot hand-offs and pause on phones
 // ---------------------------------------------------------------------------
 
-test("hand-off frames and pause round-trip for holders, and a legacy device never sees a revision-36 word", async () => {
+test("hand-off frames and pause round-trip for holders, and a legacy device never sees a revision-37 word", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const section = parseAidenRemoteContractFixture(raw).botHandoffs!;
   assert.equal(section.capability, "bot:handoffs");

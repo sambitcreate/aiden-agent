@@ -751,7 +751,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
               await (await botSessionRuntime()).deleteBot(botId);
             },
-            // The holder's view (revision 36: a person's pause is `paused`); the
+            // The holder's view (revision 37: a person's pause is `paused`); the
             // router and the host feed project it for every other device.
             sessionStates: async (botIds) => {
               const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
@@ -873,7 +873,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 routines: botRoutineService,
                 questions: botQuestions,
                 approvals: botApprovals,
-                // Revision 36: phones answer hand-offs through the desktop's own bridge.
+                // Revision 37: phones answer hand-offs through the desktop's own bridge.
                 handoffs: botHandoffs,
                 openHandoffOnMac: async (botId, waitId) => {
                   const { openBotHandoffById } = await import("./bot-runtime/bot-handoff-open-main.js");

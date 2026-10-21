@@ -202,7 +202,7 @@ export function projectAidenRemoteBotSummary(
     ...base,
     health,
     ...(sessionState === undefined ? {} : { sessionState }),
-    // Revision 36: the holder view; the router drops it for devices without `bot:handoffs`.
+    // Revision 37: the holder view; the router drops it for devices without `bot:handoffs`.
     ...(sessionState === "paused" ? { paused: true } : {}),
   });
 }
@@ -256,7 +256,7 @@ export interface AidenRemoteBotServiceOptions {
   /**
    * Durable session state per Bot, for `sessionState` on summaries, in the
    * view of a `bot:handoffs` device: a person's pause is `paused`, which also
-   * sets the summary's `paused` flag (revision 36).
+   * sets the summary's `paused` flag (revision 37).
    */
   sessionStates?(botIds: readonly string[]): Promise<ReadonlyMap<string, AidenRemoteBotSessionStateKind>>;
   resolveProviderModel?: (input: {

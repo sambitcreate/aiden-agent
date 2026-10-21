@@ -34,6 +34,8 @@ struct AidenBotSessionChatView: View {
     @State private var startAttempt = 0
     /// The chat couldn't start (no pairing or credential to reach the Mac with).
     @State private var startFailed = false
+    /// The grants this chat's feed opened with (`aidenBotSessionFeedGrants`).
+    @State private var feedOpenedWith: Set<AidenRemoteCapability> = []
     /// Content growth must not be mistaken for the reader scrolling away.
     @State private var follow = AidenTranscriptFollowController()
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
@@ -198,6 +200,16 @@ struct AidenBotSessionChatView: View {
         .onChange(of: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)) { _, supported in
             model?.attachmentsSupported = supported
             if !supported { attachmentPicker.dismiss() }
+        }
+        // The Mac shapes the feed by the grants this phone holds when it opens
+        // (cards, Chat activity, hand-offs and the paused state). The chat can
+        // open from the saved features while the phone connects, before this
+        // connection negotiated a grant (`bot:handoffs` after the Mac updates);
+        // once it is negotiated, a feed that opened without it opens again.
+        .onChange(of: aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)) { _, grants in
+            guard let model, grants != feedOpenedWith else { return }
+            feedOpenedWith = grants
+            model.reopenFeed()
         }
         // A first load that failed is a quiet hint while the chat keeps
         // reconnecting; once a snapshot arrives it is no longer news.
@@ -745,14 +757,15 @@ struct AidenBotSessionChatView: View {
 
     /// The draft clears at once and the bubble shows (R14); a refused message
     /// comes back to the composer. While a step waits (revision 37), the text
-    /// is its note instead and Send marks the step done.
+    /// is its note instead and Send marks the step done, when the card's own
+    /// Done could (connected); staged photos or files say to wait.
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
         if model.composerAnswersHandoff {
-            guard !draftIsEmpty, model.pendingAttachments.isEmpty else { return }
             let note = draft
+            let connected = canWrite
             draft = ""
             Task {
-                if !(await model.answerHandoff(.done, note: note)), draft.isEmpty { draft = note }
+                if !(await model.answerHandoffFromComposer(note, connected: connected)), draft.isEmpty { draft = note }
             }
             return
         }
@@ -1028,7 +1041,7 @@ struct AidenBotSessionChatView: View {
         .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
         .disabled(
             !canCompose || !model.canSend || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
-                || (model.composerAnswersHandoff && !model.canAnswerHandoff)
+                || (model.composerAnswersHandoff && !(canWrite && model.canAnswerHandoff))
         )
         .accessibilityLabel(model.composerAnswersHandoff ? "Send and mark done" : "Send")
     }
@@ -1051,6 +1064,7 @@ struct AidenBotSessionChatView: View {
         )
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
         model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
+        feedOpenedWith = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
         // G24: a hand-off that arrives while the person is away from this
         // chat (the app went to the background) alerts once, on this phone.
         let instanceID = context.instanceId

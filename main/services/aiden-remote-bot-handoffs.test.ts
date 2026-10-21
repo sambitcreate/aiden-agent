@@ -74,6 +74,28 @@ test("a hand-off link that is not a plain https page, and a blank reason, never 
   }, "the sign-in target and origin stay on the Mac");
 });
 
+test("a page the Mac reads in a looser form reaches a phone as the Mac's parser prints it, so every phone can decode the card", () => {
+  for (const [given, sent] of [
+    // The phones refuse each of these forms; the Mac's own parser reads them all as one page.
+    ["https:bank.example.com/verify", "https://bank.example.com/verify"],
+    ["https://@bank.example.com/verify", "https://bank.example.com/verify"],
+    ["https://bank.exa\tmple.com/verify", "https://bank.example.com/verify"],
+    ["HTTPS://Bank.Example.com:443/verify", "https://bank.example.com/verify"],
+    ["https://bank.example.com\\verify", "https://bank.example.com/verify"],
+    ["https://bänk.example.com/vérify", "https://xn--bnk-qla.example.com/v%C3%A9rify"],
+  ]) {
+    assert.deepEqual(toRemoteBotHandoff(prompt({ open: { url: given } })).open, { url: sent }, JSON.stringify(given));
+  }
+  // A page already in that form, or a bare origin as a sign-in names it, goes as it is.
+  for (const url of ["https://bank.example.com/verify", "https://github.com", "https://[::1]:8443/a?b=c#d"]) {
+    assert.deepEqual(toRemoteBotHandoff(prompt({ open: { url } })).open, { url }, url);
+  }
+  // Printed, a page may outgrow what a card may carry: the card then goes without it.
+  const long = toRemoteBotHandoff(prompt({ open: { url: `https://bank.example.com/${"é".repeat(800)}` } }));
+  assert.equal("open" in long, false);
+  assert.equal(long.action, "Enter the 2FA code your bank sent you");
+});
+
 test("a legacy device reads a waiting hand-off as one assistant line that names the Bot", async () => {
   const fixture = await section();
   const notice = fixture.legacy.session.entries[fixture.legacy.session.entries.length - 1];

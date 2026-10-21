@@ -473,6 +473,10 @@ private fun AidenBotSessionContent(
                         AidenBotPausedCard(
                             botName = identity.name,
                             busy = ui.isUnpausing,
+                            canResume = aidenBotPausedChatOffersResume(
+                                canWriteBots = coordinator.installationStore.activeInstallation?.canWriteBots == true,
+                                ui = ui
+                            ),
                             onResume = { scope.launch { controller.unpause() } }
                         )
                     }
