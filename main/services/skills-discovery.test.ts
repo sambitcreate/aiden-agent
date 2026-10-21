@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import {
+  discoverPluginSkillCandidates,
   discoverSkillCandidates,
   discoverSkills,
   SKILL_DISCOVERY_LIMITS,
@@ -596,4 +597,107 @@ test("strict invocation booleans default to both and isolate malformed policies"
     assert.equal(skill.modelInvocable, modelInvocable, name);
     assert.equal(skill.userInvocable, userInvocable, name);
   }
+});
+
+async function installPlugin(home: string, key: string, skills: Record<string, string>, options: {
+  manifest?: Record<string, unknown>;
+  scope?: string;
+  projectPath?: string;
+} = {}) {
+  const root = path.join(home, "installed", key.replace(/@/g, "-"));
+  for (const [name, content] of Object.entries(skills)) await writeSkill(path.join(root, "skills"), name, content);
+  if (options.manifest) {
+    await fs.mkdir(path.join(root, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify(options.manifest));
+  }
+  const inventory = path.join(home, ".claude", "plugins", "installed_plugins.json");
+  await fs.mkdir(path.dirname(inventory), { recursive: true });
+  const existing = await fs.readFile(inventory, "utf8").then(JSON.parse).catch(() => ({ plugins: {} }));
+  existing.plugins[key] = [{ scope: options.scope ?? "user", installPath: root, ...(options.projectPath ? { projectPath: options.projectPath } : {}) }];
+  await fs.writeFile(inventory, JSON.stringify(existing));
+  return root;
+}
+
+async function enablePlugins(base: string, enabledPlugins: Record<string, unknown>, local = false) {
+  const file = path.join(base, ".claude", local ? "settings.local.json" : "settings.json");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify({ enabledPlugins }));
+}
+
+test("enabled installed plugin skills reach the authoritative catalog with namespace and invocation policies", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = await installPlugin(home, "review@shop", {
+    review: "---\nname: audit\ndescription: Review code.\ndisable-model-invocation: true\n---\nReview carefully.",
+    hidden: "---\nuser-invocable: false\n---\nAutomatic only.",
+    blank: '---\nname: " "\n---\nBlank identity.',
+  }, { manifest: { name: "engineering" } });
+  await installPlugin(home, "disabled@shop", { review: "Disabled instructions." });
+  await installPlugin(home, "unconfigured@shop", { review: "Unconfigured instructions." });
+  await enablePlugins(home, { "review@shop": true, "disabled@shop": false });
+  const candidates = await discoverSkillCandidates(undefined, home);
+  assert.deepEqual(candidates.map(({ name, source }) => [name, source]), [["engineering:hidden", "global"], ["engineering:audit", "global"]]);
+  assert.equal(candidates.find((skill) => skill.name === "engineering:audit")?.instructions, "Review carefully.");
+  assert.equal(candidates.find((skill) => skill.name === "engineering:audit")?.modelInvocable, false);
+  assert.equal(candidates.find((skill) => skill.name === "engineering:hidden")?.userInvocable, false);
+  assert.equal(candidates.find((skill) => skill.name === "engineering:audit")?.path, await fs.realpath(path.join(root, "skills", "review", "SKILL.md")));
+  const { SkillRegistry } = await import("./skill-registry.js");
+  const registry = new SkillRegistry({ getWorkspace: async () => ({ id: "w", name: "No folder", permission: "none", createdAt: 1, updatedAt: 1 }), listConfigured: async () => [], discover: async () => candidates });
+  assert.deepEqual((await registry.snapshot("w")).catalog.map((skill) => skill.name), ["engineering:audit"]);
+});
+
+test("project plugin enablement and installed scope stay workspace-bound and require workspace access", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-scope-"));
+  const workspace = path.join(home, "project");
+  const other = path.join(home, "other");
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  await installPlugin(home, "project@shop", { review: "Project instructions." }, { scope: "project", projectPath: workspace });
+  await installPlugin(home, "user@shop", { review: "User instructions." });
+  await enablePlugins(home, { "project@shop": true, "user@shop": true });
+  await enablePlugins(workspace, { "user@shop": false });
+  assert.deepEqual((await discoverSkillCandidates(workspace, home)).map((skill) => [skill.name, skill.source]), [["project:review", "workspace"]]);
+  assert.deepEqual((await discoverSkillCandidates(other, home)).map((skill) => skill.name), ["user:review"]);
+  await enablePlugins(workspace, { "user@shop": true }, true);
+  const candidates = await discoverSkillCandidates(workspace, home);
+  assert.deepEqual(candidates.map((skill) => skill.source), ["workspace", "workspace"]);
+  const { SkillRegistry } = await import("./skill-registry.js");
+  const registry = new SkillRegistry({ getWorkspace: async () => ({ id: "w", name: "Project", folderPath: workspace, permission: "none", createdAt: 1, updatedAt: 1 }), listConfigured: async () => [], discover: async () => candidates });
+  const snapshot = await registry.snapshot("w");
+  assert.equal(snapshot.available.length, 0);
+  assert.equal(snapshot.catalog.length, 2);
+  assert.ok(snapshot.catalog.every((skill) => !skill.available));
+});
+
+test("manifest collections and root skills use bounded plugin containment and preserve authored overrides", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-paths-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = await installPlugin(home, "tools@shop", { normal: "Normal body." }, { manifest: { skills: ["./extra", "./linked", "../../outside", "/tmp", "./extra/SKILL.md"] } });
+  await fs.mkdir(path.join(root, "extra"));
+  await fs.writeFile(path.join(root, "extra", "SKILL.md"), "---\nname: custom\n---\nCustom body.");
+  await fs.writeFile(path.join(root, "SKILL.md"), "---\nname: root\n---\nRoot body.");
+  const outside = path.join(home, "outside");
+  await writeSkill(outside, "escaped", "Escaped body.");
+  await fs.symlink(outside, path.join(root, "linked"));
+  await enablePlugins(home, { "tools@shop": true });
+  await writeSkill(path.join(home, ".aiden", "skills"), "override", "---\nname: tools:normal\n---\nUser override.");
+  const skills = await discoverSkills(undefined, home);
+  assert.deepEqual(skills.map((skill) => skill.name).sort(), ["tools:custom", "tools:normal", "tools:root"]);
+  assert.equal(skills.find((skill) => skill.name === "tools:normal")?.instructions, "User override.");
+  const candidates = await discoverSkillCandidates(undefined, home);
+  assert.equal(candidates.filter((skill) => skill.name === "tools:custom").length, 1);
+});
+
+test("malformed plugin metadata and nonboolean enablement fail closed without hiding ordinary skills", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-invalid-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  await writeSkill(path.join(home, ".claude", "skills"), "ordinary", "Ordinary body.");
+  await installPlugin(home, "plugin@shop", { review: "Plugin body." });
+  await enablePlugins(home, { "plugin@shop": ["^1.0.0"] });
+  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
+  await enablePlugins(home, { "plugin@shop": true });
+  await installPlugin(home, "unsafe@shop", { review: `---\nname: ${"x".repeat(90)}\n---\nUnsafe name.` });
+  await enablePlugins(home, { "plugin@shop": true, "unsafe@shop": true });
+  assert.deepEqual((await discoverPluginSkillCandidates(undefined, home)).map((skill) => skill.name), ["plugin:review"]);
+  await fs.writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), "{");
+  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
 });

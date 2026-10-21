@@ -331,7 +331,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     featurePresentation,
-    /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
+    /Use your local skill folders and enabled installed Claude Code plugin skills\. Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     featurePresentation,

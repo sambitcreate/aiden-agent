@@ -24,4 +24,7 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
   bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access
   reset                                     Reset first-run onboarding only
+
+Skill options:
+  --add-dir <directory>                     Add skill folders after project trust (repeatable, max 32)
 `;
