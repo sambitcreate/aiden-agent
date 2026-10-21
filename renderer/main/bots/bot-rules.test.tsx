@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { after, afterEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { createBotRuleStore } from "../../../main/services/bot-rules/store";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/app-capabilities";
 import type { BotRulesUpdateInput } from "../../shared/bot-rules";
 import { BotRules } from "./bot-rules";
 import { mountWithBotRouter } from "./test-providers";
@@ -153,4 +154,23 @@ test("a change made against rules another window changed says so and shows the c
   await waitFor(() => assert.ok(within(row(list, "Permanently delete something")).getByText("Hand off to me")));
   assert.ok(within(row(list, "Send a message or email to someone")).getByText("Ask first"));
   assert.equal((await store.rules(bot.id)).find((rule) => rule.id === "default.communicate")?.behavior, "ask");
+});
+
+test("where Bots have their own computers, the rules say they read the Bot's stated intent there", async () => {
+  const note = "On Planner’s own computer, rules read Planner’s stated intent; Planner is told to hand off passwords and payments.";
+  rulesIpc();
+  await mountWithBotRouter(
+    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", bots: true, botComputers: true }}>
+      <BotRules bot={bot} />
+    </AppCapabilitiesProvider>,
+    { initialPath: "/bots/bot-1" },
+  );
+  await screen.findByRole("list", { name: "Rules" });
+  assert.ok(screen.getByText(note));
+  cleanup();
+
+  // Linux and Intel Macs have no Bot computers, so the note never shows.
+  rulesIpc();
+  await mount();
+  assert.equal(screen.queryByText(note), null);
 });
