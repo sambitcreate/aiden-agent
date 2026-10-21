@@ -248,15 +248,22 @@ test("after the screen changes size, the next frame is the repainted screen, nev
   }
 });
 
-test("watching a new connection asks for everything first, then only for changes", async () => {
+test("a new connection asks for the whole screen first; watching it once pictured asks only for changes", async () => {
   const { server, screen, requested } = await setup({}, 20);
   try {
+    const connection = server.connections[0];
+    // The connection's own first request, so a viewer never starts black.
+    await until(() => connection.updateRequests.length >= 1);
+    assert.equal(connection.updateRequests[0].incremental, false);
+    // The handshake's picture may or may not have arrived yet; a frame waits for it.
+    await screen.jpeg({ quality: 70, maxWidth: 40 });
+    const watched = requested.length;
     const stop = screen.watch(() => undefined);
-    await until(() => requested.length >= 2);
-    assert.deepEqual(
-      requested.slice(0, 2).map((request) => request.incremental),
-      [false, true],
-    );
+    // The change answers the screen's first request, and the screen asks again.
+    server.paint({ x: 0, y: 0, width: 1, height: 1 }, [1, 2, 3]);
+    await until(() => requested.length >= watched + 2);
+    const asked = requested.slice(watched).map((request) => request.incremental);
+    assert.ok(asked.every(Boolean), `a pictured screen asked ${JSON.stringify(asked)}`);
     stop();
   } finally {
     await screen.close();
@@ -269,6 +276,8 @@ test("a watched screen reconnects on its own when the VNC connection drops, and 
   try {
     const seen: number[] = [];
     const stop = screen.watch((update) => seen.push(update.version));
+    // Whether or not the handshake's picture came first, this change reaches the watcher.
+    server.paint({ x: 0, y: 0, width: 1, height: 1 }, [1, 1, 1]);
     await until(() => seen.length >= 1);
     server.dropClients();
     await until(() => connects() === 2 && screen.size() !== undefined);
