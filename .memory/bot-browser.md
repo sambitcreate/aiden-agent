@@ -18,6 +18,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - Sensitive: `input[type=password]`, autocomplete `current-password`, `new-password`, `one-time-code`, `cc-*` (section-, shipping, billing, home, work … prefixes ignored). The walker reads `DOM.getDocument({depth:-1, pierce:true})` through `CdpPort.call` (renamed from `send` so the IPC contract test doesn't read `port.send("DOM.…")` as a notification).
 - Text: `scrubBrowserSnapshot` drops a sensitive field's AX value and its subtree; the element entry keeps label and placeholder.
 - Image: boxes read before and after capture, union painted gray (0x8a) in main, then `redactBrowserData`. The image is dropped with a `BROWSER_IMAGE_OMITTED` note when a **visible** opaque frame (cross-site iframe; OOPIF masking is not supported), pinch zoom, a navigation or a scroll change happened.
+- Selectors: `assertBoundarySelector` refuses CSS/Playwright `[value…]`, XPath `@value` and `attribute::value`, and backslash escapes, in main and in `bot-browser-approval.ts` before the probe runs the selector.
 - Typing guard: `browserTypingGuardSource` refuses a sensitive named target and a sensitive or opaque focused target (through shadow roots and same-origin frames); `browser_press` of a printable key (`browserKeyInsertsText`) runs the same guard. Page-world errors come back with the page stack; `boundaryRefusalOf` turns them into the bare sentence.
 - The probe role uses Playwright's `getAriaRole`, falling back to `textbox` for contenteditable.
 
@@ -32,7 +33,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - `bot-tool-sources-main.ts`: candidates when `has("browser")` on attended turns; `approvalFor` default branch; `forgetBot` closes tabs.
 - Inventory: `bot-capability-inventory-ports.ts` `browserAgentAccess` (Browser settings' global agent access) makes Browser available; Full access then includes it.
 - Delete: `deleteBotBrowserProfile` dep of `finishDeleteBot` (after the photo, before the home), wired in `bot-application-service-main.ts` to `clearBotProfile`. Not a journal step; a failure leaves the Bot listed and rolls forward on retry or restart (`bot-delete.test.ts`).
-- Hand-offs: `bot-browser-main.ts` `openInBotBrowser` (the `botBrowser` opener) creates a shown tab with `source:"user"`, holds it (`sign_in` or `handoff`) and releases on `botHandoffs.onSettled`. Action links open there only for a Bot with the Browser capability. `openBotHandoffById` takes an optional owner.
+- Hand-offs: `bot-browser-handoff.ts` `createBotBrowserHandoffOpener` (the `botBrowser` opener; wired as `openInBotBrowser` in `bot-browser-main.ts`) creates a shown tab with `source:"user"`, holds it (`sign_in` or `handoff`, hold id = `waitId`), remembers which workspace holds it and releases it on `botHandoffs.onSettled` (answer or withdraw), or at once when the card settled while the tab opened. Action links open there only for a Bot with the Browser capability. `openBotHandoffById` takes an optional owner. P7 needs no separate `bot-sign-in-holds-main.ts`: sign-in holds already release here.
+- `windowDocumentOwner` (minted owner) has the same `id`/`documentId` as an IPC request from that window, so the panel's later read doesn't re-transfer (`renderer-document-owner.test.ts`).
 - Legacy `llm-client.ts` path: `canUseBrowserTools({bot:true})` stays false.
 
 ## Classifier
@@ -44,7 +46,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - `bot-panel-context.tsx`: `"browser"` tab and a `reveal(tab)` action that opens the panel without moving focus. `bot-workbench.tsx` shows Browser once a tab exists and keeps it once seen.
 
 ## Tests
-- `npm run test:bot-browser`: `bot-browser-tools.test.ts` (runtime-subagents), `main/handlers/bot-browser.test.ts` and `bot-browser-tab.test.tsx` (renderer-other). New `main/services/browser/*.test.ts` run under `test:browser`'s glob (no lane entry).
+- `npm run test:bot-browser`: `bot-browser-tools.test.ts`, `bot-browser-handoff.test.ts` and `main/services/renderer-document-owner.test.ts` (runtime-subagents), `main/handlers/bot-browser.test.ts` and `bot-browser-tab.test.tsx` (renderer-other). New `main/services/browser/*.test.ts` run under `test:browser`'s glob (no lane entry).
 - Credential tests launch Playwright Chromium. Locally (no `npm install`): `PLAYWRIGHT_BROWSERS_PATH=/tmp/p6-browser/pw` with symlinks to `/opt/pw-browsers`.
 - `tests/e2e/bot-browser.spec.ts` bundles `bot-browser-native.ts` with esbuild and runs it as a standalone Electron main (`--no-sandbox` only as root). Fixture fields need `position:absolute` or one covers another.
 
