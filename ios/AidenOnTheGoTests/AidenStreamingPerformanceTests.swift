@@ -525,6 +525,11 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             "> **foo\n> bar**",
             "> `foo\n> bar`",
             "*foo\n2. bar*",
+            "> *foo\nbar*",
+            // Blocks inside a quote are still separate blocks.
+            "> # Heading with `literal\n> Use `code`",
+            "> - literal `marker\n> - Use `code`",
+            "> `old\n> # Use `code`",
         ] {
             XCTAssertEqual(tail(text), text, text)
         }

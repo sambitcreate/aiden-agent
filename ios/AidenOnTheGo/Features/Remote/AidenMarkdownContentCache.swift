@@ -637,18 +637,35 @@ enum AidenStreamingMarkdownTail {
         return openRun != nil
     }
 
-    /// Whether the newline at `newline` ends a block: the line before it (from
-    /// `lineStart`) is a heading, or the line after it starts a heading, list
-    /// item or block quote. Inline spans never continue across it. A quoted
-    /// line after a quoted line continues the quote, and an ordered item
-    /// numbered other than 1 interrupts only another list item.
+    /// Whether the newline at `newline` ends a block, so inline spans never
+    /// continue across it. Quote markers are looked through: the line before
+    /// (from `lineStart`) being a heading, or the line after starting a
+    /// heading, list item or deeper quote, ends the block. An ordered item
+    /// numbered other than 1 interrupts only another list item, and a line
+    /// with fewer quote markers that starts no block continues the quoted
+    /// paragraph lazily.
     private static func isBlockBoundary(_ text: [Character], lineStart: Int, newline: Int) -> Bool {
-        let next = newline + 1
-        if startsHeading(text, at: lineStart) || startsHeading(text, at: next) { return true }
-        if startsQuote(text, at: next) { return !startsQuote(text, at: lineStart) }
-        if startsBullet(text, at: next) { return true }
-        guard let number = orderedListNumber(text, at: next) else { return false }
-        return number == 1 || startsBullet(text, at: lineStart) || orderedListNumber(text, at: lineStart) != nil
+        let previous = quoteContent(text, at: lineStart)
+        let next = quoteContent(text, at: newline + 1)
+        if next.depth > previous.depth { return true }
+        if startsHeading(text, at: previous.start) || startsHeading(text, at: next.start) { return true }
+        if startsBullet(text, at: next.start) { return true }
+        guard let number = orderedListNumber(text, at: next.start) else { return false }
+        return number == 1 || startsBullet(text, at: previous.start) ||
+            orderedListNumber(text, at: previous.start) != nil
+    }
+
+    /// How many block quote markers open the line at `start`, and where the
+    /// quoted content starts.
+    private static func quoteContent(_ text: [Character], at start: Int) -> (depth: Int, start: Int) {
+        var depth = 0
+        var lineStart = start
+        while let position = contentStart(text, at: lineStart), position < text.count, text[position] == ">" {
+            depth += 1
+            lineStart = position + 1
+            if lineStart < text.count, text[lineStart] == " " { lineStart += 1 }
+        }
+        return (depth, lineStart)
     }
 
     /// The position after up to three leading spaces, or nil when the line is
@@ -668,11 +685,6 @@ enum AidenStreamingMarkdownTail {
         guard let position = contentStart(text, at: start) else { return false }
         let run = runLength(of: "#", in: text, from: position)
         return (1...6).contains(run) && isSpaceOrLineEnd(text, at: position + run)
-    }
-
-    private static func startsQuote(_ text: [Character], at start: Int) -> Bool {
-        guard let position = contentStart(text, at: start), position < text.count else { return false }
-        return text[position] == ">"
     }
 
     /// A `-`, `*` or `+` bullet list item.
