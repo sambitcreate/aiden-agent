@@ -7,16 +7,25 @@
 //   and return at once; progress arrives as `botComputers:changed` broadcasts.
 // - `cancelSetUp`, `removeEverything`, `updateSettings(patch)`.
 // - `give(botId)`, `reset(botId)`, `remove(botId)`, `stop(botId)`.
+// - The Computer tab (plan §8.5): `viewerGrant(botId, { start })` lends a
+//   device stream target (starting the computer only with `start`, and
+//   cancelled if the asking window goes away), `takeOver` (a running
+//   computer only) / `giveBack` switch who drives it, and `pointer` reads the
+//   Bot's last action point.
 
 import {
   BOT_COMPUTER_CHANNELS,
   BOT_COMPUTERS_CHANGED_CHANNEL,
   parseBotComputersSettingsPatch,
+  parseBotComputerViewerRequest,
+  type BotComputerPointer,
   type BotComputersSettings,
   type BotComputersStatus,
   type BotComputerStatus,
+  type BotComputerViewerGrant,
 } from "../../renderer/shared/bot-computers.js";
-import type { BotComputerHost } from "../services/bot-computers/types.js";
+import type { BotComputerControl, BotComputerHost, BotComputerSessions } from "../services/bot-computers/types.js";
+import type { BotComputerViewer } from "../services/bot-computers/viewer-main.js";
 import { parseBotId } from "./bot-params.js";
 
 export interface BotComputerHandlerDependencies {
@@ -34,7 +43,13 @@ export interface BotComputerHandlerDependencies {
     | "deleteForBot"
     | "stop"
     | "onChange"
+    | "computer"
   >;
+  viewer: Pick<BotComputerViewer, "grant">;
+  control: Pick<BotComputerControl, "takeOver" | "giveBack">;
+  sessions: Pick<BotComputerSessions, "lastPointer">;
+  /** Runs `listener` once the window that invoked goes away; returns the unsubscribe. */
+  onSenderGone?(event: unknown, listener: () => void): () => void;
   broadcast(channel: string, payload: unknown): void;
   /** A computer is only given to, reset or removed for a Bot that exists. */
   botExists(botId: string): Promise<boolean>;
@@ -110,4 +125,43 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
   deps.handle(BOT_COMPUTER_CHANNELS.stop, async (_event, rawBotId): Promise<void> => {
     await deps.host.stop(parseBotId(rawBotId), { reason: "person" });
   });
+
+  async function computerOf(botId: string): Promise<BotComputerStatus> {
+    const computer = await deps.host.computer(botId);
+    if (!computer) throw new Error("This Bot doesn't have a computer.");
+    return computer;
+  }
+
+  deps.handle(BOT_COMPUTER_CHANNELS.viewerGrant, async (event, rawBotId, rawOptions): Promise<BotComputerViewerGrant> => {
+    const botId = await knownBot(rawBotId);
+    const { start } = parseBotComputerViewerRequest(rawOptions);
+    // A start the asking window no longer waits for is cancelled, unless another caller still wants it.
+    const controller = new AbortController();
+    const unsubscribe = deps.onSenderGone?.(event, () => controller.abort());
+    try {
+      return await deps.viewer.grant(botId, { start, signal: controller.signal });
+    } finally {
+      unsubscribe?.();
+    }
+  });
+
+  deps.handle(BOT_COMPUTER_CHANNELS.takeOver, async (_event, rawBotId): Promise<BotComputerStatus> => {
+    const botId = await knownBot(rawBotId);
+    // Only a running computer can be used. Control taken over a stopped one would keep the Bot
+    // waiting for a Give back the tab doesn't offer until the computer runs again.
+    if ((await computerOf(botId)).state !== "running") throw new Error("This Bot's computer isn't running.");
+    deps.control.takeOver(botId, "viewer");
+    return computerOf(botId);
+  });
+
+  deps.handle(BOT_COMPUTER_CHANNELS.giveBack, async (_event, rawBotId): Promise<BotComputerStatus> => {
+    const botId = await knownBot(rawBotId);
+    await computerOf(botId);
+    deps.control.giveBack(botId);
+    return computerOf(botId);
+  });
+
+  deps.handle(BOT_COMPUTER_CHANNELS.pointer, async (_event, rawBotId): Promise<BotComputerPointer | null> =>
+    deps.sessions.lastPointer(parseBotId(rawBotId)) ?? null,
+  );
 }

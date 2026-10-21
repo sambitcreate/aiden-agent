@@ -111,6 +111,48 @@ Bot computer that was interrupted while it was being made is marked for
   gives up only the tab's wait; the start stops only when nobody needs it.
 - **Guests are macOS only.**
 
+## Seeing and taking over
+
+While a Bot has a computer, its chat's Bot panel has a **Computer** tab. The
+tab never appears where Bot computers are unavailable (Intel Macs and Linux),
+and it goes away when the computer is removed.
+
+- **Opening the tab.** Switching to Computer starts a stopped computer and
+  shows "Starting Ada's computer…" until its screen appears. A Computer tab
+  that was open when Aiden last quit shows **Start** instead, so launching
+  Aiden never starts a computer. A computer that is waiting for a place,
+  stopping, or was interrupted while it was being made says so in the tab.
+- **The screen.** The tab shows the computer's screen live, with the Bot's
+  avatar where it last pointed and a line saying what the Bot is doing. Frames
+  are JPEG, at most about 10 a second and at most 2,560 pixels wide. A computer
+  someone is watching counts as in use, so it is not stopped for being idle or
+  to make a place, and its idle timer starts again when the last viewer closes.
+- **Read-only while the Bot works.** While the Bot controls its computer, the
+  screen only shows it. Your first click, key or scroll on the screen, or
+  **Take over**, gives you control: Aiden interrupts the Bot's current computer
+  action, and that first input is not sent to the computer. The Bot's computer
+  actions are refused until you choose **Give back**, so it never works on a
+  screen you are using.
+- **Using it.** While you control it, clicks, drags, keys and scrolling on the
+  focused screen go to the computer. Tab, Shift-Tab and Command shortcuts stay
+  with Aiden, so the keyboard can always leave the screen. Giving it back, or
+  closing the tab, lets go of any key or button still held down.
+- **Float over chat** moves the screen into the floating player over the chat,
+  with Take over or Give back in its header. Drag or resize it like the
+  Simulator's player; **Dock** (or Escape anywhere but the screen) puts it back
+  in the tab.
+- **Only on this Mac.** The screen reaches the tab through a viewer that
+  listens on `127.0.0.1` only, from the first time a Computer tab asks for it,
+  behind short-lived grants like the Simulator viewer's. The screen-sharing
+  password never leaves Aiden's main process, and the screen is not offered to
+  Aiden Remote.
+
+Confirming on a Mac: whether Apple's screen sharing accepts Aiden's sign-in,
+pixel format, key codes and scroll buttons. Launch Aiden with
+`AIDEN_BOT_COMPUTERS_RECORD_RFB=1` to record what the screen server sends
+(never the password) into `bot-computers/rfb-recordings/` in Aiden's data
+folder. The recordings show the guest's screen, so delete them afterwards.
+
 ## Privacy and network
 
 - **Manual downloads only.** The restore image is downloaded only after you

@@ -9,8 +9,11 @@ import { useRouter } from "@tanstack/react-router";
 import { botChatRouteBotId } from "../../lib/bot-routes";
 
 export const BOT_PANEL_ID = "bot-panel";
-/** `browser` shows only while the Bot's own browser has a tab (`bot-workbench.tsx`). */
-export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines", "browser"] as const;
+/**
+ * `browser` shows only while the Bot's own browser has a tab, and `computer`
+ * only while the Bot has a computer on a Mac with Bot computers (`bot-workbench.tsx`).
+ */
+export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines", "browser", "computer"] as const;
 export type BotPanelTab = (typeof BOT_PANEL_TABS)[number];
 export const BOT_PANEL_OPEN_KEY = "aiden-agent.bot-panel.open";
 export const BOT_PANEL_TAB_KEY = "aiden-agent.bot-panel.tab";

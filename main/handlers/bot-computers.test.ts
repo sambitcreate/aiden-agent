@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import {
@@ -10,13 +11,16 @@ import {
   type BotComputersStatus,
   type BotComputerSetupState,
   type BotComputerStatus,
+  type BotComputerViewerGrant,
 } from "../../renderer/shared/bot-computers.js";
+import { createBotComputerControl } from "../services/bot-computers/control.js";
+import { BotComputerTakenOverError, type BotComputerPointer } from "../services/bot-computers/types.js";
 import { registerBotComputerHandlers, type BotComputerHandlerDependencies } from "./bot-computers.js";
 
 const BOT = "bot:ada";
 
 /** A host that runs setup in steps the test releases, and records what reached it. */
-function fakeHost() {
+function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
   const listeners = new Set<(botId: string | undefined) => void>();
   const reached: string[] = [];
   let setup: BotComputerSetupState = { kind: "not_set_up" };
@@ -75,31 +79,72 @@ function fakeHost() {
       computers.delete(botId);
     },
     stop: async (botId, options) => void reached.push(`stop:${botId}:${options?.reason ?? ""}`),
+    // Like the real host, the status says who drives the computer.
+    computer: async (botId) => {
+      const computer = computers.get(botId);
+      return computer ? { ...computer, controller: control.controller(botId) } : undefined;
+    },
     onChange: (listener) => {
       listeners.add(listener);
       return () => void listeners.delete(listener);
     },
   };
-  return { host, reached, finish: () => finishSetup?.() };
+  return { host, reached, computers, finish: () => finishSetup?.() };
+}
+
+/** A viewer whose grants wait until the test settles them, so cancellation can be seen. */
+function fakeViewer() {
+  const grants: { botId: string; start: boolean; signal?: AbortSignal; settle(): void }[] = [];
+  const viewer: BotComputerHandlerDependencies["viewer"] = {
+    grant: (botId, { start, signal }) =>
+      new Promise<BotComputerViewerGrant>((resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+        grants.push({
+          botId,
+          start,
+          signal,
+          settle: () =>
+            resolve({
+              hostId: "bot-computers",
+              deviceId: "aiden-bot-0123456789abcdef",
+              grant: { origin: "http://127.0.0.1:4100", token: "t".repeat(43), expiresAt: Date.now() + 60_000 },
+            }),
+        });
+      }),
+  };
+  return { viewer, grants };
 }
 
 function setup() {
-  const fake = fakeHost();
+  const control = createBotComputerControl();
+  const fake = fakeHost(control);
+  const { viewer, grants } = fakeViewer();
+  const pointers = new Map<string, BotComputerPointer>();
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   const broadcasts: { channel: string; payload: unknown }[] = [];
   registerBotComputerHandlers({
     handle: (channel, handler) => handlers.set(channel, handler),
     host: fake.host,
+    viewer,
+    control,
+    sessions: { lastPointer: (botId) => pointers.get(botId) },
+    // The event's sender stands in for Electron's WebContents.
+    onSenderGone: (event, listener) => {
+      const sender = (event as { sender?: EventEmitter }).sender;
+      sender?.once("destroyed", listener);
+      return () => void sender?.off("destroyed", listener);
+    },
     broadcast: (channel, payload) => broadcasts.push({ channel, payload }),
     botExists: async (botId) => botId === BOT,
     coalesceMs: 20,
   });
-  const invoke = (channel: string, ...args: unknown[]) => {
+  const invokeFrom = (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`No handler for ${channel}`);
-    return Promise.resolve(handler({}, ...args));
+    return Promise.resolve(handler(event, ...args));
   };
-  return { ...fake, handlers, broadcasts, invoke };
+  const invoke = (channel: string, ...args: unknown[]) => invokeFrom({}, channel, ...args);
+  return { ...fake, control, grants, pointers, handlers, broadcasts, invoke, invokeFrom };
 }
 
 const settle = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -155,4 +200,69 @@ test("Remove everything replies with the emptied status", async () => {
   const status = parseBotComputersStatus(await invoke(BOT_COMPUTER_CHANNELS.removeEverything));
   assert.equal(status?.setup.kind, "not_set_up");
   assert.deepEqual(status?.computers, []);
+});
+
+test("the Computer tab's grant starts the computer only when asked, and only for a Bot that exists", async () => {
+  const { invoke, grants } = setup();
+  const started = invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: true });
+  const restored = invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT);
+  await settle(10);
+  assert.deepEqual(
+    grants.map(({ botId, start }) => [botId, start]),
+    [
+      [BOT, true],
+      [BOT, false],
+    ],
+  );
+  for (const grant of grants) grant.settle();
+  assert.equal(((await started) as BotComputerViewerGrant).deviceId, "aiden-bot-0123456789abcdef");
+  await restored;
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.viewerGrant, "bot:ghost", { start: true }), /no longer exists/u);
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: "yes" }), /start: boolean/u);
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: true, vm: "other" }), /start: boolean/u);
+  assert.equal(grants.length, 2);
+});
+
+test("a grant whose window goes away is cancelled, and a finished one leaves no listener behind", async () => {
+  const { invokeFrom, grants } = setup();
+  const sender = new EventEmitter();
+  const leaving = invokeFrom({ sender }, BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: true });
+  await settle(10);
+  assert.equal(sender.listenerCount("destroyed"), 1);
+  sender.emit("destroyed");
+  await assert.rejects(leaving, /cancelled/u);
+  assert.equal(grants[0].signal?.aborted, true);
+
+  const staying = invokeFrom({ sender }, BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: true });
+  await settle(10);
+  grants[1].settle();
+  await staying;
+  assert.equal(sender.listenerCount("destroyed"), 0);
+  assert.equal(grants[1].signal?.aborted, false);
+});
+
+test("Take over interrupts the Bot's action and Give back returns the computer, each replying with who drives it", async () => {
+  const { invoke, control, computers } = setup();
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT), /doesn't have a computer/u);
+  await invoke(BOT_COMPUTER_CHANNELS.give, BOT);
+  // A stopped computer can't be taken over, so the Bot is never left waiting on one nobody can give back.
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT), /isn't running/u);
+  assert.equal(control.controller(BOT), "bot");
+  computers.set(BOT, { ...computers.get(BOT)!, state: "running" });
+  const action = control.run(BOT, undefined, (signal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))));
+  const taken = (await invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT)) as BotComputerStatus;
+  assert.equal(taken.controller, "person");
+  assert.equal(control.takenOverBy(BOT), "viewer");
+  await assert.rejects(action, BotComputerTakenOverError);
+  const back = (await invoke(BOT_COMPUTER_CHANNELS.giveBack, BOT)) as BotComputerStatus;
+  assert.equal(back.controller, "bot");
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.takeOver, "bot:ghost"), /no longer exists/u);
+});
+
+test("the pointer is the Bot's last action point, or null before it acted", async () => {
+  const { invoke, pointers } = setup();
+  assert.equal(await invoke(BOT_COMPUTER_CHANNELS.pointer, BOT), null);
+  pointers.set(BOT, { x: 512, y: 300, width: 1024, height: 768 });
+  assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.pointer, BOT), { x: 512, y: 300, width: 1024, height: 768 });
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.pointer, "../escape"), /Invalid bot id/u);
 });

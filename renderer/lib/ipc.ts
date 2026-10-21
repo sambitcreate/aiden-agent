@@ -18,11 +18,15 @@ import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatu
 import {
   BOT_COMPUTER_CHANNELS,
   BOT_COMPUTERS_CHANGED_CHANNEL,
+  parseBotComputerPointer,
   parseBotComputerStatus,
   parseBotComputersStatus,
+  parseBotComputerViewerGrant,
+  type BotComputerPointer,
   type BotComputersSettings,
   type BotComputersStatus,
   type BotComputerStatus,
+  type BotComputerViewerGrant,
 } from "../shared/bot-computers.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -1017,6 +1021,16 @@ export const botComputersApi = {
   reset: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.reset, botId),
   remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
   stop: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.stop, botId),
+  /** The Computer tab's stream target. `start` boots a stopped computer; only a person's switch to the tab passes it. */
+  viewerGrant: async (botId: string, options: { start: boolean }): Promise<BotComputerViewerGrant> => {
+    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.viewerGrant, botId, options));
+    if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
+    return grant;
+  },
+  takeOver: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.takeOver, botId),
+  giveBack: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.giveBack, botId),
+  pointer: async (botId: string): Promise<BotComputerPointer | null> =>
+    parseBotComputerPointer(await invoke<unknown>(BOT_COMPUTER_CHANNELS.pointer, botId)),
   onChanged: (handler: (status: BotComputersStatus) => void) =>
     onNotification<unknown>(BOT_COMPUTERS_CHANGED_CHANNEL, (payload) => {
       const status = parseBotComputersStatus(payload);

@@ -7,6 +7,7 @@
  */
 
 import { formatHarnessBytes } from "./acp-harness.js";
+import { DEVICE_ID_PATTERN, parseDeviceStreamGrant, type DeviceStreamGrant } from "./devices.js";
 
 export type BotComputerSetupState =
   | { kind: "unsupported"; reason: "platform" | "host_os" }
@@ -72,7 +73,39 @@ export const BOT_COMPUTER_CHANNELS = {
   reset: "botComputers:reset", // invoke(botId) → BotComputerStatus
   remove: "botComputers:remove", // invoke(botId) → void
   stop: "botComputers:stop", // invoke(botId) → void
+  // The Computer tab (plan §8.5). A grant with `start: true` starts the
+  // computer (the person opened the tab); without it a stopped computer is refused.
+  viewerGrant: "botComputers:viewerGrant", // invoke(botId, { start }) → BotComputerViewerGrant
+  takeOver: "botComputers:takeOver", // invoke(botId) → BotComputerStatus; refused unless the computer is running
+  giveBack: "botComputers:giveBack", // invoke(botId) → BotComputerStatus
+  pointer: "botComputers:pointer", // invoke(botId) → BotComputerPointer | null
 } as const;
+
+/** The host id the Computer tab's device stream uses; main's viewer proxy serves nothing else. */
+export const BOT_COMPUTER_VIEWER_HOST_ID = "bot-computers";
+
+/**
+ * Aiden's scroll packet on the viewer's input socket: `{ x, y, dx, dy }`, a
+ * point normalized like a touch and the wheel's pixel deltas. serve-sim has
+ * no scroll packet, so only the Bot computer viewer hub reads it.
+ */
+export const BOT_COMPUTER_VIEWER_SCROLL_TAG = 0x20;
+
+/** Where the Computer tab connects: the device stream target for this computer's current run. */
+export interface BotComputerViewerGrant {
+  hostId: typeof BOT_COMPUTER_VIEWER_HOST_ID;
+  /** The computer's VM name, which the viewer hub serves as its device id. */
+  deviceId: string;
+  grant: DeviceStreamGrant;
+}
+
+/** The Bot's last action point, in framebuffer pixels of a `width` × `height` screen. */
+export interface BotComputerPointer {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 /** Broadcast with the whole `BotComputersStatus` whenever anything changes. */
 export const BOT_COMPUTERS_CHANGED_CHANNEL = "botComputers:changed";
@@ -307,4 +340,34 @@ export function botComputerStateLabel(state: BotComputerRunState, botName: strin
     case "stale":
       return `${owner} didn't finish being made. Reset it to start again.`;
   }
+}
+
+export function parseBotComputerViewerGrant(value: unknown, now = Date.now()): BotComputerViewerGrant | undefined {
+  const input = record(value);
+  if (!input || input.hostId !== BOT_COMPUTER_VIEWER_HOST_ID) return undefined;
+  if (typeof input.deviceId !== "string" || !DEVICE_ID_PATTERN.test(input.deviceId)) return undefined;
+  const grant = parseDeviceStreamGrant(input.grant, now);
+  return grant ? { hostId: BOT_COMPUTER_VIEWER_HOST_ID, deviceId: input.deviceId, grant } : undefined;
+}
+
+/** The viewer grant's options from the renderer. Anything but `{ start: boolean }` throws. */
+export function parseBotComputerViewerRequest(value: unknown): { start: boolean } {
+  if (value === undefined) return { start: false };
+  const input = record(value);
+  if (!input || Object.keys(input).some((key) => key !== "start") || (input.start !== undefined && typeof input.start !== "boolean")) {
+    throw new Error("The viewer request must be { start: boolean }.");
+  }
+  return { start: input.start === true };
+}
+
+/** A pointer inside its screen, or null for none. */
+export function parseBotComputerPointer(value: unknown): BotComputerPointer | null {
+  const input = record(value);
+  if (!input) return null;
+  const { x, y, width, height } = input;
+  if (![x, y, width, height].every((entry) => typeof entry === "number" && Number.isFinite(entry))) return null;
+  const pointer = { x: x as number, y: y as number, width: width as number, height: height as number };
+  if (pointer.width <= 0 || pointer.height <= 0 || pointer.width > 8192 || pointer.height > 8192) return null;
+  if (pointer.x < 0 || pointer.y < 0 || pointer.x > pointer.width || pointer.y > pointer.height) return null;
+  return pointer;
 }
