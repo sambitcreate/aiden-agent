@@ -92,6 +92,15 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
     valueSelector: result.expected.valueSelectorRefusal,
     unbounded: "This browser belongs to a Bot.",
   });
+  // Text, label and XPath locators can't tell a card field's text apart; ordinary ones still find their element.
+  const timedOut = "Browser wait timed out before all conditions matched.";
+  expect(result.textLocators.right).toEqual([timedOut, timedOut, timedOut]);
+  expect(result.textLocators.wrong).toEqual(result.textLocators.right);
+  expect(result.textLocators.xpath).toBe(result.expected.xpathRefusal);
+  expect(result.textLocators.label).toBe("ran");
+  expect(result.textLocators.button).toBe("ran");
+  expect(result.textLocators.both).toMatch(/strict mode violation: this locator matches 2 elements/u);
+  expect(result.textLocators.both).not.toMatch(/4111|737/u);
 
   // A cross-site frame can't be checked for fields: no image, and a note saying why.
   expect(result.frame).toEqual({ image: false, note: result.expected.frameNote, leaked: false });

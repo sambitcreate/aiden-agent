@@ -54,6 +54,10 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
     case "/callback":
       // A sign-in's last step: a one-time code in the address, which the page logs.
       return html(`<p>Signing you in…</p><script>console.log("sign-in code", ${JSON.stringify(url.searchParams.get("code") ?? "")})</script>`);
+    case "/card-notes":
+      // Card fields with text inside them: a textarea's default, or a framework's copy of what was typed.
+      return html(`<form><label>Card number <textarea autocomplete="cc-number">4111111111111111</textarea></label>
+        <label>Security code <textarea autocomplete="cc-csc">737</textarea></label><button type="button">Pay</button></form>`);
     case "/framed":
       return html(`<p>Payment</p><iframe title="Pay" src="http://localhost:${port}/inner" style="width:300px;height:200px;border:0"></iframe>`);
     case "/inner":
@@ -178,6 +182,19 @@ void app.whenReady().then(async () => {
     // An agent command on a Bot's browser without the boundary (a workspace chat's tools).
     unbounded: await outcome(browser.command(BOT_WORKSPACE, { action: "snapshot", tabId: botTab }, { source: "agent", supportsImages: true })),
   };
+  // A locator can't tell what a card field holds by the text inside it, and
+  // one that matches both card fields is refused without quoting either.
+  step("2 text locators");
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/card-notes`);
+  const waitFor = (locator: string) => outcome(agent({ action: "wait", tabId: botTab, locator, timeoutMs: 300 }));
+  const textLocators = {
+    right: [await waitFor("text=4111"), await waitFor('label:has-text("4111")'), await waitFor('form >> internal:has-text="737"i')],
+    wrong: [await waitFor("text=9999"), await waitFor('label:has-text("9999")'), await waitFor('form >> internal:has-text="999"i')],
+    xpath: await waitFor("xpath=//textarea[starts-with(.,'4111')]"),
+    label: await waitFor('internal:label="Card number"i'),
+    button: await waitFor("text=Pay"),
+    both: await outcome(agent({ action: "scroll", tabId: botTab, locator: "textarea", deltaX: 0, deltaY: 10 })),
+  };
 
   // 3. A visible cross-site frame can't be inspected for fields: the image is dropped, with a note.
   step("3 cross-site frame");
@@ -259,7 +276,7 @@ void app.whenReady().then(async () => {
     JSON.stringify(
       {
         electron: process.versions.electron, platform: process.platform,
-        isolation, masking, typing, noteTyping, pressing, navigationKey, refused, frame,
+        isolation, masking, typing, noteTyping, pressing, navigationKey, refused, textLocators, frame,
         hold: { heldState, held, personMayUse, afterRelease, heldTraces },
         reveal,
         cleared,
@@ -268,6 +285,7 @@ void app.whenReady().then(async () => {
           typingRefusal: boundary.BROWSER_SENSITIVE_TYPING_REFUSED,
           actionRefusal: boundary.BROWSER_BOUNDARY_ACTION_REFUSED,
           valueSelectorRefusal: boundary.BROWSER_VALUE_SELECTOR_REFUSED,
+          xpathRefusal: boundary.BROWSER_XPATH_SELECTOR_REFUSED,
           frameNote: boundary.BROWSER_IMAGE_OMITTED.frame,
           maskedNote: boundary.BROWSER_IMAGE_MASKED_NOTE,
         },

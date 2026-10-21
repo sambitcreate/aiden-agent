@@ -232,6 +232,11 @@ export const BROWSER_OPAQUE_TYPING_REFUSED =
   "A Bot can't type into a field inside this frame, because Aiden can't check what kind of field it is. Hand this step to the person.";
 export const BROWSER_VALUE_SELECTOR_REFUSED =
   "A Bot can't find fields by what is typed in them. Use a role, label or text locator.";
+export const BROWSER_XPATH_SELECTOR_REFUSED =
+  "A Bot can't use XPath locators. Use a role, label, text or CSS locator.";
+/** Only if the bundled Playwright runtime no longer has the text cache a Bot's locator relies on. */
+export const BROWSER_LOCATOR_UNCHECKED_REFUSED =
+  "Aiden couldn't check this locator against password, code or card fields. Use the page snapshot's element references.";
 
 /**
  * In-page helpers, run in Aiden's isolated world: the same field rule as
@@ -261,7 +266,12 @@ export function browserTypingGuardSource(element: string): string {
  */
 export function boundaryRefusalOf(error: unknown): unknown {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  for (const sentence of [BROWSER_SENSITIVE_TYPING_REFUSED, BROWSER_OPAQUE_TYPING_REFUSED]) {
+  for (const sentence of [
+    BROWSER_SENSITIVE_TYPING_REFUSED,
+    BROWSER_OPAQUE_TYPING_REFUSED,
+    BROWSER_XPATH_SELECTOR_REFUSED,
+    BROWSER_LOCATOR_UNCHECKED_REFUSED,
+  ]) {
     if (message.includes(sentence)) return new Error(sentence);
   }
   return error;
@@ -273,32 +283,59 @@ export function boundaryRefusalOf(error: unknown): unknown {
  */
 const VALUE_ATTRIBUTE = /\[\s*(?:[\w*-]*\|)?value\b|\\/iu;
 /**
- * An XPath attribute step (`@name` or `attribute::name`): what it names, and
- * whether a `(` follows (a node test such as `node()`).
+ * Where Playwright's parser reads XPath: an `xpath=` engine, or a part that
+ * starts with `//` or `..`, at the start, after `>>`, or opening a nested
+ * selector's quoted body. A quick check in main; the page check is exact.
  */
-const XPATH_ATTRIBUTE_STEP = /(?:@|attribute\s*::)\s*([^\s[\](),=!<>|/]*)(\s*\()?/giu;
-/** An attribute name an XPath step may use: plain, never `value`, a wildcard or a namespace. */
-const PLAIN_ATTRIBUTE = /^[a-z_][\w.-]*$/iu;
+const XPATH_SELECTOR = /(?:^|>>|")\s*\*?\s*(?:xpath(?::light)?\s*=|\(*\/\/|\.\.)/iu;
 /** CSS comments, which a selector parser skips, so a comment can hide `[value`. */
 const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/gu;
 
-function testsValue(selector: string): boolean {
-  if (VALUE_ATTRIBUTE.test(selector)) return true;
-  for (const [, name = "", call] of selector.matchAll(XPATH_ATTRIBUTE_STEP)) {
-    if (call !== undefined || !PLAIN_ATTRIBUTE.test(name) || name.toLowerCase() === "value") return true;
-  }
-  return false;
-}
-
 /**
- * Refuse a selector that could tell what a field holds: one testing its
- * `value` attribute, directly, behind a CSS comment, or through an XPath step
- * that names any attribute (a wildcard or node test) rather than one plain,
- * non-`value` name. The selector is checked as written and without comments.
+ * Refuse a selector that could tell what a field holds before the page runs
+ * it: one testing a `value` attribute, directly or behind a CSS comment, and
+ * any XPath, whose string tests read the text inside a field and every
+ * element around it. `browserBoundaryLocatorExpression` refuses XPath again
+ * with Playwright's own parser.
  */
 export function assertBoundarySelector(selector: string | undefined): void {
   if (selector === undefined) return;
-  if (testsValue(selector) || testsValue(selector.replace(CSS_COMMENT, ""))) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
+  const uncommented = selector.replace(CSS_COMMENT, "");
+  if (VALUE_ATTRIBUTE.test(selector) || VALUE_ATTRIBUTE.test(uncommented)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
+  if (XPATH_SELECTOR.test(selector) || XPATH_SELECTOR.test(uncommented)) throw new Error(BROWSER_XPATH_SELECTOR_REFUSED);
+}
+
+/**
+ * Resolves a Bot's locator in Aiden's isolated world, after
+ * `BROWSER_SENSITIVE_FIELD_SOURCE`. Playwright's parser finds any XPath part,
+ * nested ones included, and the selector is refused. Text and label engines
+ * (`text=`, `internal:text`, `:has-text()`, `internal:label`...) read element
+ * text through the evaluator's text cache, which is filled first with no text
+ * for each sensitive field and everything inside it, so a field's contents
+ * never decide a match, for the field or any element around it. More than
+ * one match is refused without Playwright's previews, which quote attributes
+ * and text.
+ */
+const BROWSER_BOUNDARY_QUERY_SOURCE = `const __aidenBoundaryQuery=(selector)=>{
+const p=globalThis.__aidenPlaywright;const parsed=p.parseSelector(selector);
+const xpath=(s)=>s.parts.some((part)=>part.name==="xpath"||part.name.startsWith("xpath:")||Boolean(part.body&&typeof part.body==="object"&&part.body.parsed&&xpath(part.body.parsed)));
+if(xpath(parsed))throw new Error(${JSON.stringify(BROWSER_XPATH_SELECTOR_REFUSED)});
+const evaluator=p._evaluator;const cache=evaluator&&evaluator._cacheText;
+if(!(cache instanceof Map)||typeof evaluator.begin!=="function"||typeof evaluator.end!=="function")throw new Error(${JSON.stringify(BROWSER_LOCATOR_UNCHECKED_REFUSED)});
+evaluator.begin();
+try{
+const blank=(node)=>cache.set(node,{full:"",normalized:"",immediate:[]});
+const blankAll=(root)=>{for(const e of root.querySelectorAll("*")){blank(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}};
+const hide=(root)=>{for(const e of root.querySelectorAll("*")){if(__aidenSensitive(e)){blank(e);blankAll(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}else if(e.shadowRoot)hide(e.shadowRoot);}};
+hide(document);
+const found=p.querySelectorAll(parsed,document);
+if(found.length>1){const error=new Error("strict mode violation: this locator matches "+found.length+" elements. Use one that matches exactly one.");delete error.stack;throw error;}
+return found[0];
+}finally{evaluator.end();}};`;
+
+/** An isolated-world expression for the one element a Bot's locator names (see `BROWSER_BOUNDARY_QUERY_SOURCE`). */
+export function browserBoundaryLocatorExpression(selector: string): string {
+  return `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${BROWSER_BOUNDARY_QUERY_SOURCE}return __aidenBoundaryQuery(${JSON.stringify(selector)});})()`;
 }
 
 /**

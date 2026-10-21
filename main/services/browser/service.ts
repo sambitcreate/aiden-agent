@@ -79,6 +79,7 @@ import {
   BROWSER_RECALL_FIELD_FUNCTION,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
+  browserBoundaryLocatorExpression,
   browserKeyInsertsText,
   browserTypingGuardSource,
   maskBrowserSnapshotImage,
@@ -510,7 +511,7 @@ export class BrowserService {
       pick = `(()=>{let e=document.elementFromPoint(${x},${y});for(let i=0;i<32&&e&&e.shadowRoot;i+=1){const inner=e.shadowRoot.elementFromPoint(${x},${y});if(!inner||inner===e)break;e=inner;}return e;})()`;
     } else {
       try {
-        pick = this.target(tab, target);
+        pick = this.target(tab, target, true);
       } catch {
         return undefined;
       }
@@ -1692,9 +1693,11 @@ export class BrowserService {
       },
     });
   }
+  /** `boundary`: a Bot's locator, resolved so password, code and card fields' text can't decide the match. */
   private target(
     tab: LiveTab,
     command: { ref?: string; selector?: string; locator?: string },
+    boundary = false,
   ): string {
     if ([command.ref, command.selector, command.locator].filter((v) => v !== undefined).length > 1)
       throw new Error("Provide exactly one element reference, selector, or locator.");
@@ -1704,6 +1707,7 @@ export class BrowserService {
       return ref;
     }
     const locator = command.locator ?? command.selector;
+    if (locator && boundary) return browserBoundaryLocatorExpression(text(locator, "selector", 4_000));
     if (locator)
       return `globalThis.__aidenPlaywright.querySelector(globalThis.__aidenPlaywright.parseSelector(${JSON.stringify(text(locator, "selector", 4_000))}),document,true)`;
     return "document.activeElement";
@@ -1713,8 +1717,9 @@ export class BrowserService {
     command: { ref?: string; selector?: string; locator?: string; timeoutMs?: number },
     signal?: AbortSignal,
     pinClickTarget = false,
+    boundary = false,
   ): Promise<{ x: number; y: number }> {
-    const target = this.target(tab, command);
+    const target = this.target(tab, command, boundary);
     const end =
       Date.now() + browserBoundedNumber(command.timeoutMs ?? 15000, 1, 60000, "Action timeout");
     let failure: unknown;
@@ -1732,6 +1737,8 @@ export class BrowserService {
         failure = error;
         browserAbort(signal);
         browserAbort(tab.queue.signal);
+        const refused = boundaryRefusalOf(error);
+        if (refused !== error) throw refused;
         if (
           error instanceof Error &&
           (/strict mode violation|parsing selector|unknown engine|invalid selector/i.test(
@@ -2610,7 +2617,7 @@ export class BrowserService {
                 if (hasTarget && (command.x !== undefined || command.y !== undefined))
                   throw new Error("Provide one click target.");
                 const point = hasTarget
-                  ? await this.elementPoint(tab, command, signal, true)
+                  ? await this.elementPoint(tab, command, signal, true, context.credentialBoundary === true)
                   : {
                       x: browserBoundedNumber(command.x, 0, 8192, "Click X"),
                       y: browserBoundedNumber(command.y, 0, 8192, "Click Y"),
@@ -2667,11 +2674,11 @@ export class BrowserService {
               case "type": {
                 text(command.text, "browser input");
                 if (command.ref || command.selector || command.locator) {
-                  const point = await this.elementPoint(tab, command, signal);
+                  const point = await this.elementPoint(tab, command, signal, false, context.credentialBoundary === true);
                   await this.showAgentCursor(tab, point, signal);
                 }
                 check();
-                const target = this.target(tab, command);
+                const target = this.target(tab, command, context.credentialBoundary === true);
                 if (context.credentialBoundary) {
                   await this.recallSensitiveFields(tab, signal);
                   check();
@@ -2715,6 +2722,8 @@ export class BrowserService {
                         tab,
                         { selector: input.selector, locator: input.locator },
                         signal,
+                        false,
+                        context.credentialBoundary === true,
                       )
                     : { x: command.x ?? 200, y: command.y ?? 200 };
                 check();
@@ -2766,7 +2775,7 @@ export class BrowserService {
                 await this.evaluate(tab, buildBrowserAnnotationPreviewResetExpression(), signal, true);
                 break;
               case "wait":
-                await this.wait(tab, input, signal, check);
+                await this.wait(tab, input, signal, check, context.credentialBoundary === true);
                 break;
               case "record_start":
                 await this.startRecording(tab, command.fps ?? this.defaults.recordingFps, signal);
@@ -2886,6 +2895,7 @@ export class BrowserService {
     input: Record<string, any>,
     signal?: AbortSignal,
     check = () => {},
+    boundary = false,
   ): Promise<void> {
     const timeout = browserBoundedNumber(input.timeoutMs ?? 15000, 1, 60000, "Wait timeout");
     const end = Date.now() + timeout;
@@ -2897,7 +2907,7 @@ export class BrowserService {
       !input.readiness
     )
       throw new Error("Provide at least one browser wait condition.");
-    const target = input.selector || input.locator ? this.target(tab, input) : undefined;
+    const target = input.selector || input.locator ? this.target(tab, input, boundary) : undefined;
     while (Date.now() < end) {
       check();
       browserAbort(signal);
@@ -2917,6 +2927,8 @@ export class BrowserService {
         check();
         browserAbort(signal);
         browserAbort(tab.queue.signal);
+        const refused = boundaryRefusalOf(error);
+        if (refused !== error) throw refused;
         if (error instanceof Error && /selector/i.test(error.message)) throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, 100));

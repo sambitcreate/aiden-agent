@@ -16,12 +16,17 @@ import {
 } from "./credential-fields.js";
 import {
   assertBoundarySelector,
+  boundaryRefusalOf,
   BROWSER_OPAQUE_TYPING_REFUSED,
   BROWSER_RECALL_FIELD_FUNCTION,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
+  BROWSER_VALUE_SELECTOR_REFUSED,
+  BROWSER_XPATH_SELECTOR_REFUSED,
+  browserBoundaryLocatorExpression,
   browserTypingGuardSource,
 } from "./credential-boundary.js";
+import { playwrightInjectedSource } from "./playwright-source.generated.js";
 
 let nextId = 1;
 function element(localName: string, attributes: Record<string, string> = {}, children: CdpDomNode[] = [], extra: Partial<CdpDomNode> = {}): CdpDomNode {
@@ -255,7 +260,7 @@ test("Chromium: every selector that can tell a field's value apart is refused; o
     `input[/**/value^='${prefix}']`,
     `input[/* any */ value^='${prefix}']`,
   ];
-  const ordinary = ["internal:role=textbox[name=\"Password\"i]", "#pw", "input[name=pw]", "text=Signed in as sam@example.com", "xpath=//input[@name='pw']"];
+  const ordinary = ["internal:role=textbox[name=\"Password\"i]", "#pw", "input[name=pw]", "text=Signed in as sam@example.com"];
   let browser: Browser | undefined;
   try {
     browser = await playwright.chromium.launch({ headless: true });
@@ -266,11 +271,116 @@ test("Chromium: every selector that can tell a field's value apart is refused; o
     for (const [index, selector] of right.entries()) {
       assert.equal(await matches(selector), 1, `${selector} reads the field`);
       assert.equal(await matches(wrong[index]!), 0, `${wrong[index]} tells another value apart`);
-      assert.throws(() => assertBoundarySelector(selector), /what is typed/u, selector);
+      assert.throws(
+        () => assertBoundarySelector(selector),
+        (error: Error) => [BROWSER_VALUE_SELECTOR_REFUSED, BROWSER_XPATH_SELECTOR_REFUSED].includes(error.message),
+        selector,
+      );
     }
     for (const selector of ordinary) {
       assert.ok((await matches(selector)) >= 1, `${selector} finds its element`);
       assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
+    }
+  } finally {
+    await browser?.close();
+  }
+});
+
+test("Chromium: a Bot's locator can't tell what a card or code field holds by its text; ordinary locators find the same element", { timeout: 30_000 }, async () => {
+  // A textarea's text (its default or a framework's copy of what was typed)
+  // and a contenteditable code field's text are what text, label and XPath
+  // engines read. The bundled runtime, installed as the browser service does
+  // in an isolated world, is the oracle: each form below finds the field, or
+  // an element around it, with the right prefix and nothing with a wrong one.
+  const reads = (prefix: string) => [
+    `xpath=//textarea[starts-with(.,'${prefix}')]`,
+    `//form[contains(.,'${prefix}')]`,
+    `text=${prefix}`,
+    `text=/${prefix}/`,
+    `internal:text="${prefix}"i`,
+    `textarea:has-text("${prefix}")`,
+    `form:has-text("${prefix}")`,
+    `textarea:text-matches("^${prefix}")`,
+    `form >> internal:has-text="${prefix}"i`,
+    `form >> internal:has-not-text="${prefix}"i`,
+    `internal:label=/${prefix}/`,
+    `label:has-text("${prefix}")`,
+    `textarea:not(:has-text("${prefix}"))`,
+    `#host >> text=${prefix}`,
+  ];
+  const ordinary: Array<[selector: string, id: string]> = [
+    ['internal:role=textbox[name="Card number"i]', "card"],
+    ['internal:label="Card number"i', "card"],
+    ["label:has-text('Card number') >> textarea", "card"],
+    ["textarea[name=card]", "card"],
+    ["text=Pay", "pay"],
+    ['internal:role=button[name="Pay"i]', "pay"],
+    ['form >> internal:has-text="Pay"i', "checkout"],
+    ["text=Signed in as sam@example.com", "account"],
+  ];
+  const options = { isUnderTest: false, sdkLanguage: "javascript", testIdAttributeName: "data-testid", stableRafCount: 1, browserName: "chromium", shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] };
+  let browser: Browser | undefined;
+  try {
+    browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.setContent(`<form id="checkout">
+      <label>Card number <textarea id="card" name="card" autocomplete="cc-number">4111111111111111</textarea></label>
+      <label>Code <div id="otp" contenteditable autocomplete="one-time-code"><span>482913</span></div></label>
+      <div id="host"></div><button id="pay">Pay</button></form><p id="account">Signed in as sam@example.com</p>
+      <script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<textarea id="csc" autocomplete="cc-csc">737</textarea>';</script>`);
+    const session = await page.context().newCDPSession(page);
+    const frame = (await session.send("Page.getFrameTree")).frameTree.frame.id;
+    const { executionContextId: contextId } = await session.send("Page.createIsolatedWorld", { frameId: frame, worldName: "aiden-browser", grantUniveralAccess: false });
+    const run = async (expression: string): Promise<string> => {
+      const result = await session.send("Runtime.evaluate", { expression, contextId, returnByValue: true });
+      if (result.exceptionDetails) {
+        const refused = boundaryRefusalOf(new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text));
+        return `error: ${(refused as Error).message}`;
+      }
+      return String(result.result.value);
+    };
+    await run(`(() => { const module = {exports:{}}; ${playwrightInjectedSource}\n globalThis.__aidenPlaywright = new (module.exports.InjectedScript())(globalThis, ${JSON.stringify(options)}); })()`);
+    const elementId = (element: string) => `(()=>{const e=${element};return e?e.id||e.localName:"none";})()`;
+    const plain = (selector: string) =>
+      run(`(()=>{const p=globalThis.__aidenPlaywright;return p.querySelectorAll(p.parseSelector(${JSON.stringify(selector)}),document).map(e=>e.id||e.localName).join(",")||"none";})()`);
+    // The whole path a Bot's locator takes: main's check, then the page.
+    const bot = async (selector: string): Promise<string> => {
+      try {
+        assertBoundarySelector(selector);
+      } catch (error) {
+        return `refused: ${(error as Error).message}`;
+      }
+      return run(elementId(browserBoundaryLocatorExpression(selector)));
+    };
+
+    const told = new Set<number>();
+    for (const [prefix, other] of [["4111", "9999"], ["4829", "9999"], ["737", "999"]] as const) {
+      const right = reads(prefix), wrong = reads(other);
+      for (const [index, selector] of right.entries()) {
+        const [matched, missed] = [await plain(selector), await plain(wrong[index]!)];
+        if (matched === missed) continue;
+        told.add(index);
+        assert.equal(await bot(selector), await bot(wrong[index]!), `${selector} and ${wrong[index]} look the same to a Bot (${matched} vs ${missed} without the boundary)`);
+      }
+    }
+    assert.deepEqual([...told].sort((a, b) => a - b), reads("").map((_, index) => index), "every form tells some field's text apart without the boundary");
+
+    // A nested XPath that main's quick check would miss, were it written another way, is refused in the page.
+    const nested = `form >> internal:has="//textarea[starts-with(.,'4111')]"`;
+    assert.equal(await plain(nested), "checkout");
+    assert.equal(await run(elementId(browserBoundaryLocatorExpression(nested))), `error: ${BROWSER_XPATH_SELECTOR_REFUSED}`);
+
+    // Two card fields match: Playwright's own refusal quotes what one holds; a Bot's names only the count.
+    const strict = (selector: string) =>
+      run(`(()=>{const p=globalThis.__aidenPlaywright;p.querySelector(p.parseSelector(${JSON.stringify(selector)}),document,true);return "one";})()`);
+    assert.match(await strict("form textarea, #csc"), /4111111111111111/u);
+    const twoFields = await bot("form textarea, #csc");
+    assert.match(twoFields, /strict mode violation: this locator matches 2 elements/u);
+    assert.doesNotMatch(twoFields, /4111|737/u);
+
+    for (const [selector, id] of ordinary) {
+      assert.equal(await plain(selector), id, `${selector} finds its element`);
+      assert.equal(await bot(selector), id, `${selector} still finds it for a Bot`);
     }
   } finally {
     await browser?.close();

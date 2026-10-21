@@ -17,7 +17,7 @@ import {
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import type { BrowserCommandContext, BrowserFieldProbe } from "../browser/service.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
-import { BROWSER_VALUE_SELECTOR_REFUSED } from "../browser/credential-boundary.js";
+import { BROWSER_VALUE_SELECTOR_REFUSED, BROWSER_XPATH_SELECTOR_REFUSED } from "../browser/credential-boundary.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
 import {
@@ -249,13 +249,13 @@ test("a tab the person is using refuses the Bot before anything is asked", async
 test("a selector that tests what a field holds is refused before anything reads the page", async () => {
   const fake = fakeBrowser();
   await fake.browser.candidates(BOT, TURN);
-  for (const args of [
-    { selector: "input[value^='h']", text: "x" },
-    { locator: "xpath=//input[starts-with(attribute::value,'h')]" },
-  ]) {
+  for (const [args, refusal] of [
+    [{ selector: "input[value^='h']", text: "x" }, BROWSER_VALUE_SELECTOR_REFUSED],
+    [{ locator: "xpath=//textarea[starts-with(.,'4111')]" }, BROWSER_XPATH_SELECTOR_REFUSED],
+  ] as const) {
     await assert.rejects(
       fake.browser.approvalFor(BOT, "browser_click", { callId: "v", args, signal: undefined }),
-      new RegExp(BROWSER_VALUE_SELECTOR_REFUSED.replace(/[.]/gu, "\\.")),
+      { message: refusal },
     );
   }
   assert.equal(fake.probes(), 0, "the page never evaluated the selector");

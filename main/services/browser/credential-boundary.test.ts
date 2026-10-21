@@ -6,6 +6,8 @@ import {
   boundaryRefusalOf,
   BROWSER_IMAGE_OMITTED,
   BROWSER_SENSITIVE_TYPING_REFUSED,
+  BROWSER_VALUE_SELECTOR_REFUSED,
+  BROWSER_XPATH_SELECTOR_REFUSED,
   browserKeyInsertsText,
   maskBrowserSnapshotImage,
   scrubBrowserSnapshot,
@@ -217,11 +219,27 @@ test("only keys that put text into a field count as typing", () => {
   }
 });
 
-test("a Bot can't find a field by what is typed in it", () => {
-  for (const selector of ['input[value^="a"]', "input[ VALUE$='1']", "[*|value]", 'internal:attr=[value="x"]', "xpath=//input[@value='hunter2']", "xpath=//input[starts-with(attribute::value,'h')]", "xpath=//input[@ value='h']", "input[v\\61lue]"]) {
-    assert.throws(() => assertBoundarySelector(selector), /what is typed/u, selector);
+test("a Bot can't find a field by what is typed in it, or use XPath", () => {
+  for (const selector of ['input[value^="a"]', "input[ VALUE$='1']", "[*|value]", 'internal:attr=[value="x"]', "input[/**/value^='a']", "input[v\\61lue]"]) {
+    assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_VALUE_SELECTOR_REFUSED }, selector);
   }
-  for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip"]) {
+  // Every way Playwright's parser reads XPath: the engine, a part starting
+  // with `//` or `..`, after `>>`, and a nested selector's body.
+  for (const selector of [
+    "xpath=//input[@value='hunter2']",
+    "xpath=//textarea[starts-with(.,'4111')]",
+    " *xpath = //form",
+    "xpath:light=//form",
+    "//form[contains(.,'4111')]",
+    "(//textarea)[1]",
+    "textarea >> ..",
+    "form >> //textarea[starts-with(.,'4')]",
+    'form >> internal:has="//textarea[starts-with(.,\'4\')]"',
+    'form >> internal:has=" xpath=//textarea"',
+  ]) {
+    assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_XPATH_SELECTOR_REFUSED }, selector);
+  }
+  for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip", "text=Open https://example.com/docs", "text=Signed in as sam@example.com", "a[href^='https://example.com']"]) {
     assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
   }
 });
