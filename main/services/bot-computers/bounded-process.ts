@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { terminateDirectChild } from "../computer-use/process.js";
 import { BotComputerError } from "./types.js";
 
@@ -12,6 +13,8 @@ export interface BoundedProcessOptions {
   overflow?: "truncate" | "fail";
   /** Written to the child's stdin, which is then closed. Secrets go here, never in argv. */
   stdin?: string;
+  /** A local file streamed to the child's stdin instead (a binary copied into a guest). */
+  stdinFile?: string;
   cwd?: string;
 }
 
@@ -50,7 +53,7 @@ export function runBoundedProcess(
       detached: false,
       env: options.env,
       shell: false,
-      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      stdio: [options.stdin === undefined && options.stdinFile === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     const stdout: Buffer[] = [];
@@ -140,6 +143,14 @@ export function runBoundedProcess(
     if (options.stdin !== undefined && child.stdin) {
       child.stdin.on("error", () => undefined);
       child.stdin.end(options.stdin);
+    } else if (options.stdinFile !== undefined && child.stdin) {
+      child.stdin.on("error", () => undefined);
+      const source = createReadStream(options.stdinFile);
+      source.once("error", () => {
+        failure ??= new BotComputerError("invalid", "The file to copy can't be read.");
+        void terminate();
+      });
+      source.pipe(child.stdin);
     }
     if (options.signal?.aborted) onAbort();
   });

@@ -136,7 +136,7 @@ const REMOTE_ALARM_EXIT = 142;
 export async function runGuestCommand(
   target: GuestSshTarget,
   command: string,
-  options: { timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; stdin?: string },
+  options: { timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; stdin?: string; stdinFile?: string },
   deps: GuestSshDependencies,
 ): Promise<BotComputerGuestCommandResult> {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
@@ -156,6 +156,7 @@ export async function runGuestCommand(
     maxStderrBytes: Math.min(options.maxOutputBytes, 64 * 1024),
     overflow: "truncate",
     stdin: options.stdin,
+    stdinFile: options.stdinFile,
   });
   return {
     exitCode: result.exitCode,
