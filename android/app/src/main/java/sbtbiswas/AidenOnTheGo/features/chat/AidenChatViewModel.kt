@@ -2103,11 +2103,13 @@ class AidenChatViewModel(
         val pairingCreatedAt = pairingCreatedAt()
         _isSubmittingRunInput.value = true
         // The draft clears the moment the input leaves, like a sent message; it comes back if the
-        // Mac rejects or never confirms it and nothing new was typed meanwhile. A retry resends
-        // the saved text, not the draft.
+        // Mac rejects or never confirms it and nothing new was typed meanwhile. Only the screen
+        // clears now: the saved draft is the text's durable copy until the Mac admits it, so a
+        // rejection that lands after this screen or pairing changed still leaves it on disk.
+        // A retry resends the saved text, not the draft.
         val draftBeforeSend = _draft.value
         val draftAfterSend = if (retry) draftBeforeSend else AidenRunInputPresentation.consumedDraft(text, draftBeforeSend)
-        if (!retry) consumeRunInputDraft(text)
+        if (!retry) consumeRunInputDraft(text, persist = false)
         fun restoreDraft() { if (!retry) restoreRunInputDraft(text, draftBeforeSend, draftAfterSend) }
         viewModelScope.launch {
             try {
@@ -2136,7 +2138,7 @@ class AidenChatViewModel(
                 _pendingSend.value = null
                 if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
                 if (AidenRunInputPresentation.consumesDraft(result)) {
-                    if (retry) consumeRunInputDraft(text)
+                    if (retry) consumeRunInputDraft(text) else draftWriter?.writeSoon(_draft.value)
                     AidenRunInputPresentation.receipt(result)?.let { showRunInputReceipt(it) }
                     // The Mac persisted the message before queue admission;
                     // pull it into the transcript without waiting for the
@@ -2391,11 +2393,12 @@ class AidenChatViewModel(
         }
     }
 
-    private fun consumeRunInputDraft(text: String) {
+    /** Removes the submitted text from the composer; with [persist] false the saved draft keeps it. */
+    private fun consumeRunInputDraft(text: String, persist: Boolean = true) {
         val remaining = AidenRunInputPresentation.consumedDraft(text, _draft.value)
         if (remaining != _draft.value) {
             _draft.value = remaining
-            draftWriter?.writeSoon(remaining)
+            if (persist) draftWriter?.writeSoon(remaining)
         }
     }
 

@@ -20,7 +20,9 @@ function botStoreIpc(initial: BotDefinition, extra: Record<string, (...args: unk
       const update = input as BotUpdateInput;
       updates.push(update);
       const { id: _id, expectedRevision: _revision, ...fields } = update;
-      bot = { ...bot, ...fields, revision: `${bot.revision}+` };
+      // Like main: an update without a description clears it.
+      const { description: _dropped, ...kept } = bot;
+      bot = { ...kept, ...fields, revision: `${bot.revision}+` };
       return bot;
     },
     ...extra,
@@ -255,13 +257,20 @@ test("Advanced Back with an unsaved access change asks before discarding it", as
 });
 
 test("an inline name edit shows at once, before the save answers, and goes back if the save fails", async () => {
-  let answer: (bot: BotDefinition) => void = () => undefined;
+  let answer: () => void = () => undefined;
   let fail = false;
-  const store = botStoreIpc(botFixture(), {
+  // The store answers the held save like main would: the saved Bot is what `bots:get` reads next.
+  let stored = botFixture();
+  installBotTestIpc({
+    "bots:list": () => [stored],
+    "bots:get": () => stored,
     "bots:update": (input) => {
       if (fail) throw new Error("Error invoking remote method 'bots:update': Error: Bots are starting.");
       return new Promise<BotDefinition>((resolve) => {
-        answer = (bot) => resolve({ ...bot, ...(input as Record<string, unknown>), revision: "rev-2" });
+        answer = () => {
+          stored = { ...stored, ...(input as Record<string, unknown>), revision: "rev-2" };
+          resolve(stored);
+        };
       });
     },
   });
@@ -272,7 +281,7 @@ test("an inline name edit shows at once, before the save answers, and goes back 
   await waitFor(() => assert.equal(queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])?.name, "Trip Planner"));
   assert.equal(name.disabled, false, "the field stays usable while the save is in flight");
   assert.ok(screen.getAllByText("Trip Planner").length >= 1);
-  answer(store.current());
+  answer();
   await waitFor(() => assert.equal(queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])?.revision, "rev-2"));
 
   fail = true;
@@ -281,6 +290,52 @@ test("an inline name edit shows at once, before the save answers, and goes back 
   // A failed save puts the stored name back.
   await waitFor(() => assert.equal(name.value, "Trip Planner"));
   assert.equal(queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])?.name, "Trip Planner");
+});
+
+test("clearing the subtitle sends an update without one, and the cache drops it", async () => {
+  const store = botStoreIpc(botFixture({ description: "Plans trips" }));
+  const { queryClient } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+  const subtitle = (await screen.findByRole("textbox", { name: "Subtitle" })) as HTMLInputElement;
+  assert.equal(subtitle.value, "Plans trips");
+  fireEvent.change(subtitle, { target: { value: "" } });
+  fireEvent.blur(subtitle);
+  await waitFor(() => assert.equal(store.updates.length, 1));
+  assert.equal("description" in store.updates[0]!, false);
+  await waitFor(() => assert.equal(queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])?.description, undefined));
+  assert.equal(store.current().description, undefined);
+  assert.equal(subtitle.value, "");
+});
+
+test("two edits in flight that both fail leave the confirmed Bot, whichever answers first", async () => {
+  const answers: Array<(error: Error) => void> = [];
+  botStoreIpc(botFixture(), {
+    "bots:update": () => new Promise<BotDefinition>((_resolve, reject) => answers.push(reject)),
+  });
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(["bots", "active"], [botFixture()]);
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1", queryClient });
+  const name = (await screen.findByRole("textbox", { name: "Name" })) as HTMLInputElement;
+  const subtitle = screen.getByRole("textbox", { name: "Subtitle" }) as HTMLInputElement;
+  fireEvent.change(name, { target: { value: "Unsaved first" } });
+  fireEvent.blur(name);
+  fireEvent.change(subtitle, { target: { value: "Unsaved second" } });
+  fireEvent.blur(subtitle);
+  await waitFor(() => assert.equal(answers.length, 2));
+  // Both edits show while they are in flight.
+  const shown = () => queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])!;
+  assert.equal(shown().name, "Unsaved first");
+  assert.equal(shown().description, "Unsaved second");
+  answers[0]!(new Error("Error invoking remote method 'bots:update': Error: Bots are starting."));
+  // The first failure keeps the second edit on screen.
+  await waitFor(() => assert.equal(shown().name, "Planner"));
+  assert.equal(shown().description, "Unsaved second");
+  answers[1]!(new Error("Error invoking remote method 'bots:update': Error: Bots are starting."));
+  await waitFor(() => assert.equal(shown().description, "Plans trips"));
+  assert.equal(shown().name, "Planner");
+  await waitFor(() => assert.equal(name.value, "Planner"));
+  assert.equal(subtitle.value, "Plans trips");
+  const list = queryClient.getQueryData<BotDefinition[]>(["bots", "active"]);
+  assert.equal(list?.find((row) => row.id === "bot-1")?.name, "Planner");
 });
 
 test("a Bot already in the list opens its Profile without a loading skeleton", async () => {

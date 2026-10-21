@@ -3569,10 +3569,13 @@ final class AidenChatViewModel {
         defer { isSubmittingRunInput = false }
         // The draft clears the moment the input leaves, like a sent message; it
         // comes back if the Mac rejects or never confirms it and nothing new was
-        // typed meanwhile. A retry resends the saved text, not the draft.
+        // typed meanwhile. Only the screen clears now: the saved draft is the
+        // text's durable copy until the Mac admits it, so a rejection that lands
+        // after this screen or pairing changed still leaves it on disk.
+        // A retry resends the saved text, not the draft.
         let draftBeforeSend = draft
         let draftAfterSend = retry ? draft : AidenRunInputPresentation.consumedDraft(submitted: text, current: draft)
-        if !retry { consumeRunInputDraft(text) }
+        if !retry { clearRunInputDraftOnScreen(text) }
         let restoreDraft = { [self] in
             guard !retry else { return }
             restoreRunInputDraft(submitted: text, previous: draftBeforeSend, consumedTo: draftAfterSend)
@@ -3607,7 +3610,7 @@ final class AidenChatViewModel {
             pendingSend = nil
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {
-                if retry { consumeRunInputDraft(text) }
+                if retry { consumeRunInputDraft(text) } else { persistDraftNow() }
                 if let receipt = AidenRunInputPresentation.receipt(for: result) {
                     showRunInputReceipt(receipt)
                 }
@@ -3862,6 +3865,28 @@ final class AidenChatViewModel {
                 guard let self, draftGeneration == clearedDraftGeneration, draft == remaining else { return }
                 _ = try? await draftStore.save(remaining, session: draftSession)
             }
+        }
+    }
+
+    /// Clears the submitted text from the composer without touching the saved
+    /// draft; `persistDraftNow` commits it once the Mac admits the input.
+    private func clearRunInputDraftOnScreen(_ text: String) {
+        let remaining = AidenRunInputPresentation.consumedDraft(submitted: text, current: draft)
+        guard remaining != draft else { return }
+        draftPersistenceTask?.cancel()
+        suppressesDraftPersistence = true
+        draft = remaining
+        suppressesDraftPersistence = false
+    }
+
+    /// Saves the draft as it is now, unless it changes again first.
+    private func persistDraftNow() {
+        let value = draft
+        let generation = draftGeneration
+        guard let draftSession else { return }
+        Task { [weak self] in
+            guard let self, draftGeneration == generation, draft == value else { return }
+            _ = try? await draftStore.save(value, session: draftSession)
         }
     }
 

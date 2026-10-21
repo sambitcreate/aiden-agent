@@ -14,18 +14,40 @@ export type BotIdentityPatch = Partial<{
 
 /** The Bot as the renderer will show it once `patch` is applied to `base`. */
 function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition {
-  const next = { ...base, ...patch };
-  const description = next.description?.trim();
+  // A cleared subtitle must not fall through to the old one: main drops the
+  // description when the update omits it, and the cache has to agree.
+  const { description: baseDescription, ...rest } = base;
+  const description = (patch.description ?? baseDescription ?? "").trim();
   return {
-    ...base,
-    name: next.name.trim(),
+    ...rest,
+    name: (patch.name ?? base.name).trim(),
     ...(description ? { description } : {}),
-    instructions: next.instructions,
-    avatar: next.avatar,
+    instructions: patch.instructions ?? base.instructions,
+    avatar: patch.avatar ?? base.avatar,
     ...(patch.chatActivity
       ? { chatActivity: { ...resolveBotChatActivity(base.chatActivity), ...patch.chatActivity } }
       : {}),
   };
+}
+
+/**
+ * The edits in flight for one Bot: the last Bot main confirmed, with every
+ * unanswered patch layered on top in the order it was made. The cache always
+ * shows that stack, so overlapping edits settle correctly whatever order
+ * their answers arrive in, and a failed one simply drops out of the stack.
+ */
+interface BotEditStack {
+  confirmed: BotDefinition;
+  pending: BotIdentityPatch[];
+}
+
+const editStacks = new Map<string, BotEditStack>();
+
+function presentEdits(qc: QueryClient, stack: BotEditStack): void {
+  placeBotInCache(
+    qc,
+    stack.pending.reduce<BotDefinition>((bot, patch) => patchedBot(bot, patch), stack.confirmed),
+  );
 }
 
 /** Writes `bot` into its own query and into every cached Bots list that holds it. */
@@ -62,29 +84,34 @@ export function removeBotFromCache(qc: QueryClient, botId: string): () => void {
  * change made on another device to a different field is kept.
  *
  * The change shows at once: the Bot's query and the Bots list take the patched
- * Bot before main answers, and go back to what they held if the save fails.
- * The write itself still rereads the Bot first, so it patches the latest
- * revision rather than the one this window happens to have cached.
+ * Bot before main answers, and go back to the last confirmed Bot (plus any
+ * other edit still in flight) if the save fails. The write itself still
+ * rereads the Bot first, so it patches the latest revision rather than the one
+ * this window happens to have cached.
  */
 export async function updateBotIdentity(
   qc: QueryClient,
   botId: string,
   patch: BotIdentityPatch,
 ): Promise<BotDefinition> {
-  const cached = qc.getQueryData<BotDefinition>(queryKeys.bot(botId));
-  const optimistic = cached ? patchedBot(cached, patch) : null;
-  if (optimistic) placeBotInCache(qc, optimistic);
-  // Only this Bot's row goes back, and only where it still holds this edit's
-  // copy: a list reread or a later edit that landed meanwhile is kept. The
-  // query cache shares structure, so the copy is matched by value, not identity.
-  const holdsOptimistic = (row: BotDefinition | undefined) =>
-    row !== undefined && optimistic !== null && JSON.stringify(row) === JSON.stringify(optimistic);
-  const rollback = () => {
-    if (!cached || !optimistic) return;
-    if (holdsOptimistic(qc.getQueryData<BotDefinition>(queryKeys.bot(botId)))) qc.setQueryData(queryKeys.bot(botId), cached);
-    qc.setQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots }, (list) =>
-      list?.some(holdsOptimistic) ? list.map((row) => (holdsOptimistic(row) ? cached : row)) : list,
-    );
+  let stack = editStacks.get(botId);
+  if (!stack) {
+    const cached = qc.getQueryData<BotDefinition>(queryKeys.bot(botId));
+    if (cached) {
+      stack = { confirmed: cached, pending: [] };
+      editStacks.set(botId, stack);
+    }
+  }
+  if (stack) {
+    stack.pending.push(patch);
+    presentEdits(qc, stack);
+  }
+  const settle = (confirmed: BotDefinition | null) => {
+    if (!stack) return;
+    stack.pending.splice(stack.pending.indexOf(patch), 1);
+    if (confirmed) stack.confirmed = confirmed;
+    if (stack.pending.length === 0) editStacks.delete(botId);
+    presentEdits(qc, stack);
   };
   try {
     const latest = await botsApi.get(botId);
@@ -99,11 +126,13 @@ export async function updateBotIdentity(
       avatar: next.avatar,
       ...(patch.chatActivity ? { chatActivity: resolveBotChatActivity(next.chatActivity) } : {}),
     });
-    placeBotInCache(qc, saved);
+    settle(saved);
     void qc.invalidateQueries({ queryKey: queryKeys.bots });
     return saved;
   } catch (error) {
-    rollback();
+    settle(null);
+    // The confirmed Bot this window held may be older than main's by now.
+    if (stack && !editStacks.has(botId)) void qc.invalidateQueries({ queryKey: queryKeys.bot(botId) });
     throw error;
   }
 }
