@@ -1,0 +1,306 @@
+[
+  {
+    "file": "ios/01-welcome.png",
+    "label": "Welcome",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/02-onboarding-models.png",
+    "label": "Onboarding: what Aiden can do",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/03-connect-setup.png",
+    "label": "Connect your Mac (setup code)",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/04-pair-scan.png",
+    "label": "Pair by scanning a QR code",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/05-bots-tip.png",
+    "label": "Bots: first-run tip",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/06-bots-list.png",
+    "label": "Bots list",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/07-bot-chat-empty.png",
+    "label": "Bot chat (Trip Buddy)",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/08-area-switcher.png",
+    "label": "Switch between Bots and Workspaces",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/09-workspaces.png",
+    "label": "Workspaces",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/10-new-workspace-chat.png",
+    "label": "New workspace chat",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/11-model-picker.png",
+    "label": "Model picker",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/12-composer.png",
+    "label": "Composer",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/13-tool-approval.png",
+    "label": "Tool approval",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/14-chat-tools.png",
+    "label": "Chat with tool activity",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/15-chat-reply.png",
+    "label": "Chat reply",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/16-settings.png",
+    "label": "Settings",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/17-providers.png",
+    "label": "Providers",
+    "platform": "ios",
+    "theme": "light",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/18-bots-list-dark.png",
+    "label": "Bots list (dark)",
+    "platform": "ios",
+    "theme": "dark",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/19-workspaces-dark.png",
+    "label": "Workspaces (dark)",
+    "platform": "ios",
+    "theme": "dark",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/20-chat-reply-dark.png",
+    "label": "Chat reply (dark)",
+    "platform": "ios",
+    "theme": "dark",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "ios/21-settings-dark.png",
+    "label": "Settings (dark)",
+    "platform": "ios",
+    "theme": "dark",
+    "width": 1206,
+    "height": 2622
+  },
+  {
+    "file": "android/01-connect.png",
+    "label": "Connect your desktop",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/02-setup-code.png",
+    "label": "Pair with a setup code",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/03-bots-list.png",
+    "label": "Bots list",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/04-area-switcher.png",
+    "label": "Switch between Bots and Workspaces",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/05-workspaces.png",
+    "label": "Workspaces",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/06-chat-reply.png",
+    "label": "Chat reply",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/07-chat-tools.png",
+    "label": "Chat with tool activity",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/08-model-picker.png",
+    "label": "Model picker",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/09-new-chat.png",
+    "label": "New workspace chat",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/10-composer.png",
+    "label": "Composer",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/11-tool-approval.png",
+    "label": "Tool approval",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/12-settings.png",
+    "label": "Settings",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/13-providers.png",
+    "label": "Providers",
+    "platform": "android",
+    "theme": "light",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/14-bots-list-dark.png",
+    "label": "Bots list (dark)",
+    "platform": "android",
+    "theme": "dark",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/15-workspaces-dark.png",
+    "label": "Workspaces (dark)",
+    "platform": "android",
+    "theme": "dark",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/16-chat-reply-dark.png",
+    "label": "Chat reply (dark)",
+    "platform": "android",
+    "theme": "dark",
+    "width": 1080,
+    "height": 2424
+  },
+  {
+    "file": "android/17-settings-dark.png",
+    "label": "Settings (dark)",
+    "platform": "android",
+    "theme": "dark",
+    "width": 1080,
+    "height": 2424
+  }
+]
