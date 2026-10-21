@@ -652,6 +652,36 @@ test("Bots on a paired Mac count: with only those, and with a search only they m
   assert.ok(screen.getByText("No matching Bots"));
 });
 
+test("a paired Mac's Bot shows when it is working there, and marks the one whose chat is open", async () => {
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(hostQueryKeys.list(), [
+    { id: "host-b", name: "Studio", enabled: true, state: "connected", features: ["bot-durable-session-v1"], capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"] },
+  ]);
+  queryClient.setQueryData(hostQueryKeys.statuses(), [
+    { hostId: "host-b", generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false },
+  ]);
+  queryClient.setQueryData(hostQueryKeys.feed("host-b"), {
+    hostId: "host-b",
+    epoch: "e1",
+    sequence: 1,
+    stale: false,
+    summaries: [],
+    workspaces: [],
+    bots: [
+      { id: "remote-1", name: "Reviewer", purpose: "Reviews pull requests", sessionState: "running" },
+      { id: "remote-2", name: "Scout", purpose: "Finds flights", sessionState: "idle" },
+    ],
+    runs: [],
+  });
+  sidebarIpc([], {}, { "bots:list": () => [] });
+  await mountSidebar("/host/host-b/bots/remote-2/chat", queryClient);
+  const working = await screen.findByRole("button", { name: "Reviewer, on Studio, working" });
+  assert.ok(within(working).getByText("Working…"));
+  const open = screen.getByRole("button", { name: "Scout, on Studio" });
+  assert.equal(open.getAttribute("aria-current"), "page");
+  assert.equal(working.getAttribute("aria-current"), null);
+});
+
 test("Cancel in a row's Delete puts focus back on that row", async () => {
   sidebarIpc([PLANNER, INBOX, SCOUT]);
   await mountSidebar();

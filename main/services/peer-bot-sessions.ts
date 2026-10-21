@@ -5,7 +5,8 @@ import type {
   PeerBotSessionStreamState,
   PeerBotSessionSubscription,
 } from "../../renderer/shared/peer-bot-session.js";
-import { parseAidenRemoteBotSessionEvent, parseAidenRemoteJson } from "./aiden-remote-protocol.js";
+import { parseAidenRemoteJson } from "./aiden-remote-protocol.js";
+import { parsePeerBotSessionEvent } from "./peer-bot-session-compat.js";
 import type { PeerRequestPartition } from "./peer-host-registry.js";
 import type { PeerRunTimers } from "./peer-run-subscriptions.js";
 import { parsePeerSseFrame } from "./peer-sse.js";
@@ -174,6 +175,9 @@ export class PeerBotSessionStreams {
   private async run(stream: Stream): Promise<void> {
     const alive = () => !this.closed && !stream.stopped;
     let failures = 0;
+    // Clean closes reopened at once with nothing in between; a host that keeps
+    // closing falls back to the backoff.
+    let reopened = 0;
     while (alive()) {
       const connection = this.options.connection(stream.hostId);
       if (!connection) {
@@ -187,6 +191,7 @@ export class PeerBotSessionStreams {
       else connection.signal.addEventListener("abort", abort, { once: true });
       stream.controller = controller;
       let failure: unknown;
+      let closed = false;
       try {
         const end = (await this.options.request(
           stream.hostId,
@@ -200,12 +205,23 @@ export class PeerBotSessionStreams {
           (frame) => {
             if (failure !== undefined || !alive() || !connection.current()) return;
             try {
-              const event = parseAidenRemoteBotSessionEvent(
+              const event = parsePeerBotSessionEvent(
                 parseAidenRemoteJson(parsePeerSseFrame(frame).data, "Bot session event"),
               );
               if (event.botId !== stream.botId) throw new PeerTransportError("invalid_response");
               // Every connection opens with a snapshot; only later frames prove it stays up.
               if (event.type !== "snapshot") failures = 0;
+              if (event.type === "closed") closed = true;
+              else if (event.type !== "snapshot") reopened = 0;
+              if (event.type === "resync") {
+                // Newer than this Mac understands: read the whole session again.
+                this.options.broadcast(PEER_BOT_SESSION_CHANNEL, {
+                  kind: "resync",
+                  hostId: stream.hostId,
+                  botId: stream.botId,
+                });
+                return;
+              }
               this.options.broadcast(PEER_BOT_SESSION_CHANNEL, {
                 kind: "event",
                 hostId: stream.hostId,
@@ -222,7 +238,9 @@ export class PeerBotSessionStreams {
         if (failure !== undefined) throw failure;
         if (end.reason === "capped") continue;
         // The host ended the stream: the session closed (a reset or a reopen)
-        // or the connection dropped. A new connection starts from a snapshot.
+        // or the connection dropped. A new connection starts from a snapshot;
+        // after a clean close the session is already open again.
+        if (closed && reopened++ < 2) continue;
         this.setState(stream, "waiting");
         failures += 1;
         await this.wait(stream, this.options.backoff(failures));

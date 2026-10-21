@@ -1,3 +1,4 @@
+import { peerBotSessionCompat } from "./peer-bot-session-compat.js";
 import { validatePeerResponse } from "./peer-response.js";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import type {
@@ -144,6 +145,12 @@ export async function peerOperationResult(
     await validatePeerResponse(name, projection);
     return projection;
   }
+  if (name === "botSession") {
+    // A newer host's session is read as far as this client understands it.
+    const session = peerBotSessionCompat(value);
+    await validatePeerResponse(name, session);
+    return parseAidenRemoteBotSession(session);
+  }
   await validatePeerResponse(name, value);
   if (name === "summaries")
     return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
@@ -158,7 +165,6 @@ export async function peerOperationResult(
   if (name === "forkChat")
     return parseAidenRemoteChatForkResult(value, "Peer chat fork");
   if (name === "forkSummaryCancel") return forkSummaryCancelled(value);
-  if (name === "botSession") return parseAidenRemoteBotSession(value);
   if (name === "botSend") return parseAidenRemoteBotMessageReceipt(value);
   if (name === "botResume" || name === "botDismiss" || name === "botStop" || name === "botPause" || name === "botUnpause")
     return parseAidenRemoteBotSessionStateView(value);

@@ -5527,7 +5527,7 @@ export function parseAidenRemoteBotQueuedMessage(value: unknown): AidenRemoteBot
   };
 }
 
-function parseBotQueuedList(value: unknown): AidenRemoteBotQueuedMessage[] {
+export function parseAidenRemoteBotQueuedList(value: unknown): AidenRemoteBotQueuedMessage[] {
   if (!Array.isArray(value)) throw new Error("Bot queued messages must be an array.");
   if (value.length > AIDEN_REMOTE_BOT_QUEUED_MAX) {
     throw new Error(`Bot queued messages must contain at most ${AIDEN_REMOTE_BOT_QUEUED_MAX} items.`);
@@ -5570,7 +5570,7 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
     ...(hasOwn(value, "activity")
       ? { activity: value.activity === null ? null : parseAidenRemoteBotSessionActivity(value.activity) }
       : {}),
-    ...(hasOwn(value, "queued") ? { queued: parseBotQueuedList(value.queued) } : {}),
+    ...(hasOwn(value, "queued") ? { queued: parseAidenRemoteBotQueuedList(value.queued) } : {}),
     ...(hasOwn(value, "handoff")
       ? { handoff: value.handoff === null ? null : parseAidenRemoteBotHandoff(value.handoff) }
       : {}),
@@ -5637,7 +5637,7 @@ export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotS
       };
     case "queued":
       assertExactKeys(payload, ["queued"], "Bot session queued event");
-      return { ...base, type, payload: { queued: parseBotQueuedList(payload.queued) } };
+      return { ...base, type, payload: { queued: parseAidenRemoteBotQueuedList(payload.queued) } };
     case "handoff":
       assertExactKeys(payload, ["handoff"], "Bot session handoff event");
       if (!hasOwn(payload, "handoff")) throw new Error("Bot session handoff event handoff is required.");

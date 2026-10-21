@@ -15014,6 +15014,15 @@
         "additionalProperties": false
       },
       "BotSessionState": {
+        "description": "A Bot session's state on its own, as Resume, Dismiss and Stop return it.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BotSessionStateFields"
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "BotSessionStateFields": {
         "type": "object",
         "required": [
           "state",
@@ -15040,8 +15049,7 @@
               "bot_missing"
             ]
           }
-        },
-        "additionalProperties": false
+        }
       },
       "BotSessionEntry": {
         "oneOf": [
@@ -15276,7 +15284,7 @@
       "BotSession": {
         "allOf": [
           {
-            "$ref": "#/components/schemas/BotSessionState"
+            "$ref": "#/components/schemas/BotSessionStateFields"
           }
         ],
         "type": "object",
@@ -15373,7 +15381,7 @@
             ]
           }
         },
-        "additionalProperties": false
+        "unevaluatedProperties": false
       },
       "BotSessionActivity": {
         "description": "Contract revision 30 (bot-activity-v1). Exactly these keys: never a step, detail, path, command, query or thinking. Clients render an unknown phase as working.",
@@ -15548,7 +15556,7 @@
       "BotMessageReceipt": {
         "allOf": [
           {
-            "$ref": "#/components/schemas/BotSessionState"
+            "$ref": "#/components/schemas/BotSessionStateFields"
           }
         ],
         "type": "object",
@@ -15568,7 +15576,7 @@
             "type": "boolean"
           }
         },
-        "additionalProperties": false
+        "unevaluatedProperties": false
       },
       "BotMemoryEntry": {
         "type": "object",

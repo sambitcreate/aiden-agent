@@ -12,7 +12,10 @@ import {
   PeerEventFrames,
   PeerTransportError,
   MAX_PEER_UPLOAD_BYTES,
+  parsePeerErrorEnvelope,
+  peerStatusError,
 } from "./peer-transport.js";
+import { AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE } from "./aiden-remote-chats.js";
 import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
 import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
@@ -541,5 +544,26 @@ test("every exposed operation rejects malformed DTOs and preserves legitimate co
   assert.equal(
     await peerOperationResult({ operation: "deleteChat" }, undefined),
     undefined,
+  );
+});
+
+test("a host's own explanation reaches this Mac, so a refused request says what to do", () => {
+  const envelope = (code: string, message: unknown) => JSON.stringify({ error: { code, message } });
+  const refused = peerStatusError(400, parsePeerErrorEnvelope(envelope("invalid_request", AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE)));
+  assert.equal(refused.code, "request_failed");
+  assert.equal(refused.message, AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE);
+  assert.equal(
+    peerStatusError(404, parsePeerErrorEnvelope(envelope("not_found", "Gone.\u0007\n\u202eevil"))).message,
+    "Gone. evil",
+    "control and direction characters never reach the toast",
+  );
+  assert.equal(
+    peerStatusError(400, parsePeerErrorEnvelope(envelope("invalid_request", "x".repeat(301)))).message,
+    "The other device could not complete this request.",
+  );
+  assert.equal(
+    peerStatusError(401, parsePeerErrorEnvelope(envelope("unauthorized", "Bearer token expired"))).message,
+    "Pair this device again to reconnect.",
+    "a lost pairing keeps this Mac's own advice",
   );
 });

@@ -16,7 +16,7 @@ const HOST: PeerHostView = {
   enabled: true,
   state: "connected",
   features: ["bot-durable-session-v1", "bot-activity-v1"],
-  capabilities: ["chat:read", "chat:write", "bot:read", "bot:write", "approval:respond"],
+  capabilities: ["chat:read", "chat:write", "bot:read", "bot:write", "bot:activity", "approval:respond"],
 };
 
 const SESSION = {
@@ -309,4 +309,31 @@ test("a host that does not serve hand-offs to this Mac offers no Pause here", as
   await mount();
   await screen.findByText("Two meetings and a dentist.");
   assert.equal(screen.queryByRole("button", { name: "More for Planner" }), null);
+});
+
+test("without the host's activity frames a busy Bot is not offered Queue, so a queued message never goes missing", async () => {
+  const { peerCalls } = await mount({ ...HOST, capabilities: HOST.capabilities.filter((grant) => grant !== "bot:activity") });
+  await screen.findByText("Two meetings and a dentist.");
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "and Friday?" } });
+  assert.equal(screen.queryByRole("button", { name: "Queue message" }), null);
+  fireEvent.keyDown(box, { key: "Enter" });
+  await act(async () => undefined);
+  assert.equal(peerCalls().some((call) => call.operation === "botSend"), false, "nothing is sent that this Mac could not show");
+});
+
+test("a host that was unpaired while its Bot was open says so, instead of blaming the Bot", async () => {
+  installBotTestIpc({
+    "remote:peerBotSessionSubscribe": () => ({ subscriptionId: "bot_sub_1", state: "streaming" }),
+    "remote:peerBotSessionUnsubscribe": () => true,
+    "remote:peerCall": () => ({ ok: false, error: { code: "unavailable", message: "Not paired." } }),
+  });
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(hostQueryKeys.list(), []);
+  await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, { initialPath: "/bots", queryClient });
+  assert.ok(await screen.findByText("This device isn't paired anymore"));
+  assert.equal(screen.queryByText("Bot not found"), null);
 });

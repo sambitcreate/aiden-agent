@@ -68,6 +68,7 @@ function fakeTransport(reads: AidenRemoteBotSession[] | ((attempt: number) => Pe
     unsubscribed,
     push: (body: AidenRemoteBotSessionEvent) => handler?.({ kind: "event", hostId: "host_a", botId: "bot_1", event: body }),
     state: (state: "waiting" | "streaming" | "gone") => handler?.({ kind: "state", hostId: "host_a", botId: "bot_1", state }),
+    resync: () => handler?.({ kind: "resync", hostId: "host_a", botId: "bot_1" }),
     listening: () => handler !== null,
   };
 }
@@ -295,4 +296,42 @@ test("a host that does not send this Mac hand-offs shows the Mac-only line, and 
 test("only a host that granted this Mac bot:handoffs gets hand-off answers and Pause from here", () => {
   assert.equal(hostServesBotHandoffs({ capabilities: ["bot:read", "bot:write", "bot:handoffs"] }), true);
   assert.equal(hostServesBotHandoffs({ capabilities: ["bot:read", "bot:write", "bot:activity"] }), false);
+});
+
+test("something newer than this Mac reads makes the follower read the session again", async () => {
+  const fake = fakeTransport([session(), session({ seq: 9, state: "unavailable" })]);
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.resync();
+  await settle();
+  assert.equal(fake.reads(), 2);
+  assert.equal(follower.getState().view?.snapshot.seq, 9);
+  follower.stop();
+});
+
+test("a burst of unreadable frames during a read becomes one follow-up read, and its answer is adopted", async () => {
+  const fake = fakeTransport([session()]);
+  const pending: ((outcome: PeerOperationOutcome) => void)[] = [];
+  fake.transport.read = () => new Promise((resolve) => pending.push(resolve));
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  pending[0]!({ ok: true, value: session() });
+  await settle();
+  fake.resync();
+  await settle();
+  assert.equal(pending.length, 2, "the first resync reads");
+  for (let index = 0; index < 12; index += 1) fake.resync();
+  await settle();
+  assert.equal(pending.length, 2, "no overlapping reads while one is out");
+  pending[1]!({ ok: true, value: session({ seq: 7 }) });
+  await settle();
+  assert.equal(follower.getState().view?.snapshot.seq, 7, "the answer in hand is shown");
+  assert.equal(pending.length, 3, "one more read covers what arrived meanwhile");
+  pending[2]!({ ok: true, value: session({ seq: 9 }) });
+  await settle();
+  assert.equal(follower.getState().view?.snapshot.seq, 9);
+  assert.equal(pending.length, 3);
+  follower.stop();
 });

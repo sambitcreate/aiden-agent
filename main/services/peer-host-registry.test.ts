@@ -603,6 +603,33 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
   assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:handoffs"])).bodies, [{ accepts: ["bot:handoffs"] }]);
 });
 
+test("a lost opt-in answer is asked again on the next reconnect; a refusal is not", async () => {
+  const attempts = async (failure: PeerTransportError) => {
+    let calls = 0;
+    const { store, requests } = scripted(
+      {
+        capabilities: ["chat:read", "bot:read", "bot:write"],
+        features: ["bot-durable-session-v1", "bot-activity-v1"],
+        serverCapabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"],
+      },
+      (input) => {
+        if (input.path !== "/device/capabilities") return { ok: true };
+        calls += 1;
+        if (calls === 1) throw failure;
+        return { capabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"] };
+      },
+    );
+    await store.request("host_a", { path: "/bots" });
+    await store.connect("host_a");
+    return {
+      asked: requests.filter((request) => request.path === "/device/capabilities").length,
+      granted: (await store.list())[0]!.capabilities.includes("bot:activity"),
+    };
+  };
+  assert.deepEqual(await attempts(new PeerTransportError("unavailable")), { asked: 2, granted: true });
+  assert.deepEqual(await attempts(new PeerTransportError("request_failed", 403)), { asked: 1, granted: false });
+});
+
 test("a malformed route hint is ignored instead of failing the connection", async () => {
   const { store } = scripted(
     { capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: [{ endpoint: "not a url" }] },

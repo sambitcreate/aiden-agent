@@ -368,3 +368,49 @@ test("server reads strip route trust before crossing into the renderer", async (
   assert.deepEqual(result, contract.server);
   await assert.rejects(peerOperationResult({ operation: "server" }, { ...server, nested: { credential: "still-forbidden" } }));
 });
+
+test("a newer host's Bot session reads here as far as this Mac understands it", async () => {
+  const session = (await peerOperationResult(
+    { operation: "botSession", resourceId: "bot_1" },
+    {
+      botId: "bot_1",
+      epoch: "e1",
+      seq: 3,
+      state: "hibernating",
+      interrupted: false,
+      entries: [
+        { type: "message", id: "m1", role: "assistant", text: "Done." },
+        { type: "hand_off", id: "h1", text: "Sign in" },
+      ],
+      hasOlder: false,
+      question: null,
+      approval: null,
+      rules: ["a field from a newer host"],
+    },
+  )) as { state: string; entries: { id: string }[] };
+  assert.equal(session.state, "unavailable");
+  assert.deepEqual(session.entries.map((entry) => entry.id), ["m1"]);
+  await assert.rejects(peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, { botId: "bot_1" }));
+});
+
+test("the host's real Bot session, send receipt and controls pass this Mac's contract check", async () => {
+  const fixtures = contract as unknown as Record<string, { response?: unknown } & Record<string, unknown>>;
+  for (const key of ["botSession", "botSessionNeedsModel", "botSessionCards"]) {
+    const session = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, fixtures[key])) as {
+      botId: string;
+    };
+    assert.equal(session.botId, (fixtures[key] as { botId: string }).botId, key);
+  }
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botSend", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
+    fixtures.botSessionSend!.response,
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionResume!.response),
+    fixtures.botSessionResume!.response,
+  );
+  // A state alone stays closed: a receipt's fields are not a control's answer.
+  await assert.rejects(
+    peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
+  );
+});

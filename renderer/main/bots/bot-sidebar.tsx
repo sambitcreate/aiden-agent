@@ -19,7 +19,7 @@ import {
   SplitView,
   Text,
 } from "../../components/ui";
-import { botChatPath, botRouteBotId, lastNonBotRoute } from "../../lib/bot-routes";
+import { botChatPath, botRouteBotId, hostBotChatRouteKey, lastNonBotRoute } from "../../lib/bot-routes";
 import { isBotUnread } from "../../lib/bot-sidebar-preferences";
 import { useProfile } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
@@ -484,7 +484,12 @@ export function BotSidebar() {
         <nav ref={navRef} aria-label="Bots" className="flex flex-col px-2.5 pb-3">
           {refreshFailed}
           {list}
-          <RemoteBotsSection groups={remoteShown} opening={remote.opening} onOpen={remote.open} />
+          <RemoteBotsSection
+            groups={remoteShown}
+            opening={remote.opening}
+            selected={hostBotChatRouteKey(pathname)}
+            onOpen={remote.open}
+          />
         </nav>
       </Sidebar>
       <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => openChat(bot)} />
