@@ -3878,3 +3878,21 @@ test("real command process receipts never promote tool success or model claims t
   assert.match(await store.verification.readEvidence("command-chat", scope, receipts[0]!.checkId), /checked/);
   await harness.dispose();
 });
+
+test("a receipt that cannot be written never fails the command or the run", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-command-check-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = await effectStoreFixture(t);
+  // Deleting the chat's evidence fences every later receipt write for it.
+  await store.verification.deleteByChat("fenced-chat");
+  const command = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
+  const { harness } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("run_command", { command: "printf checked; exit 0" }, { id: "success" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], { tools: [command], identity: { runId: "fenced-run", sessionId: "fenced-session", lane: "foreground" }, effects: { store, chatId: "fenced-chat" } });
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run checks", timestamp: Date.now() } });
+  assert.equal(outcome.kind, "completed");
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "run_command");
+  assert.equal(result?.role === "toolResult" && result.isError, false);
+  await harness.dispose();
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type, type JsonObject } from "@earendil-works/pi-ai";
+import { Type, validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { createPiToolDiscovery, type PiDiscoverableTool } from "./pi-tool-discovery.js";
 
@@ -289,6 +289,14 @@ test("truncated global search exposes a namespace directory and bounded late loo
   const next = discovery.searchTools("", { listNamespaces: true, limit: 1, offset: directory.nextOffset });
   assert.deepEqual(next.namespaces, [{ namespace: "mcp:late", label: "Server mcp:late" }]);
   assert.deepEqual(names(discovery.searchTools("late_unique", { namespace: "mcp:late" })), ["late_unique"]);
+});
+
+test("tool_search lists the namespace directory from a call that omits query", async () => {
+  const discovery = createPiToolDiscovery({ tools: () => [tool("read_docs", "mcp:docs")], isCallable: () => true });
+  const args = validateToolArguments(discovery.toolSearch, { type: "toolCall", id: "directory", name: "tool_search", arguments: { listNamespaces: true } });
+  const result = await discovery.toolSearch.execute("directory", args);
+  assert.deepEqual((result.structuredContent as JsonObject).namespaces, [{ namespace: "mcp:docs", label: "Server mcp:docs" }]);
+  await assert.rejects(discovery.toolSearch.execute("search", {}), /search query/u);
 });
 
 test("namespace directory cursors can traverse beyond the ranked search cap", () => {

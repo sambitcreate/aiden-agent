@@ -2738,12 +2738,13 @@ export class PiAgentRuntimeHarness {
     });
     const observation = hostCommandObservation(context.result);
     if (observation) {
+      // Receipts are private evidence: a failed write must not fail the tool effect or the run.
       await binding.store.verification.check(binding.chatId, toolOutputScope({ runId: this.identity.runId, sessionId: this.identity.sessionId }), {
         checkId: verificationIdentity("check", tracked.owner.effectId), runId: verificationIdentity("run", this.identity.runId), turnId: verificationIdentity("turn", operation.operationId),
         artifactId: verificationIdentity("artifact", tracked.owner.effectId), kind: "tool_execution",
         snapshot: async () => observation.snapshot,
         observe: async () => observation,
-      }, this.managedAbortController?.signal);
+      }, this.managedAbortController?.signal).catch(() => undefined);
     }
     operation.effects.delete(context.toolCall.id);
   }
