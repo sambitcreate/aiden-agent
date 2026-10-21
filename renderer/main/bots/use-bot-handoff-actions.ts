@@ -26,17 +26,20 @@ export interface BotHandoffActions {
 
 export function useBotHandoffActions(botId: string): BotHandoffActions {
   const panel = useBotPanelActions();
-  const [busy, setBusy] = React.useState(false);
+  // How many answers and Opens are on their way: one finishing leaves the buttons waiting for the others.
+  const [inFlight, setInFlight] = React.useState(0);
+  const begin = () => setInFlight((count) => count + 1);
+  const end = () => setInFlight((count) => Math.max(0, count - 1));
 
   const send = async (pending: BotPendingHandoff, outcome: BotHandoffOutcome, note?: string): Promise<string | null> => {
-    setBusy(true);
+    begin();
     try {
       const { answered } = await botsApi.answerHandoff(botId, pending.waitId, outcome, note);
       return answered ? null : "That card was already answered or closed.";
     } catch (error) {
       return userFacingErrorMessage(error, "Aiden couldn’t send that answer.");
     } finally {
-      setBusy(false);
+      end();
     }
   };
 
@@ -48,7 +51,7 @@ export function useBotHandoffActions(botId: string): BotHandoffActions {
   const open = async (pending: BotPendingHandoff) => {
     const signIn = pending.kind === "sign_in";
     const failed = signIn ? "Aiden couldn’t open the sign-in page." : "Aiden couldn’t open that page.";
-    setBusy(true);
+    begin();
     try {
       const { opened } = await botsApi.openHandoff(botId, pending.waitId);
       if (opened === "none") toast.error(failed);
@@ -57,9 +60,9 @@ export function useBotHandoffActions(botId: string): BotHandoffActions {
     } catch (error) {
       toast.error(userFacingErrorMessage(error, failed));
     } finally {
-      setBusy(false);
+      end();
     }
   };
 
-  return { busy, send, answer, open };
+  return { busy: inFlight > 0, send, answer, open };
 }

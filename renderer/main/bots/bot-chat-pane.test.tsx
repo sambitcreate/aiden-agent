@@ -1144,6 +1144,37 @@ test("typing while a hand-off waits answers it Done with that note, never as a q
   await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
 });
 
+test("a note sent while Open is on its way keeps the card's buttons waiting for the note, so Done can't answer twice", async () => {
+  const errors = captureErrorToasts();
+  try {
+    let opened: (value: { opened: string }) => void = () => undefined;
+    let answered: (value: { answered: boolean }) => void = () => undefined;
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:openHandoff": () => new Promise((resolve) => (opened = resolve)),
+      "bots:answerHandoff": () => new Promise((resolve) => (answered = resolve)),
+    });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    const done = () => within(card).getByRole("button", { name: "Done" }) as HTMLButtonElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
+    await waitFor(() => assert.equal(done().disabled, true));
+    const box = screen.getByPlaceholderText("Add a note and send to mark it done");
+    fireEvent.change(box, { target: { value: "Entered it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+
+    await act(async () => opened({ opened: "external" }));
+    assert.equal(done().disabled, true, "the note is still on its way");
+    fireEvent.click(done());
+    await act(async () => answered({ answered: true }));
+    await waitFor(() => assert.equal(done().disabled, false));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Entered it." }]);
+    assert.deepEqual(errors.shown, [], "no 'already answered' for an answer the person sent once");
+  } finally {
+    errors.restore();
+  }
+});
+
 test("a note the card could not take stays in the composer", async () => {
   const errors = captureErrorToasts();
   try {

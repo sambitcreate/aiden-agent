@@ -124,7 +124,8 @@ export type BotTranscriptEntry =
   /**
    * The person's answer to a hand-off card, shown on their side of the chat:
    * "You did this: …", "You skipped this: …" or "You signed in to …".
-   * Id `handoff:<toolCallId>`.
+   * Id `handoff:<toolCallId>`; a later answer for a call id the provider
+   * reused in another turn is `handoff:<toolCallId>:<entry id>`.
    */
   | {
       id: string;
