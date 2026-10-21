@@ -15,6 +15,15 @@ import type {
   FirstMessageWorktreeResult,
 } from "../shared/worktree-on-send";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
+import {
+  BOT_COMPUTER_CHANNELS,
+  BOT_COMPUTERS_CHANGED_CHANNEL,
+  parseBotComputerStatus,
+  parseBotComputersStatus,
+  type BotComputersSettings,
+  type BotComputersStatus,
+  type BotComputerStatus,
+} from "../shared/bot-computers.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
@@ -981,6 +990,38 @@ export const browserApi = {
   setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
+};
+
+async function botComputersStatus(channel: string): Promise<BotComputersStatus> {
+  const status = parseBotComputersStatus(await invoke<unknown>(channel));
+  if (!status) throw new Error("Aiden returned an invalid Bot computer status.");
+  return status;
+}
+
+async function botComputer(channel: string, botId: string): Promise<BotComputerStatus> {
+  const computer = parseBotComputerStatus(await invoke<unknown>(channel, botId));
+  if (!computer) throw new Error("Aiden returned an invalid Bot computer.");
+  return computer;
+}
+
+/** Settings → Bot computers and the profile's Computer section (Apple silicon only). */
+export const botComputersApi = {
+  status: () => botComputersStatus(BOT_COMPUTER_CHANNELS.status),
+  setUp: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUp),
+  cancelSetUp: () => invoke<void>(BOT_COMPUTER_CHANNELS.cancelSetUp),
+  updateBase: () => botComputersStatus(BOT_COMPUTER_CHANNELS.updateBase),
+  removeEverything: () => botComputersStatus(BOT_COMPUTER_CHANNELS.removeEverything),
+  updateSettings: (patch: Partial<BotComputersSettings>) =>
+    invoke<BotComputersSettings>(BOT_COMPUTER_CHANNELS.updateSettings, patch),
+  give: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.give, botId),
+  reset: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.reset, botId),
+  remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
+  stop: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.stop, botId),
+  onChanged: (handler: (status: BotComputersStatus) => void) =>
+    onNotification<unknown>(BOT_COMPUTERS_CHANGED_CHANNEL, (payload) => {
+      const status = parseBotComputersStatus(payload);
+      if (status) handler(status);
+    }),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {

@@ -22,6 +22,7 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
 import type { BotMemoryView } from "../../shared/bot-memory";
 import { BotCharacterCard } from "./bot-character-card";
+import { BotComputerSection } from "./bot-computer-section";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -315,6 +316,8 @@ export function BotProfile({
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />
       <BotRules bot={bot} />
+      {/* Apple silicon only; renders nothing elsewhere. */}
+      <BotComputerSection bot={bot} />
       <Text as="p" variant="small" color="tertiary" className="px-1 text-center">
         Changes save as you make them and apply from the next message.
       </Text>

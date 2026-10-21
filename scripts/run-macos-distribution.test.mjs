@@ -9,6 +9,7 @@ import test from "node:test";
 import { URL } from "node:url";
 import {
   AIDEN_UPDATE_FEED_URL,
+  buildMacDistribution,
   discoverMacDistributionArchives,
   distributionElectronBuilderArguments,
   runDistributionTransaction,
@@ -91,23 +92,45 @@ test("distribution promotion happens only after build and verification", async (
   assert.deepEqual(events, ["prepare", "build", "verify", "promote"]);
 });
 
-test("development and release packaging vendor Generative UI libraries before building", async () => {
+test("development and release packaging vendor pinned helpers and Generative UI libraries before building", async () => {
   const packageJson = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.match(
     packageJson.scripts.package,
-    /computer-use:vendor.+generative-ui:vendor.+build:native.+npm run build/u,
+    /computer-use:vendor.+bot-computers:vendor.+generative-ui:vendor.+build:native.+npm run build/u,
   );
 
-  const distributionSource = await readFile(
-    new URL("./run-macos-distribution.mjs", import.meta.url),
-    "utf8",
+  const events = [];
+  await buildMacDistribution("/stage", {
+    npm: async (script) => events.push(`npm ${script}`),
+    run: async (command, args) => events.push(`${path.basename(command)} ${args.join(" ")}`),
+  });
+  const at = (event) => events.indexOf(event);
+  for (const script of ["computer-use:vendor", "bot-computers:vendor", "generative-ui:vendor"]) {
+    assert.ok(at(`npm ${script}`) >= 0, script);
+    assert.ok(at(`npm ${script}`) < at("npm build:native"), `${script} runs before native builds`);
+  }
+  assert.ok(at("npm computer-use:vendor") < at("npm bot-computers:vendor"));
+  assert.ok(at("npm release:preflight") < at("npm bot-computers:vendor"));
+  assert.ok(at("npm package:model-catalog") < events.length - 1);
+  assert.equal(events.at(-1), "electron-builder --mac --config.directories.output=/stage");
+});
+
+test("a failing Lume vendor step stops the build before anything is packaged", async () => {
+  const events = [];
+  await assert.rejects(
+    buildMacDistribution("/stage", {
+      npm: async (script) => {
+        events.push(script);
+        if (script === "bot-computers:vendor") throw new Error("Lume checksum mismatch");
+      },
+      run: async () => events.push("electron-builder"),
+    }),
+    /Lume checksum mismatch/u,
   );
-  assert.match(
-    distributionSource,
-    /npm\("computer-use:vendor"\);[\s\S]{0,100}npm\("generative-ui:vendor"\);[\s\S]{0,100}npm\("build:native"\);/u,
-  );
+  assert.equal(events.includes("build"), false);
+  assert.equal(events.includes("electron-builder"), false);
 });
 
 test("distribution archive discovery requires exactly one current DMG and ZIP", async () => {

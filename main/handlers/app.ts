@@ -43,6 +43,7 @@ export const appHandlers = {
         bots: host.bots,
         appUpdates: supportsAppUpdates(),
         computerUse: host.computerUse,
+        botComputers: host.botComputers,
         dockIcon: host.dockIcon,
         accessibilityPaste: host.accessibilityPaste,
         dictationHoldToTalk: host.dictationHoldToTalk || activeLinuxDictationHoldShortcut(),

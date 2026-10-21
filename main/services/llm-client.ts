@@ -298,7 +298,7 @@ import { createPiTurnContextPreparation } from "./pi-turn-context.js";
 import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
-import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
+import { assistantSettingsSections } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
@@ -3099,9 +3099,10 @@ export const llmClient = {
           ? (designWiring?.baseSystemPrompt ?? "")
           : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              settingsSections: devicesEnabled()
-                ? SETTINGS_SECTIONS
-                : SETTINGS_SECTIONS.filter((section) => section !== "simulator"),
+              settingsSections: assistantSettingsSections({
+                devices: devicesEnabled(),
+                botComputers: hostPlatformCapabilities().botComputers,
+              }),
               settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),

@@ -18,6 +18,7 @@ import {
   ListFilter,
   Search,
   MousePointer2,
+  Monitor,
   ChartScatter,
   Info,
   Clock3,
@@ -40,6 +41,7 @@ import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { LinksSettings } from "../components/settings/links-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
+import { BotComputersSettings } from "../components/settings/bot-computers-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
@@ -81,6 +83,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   geminiLive: <AudioWaveform className="size-5" />,
   approvals: <ShieldCheck className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
+  botComputers: <Monitor className="size-5" />,
   simulator: <TabletSmartphone className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
@@ -110,6 +113,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   imageGeneration: ImageGenerationSettings,
   approvals: ToolApprovalSettings,
   computerUse: ComputerUseSettings,
+  botComputers: BotComputersSettings,
   simulator: SimulatorSettingsPage,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
@@ -133,6 +137,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
   approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
+  botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers and how long chats stay manageable.",
   scheduledTasks: "Manage when Aiden works in the background.",
@@ -149,16 +154,16 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const router = useRouter();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
-  const section =
-    initialSection === "computerUse" && !capabilities.computerUse
-      ? "providers"
-      : (initialSection ?? "providers");
   const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
   const availableDestinationIds = new Set(
     availableSettingsDestinations(capabilities).map((destination) => destination.id),
   );
+  // A deep link to a page this Mac can't show (Computer Use off, Bot computers on
+  // Linux or an Intel Mac) lands on Providers rather than an empty page.
+  const section =
+    initialSection && availableDestinationIds.has(initialSection) ? initialSection : "providers";
   const availableNav = NAV.filter((item) => availableDestinationIds.has(item.id));
   const filteredNav = query
     ? availableNav.filter((item) => matchesSettingsSearch(item, query, DESCRIPTIONS[item.id]))
