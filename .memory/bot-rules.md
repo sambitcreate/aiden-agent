@@ -52,7 +52,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
   - stores the approval memo with `kind:"handoff"` and `rule`;
   - asks through `requestHandoff`, which is `ruleHandoffRequest` from `bot-handoffs.ts`: kind `action`, source `rule`;
   - stores the answer memo `aiden.handoff.answer`;
-  - records an `aiden.handoff-result` entry through `recordHandoff`: `recordRuleHandoffEntry` in `bot-handoffs.ts` (appends through `runtime.appendEntry`, never submits; writes nothing when that toolCallId already has a row). `bot-tool-assembly.test.ts` runs it from inside `beforeTool` on a real conversation;
+  - records an `aiden.handoff-result` entry through `recordHandoff(record, conversation)`: `recordRuleHandoffEntry` in `bot-handoffs.ts` writes into the `BotRuleHandoffRowTarget` the extension hands over, the stopped call's own conversation through the harness running it (`conversation.commit(tx => tx.appendEntry(...))`, never a submit; nothing when that toolCallId already has a row). `bot-tool-assembly.test.ts` runs it from inside `beforeTool` on a real conversation;
+  - never write it through `botSessionRuntime()` / the harness host: a pause, quit or delete holds the host's per-Bot lock while its close waits for this very call, so such a write deadlocked the close (pause timed out, shutdown hung). The extension test "(k)" pauses while the row is being written and checks the turn closes and Resume applies the answer once; a row the closing turn could not write is written on Resume;
   - blocks the call with "The person did this themselves: …" or the skipped text.
   - The answer memo is read before anything else, so a resume applies the answer without asking again or re-deciding.
 - Unattended turns (`routine:`, `tg:`): a hand-off, or a rule-made ask with no baseline, blocks at once with `ruleUnattendedBlock` or `ruleAskUnattendedBlock`. A run with no `requestHandoff` dep also fails closed with the unattended text.

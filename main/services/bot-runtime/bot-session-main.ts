@@ -57,7 +57,7 @@ import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
-import type { BotExtensionDeps, BotRuleHandoffRecord } from "./bot-extension.js";
+import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -183,20 +183,6 @@ async function promptRules(botId: string) {
 }
 
 /**
- * The transcript row for a settled rule hand-off: appended (never submitted,
- * so it can't start the Bot), once per tool call even when a crash made the
- * extension apply the same answer again.
- */
-async function recordRuleHandoff(record: BotRuleHandoffRecord): Promise<void> {
-  const runtime = await botSessionRuntime();
-  await recordRuleHandoffEntry(
-    await runtime.conversation(record.botId),
-    (kind, data) => runtime.appendEntry(record.botId, kind, data),
-    record,
-  );
-}
-
-/**
  * Memory review and compaction work: admit the Bot's authority, keep the
  * admission (unlike `withAdmission`) until the work releases it, and resolve
  * the Bot's model from that admission rather than the model cache, so the
@@ -303,9 +289,11 @@ const extension: BotExtensionDeps = {
   requestApproval: (request) => botApprovals.request(request),
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
   requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request)),
-  recordHandoff: async (record) => {
+  // Into the stopped call's own conversation, never through the harness host,
+  // whose per-Bot lock a pause or quit holds while it waits for this call.
+  recordHandoff: async (record, conversation) => {
     try {
-      await recordRuleHandoff(record);
+      await recordRuleHandoffEntry(conversation, record);
     } catch (error) {
       logger.warn("bots", `Bot ${record.botId} hand-off row could not be written.`, error);
     }

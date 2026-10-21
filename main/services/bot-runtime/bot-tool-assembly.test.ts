@@ -839,20 +839,14 @@ test("a rule hand-off's answer is written once into the Bot's conversation from 
     rules: () => rulesWith("hand_off"),
     requestHandoff: (request) => handoffs.request(ruleHandoffRequest(request)),
   });
-  let conversation: Conversation | undefined;
   const writes: boolean[] = [];
-  // As production does: append (never submit) on the Bot's own conversation while its call waits in beforeTool.
-  turn.deps.recordHandoff = async (record) => {
-    const target = conversation!;
-    const append = async (kind: string, data: Parameters<Parameters<typeof recordRuleHandoffEntry>[1]>[1]) => {
-      await target.commit((tx) => tx.appendEntry(target.id, { kind, data }), ctx);
-    };
-    writes.push(await recordRuleHandoffEntry(target, append, record));
+  // As production does, into the conversation the extension hands over while the call waits in beforeTool.
+  turn.deps.recordHandoff = async (record, conversation) => {
+    writes.push(await recordRuleHandoffEntry(conversation, record));
     // A crash between the row and the block applies the same answer again: no second row.
-    writes.push(await recordRuleHandoffEntry(target, append, record));
+    writes.push(await recordRuleHandoffEntry(conversation, record));
   };
   const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
-  conversation = root;
   try {
     const run = await root.submit({ type: "input", content: "order it" }, ctx);
     await waitFor(() => handoffs.pending("bot-1").length === 1, { what: "the hand-off card" });

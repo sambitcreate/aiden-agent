@@ -20,17 +20,21 @@ import {
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
+import { createBotPauseStore } from "../bot-pause-store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
+import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
+import { recordRuleHandoffEntry } from "./bot-handoffs.js";
+import { createBotSessionService } from "./bot-session-service.js";
 import { botIngressAllowsTool } from "./bot-tool-policy.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { SCENARIO_RULE_HANDOFF } from "./test-support/extension-scenario.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, type FauxModels } from "./test-support/faux.js";
+import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "extension-scenario.ts");
@@ -655,5 +659,62 @@ test("(j4) an approval memo written before rules (no kind) carries its waitId in
     assert.deepEqual(gated.executions, []);
   } finally {
     await harness.close(ctx);
+  }
+});
+
+test("(k) a pause that lands while a rule hand-off's answer is being recorded closes the turn; Resume applies the answer once", { timeout: 60_000 }, async () => {
+  const profile = tempProfile();
+  const botId = "bot:paused-mid-answer";
+  const gated = countingTool("gated");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("gated", { text: "x" }, { id: "call-paused" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("carried on"),
+  ]);
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe" }],
+    policy: RULE_HANDOFF,
+    handoff: async () => ({ outcome: "done", note: "Booked for two" }),
+  });
+  // Production's writer, held on its first attempt until the pause has begun
+  // closing the turn: the answer is stored, its row not yet written.
+  let releaseRow!: () => void;
+  const rowHeld = new Promise<void>((resolve) => (releaseRow = resolve));
+  deps.recordHandoff = async (record, conversation) => {
+    deps.recordCalls.push(record);
+    if (deps.recordCalls.length === 1) await rowHeld;
+    await recordRuleHandoffEntry(conversation, record);
+  };
+  const service = await createBotSessionService({
+    profileDir: profile,
+    models: fauxModels.models,
+    extension: deps,
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([botId]),
+    pauses: createBotPauseStore({ root: () => path.join(profile, "bot-service"), now: () => 1_000 }),
+    // A close that waited on the row would give up here and leave the turn running.
+    suspendTimeoutMs: 3_000,
+    onPaused: () => void setTimeout(releaseRow, 50),
+  });
+  const never = new AbortController().signal;
+  try {
+    const { submissionId } = await service.send(botId, { text: "buy it", requestId: "desk-1" });
+    await waitFor(() => deps.recordCalls.length === 1, { what: "the answer to be recorded" });
+
+    // The turn closed (it reads as interrupted under the pause) instead of the close timing out.
+    assert.deepEqual(await service.pause(botId, "mac"), { kind: "paused", since: 1_000, by: "mac", interrupted: submissionId });
+    assert.deepEqual(await service.unpause(botId), { kind: "interrupted", submissionId });
+    await service.resume(botId, "resume-1");
+    assert.deepEqual(await service.awaitReply(botId, submissionId, never), { kind: "completed", text: "carried on" });
+
+    assert.equal(deps.handoffs.length, 1, "the stored answer is applied on Resume, not asked again");
+    assert.equal(deps.recordCalls.length, 2, "the closed attempt and Resume both apply the same answer");
+    assert.deepEqual(gated.executions, []);
+    const conversation = await service.conversation(botId);
+    const entries = (await conversation.context(ctx)).entries;
+    assert.equal(entries.filter((entry) => entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND).length, 1);
+    const [result] = await toolResults(conversation);
+    assert.ok(resultText(result).includes(ruleHandoffDoneBlock(SCENARIO_RULE_HANDOFF.summary, "Booked for two")));
+  } finally {
+    await service.shutdown();
   }
 });

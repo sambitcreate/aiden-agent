@@ -53,6 +53,7 @@ import {
   type CompactionHooks,
   type ConversationId,
   type DocumentReader,
+  type EntryRecord,
   type Extension,
   type Harness,
   type Registry,
@@ -118,6 +119,20 @@ export interface BotRuleHandoffRequest {
 
 /** A settled rule hand-off, for the transcript. `toolCallId` and `rule` are always set. */
 export type BotRuleHandoffRecord = { botId: string } & BotHandoffResultDetails & { toolCallId: string; rule: BotHandoffRule };
+
+/**
+ * Where a rule hand-off's row goes: the conversation of the call it stopped,
+ * read and written through the harness that runs that call. It never goes
+ * through the Bot's harness host: a pause, quit or delete holds the host's
+ * lock for the Bot while it waits for this very call to end, so a write that
+ * waited on that lock would never finish, and nor would the close.
+ */
+export interface BotRuleHandoffRowTarget {
+  /** The conversation's entries as committed now. */
+  entries(): Promise<readonly EntryRecord[]>;
+  /** Append an entry; never submitted, so it can't start or resume the Bot. */
+  append(kind: string, data: JsonValue): Promise<void>;
+}
 
 /** The call being checked. */
 export interface BotToolCallCheck {
@@ -208,8 +223,11 @@ export interface BotExtensionDeps {
    * under the same `waitId`. Absent (no one to ask): a rule hand-off blocks.
    */
   requestHandoff?(request: BotRuleHandoffRequest): Promise<BotHandoffAnswer>;
-  /** Write the transcript row for a settled rule hand-off. Must be idempotent per `toolCallId`. */
-  recordHandoff?(record: BotRuleHandoffRecord): Promise<void>;
+  /**
+   * Write the transcript row for a settled rule hand-off into `conversation`,
+   * the stopped call's own. Must be idempotent per `toolCallId`.
+   */
+  recordHandoff?(record: BotRuleHandoffRecord, conversation: BotRuleHandoffRowTarget): Promise<void>;
   readmit(botId: string): Promise<BotReadmission>;
   /** Whether the Bot's model takes images. Defaults to true. */
   imageInput?(botId: string): Promise<boolean>;
@@ -303,22 +321,45 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
 
   let installedToolNames = new Set<string>();
 
+  /** A conversation as a rule hand-off row target: read and appended through this harness, never the host. */
+  function rowTarget(conversation: Conversation, context: Context): BotRuleHandoffRowTarget {
+    return {
+      entries: async () => (await conversation.context(context)).entries,
+      append: async (kind, data) => {
+        await conversation.commit((tx) => tx.appendEntry(conversation.id, { kind, data }), context);
+      },
+    };
+  }
+
   /**
    * Record the settled hand-off and block the call with what the person did.
    * Recording is idempotent, so a crash after it re-applies the same answer
-   * without a second row.
+   * without a second row. A row that can't be written now (the turn is
+   * closing for a pause or quit) is written when Resume applies the answer.
    */
-  async function applyHandoffAnswer(toolCallId: string, answer: HandoffAnswerMemo): Promise<{ block: string }> {
+  async function applyHandoffAnswer(
+    api: { readonly conversationId: ConversationId },
+    context: Context,
+    toolCallId: string,
+    answer: HandoffAnswerMemo,
+  ): Promise<{ block: string }> {
     try {
-      await deps.recordHandoff?.({
-        botId,
-        kind: "action",
-        outcome: answer.outcome,
-        action: answer.action,
-        ...(typeof answer.note === "string" ? { note: answer.note } : {}),
-        toolCallId,
-        rule: { id: answer.rule.id, label: answer.rule.label },
-      });
+      const conversation =
+        deps.recordHandoff === undefined ? undefined : await harness?.conversation(api.conversationId, context);
+      if (conversation !== undefined) {
+        await deps.recordHandoff!(
+          {
+            botId,
+            kind: "action",
+            outcome: answer.outcome,
+            action: answer.action,
+            ...(typeof answer.note === "string" ? { note: answer.note } : {}),
+            toolCallId,
+            rule: { id: answer.rule.id, label: answer.rule.label },
+          },
+          rowTarget(conversation, context),
+        );
+      }
     } catch {
       // The model must still read what the person did; the row is only the transcript's copy.
     }
@@ -403,7 +444,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         // whatever the rules say now: re-deciding could run a call the person
         // already did themselves.
         const answered = await api.memo<HandoffAnswerMemo>(HANDOFF_ANSWER_MEMO, context);
-        if (answered !== undefined) return applyHandoffAnswer(call.id, answered);
+        if (answered !== undefined) return applyHandoffAnswer(api, context, call.id, answered);
         // A throw here blocks the call, so an unreadable run fails closed.
         const requestIds = await runRequestIds(api, context);
         if (deps.turnAllows !== undefined && !deps.turnAllows(call.name, requestIds)) {
@@ -447,7 +488,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             },
             context,
           );
-          return applyHandoffAnswer(call.id, stored);
+          return applyHandoffAnswer(api, context, call.id, stored);
         }
         if (decision.approval === undefined) return undefined;
         const memo = await api.memo<ApprovalMemo>(
