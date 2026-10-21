@@ -4,7 +4,7 @@ import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BotDefinition, BotUpdateInput } from "../../shared/bots";
 import { BotsView } from "../bots-view";
-import { mountWithBotRouter } from "./test-providers";
+import { createBotTestQueryClient, mountWithBotRouter } from "./test-providers";
 import { botFixture, catalogFixture } from "./test-fixtures";
 
 afterEach(cleanup);
@@ -252,4 +252,46 @@ test("Advanced Back with an unsaved access change asks before discarding it", as
   assert.equal(router.state.location.pathname, "/bots/bot-1");
   assert.equal(store.updates.length, 0);
   assert.equal(store.accessUpdates.length, 0);
+});
+
+test("an inline name edit shows at once, before the save answers, and goes back if the save fails", async () => {
+  let answer: (bot: BotDefinition) => void = () => undefined;
+  let fail = false;
+  const store = botStoreIpc(botFixture(), {
+    "bots:update": (input) => {
+      if (fail) throw new Error("Error invoking remote method 'bots:update': Error: Bots are starting.");
+      return new Promise<BotDefinition>((resolve) => {
+        answer = (bot) => resolve({ ...bot, ...(input as Record<string, unknown>), revision: "rev-2" });
+      });
+    },
+  });
+  const { queryClient } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+  const name = (await screen.findByRole("textbox", { name: "Name" })) as HTMLInputElement;
+  fireEvent.change(name, { target: { value: "Trip Planner" } });
+  fireEvent.blur(name);
+  await waitFor(() => assert.equal(queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])?.name, "Trip Planner"));
+  assert.equal(name.disabled, false, "the field stays usable while the save is in flight");
+  assert.ok(screen.getAllByText("Trip Planner").length >= 1);
+  answer(store.current());
+  await waitFor(() => assert.equal(queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])?.revision, "rev-2"));
+
+  fail = true;
+  fireEvent.change(name, { target: { value: "Broken" } });
+  fireEvent.blur(name);
+  // A failed save puts the stored name back.
+  await waitFor(() => assert.equal(name.value, "Trip Planner"));
+  assert.equal(queryClient.getQueryData<BotDefinition>(["bot", "bot-1"])?.name, "Trip Planner");
+});
+
+test("a Bot already in the list opens its Profile without a loading skeleton", async () => {
+  installBotTestIpc({
+    "bots:list": () => [botFixture()],
+    // The Bot's own read never answers: the list is enough to show it.
+    "bots:get": () => new Promise<never>(() => undefined),
+  });
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(["bots", "active"], [botFixture()]);
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1", queryClient });
+  assert.ok(await screen.findByRole("textbox", { name: "Name" }));
+  assert.equal(screen.queryByRole("status", { name: "Loading Bot" }), null);
 });
