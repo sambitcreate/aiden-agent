@@ -6,17 +6,19 @@ import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createM
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions } from "./mcp-server-instructions.js";
-// MCP connection manager. Connects to user-configured MCP servers (stdio / HTTP
-// / SSE) via the official MCP SDK, caches clients, and exposes their tools as
-// pi agent tools for the generation loop.
+// MCP connection manager. Connects to user-configured MCP servers (stdio /
+// Streamable HTTP) via Pi's MCP client, caches clients, and exposes their tools
+// as pi agent tools for the generation loop.
 
-import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage } from "./mcp-resources.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage, readMcpResource } from "./mcp-resources.js";
+import type { McpClient, McpTransport } from "@earendil-works/pi-mcp";
+import { connectMcpClient, createMcpClient } from "./mcp-client.js";
 import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
-import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { logger } from "../platform.js";
+import { mcpDiagnostics } from "./mcp-failure-diagnostics.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
 import {
   assertMcpPresetServer,
@@ -27,7 +29,6 @@ import type { McpServer } from "./types.js";
 import { mcpServerExposure, mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { resolveMcpConnectionCredentials } from "./mcp-connection-credentials.js";
 import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
-import { McpStdioApprovalRequiredError } from "./mcp-stdio-approvals.js";
 import { markMcpToolExposure, planMcpServerExposure } from "./mcp-exposure.js";
 import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
@@ -44,7 +45,7 @@ import {
 import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix, type McpToolNamingServer } from "./mcp-tool-identity.js";
 import {
   withIsolatedSubagentMcpClientCore,
-  type IsolatedSubagentMcpSdkClient,
+  type IsolatedSubagentMcpClient,
 } from "./subagents/subagent-mcp-client-core.js";
 import { createBoundedSubagentMcpFetch } from "./subagents/subagent-mcp-bounded-fetch.js";
 import { resolveProductionSubagentMcpCredentialBoundary } from "./subagents/subagent-mcp-credential-production.js";
@@ -85,10 +86,6 @@ import {
 const MCP_IDLE_CONNECTION_MS = 10 * 60_000;
 const MCP_IDLE_SWEEP_MS = 60_000;
 
-interface Transport {
-  close?: () => Promise<void>;
-}
-
 /**
  * Resolve a server record into connection-ready form. For built-in presets
  * authenticated by API key, the key lives in the encrypted secrets store
@@ -109,7 +106,7 @@ async function resolveAuth(
       return secrets.getOrBindLegacyProviderKey(presetSecretId(configured.id), binding);
     },
     isCurrent,
-    missingKey: (name) => `${name} needs an API key — add one in Settings → Plugins.`,
+    missingKey: (name) => `${name} needs an API key — add one in Settings → Connectors.`,
   });
 }
 
@@ -124,11 +121,11 @@ function makeTransport(
       redactor: SubagentMcpCredentialRedactor,
     ) => void;
   } = {},
-): Transport {
+): McpTransport {
   if (server.transport === "stdio") {
     if (!server.command)
       throw new Error("This MCP server needs a command to run.");
-    // Only the SDK's safe default environment plus the server's declared env:
+    // Only the safe default environment plus the server's declared env:
     // Aiden's own environment (tokens, proxy secrets) never reaches the child.
     return createMcpStdioTransport({
       command: server.command,
@@ -156,7 +153,6 @@ function makeTransport(
       )
     : undefined;
   return createMcpRemoteTransport({
-    transport: server.transport,
     signal: options.signal,
     serviceUrl: server.url,
     serviceHeaders: server.headers,
@@ -202,16 +198,13 @@ export async function withIsolatedSubagentMcpClient<T>(
     operation,
     dependencies: {
       createClient: () => {
-        const client = new Client(
-          { name: "aiden-subagent-mcp-read", version: "1.0.0" },
-          { capabilities: {} },
-        );
+        const client = createMcpClient("aiden-subagent-mcp-read");
         return {
-          connect: (transport, options) => client.connect(transport as Parameters<Client["connect"]>[0], options),
+          connect: (transport, options) => connectMcpClient(client, transport as McpTransport, options),
           close: () => client.close(),
-          listTools: (params, options) => client.listTools(params, options),
-          callTool: (params, _schema, options) => callMcpTool(client, params, options),
-        } satisfies IsolatedSubagentMcpSdkClient;
+          listTools: (cursor, options) => listMcpToolPage(client, cursor, options, reportSkippedMcpTool),
+          callTool: (params, options) => callMcpTool(client, params, options),
+        } satisfies IsolatedSubagentMcpClient;
       },
       resolveAuth,
       resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
@@ -243,8 +236,13 @@ export const productionSubagentMcpReadHost: SubagentMcpReadHost = Object.freeze(
   },
 );
 
+/** A listed tool left out because its input schema root is unusable. */
+function reportSkippedMcpTool(toolName: string, reason: string): void {
+  logger.warn("mcp", `Skipped MCP tool "${toolName.slice(0, 128)}": ${reason}.`);
+}
+
 function botMcpRequestOptions(signal: AbortSignal) {
-  return { signal, timeout: 10_000, maxTotalTimeout: 10_000 };
+  return { signal, timeoutMs: 10_000 };
 }
 
 /**
@@ -268,16 +266,14 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
     server.id,
     mcpRuntimeConnectionSnapshot(server),
     async () => {
-      const client = new Client(
-        { name: "aiden-bot-mcp-catalog", version: "1.0.0" },
-        { capabilities: {} },
-      );
+      const client = createMcpClient("aiden-bot-mcp-catalog");
       try {
         // Bound the whole attempt (credential resolution and transport start
         // included), not only initialize.
         await connectMcpWithinDeadline(
-          (async () => client.connect(
-            makeTransport(await resolveAuth(server, isCurrent), isCurrent) as never,
+          (async () => connectMcpClient(
+            client,
+            makeTransport(await resolveAuth(server, isCurrent), isCurrent),
             botMcpRequestOptions(operationSignal),
           ))(),
           () => client.close(),
@@ -287,7 +283,7 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
         const tools = await listMcpToolInventory({
           signal: operationSignal,
           assertCurrent: isCurrent,
-          listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, botMcpRequestOptions(pageSignal)),
+          listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, botMcpRequestOptions(pageSignal), reportSkippedMcpTool),
         });
         isCurrent();
         // The same projection the live agent tools carry, so the Bot's live
@@ -329,9 +325,9 @@ function leaseIsCurrent(lease: ReturnType<typeof mcpConfigurationLeases.acquire>
 
 class McpManager {
   // Bound the whole attempt (transport start included), not just initialize.
-  private readonly clients = new GenerationBoundConnectionCache<Client>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs, onLifecycle: recordMcpConnectionLifecycle });
+  private readonly clients = new GenerationBoundConnectionCache<McpClient>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs, onLifecycle: recordMcpConnectionLifecycle });
   private readonly statusClients =
-    new GenerationBoundConnectionAttempts<Client>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs });
+    new GenerationBoundConnectionAttempts<McpClient>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs });
   private closed = false;
   // Servers that cannot announce tool changes are re-listed after the TTL.
   private readonly toolInventories = createMcpToolInventoryCache<McpInventory>({ ttlMs: MCP_TOOL_INVENTORY_TTL_MS });
@@ -349,14 +345,10 @@ class McpManager {
   private async ensureConnected(
     server: McpServer,
     generation: number,
-  ): Promise<Client> {
+  ): Promise<McpClient> {
     const client = await this.clients.getOrConnect(
       server.id,
-      () =>
-        new Client(
-          { name: "aiden-agent", version: "1.0.0" },
-          { capabilities: {} },
-        ),
+      () => createMcpClient("aiden-agent"),
       async (client, connectionIsCurrent, onClosed) => {
         // A closed client's inventory is never reused, even by a waiter that
         // still holds the client.
@@ -366,15 +358,15 @@ class McpManager {
         };
         // Register before connect: closure during initialization must also
         // prevent a dead client from being published to the cache.
-        client.onclose = closed;
+        client.onClose(closed);
         this.toolInventories.watch(client);
-        // The MCP SDK transports satisfy the client's transport interface.
-        await client.connect(
+        await connectMcpClient(
+          client,
           makeTransport(
             await resolveAuth(server, connectionIsCurrent),
             connectionIsCurrent,
             { onTerminalFailure: closed },
-          ) as never,
+          ),
           mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
         );
       },
@@ -397,8 +389,8 @@ class McpManager {
   private async withLiveClient<R>(
     server: McpServer,
     generation: number,
-    client: Client,
-    request: (client: Client) => Promise<R>,
+    client: McpClient,
+    request: (client: McpClient) => Promise<R>,
   ): Promise<R> {
     const end = this.activity.begin(server.id);
     try {
@@ -415,11 +407,11 @@ class McpManager {
     if (this.connectionGeneration(id) !== generation) throw new Error("The MCP connection was superseded.");
   }
 
-  private async readInventory(client: Client, assertCurrent: () => void, signal?: AbortSignal): Promise<McpInventory> {
-    const tools = client.getServerCapabilities()?.tools ? await listMcpToolInventory({
+  private async readInventory(client: McpClient, assertCurrent: () => void, signal?: AbortSignal): Promise<McpInventory> {
+    const tools = client.serverCapabilities?.tools ? await listMcpToolInventory({
       signal,
       assertCurrent,
-      listPage: boundedMcpToolPageReader(client, MCP_DISCOVERY_DEADLINES.listMs),
+      listPage: boundedMcpToolPageReader(client, MCP_DISCOVERY_DEADLINES.listMs, reportSkippedMcpTool),
     }) as McpToolInfo[] : [];
     return { tools, guard: createMcpToolCallGuard(tools) };
   }
@@ -429,7 +421,7 @@ class McpManager {
    * caller's own revoked lease cannot fail other callers; each caller stops
    * waiting on its own signal and re-checks its lease afterwards.
    */
-  private cachedInventory(server: McpServer, generation: number, client: Client, signal?: AbortSignal): Promise<McpInventory> {
+  private cachedInventory(server: McpServer, generation: number, client: McpClient, signal?: AbortSignal): Promise<McpInventory> {
     return this.toolInventories.load(
       client,
       () => this.readInventory(client, () => this.assertGeneration(server.id, generation)),
@@ -491,6 +483,8 @@ class McpManager {
     this.built.clear();
     if (options.final) {
       this.closed = true;
+      // Write pending repeat counts and stop the coalescing timers.
+      mcpDiagnostics.shutdown();
       const shutdown = Promise.all([this.clients.shutdown(), this.statusClients.shutdown()]).then(() => undefined);
       this.disconnecting.add(shutdown);
       void shutdown.finally(() => this.disconnecting.delete(shutdown)).catch(() => undefined);
@@ -550,15 +544,12 @@ class McpManager {
       return await this.statusClients.run(
         server.id,
         expectedGeneration,
-        () =>
-          new Client(
-            { name: "aiden-agent-test", version: "1.0.0" },
-            { capabilities: {} },
-          ),
+        () => createMcpClient("aiden-agent-test"),
         async (client, connectionIsCurrent) => {
           const active = () => isCurrent() && connectionIsCurrent();
-          await client.connect(
-            makeTransport(await resolve(server, active), active) as never,
+          await connectMcpClient(
+            client,
+            makeTransport(await resolve(server, active), active),
             mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
           );
         },
@@ -587,17 +578,17 @@ class McpManager {
     if (this.closed) throw new Error("MCP connections are shut down.");
     const lease = mcpConfigurationLeases.acquire(server.id);
     if (server.authProvider && !providerScope) throw new Error("Provider-authenticated MCP requires a live attended operation.");
-    const scoped = <R>(use: (client: Client, signal: AbortSignal) => Promise<R>, callerSignal?: AbortSignal): Promise<R> => withMcpProviderOperation({
+    const scoped = <R>(use: (client: McpClient, signal: AbortSignal) => Promise<R>, callerSignal?: AbortSignal): Promise<R> => withMcpProviderOperation({
       scope: {
         onInvalidated: providerScope!.onInvalidated,
         signal: AbortSignal.any([providerScope!.signal, lease.signal, ...(callerSignal ? [callerSignal] : [])]),
         isCurrent: () => { lease.assertCurrent(); return providerScope!.isCurrent(); },
       },
-      create: () => new Client({ name: "aiden-agent-attended", version: "1.0.0" }, { capabilities: {} }),
+      create: () => createMcpClient("aiden-agent-attended"),
       connect: async (client, signal, isCurrent) => {
         // The operation's own 60 s bound is far past the discovery budget.
         await connectMcpWithinDeadline(
-          (async () => client.connect(makeTransport(await resolveAuth(server, isCurrent), isCurrent, { signal }) as never, { signal }))(),
+          (async () => connectMcpClient(client, makeTransport(await resolveAuth(server, isCurrent), isCurrent, { signal }), { signal }))(),
           () => client.close(),
           { signal },
         );
@@ -608,9 +599,9 @@ class McpManager {
     const cachedClient = server.authProvider ? undefined : await this.ensureConnected(server, generation);
     lease.assertCurrent();
     const assertGeneration = () => this.assertGeneration(server.id, generation);
-    const describe = (client: Client) => ({
-      resources: Boolean(client.getServerCapabilities()?.resources),
-      instructions: client.getInstructions(),
+    const describe = (client: McpClient) => ({
+      resources: Boolean(client.serverCapabilities?.resources),
+      instructions: client.instructions,
     });
     const metadata = cachedClient ? {
       inventory: await this.cachedInventory(server, generation, cachedClient, lease.signal),
@@ -643,12 +634,12 @@ class McpManager {
         )),
       listResources: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourcesPage(live, params, options)),
       listResourceTemplates: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourceTemplatesPage(live, params, options)),
-      readResource: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.readResource(params, options)),
+      readResource: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => readMcpResource(live, params, options)),
     } : {
       callTool: (params, options) => scoped((connection, signal) => guardedMcpToolCall(callGuard, connection, params, { ...options, signal }), options?.signal),
       listResources: (params, options) => scoped((connection, signal) => listMcpResourcesPage(connection, params, { ...options, signal }), options?.signal),
       listResourceTemplates: (params, options) => scoped((connection, signal) => listMcpResourceTemplatesPage(connection, params, { ...options, signal }), options?.signal),
-      readResource: (params, options) => scoped((connection, signal) => connection.readResource(params, { ...options, signal }), options?.signal),
+      readResource: (params, options) => scoped((connection, signal) => readMcpResource(connection, params, { ...options, signal }), options?.signal),
     };
     // The resource tool keeps a per-turn resource listing, so it is always new.
     const resourceTool = metadata.resources ? createMcpResourceTool(server, client, lease) : undefined;
@@ -688,7 +679,7 @@ class McpManager {
               name: t.name,
               arguments: (args ?? {}) as Record<string, unknown>,
             },
-            { signal, timeout: MCP_TOOL_CALL_TIMEOUT_MS, maxTotalTimeout: MCP_TOOL_CALL_TIMEOUT_MS },
+            { signal, timeoutMs: MCP_TOOL_CALL_TIMEOUT_MS },
           );
         });
       },
@@ -736,25 +727,13 @@ class McpRecentFailureError extends Error {
   }
 }
 
-function writeMcpDegraded(error: unknown, phase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm", extra: Record<string, number> = {}): void {
-  // An unapproved local command is a distinct, expected state, not a failure to connect.
-  const failurePhase = error instanceof McpStdioApprovalRequiredError ? "mcp-stdio-approval" : phase;
-  const projected = projectDiagnosticError(error);
-  writeDiagnosticEvent({
-    level: "warn",
-    area: "mcp",
-    event: "mcp-degraded",
-    outcome: projected.code === "cancelled" ? "cancelled" : "degraded",
-    code: projected.code,
-    fields: {
-      errorType: projected.errorType,
-      ...(projected.fingerprint ? { fingerprint: projected.fingerprint } : {}),
-      ...(projected.causeCode ? { causeCode: projected.causeCode } : {}),
-      ...(projected.httpStatus === undefined ? {} : { httpStatus: projected.httpStatus }),
-      failurePhase,
-      ...extra,
-    },
-  });
+function writeMcpDegraded(
+  server: McpServer | undefined,
+  error: unknown,
+  phase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm",
+  extra: Record<string, number> = {},
+): void {
+  mcpDiagnostics.degraded(server, error, { phase, extra });
 }
 
 /**
@@ -784,6 +763,7 @@ function discoverMcpServer(
   ).then(
     (context) => {
       mcpManager.clearFailure(server.id);
+      mcpDiagnostics.recovered(server);
       return context;
     },
     (error: unknown) => {
@@ -807,7 +787,7 @@ async function configuredMcpToolNamingServers(extra: readonly McpServer[]): Prom
 /** Report a server that lost its tools for this turn, and remember why. */
 function reportUnavailableMcpServer(server: McpServer, error: unknown, generations: Map<string, number>): void {
   if (error instanceof McpRecentFailureError) {
-    writeMcpDegraded(asMcpDeadlineError(error.original), "mcp-recent-failure", { backoffMs: Math.max(0, Math.round(error.retryInMs)) });
+    writeMcpDegraded(server, asMcpDeadlineError(error.original), "mcp-recent-failure", { backoffMs: Math.max(0, Math.round(error.retryInMs)) });
     return;
   }
   // A missed deadline leaves the raw attempt running; remember the timeout
@@ -816,7 +796,7 @@ function reportUnavailableMcpServer(server: McpServer, error: unknown, generatio
   if (generation !== undefined) mcpManager.recordFailure(server.id, generation, error);
   // A skipped server, including one that missed its deadline, is surfaced
   // as degraded MCP status in diagnostics rather than failing the turn.
-  writeMcpDegraded(error, "mcp-tool-discovery");
+  writeMcpDegraded(server, error, "mcp-tool-discovery");
 }
 
 /**
@@ -842,11 +822,11 @@ export function prewarmMcpServers(servers?: readonly McpServer[]): void {
           // A missed deadline is remembered like any failure; a late success clears it.
           const generation = generations.get(server.id);
           if (generation !== undefined) mcpManager.recordFailure(server.id, generation, error);
-          writeMcpDegraded(asMcpDeadlineError(error), "mcp-prewarm");
+          writeMcpDegraded(server, asMcpDeadlineError(error), "mcp-prewarm");
         },
       );
     }
-  })().catch((error: unknown) => writeMcpDegraded(error, "mcp-prewarm"));
+  })().catch((error: unknown) => writeMcpDegraded(undefined, error, "mcp-prewarm"));
 }
 
 /**

@@ -48,7 +48,7 @@ autocomplete, themes, hidden `/debug`.
 
 | Feature | Glue needed | Files |
 | --- | --- | --- |
-| MCP preset catalog + OAuth | printed-URL OAuth + file credential store replace keychain/session glue | `mcp-presets.ts`, `plugin-catalog.ts` (pure), `mcp-oauth-store-core.ts` |
+| MCP preset catalog + OAuth | printed-URL OAuth + file credential store replace keychain/session glue | `mcp-presets.ts`, `connector-catalog.ts` (pure), `mcp-oauth-store-core.ts` |
 | Provider auth browser handoff | `shell.openExternal` injected (pure coordinator) | `provider-auth-flow.ts` |
 | Catalog refresh on credential commit | drop bot-inventory hooks | `provider-registry.ts::refreshBuiltinCatalogs` |
 | Telegram control | token source swap (env/auth.json vs safeStorage) | `telegram/*` (pure pipeline), Phase 4 serve |
@@ -97,7 +97,7 @@ this plan remains active until the final acceptance checks below are complete.
 | Workspace authority | Registry, scratch directories, full/ask/none gates, daemon-routed mutations and cancellation, shared Git/files/worktree services and native removal |
 | Providers and setup | Native Pi provider APIs including Codex OAuth, Concentrate/custom providers, auth coordinator and key validation, encrypted credential migration, shared onboarding state, thinking metadata |
 | Catalogs | Hardened inference catalog overlay; fixed-endpoint manual models.dev and separate AA/OpenRouter benchmark credentials; display-only offline reads |
-| MCP | Explicit SDK adapter (not provided by Pi), stdio/HTTP/SSE, presets/OAuth, pagination and response/schema budgets, exact schema/configuration checks before effects |
+| MCP | Explicit SDK adapter (not provided by Pi), stdio/Streamable HTTP (legacy HTTP+SSE removed 2026-10-20; the desktop client moved to Pi's `@earendil-works/pi-mcp`), presets/OAuth, pagination and response/schema budgets, exact schema/configuration checks before effects |
 | Subagents | Shared supervisor, fresh/fork projection, parent-owned tool execution, native private history, one-shot write/shell/outbound/mutation gates and nested capability ceilings |
 | Automation | Shared schedule CRUD, previews, durable runs, selected MCP/web inference and script execution; explicit-owner Telegram polling; settled shutdown |
 | Bots | Shared notice/catalog/access/incarnation/rollback anchors, managed homes, scoped file/shell/MCP/skill/web tools, companion image analysis, worker-normalized photos, scoped read-only child investigations |

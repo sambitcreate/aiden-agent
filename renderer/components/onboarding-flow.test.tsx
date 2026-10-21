@@ -365,7 +365,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Attachments & Vision",
     "Web Search",
     "Reusable Skills",
-    "MCP Connectors",
+    "Connectors",
     "Aiden Live",
     "Meet your Bots",
     "Scheduled Automations",
@@ -457,11 +457,11 @@ test("primary AI choices include custom setup without opening advanced providers
 });
 
 
-test("MCP onboarding discloses service-supplied tool guidance", () => {
+test("Connectors onboarding discloses service-supplied tool guidance", () => {
   assert.match(featurePresentation, /Connected services may also provide guidance for using those tools\./u);
 });
 
-test("MCP tour explains connected-service resource reads", () => {
+test("Connectors tour explains connected-service resource reads", () => {
   assert.match(featurePresentation, /read the resources they share/u);
 });
 

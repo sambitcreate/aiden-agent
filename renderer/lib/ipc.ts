@@ -428,6 +428,9 @@ export const providersApi = {
       request,
     ),
   logout: (providerId: string) => invoke<unknown>("providers:logout", providerId),
+  /** Settings → Providers: let custom connectors use this provider's saved API key. */
+  setConnectorKeySharing: (providerId: string, allowed: boolean) =>
+    invoke<{ connectorKeySharing: boolean }>("providers:setConnectorKeySharing", providerId, allowed),
   onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
     onNotification("providers:auth:prompt", handler),
   onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>
@@ -607,7 +610,8 @@ export const mcpApi = {
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
-  authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
+  /** `connectionError`: signed in and stored, but the follow-up connection failed for another reason. */
+  authorize: (server: McpServer) => invoke<{ authorized: boolean; connectionError?: string }>("mcp:authorize", server),
   /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
   cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
   /** Forget this server's OAuth session and disconnect it. */
@@ -623,7 +627,7 @@ export const mcpApi = {
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>
-    invoke<{ authorized: boolean; needsSignIn?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+    invoke<{ authorized: boolean; needsSignIn?: boolean; hasSession?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
   providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),

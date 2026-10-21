@@ -1,5 +1,5 @@
-// Settings controls for MCP servers that sit beside save/remove: cancelling a
-// waiting browser sign-in, signing out, testing an unsaved draft, listing the
+// Settings controls for MCP servers that sit beside save/remove: browser
+// sign-in (Authorize), cancelling a waiting sign-in, signing out, testing an unsaved draft, listing the
 // schedules and Bots that depend on a server, and reading live status.
 // Dependencies are injected so the IPC contract is exercised without Electron.
 
@@ -31,8 +31,17 @@ export type { McpPendingLaunchApproval };
 
 export interface McpControlDependencies<Event> {
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
-  owner(event: Event): { isDestroyed(): boolean };
+  owner(event: Event): { isDestroyed(): boolean; onInvalidated?(listener: () => void): () => void };
   configured(serverId: string): Promise<McpServer | undefined>;
+  /**
+   * Run the browser sign-in for a server that uses it. `signal` aborts when
+   * the requesting document goes away. Resolves once tokens are stored.
+   */
+  authorize(server: McpServer, isCurrent: () => boolean, signal: AbortSignal): Promise<{ authorized: true; connectionError?: string }>;
+  /** Record a failed or cancelled Authorize in diagnostics (classified, no secrets). */
+  reportAuthorizeFailure?(server: McpServer, error: unknown): void;
+  /** Record that Authorize stored tokens and the server answered. */
+  reportAuthorizeSuccess?(server: McpServer): void;
   cancelAuthorization(serverId: string): boolean;
   signOut(server: McpServer, isCurrent: () => boolean): Promise<void>;
   testDraft(server: McpServer, credentials: McpDraftCredentials, isCurrent: () => boolean): Promise<McpStatus>;
@@ -43,7 +52,7 @@ export interface McpControlDependencies<Event> {
    */
   admitSaved<R>(saved: McpServer, operation: () => Promise<R>, isCurrent: () => boolean): Promise<R>;
   /** Stored browser sign-in state of a saved server, as `mcp:status` reports it. */
-  signInState(server: McpServer): Promise<{ authorized: boolean; needsSignIn: boolean }>;
+  signInState(server: McpServer): Promise<{ authorized: boolean; needsSignIn: boolean; hasSession: boolean }>;
   dependents(serverId: string): Promise<McpServerDependents>;
   liveStatus(): McpLiveStatus[];
   /** The server's full tool list from its last discovery in this process, if any. */
@@ -80,6 +89,28 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
     if (!isCurrent()) throw new Error(INACTIVE);
     return isCurrent;
   };
+
+  deps.handle("mcp:authorize", async (event, value: unknown) => {
+    const owner = deps.owner(event);
+    const isCurrent = () => !owner.isDestroyed();
+    if (!isCurrent()) throw new Error("MCP authorization must come from the active application document.");
+    const server = parseMcpServer(value);
+    const preset = assertMcpPresetServer(server);
+    if (preset && preset.auth.kind !== "oauth") throw new Error(`${preset.name} does not use browser sign-in.`);
+    if (!usesBrowserSignIn(server)) throw new Error("This MCP server does not use browser sign-in.");
+    const ownerAbort = new AbortController();
+    const stopWatching = owner.onInvalidated?.(() => ownerAbort.abort(new Error("The renderer document is no longer active.")));
+    try {
+      const result = await deps.authorize(server, isCurrent, ownerAbort.signal);
+      if (!result.connectionError) deps.reportAuthorizeSuccess?.(server);
+      return result.connectionError ? { authorized: true, connectionError: result.connectionError } : { authorized: true };
+    } catch (error) {
+      deps.reportAuthorizeFailure?.(server, error);
+      throw error;
+    } finally {
+      stopWatching?.();
+    }
+  });
 
   deps.handle("mcp:cancelAuthorize", (event, id: unknown) => {
     live(event);
@@ -138,8 +169,8 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
     const status = await deps.admitSaved(saved!, async () => {
       const result = await test();
       if (!usesBrowserSignIn(draft)) return result;
-      const { authorized, needsSignIn } = await deps.signInState(saved!);
-      return { ...result, authorized, ...(needsSignIn ? { needsSignIn: true } : {}) };
+      const { authorized, needsSignIn, hasSession } = await deps.signInState(saved!);
+      return { ...result, authorized, ...(needsSignIn ? { needsSignIn: true } : {}), ...(hasSession ? { hasSession: true } : {}) };
     }, isCurrent);
     if (!isCurrent()) throw new Error(INACTIVE);
     return status;

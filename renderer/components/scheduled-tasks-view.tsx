@@ -262,7 +262,7 @@ function ScheduledTaskDetail({
                 {(task.mcpServerIds?.length ?? 0) > 0
                   ? ` · ${task.mcpServerIds?.length} MCP ${task.mcpServerIds?.length === 1 ? "server" : "servers"}`
                   : ""}
-                {legacyMcpAccess ? " · All enabled MCP servers (legacy)" : ""}
+                {legacyMcpAccess ? " · All enabled connectors (legacy)" : ""}
                 {task.webSearchEnabled ? " · Web Search" : ""}
               </dd>
             </div>
@@ -779,7 +779,7 @@ export function ScheduledTasksView() {
                 editDisabledReason={
                   usesLegacyInheritedMcp(selectedTask) &&
                   (mcpServers.isLoading || mcpServers.isError)
-                    ? "MCP access could not be loaded. You can inspect and run this task, but editing is unavailable until access details load."
+                    ? "Connector access could not be loaded. You can inspect and run this task, but editing is unavailable until access details load."
                     : undefined
                 }
                 legacyMcpAccess={usesLegacyInheritedMcp(selectedTask)}
