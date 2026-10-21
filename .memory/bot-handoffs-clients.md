@@ -34,7 +34,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
   - `remote-bot-chat-view.tsx` shows the shared hand-off card (`handoff-card.tsx`, new `finishOn` prop, "Finish on <Mac>") and `BotPausedNotice` (`renderer/main/bots/bot-paused-card.tsx`).
   - The chat's ••• menu has Pause Bot / Resume Bot.
   - A settled card is hidden by the identity of the host's handoff object, not its wait id. Resume asks again under the same wait id, and the frame or snapshot carrying it is a new object, so the card shows again (adversarial review fix).
-- The host feed sends paired desktops the revision-35 rows, so the desktop sidebar never shows a paired Bot as Paused (it reads idle/unavailable). Only the open chat knows.
+- The host feed sends paired desktops the revision-35 rows, so the desktop sidebar never shows a paired Bot as Paused or Interrupted (its rows show only "Working…" or the Bot's purpose). Only the open chat knows. Whether holders should get per-audience feed rows is an open owner question (hardening H2).
 - Merge watch with #565:
   - `peer-bot-session-compat.ts` `SESSION_KEYS` must gain `handoff`.
   - The registry's catch must merge into `requestGrants`.
@@ -45,7 +45,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
 - Coordinator: `negotiateBotHandoffsIfNeeded` runs after the progress batch.
 - Models: `AidenBotSession.swift` (`AidenRemoteBotHandoff`, `AidenBotHandoffWire.isOpenURL`) and `AidenBot.swift` (`AidenBotWire.pausedFlag`).
 - UI:
-  - `AidenBotSessionModel.swift` holds `answerHandoff`, `finishHandoffOnMac`, `pause` / `unpause`, and the `AidenBotSessionCopy` strings, including `interruptedSubtitle` and `pausedSubtitle`.
+  - `AidenBotSessionModel.swift` holds `answerHandoff`, `finishHandoffOnMac`, `unpause`, and the `AidenBotSessionCopy` strings, including `interruptedSubtitle` and `pausedSubtitle`.
   - `Features/Bots/AidenBotHandoffCard.swift` holds the card and `AidenBotPausedCard`; it is in the pbxproj.
   - `AidenBotSessionChatView.swift` shows the card and the paused state.
   - The profile's More menu has Pause Bot / Resume Bot.
@@ -57,7 +57,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
   - The outbox's pre-send check uses `canSend`, so a paused Bot takes nothing (as on Android) and a cut-off request keeps its key.
   - Profile `setPaused` and `deleteBot` each carry one `@MainActor`.
   - The cache round trip of a paused summary encodes dates as ISO 8601, as `AidenBotCache` does.
-  - `AidenBotSessionModel.pause()` (optimistic) has tests but no production caller: Pause is offered on the profile only, as on Android. The desktop chat's ••• menu also has it.
+  - `AidenBotSessionModel.pause()` (optimistic) had tests but no production caller: Pause is offered on the profile only, as on Android. The desktop chat's ••• menu also has it. Hardening H2 removed it.
 
 ## Android
 - Protocol: `protocol/AidenRemoteProtocol.kt` has `BOT_HANDOFFS` (negotiable and phone-known; `PHONE_BOT_HANDOFFS`) and the `BOT_PAUSED` and `HANDOFF_EXPIRED` codes. `botHandoffs` is a fixture Bot root whose `pausedDetail.instructions` is allowed.
@@ -78,6 +78,16 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
 - Tests:
   - New: `AidenBotHandoffsContractTest`.
   - Extended: `AidenBotSessionControllerTest`, `AidenBotProfileBehaviorTest` and `AidenBotHomeBehaviorTest`.
+
+## Hardening H2 (branch `wp/h2-remote-clients`)
+- Desktop `remote-bot-chat-view.tsx`: `useBusyOperations()` counts busy work per operation, so one finishing (Pause) never clears another's (the card's answer). `answeringHandoff` (a ref of the wait id in flight) stops the composer sending a second answer. Questions and approvals are hidden by the identity of the settled object (as the hand-off card), so Resume asking the same wait id shows them again; a failed approval answer brings its card back.
+- Desktop `peer-host-registry.ts` `requestGrants`: a `401` from `POST /device/capabilities` clears the host's verification and rethrows, so the offer counts as unanswered and the next connect asks again.
+- iOS:
+  - `aidenBotSessionFeedGrants(installation)` + `AidenBotSessionModel.reopenFeed()` (the chat view's `onChange` of the held grants): the feed is wrapped in a reopenable `AsyncThrowingStream`, and a reopen skips the backoff (mirrors Android's 25ec0fc8).
+  - `answerHandoffFromComposer(_:connected:)`: Send-as-Done needs the connection (as the card's Done and Skip), and staged photos or files keep the draft with "Send photos/files after you answer the card." (the desktop's copy).
+  - Hand-off alert: `aidenBotSessionDeepLinkPath(botID:hostFeatures:)` sends `.botChat` on a durable-session Mac to the Bots area with the durable chat pushed (`setCompactBotPath`). Android already routed it.
+- Android: `aidenBotPausedChatOffersResume(canWriteBots, ui)` gates the paused card's Resume on `canWriteBots` and a connection.
+- The host normalises `open.url` (see `.memory/remote-rev37-bot-handoffs.md`), so Android's strict `isOpenUrl` and iOS's check accept every page the host sends; neither client changed for it.
 
 ## Validating Android without the SDK (container recipe)
 - `dl.google.com` is blocked, so there is no Android SDK and no AGP. Maven Central (`repo.maven.apache.org`) returns 429 to Gradle. The Google mirror `https://maven-central.storage-download.googleapis.com/maven2/` works.

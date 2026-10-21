@@ -24,6 +24,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
   - holders: a summary keeps `paused` only as `true`; a detail always carries a Boolean;
   - legacy devices: the flag is dropped and `sessionState: paused` becomes `unavailable`.
 - `toRemoteBotHandoff`: parse-validated. A link that fails `isBotHandoffOpenUrl` is dropped, and a blank `why` too.
+  - `cardPage(url)` (hardening H2): `open.url` goes out as the WHATWG parser prints it (`new URL(url).href`), so Android's strict `isOpenUrl` and iOS's `URLComponents` check, which refuse forms the Mac's parser accepts (`https:host`, an empty `@`, a tab in the host, a backslash, uppercase, `:443`, a Unicode host), never refuse the whole snapshot. A bare origin keeps its form (no trailing `/` added); a printed form that fails the check (too long) drops `open`.
 - `legacyHandoffNotice`: an assistant message `handoff-notice:<waitId>`, "<Name> needs you on your Mac: <action>", with no `createdAt`.
 - The host stores the holder view everywhere:
   - `AidenRemoteBotService.sessionStates` (service-main) and `projectAidenRemoteBotSummary`, which adds `paused: true`;
@@ -46,6 +47,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
   - `openHandoffOnMac`: returns `{waitId, opened: result !== "none"}`.
   - `pause(…, "phone")` / `unpause`: go through `control()`, with `CONTROL_ROUTES` (unpause = `DELETE /bots/{id}/pause`).
   - All of them 404 when unwired.
+  - Refusals replay as refusals (hardening H2): `answerOrRefuseUnchanged` wraps the question, approval and hand-off answers so an `AidenRemoteServiceError` thrown inside the ledger becomes `AidenOperationNotExecutedError` (nothing recorded; the same key is checked again). Before, the ledger recorded it as `internal_error` and a retry got a 500. `openHandoffOnMac`'s expired check does the same.
 
 ## Router
 - Route labels `botHandoffAnswer`, `botHandoffOpenOnMac` and `botPause`. They use separate single-line matchers, because the matcher-scan test cannot cover alternation.
@@ -55,7 +57,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
 
 ## Fixture and OpenAPI
 - `contract.json` `botHandoffs`: a holder and a `legacy` view of one hand-off ("Scout", waitId `4f9c2d1e-…`), its answer, open-on-Mac, pause and unpause, the paused session, summary and detail, and the refusals.
-- The desktop parser checks the legacy view never carries a revision-36 word. The section is refused below revision 37.
+- The desktop parser checks the legacy view never carries a revision-37 word. The section is refused below revision 37.
 - `pausedDetail.instructions` is allowed by the privacy walk. P5 added `botHandoffs` to the iOS and Android fixture roots with the same exception (`AidenRemoteContract.swift`, `AidenRemoteProtocol.kt` `isAllowedKnownIdentityKey`).
 - OpenAPI: 3 paths after the question answer; schemas `BotHandoff`, `BotHandoffAnswerRequest`, `BotHandoffAnswerReceipt` and `BotHandoffOpenOnMacReceipt`. `BotDetail` also gained the `sessionState` it was missing.
 - BotSession's `allOf` + closed `BotSessionState` can't be validated by plain Ajv, so the Ajv test checks the hand-off on its own.

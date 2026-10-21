@@ -81,7 +81,7 @@ async function fixture(options: {
   speechAvailable?: boolean;
   /** The host ships the phone visual viewer (contract revision 35). */
   visualViewer?: boolean;
-  /** The person paused the Bot: the host's rows carry the `bot:handoffs` view (contract revision 36). */
+  /** The person paused the Bot: the host's rows carry the `bot:handoffs` view (contract revision 37). */
   pausedBot?: boolean;
 } = {}) {
   const logs: unknown[] = [];

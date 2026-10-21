@@ -381,10 +381,13 @@ test("an answer after the question was withdrawn is refused and records nothing"
   const asked = ask(controller.signal);
   controller.abort(); // Stop, Dismiss, delete or quit
   await assert.rejects(asked);
-  await assert.rejects(
-    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0004", option("Blue")),
-    isError("question_expired", 409),
-  );
+  for (const attempt of ["first", "retry"]) {
+    await assert.rejects(
+      service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0004", option("Blue")),
+      isError("question_expired", 409),
+      `${attempt}: the same request UUID gets the same refusal, not a server error`,
+    );
+  }
   assert.deepEqual(questions.pending(), []);
   await service.close();
 });
@@ -862,7 +865,7 @@ async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges
   const service = new AidenRemoteBotSessionService({
     bots,
     runtime: async () => runtime,
-    // Revision 36: a host wired for hand-offs and pause on phones.
+    // Revision 37: a host wired for hand-offs and pause on phones.
     ...(options.handoffs ? { handoffs: createBotHandoffs(), openHandoffOnMac: async () => "focused" as const } : {}),
     ...(options.stateChanges
       ? {
@@ -1076,10 +1079,13 @@ test("a phone can deny a Bot approval but only the Mac can allow Computer Use", 
     await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
     const waiting = (await service.session(BOT_ID)).approval!;
     assert.equal(waiting.canAllow, false);
-    await assert.rejects(
-      service.respondApproval(DEVICE_ID, waiting.waitId, "allow", "approve-request-0003"),
-      isError("capability_denied", 403),
-    );
+    for (const attempt of ["first", "retry"]) {
+      await assert.rejects(
+        service.respondApproval(DEVICE_ID, waiting.waitId, "allow", "approve-request-0003"),
+        isError("capability_denied", 403),
+        `${attempt}: the same request UUID gets the same refusal, not a server error`,
+      );
+    }
     await assert.rejects(
       service.respondApproval(DEVICE_ID, waiting.waitId, "deny", "approve-request-0004", "always"),
       isError("invalid_request", 400),
@@ -2677,7 +2683,7 @@ test("a steer and a follow-up placed mid-turn take their queued ids, two at one 
 });
 
 // ---------------------------------------------------------------------------
-// Contract revision 36: hand-offs and pause on phones (`bot:handoffs`)
+// Contract revision 37: hand-offs and pause on phones (`bot:handoffs`)
 // ---------------------------------------------------------------------------
 
 const HANDOFF_WAIT_ID = "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f";
@@ -2900,6 +2906,11 @@ test("a hand-off answer is idempotent per request UUID, and a card that stopped 
       service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0004", { outcome: "done" }, HOLDER),
       isError("handoff_expired", 409),
     );
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0004", { outcome: "done" }, HOLDER),
+      isError("handoff_expired", 409),
+      "a retry of the refused answer gets the same refusal, not a server error",
+    );
     assert.deepEqual(handoffs.pending(), []);
   } finally {
     await service.close();
@@ -2931,11 +2942,14 @@ test("an answer the card does not accept is invalid and the card keeps waiting; 
 
     // A sign-in happens in the Mac's browser: Done from a phone is refused, Skip settles it.
     const signIn = handOff(SIGN_IN);
-    await assert.rejects(
-      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0011", { outcome: "done" }, HOLDER),
-      (error: { code?: string; status?: number; message?: string }) =>
-        error.code === "invalid_request" && error.status === 400 && /signing in on your Mac/u.test(error.message ?? ""),
-    );
+    for (const attempt of ["first", "retry"]) {
+      await assert.rejects(
+        service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0011", { outcome: "done" }, HOLDER),
+        (error: { code?: string; status?: number; message?: string }) =>
+          error.code === "invalid_request" && error.status === 400 && /signing in on your Mac/u.test(error.message ?? ""),
+        `${attempt}: the same request UUID gets the same refusal`,
+      );
+    }
     assert.equal(handoffs.pending(BOT_ID).length, 1, "the sign-in still waits");
     await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0012", { outcome: "skipped", note: "Not today." }, HOLDER);
     assert.deepEqual(await signIn, { outcome: "skipped", note: "Not today." });
@@ -3022,10 +3036,13 @@ test("Open on Mac brings the waiting card forward once per request UUID and says
     );
     await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0013", { outcome: "done" }, HOLDER);
     await asked;
-    await assert.rejects(
-      service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000003", {}),
-      isError("handoff_expired", 409),
-    );
+    for (const attempt of ["first", "retry"]) {
+      await assert.rejects(
+        service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000003", {}),
+        isError("handoff_expired", 409),
+        `${attempt}: the same request UUID gets the same refusal, not a server error`,
+      );
+    }
   } finally {
     await service.close();
   }

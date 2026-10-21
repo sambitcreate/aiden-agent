@@ -132,10 +132,10 @@ fun AidenBotHandoffCard(
 /**
  * Revision 37: a Bot the person paused. It is a calm state, not a warning: Resume lifts the
  * pause, and a reply the pause cut short then shows the interrupted card with its own Resume
- * and Dismiss.
+ * and Dismiss. Resume waits for [canResume] ([aidenBotPausedChatOffersResume]).
  */
 @Composable
-fun AidenBotPausedCard(botName: String, busy: Boolean, onResume: () -> Unit) {
+fun AidenBotPausedCard(botName: String, busy: Boolean, canResume: Boolean, onResume: () -> Unit) {
     val palette = AidenTheme.palette
     Surface(
         color = palette.raised,
@@ -148,7 +148,7 @@ fun AidenBotPausedCard(botName: String, busy: Boolean, onResume: () -> Unit) {
                 Text(stringResource(R.string.bot_paused_title, botName), style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
             }
             Text(stringResource(R.string.bot_paused_detail, botName), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
-            AidenPrimaryButton(text = stringResource(R.string.bot_session_resume), enabled = !busy, onClick = onResume)
+            AidenPrimaryButton(text = stringResource(R.string.bot_session_resume), enabled = canResume && !busy, onClick = onResume)
         }
     }
 }

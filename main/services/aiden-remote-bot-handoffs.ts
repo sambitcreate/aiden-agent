@@ -1,4 +1,4 @@
-// Contract revision 36 (`bot:handoffs`): what each kind of device is sent
+// Contract revision 37 (`bot:handoffs`): what each kind of device is sent
 // about hand-offs and pause. Pure.
 //
 // Shipped phones decode closed enums and exact keys, so only a device that
@@ -30,20 +30,36 @@ export function legacyHandoffNoticeId(waitId: string): string {
 }
 
 /**
+ * A card's page in the one form every client reads. The Mac checks a page
+ * with the WHATWG parser, which also accepts forms the phones refuse
+ * (`https:bank.example.com`, `https://@bank.example.com/`, a tab inside), and
+ * a phone that refuses a card's page can't decode the session at all. So a
+ * page goes out as that parser prints it; one already in that form, or a bare
+ * origin as a sign-in names it, goes as it is. Undefined when the page is not
+ * one a card may open, before or after printing.
+ */
+function cardPage(url: string): string | undefined {
+  if (!isBotHandoffOpenUrl(url)) return undefined;
+  const printed = new URL(url).href;
+  if (printed === url || printed === `${url}/`) return url;
+  return isBotHandoffOpenUrl(printed) ? printed : undefined;
+}
+
+/**
  * A waiting hand-off card as a `bot:handoffs` device sees it. A link that is
  * not a safe https page is left out, and so is a rule card's page: it is the
  * Bot's own tab on the Mac, and in the device's browser the step would act on
  * the person's own session.
  */
 export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHandoff {
-  const url = prompt.source === "rule" ? undefined : prompt.open?.url;
+  const url = prompt.source === "rule" || prompt.open === undefined ? undefined : cardPage(prompt.open.url);
   const why = prompt.why?.trim();
   return parseAidenRemoteBotHandoff({
     waitId: prompt.waitId,
     kind: prompt.kind,
     action: prompt.action,
     ...(why ? { why: prompt.why } : {}),
-    ...(url !== undefined && isBotHandoffOpenUrl(url) ? { open: { url } } : {}),
+    ...(url !== undefined ? { open: { url } } : {}),
   });
 }
 

@@ -241,6 +241,21 @@ final class AidenBotCacheTests: XCTestCase {
         XCTAssertEqual(aidenResolvedBotDeepLink(botID: "bot_fixture_01", conversations: []), .showBot)
     }
 
+    @MainActor
+    func testBotChatDeepLinkOnAMacServingDurableSessionsOpensTheDurableChatWhereTheCardWaits() throws {
+        let path = try XCTUnwrap(aidenBotSessionDeepLinkPath(botID: "bot_fixture_01", hostFeatures: ["bot-durable-session-v1"]))
+        XCTAssertEqual(path.compactMap(AidenBotChatRoute.botID(fromPath:)), ["bot_fixture_01"], "the Bots stack opens that Bot's durable chat")
+        XCTAssertNil(aidenBotSessionDeepLinkPath(botID: "bot_fixture_01", hostFeatures: []), "an older Mac keeps the conversation link")
+        XCTAssertNil(aidenBotSessionDeepLinkPath(botID: "bot_fixture_01", hostFeatures: nil))
+
+        // The Bots stack keeps the path the link set, as it restores it.
+        let suiteName = "AidenBotCacheTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        AidenProductNavigationStore(defaults: defaults).setCompactBotPath(path, for: "mac-a")
+        XCTAssertEqual(AidenProductNavigationStore(defaults: defaults).compactBotPath(for: "mac-a"), path)
+    }
+
     func testBotCachePurgesOnlySelectedInstallationAndInvalidatesItsActivation() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-bot-cache-purge-\(UUID().uuidString)", directoryHint: .isDirectory)

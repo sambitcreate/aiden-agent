@@ -316,7 +316,7 @@ export interface AidenRemoteRouterDependencies {
         | "uploadAttachment"
         | "removeAttachment"
         | "supportsAttachments"
-        // Contract revision 36 (`bot:handoffs`).
+        // Contract revision 37 (`bot:handoffs`).
         | "answerHandoff"
         | "openHandoffOnMac"
         | "pause"
@@ -1675,7 +1675,7 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
 }
 
 /**
- * Revision 36: the hand-off answer, open-on-Mac and pause routes and the
+ * Revision 37: the hand-off answer, open-on-Mac and pause routes and the
  * holder projection ship together, or not at all.
  */
 function botHandoffsWired(dependencies: AidenRemoteRouterDependencies): boolean {
@@ -1687,7 +1687,7 @@ function botHandoffsWired(dependencies: AidenRemoteRouterDependencies): boolean 
     typeof sessions.unpause === "function";
 }
 
-/** Whether this device is sent revision-36 hand-off and pause shapes. */
+/** Whether this device is sent revision-37 hand-off and pause shapes. */
 function holdsBotHandoffs(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -1695,7 +1695,7 @@ function holdsBotHandoffs(
   return device.capabilities.has("bot:handoffs") && botHandoffsWired(dependencies);
 }
 
-/** A revision-36 route: not_found where unwired, capability_denied without `bot:handoffs`. */
+/** A revision-37 route: not_found where unwired, capability_denied without `bot:handoffs`. */
 function requireBotHandoffs(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -1754,7 +1754,7 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botActivityWired(dependencies)
       ? AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES
       : []),
-    // Revision 36: offered only while the hand-off and pause routes are wired.
+    // Revision 37: offered only while the hand-off and pause routes are wired.
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
@@ -2142,7 +2142,7 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Bot chat activity is unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 36: an opt-in to hand-off and pause shapes, offered only while their routes are wired.
+            // Revision 37: an opt-in to hand-off and pause shapes, offered only while their routes are wired.
             if (!botHandoffsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }

@@ -2460,6 +2460,18 @@ class AidenBotSessionControllerTest {
     }
 
     @Test
+    fun aPausedChatOffersResumeOnlyToAPhoneThatMayChangeBotsWhileTheMacIsConnected() = runTest {
+        val controller = AidenBotSessionController(pausedSession.botId, HandoffTransport(pausedSession), backgroundScope)
+        assertFalse("before the Mac's snapshot", aidenBotPausedChatOffersResume(canWriteBots = true, ui = controller.state.value))
+        controller.refetch()
+        val paused = controller.state.value
+        assertTrue(paused.isPaused)
+        assertTrue(aidenBotPausedChatOffersResume(canWriteBots = true, ui = paused))
+        assertFalse("a phone that may only read Bots", aidenBotPausedChatOffersResume(canWriteBots = false, ui = paused))
+        assertFalse("while the feed reconnects", aidenBotPausedChatOffersResume(canWriteBots = true, ui = paused.copy(streamDown = true)))
+    }
+
+    @Test
     fun aFeedThatOpenedBeforeTheHandoffsGrantOpensAgainAndShowsTheCard() = runTest {
         // The Mac shapes a feed by the grants this phone held when it opened. A chat opened while
         // connecting can open its feed before `bot:handoffs` is negotiated: no card on that feed.

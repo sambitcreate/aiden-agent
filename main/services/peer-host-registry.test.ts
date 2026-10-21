@@ -628,6 +628,30 @@ test("a lost opt-in answer is asked again on the next reconnect; a refusal is no
   };
   assert.deepEqual(await attempts(new PeerTransportError("unavailable")), { asked: 2, granted: true });
   assert.deepEqual(await attempts(new PeerTransportError("request_failed", 403)), { asked: 1, granted: false });
+
+  // A credential the host no longer takes is neither: the call fails the way any other call would.
+  let calls = 0;
+  const { store, requests } = scripted(
+    {
+      capabilities: ["chat:read", "bot:read", "bot:write"],
+      features: ["bot-durable-session-v1", "bot-activity-v1"],
+      serverCapabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"],
+    },
+    (input) => {
+      if (input.path !== "/device/capabilities") return { ok: true };
+      calls += 1;
+      if (calls === 1) throw new PeerTransportError("authentication_required", 401);
+      return { capabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"] };
+    },
+  );
+  await assert.rejects(
+    store.request("host_a", { path: "/bots" }),
+    (error: unknown) => error instanceof PeerTransportError && error.code === "authentication_required",
+  );
+  assert.equal(requests.some((request) => request.path === "/bots"), false, "nothing is sent on a refused credential");
+  await store.connect("host_a");
+  assert.equal(requests.filter((request) => request.path === "/device/capabilities").length, 2, "the next connection asks again");
+  assert.ok((await store.list())[0]!.capabilities.includes("bot:activity"));
 });
 
 test("a malformed route hint is ignored instead of failing the connection", async () => {
