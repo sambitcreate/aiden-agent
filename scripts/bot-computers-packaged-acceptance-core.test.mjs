@@ -66,7 +66,7 @@ async function loopbackModel() {
 }
 
 /** A guest whose home has a ~/Shared (the Bot's Computer folder) and a `sw_vers`, for the real shell. */
-async function guest({ takeOverOnWait } = {}) {
+async function guest({ takeOverOnWait, takeOverOnClick = false, captureMimeType = "image/jpeg" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-bc-acceptance-"));
   roots.push(root);
   const home = path.join(root, "home");
@@ -78,6 +78,7 @@ async function guest({ takeOverOnWait } = {}) {
   let waits = 0;
   return {
     computerFolder,
+    captureMimeType,
     /** What the Bot's tool returns for a call: text, and a screenshot for captures. */
     async call(name, args) {
       if (name === "computer_shell") {
@@ -91,6 +92,8 @@ async function guest({ takeOverOnWait } = {}) {
         case "capture":
           return { text: SCREENSHOT, image: true };
         case "click":
+          // The person took over while the click was in flight, so it never landed.
+          if (takeOverOnClick) return { text: GIVE_BACK_NOTE };
           return { text: `Clicked at (${args.coordinate[0]}, ${args.coordinate[1]}).` };
         case "wait":
           waits += 1;
@@ -139,7 +142,7 @@ async function playBot(model, computer, { vision = true, prompt = ACCEPTANCE_PRO
         toolName: call.name,
         content: [
           { type: "text", text: result.text },
-          ...(result.image ? [{ type: "image", data: "/9j/2wBD", mimeType: "image/jpeg" }] : []),
+          ...(result.image ? [{ type: "image", data: "/9j/2wBD", mimeType: computer.captureMimeType }] : []),
         ],
         isError: false,
         timestamp: 0,
@@ -215,6 +218,42 @@ test("a shared file that never reached the Computer folder fails the run", async
     const { ok, failures } = evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText: "something else" });
     assert.equal(ok, false);
     assert.deepEqual(failures, ["The file the Bot wrote to ~/Shared did not reach its Computer folder."]);
+  } finally {
+    await model.close();
+  }
+});
+
+test("a click the person interrupted never landed, so the run fails rather than claim it did", async () => {
+  const model = await loopbackModel();
+  try {
+    const computer = await guest({ takeOverOnClick: true });
+    const { calls } = await playBot(model, computer);
+    // The give-back note ends the hand-over part of the sequence: a fresh capture, then the shell.
+    assert.deepEqual(
+      calls.map((call) => call.args.action ?? call.name),
+      ["capture", "click", "capture", "computer_shell"],
+    );
+    const sharedFileText = await readFile(path.join(computer.computerFolder, acceptanceSharedFileName(NONCE)), "utf8");
+    const { ok, failures } = evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText });
+    assert.equal(ok, false);
+    assert.deepEqual(failures, [`The click did not land: ${GIVE_BACK_NOTE}`]);
+  } finally {
+    await model.close();
+  }
+});
+
+test("a capture that is not a JPEG fails the run", async () => {
+  const model = await loopbackModel();
+  try {
+    const computer = await guest({ takeOverOnWait: 1, captureMimeType: "image/png" });
+    await playBot(model, computer);
+    const sharedFileText = await readFile(path.join(computer.computerFolder, acceptanceSharedFileName(NONCE)), "utf8");
+    const { ok, failures } = evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText });
+    assert.equal(ok, false);
+    assert.deepEqual(failures, [
+      "The first capture was not a JPEG.",
+      "The capture after Give back was not a JPEG.",
+    ]);
   } finally {
     await model.close();
   }

@@ -75,21 +75,21 @@ export function isAcceptanceRequest(request) {
   );
 }
 
-/** How many tool-result images follow the tool message at `index`, the way pi-ai sends them. */
+/** The media types of the tool-result images that follow the tool message at `index`, the way pi-ai sends them. */
 function imagesAfter(messages, index) {
   let next = index + 1;
   while (messages[next]?.role === "tool") next += 1;
   // Providers that need an assistant turn between tool results and a user message get a filler one.
   if (messages[next]?.role === "assistant" && !Array.isArray(messages[next].tool_calls)) next += 1;
   const follow = messages[next];
-  if (follow?.role !== "user" || !Array.isArray(follow.content)) return 0;
-  if (follow.content[0]?.type !== "text" || follow.content[0].text !== ATTACHED_IMAGES) return 0;
-  return follow.content.filter(
-    (part) =>
-      part?.type === "image_url" &&
-      typeof part.image_url?.url === "string" &&
-      /^data:image\/(?:png|jpeg|webp);base64,/u.test(part.image_url.url),
-  ).length;
+  if (follow?.role !== "user" || !Array.isArray(follow.content)) return [];
+  if (follow.content[0]?.type !== "text" || follow.content[0].text !== ATTACHED_IMAGES) return [];
+  return follow.content.flatMap((part) => {
+    const type = part?.type === "image_url" && typeof part.image_url?.url === "string"
+      ? /^data:(image\/(?:png|jpeg|webp));base64,/u.exec(part.image_url.url)?.[1]
+      : undefined;
+    return type ? [type] : [];
+  });
 }
 
 /**
@@ -110,11 +110,12 @@ export function acceptanceHistory(request) {
         args = undefined;
       }
       const at = messages.findIndex((entry) => entry?.role === "tool" && entry.tool_call_id === call.id);
+      const imageTypes = at < 0 ? [] : imagesAfter(messages, at);
       calls.push({
         id: call.id,
         name: call.function?.name,
         args,
-        result: at < 0 ? null : { text: contentText(messages[at].content), images: imagesAfter(messages, at) },
+        result: at < 0 ? null : { text: contentText(messages[at].content), images: imageTypes.length, imageTypes },
       });
     }
   }
@@ -126,6 +127,11 @@ export function captureSize(result) {
   const match = typeof result?.text === "string" ? CAPTURE_TEXT.exec(result.text) : null;
   if (!match || result.images !== 1) return null;
   return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+/** The computer tool sends every capture as a JPEG (G23). */
+function isJpegCapture(result) {
+  return captureSize(result) !== null && result.imageTypes?.[0] === "image/jpeg";
 }
 
 function isAction(call, action) {
@@ -266,17 +272,20 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
   evidence.captureSize = captureSize(capture?.result);
   if (!capture || !isAction(capture, "capture") || !evidence.captureSize) {
     failures.push("The first capture did not return a screenshot of the Bot's computer.");
-  } else if (Math.max(evidence.captureSize.width, evidence.captureSize.height) > ACCEPTANCE_CAPTURE_MAX_EDGE) {
-    failures.push(`The capture was larger than ${ACCEPTANCE_CAPTURE_MAX_EDGE} px on its long side.`);
+  } else {
+    if (Math.max(evidence.captureSize.width, evidence.captureSize.height) > ACCEPTANCE_CAPTURE_MAX_EDGE) {
+      failures.push(`The capture was larger than ${ACCEPTANCE_CAPTURE_MAX_EDGE} px on its long side.`);
+    }
+    if (!isJpegCapture(capture.result)) failures.push("The first capture was not a JPEG.");
   }
 
   if (!click || !isAction(click, "click") || !click.result) {
     failures.push("The click never ran.");
   } else {
+    // Only the tool's own report that it clicked counts: a click Take over
+    // interrupted returns the give-back note and never landed.
     const [x, y] = click.args.coordinate;
-    if (click.result.text !== `Clicked at (${x}, ${y}).` && click.result.text !== giveBackNote) {
-      failures.push(`The click did not land: ${click.result.text}`);
-    }
+    if (click.result.text !== `Clicked at (${x}, ${y}).`) failures.push(`The click did not land: ${click.result.text}`);
     if (click.result.images !== 0) failures.push("The click returned an image it was not asked for.");
   }
 
@@ -290,6 +299,7 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
     if (interrupted.result.images !== 0) failures.push("The give-back note carried a capture of what the person did.");
     const fresh = calls.slice(handedBack + 1).find((call) => isAction(call, "capture"));
     if (!fresh || !captureSize(fresh.result)) failures.push("The capture after Give back did not return a screenshot.");
+    else if (!isJpegCapture(fresh.result)) failures.push("The capture after Give back was not a JPEG.");
   }
 
   const shell = calls.find((call) => call.name === COMPUTER_SHELL);

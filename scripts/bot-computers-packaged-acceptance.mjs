@@ -351,7 +351,7 @@ async function runAcceptance() {
     console.log(`3. Create a Bot with Full access whose AI model is ${ACCEPTANCE_PROVIDER_LABEL}.`);
     console.log("4. In the Bot's profile, give the Bot a computer.");
     console.log(`5. In the Bot's chat, send exactly: ${ACCEPTANCE_PROMPT}`);
-    console.log("6. When this terminal says NOW, Take over in the Computer tab, then Give back.");
+    console.log("6. When this terminal says NOW, Take over in the Computer tab, then Give back (not before: a Take over that interrupts the click fails the run).");
     console.log("Then follow this terminal: Pause the Bot, Delete the Bot, Remove everything, and quit Aiden.");
     console.log("No model data leaves this Mac; the model listens only on 127.0.0.1.\n");
 
