@@ -167,16 +167,24 @@ export class PiVerificationStore {
     for (const chat of this.pendingChats.keys()) {
       if (!valid.has(chat)) this.deletedChats.add(chat);
     }
-    for (const row of await this.load()) {
-      if (!valid.has(row.chat)) this.deletedChats.add(row.chat);
+    // Raw evidence lives in its own store; clean it even when the receipt
+    // index is unreadable and must stay preserved.
+    try {
+      for (const row of await this.load()) {
+        if (!valid.has(row.chat)) this.deletedChats.add(row.chat);
+      }
+      await this.data.update((rows) => { const retained = rows.filter((row) => valid.has(row.chat)); rows.splice(0, rows.length, ...retained); });
+    } finally {
+      await this.outputs.reconcileChats(validChatIds);
     }
-    await this.data.update((rows) => { const retained = rows.filter((row) => valid.has(row.chat)); rows.splice(0, rows.length, ...retained); });
-    await this.outputs.reconcileChats(validChatIds);
   }
   async deleteByChat(chatId: string): Promise<void> {
     this.deletedChats.add(toolOutputScope(chatId));
-    await this.load();
-    await this.data.update((rows) => { const retained = rows.filter((row) => row.chat !== toolOutputScope(chatId)); rows.splice(0, rows.length, ...retained); });
-    await this.outputs.deleteByChat(chatId);
+    try {
+      await this.load();
+      await this.data.update((rows) => { const retained = rows.filter((row) => row.chat !== toolOutputScope(chatId)); rows.splice(0, rows.length, ...retained); });
+    } finally {
+      await this.outputs.deleteByChat(chatId);
+    }
   }
 }

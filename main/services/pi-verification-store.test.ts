@@ -57,6 +57,17 @@ test("expired evidence and corrupt receipts fail closed", async (t) => {
   await writeFile(join(root, "pi-verification-receipts.json"), '[{"result":"passed","version":999}]');
   await assert.rejects(new PiVerificationStore(() => root).list("chat", scope), /unreadable/);
 });
+test("raw evidence is removed even when the receipt index is unreadable", async (t) => {
+  for (const remove of [(store: PiVerificationStore) => store.deleteByChat("chat"), (store: PiVerificationStore) => store.reconcileChats(new Set())]) {
+    const root = await fixture(t);
+    await new PiVerificationStore(() => root).check("chat", scope, check({ observe: async () => ({ result: "passed", evidence: "SECRET raw command output" }) }));
+    assert.match(await readFile(join(root, "pi-verification-evidence.json"), "utf8"), /SECRET/);
+    await writeFile(join(root, "pi-verification-receipts.json"), "{not json");
+    await assert.rejects(remove(new PiVerificationStore(() => root)), /unreadable/);
+    assert.doesNotMatch(await readFile(join(root, "pi-verification-evidence.json"), "utf8"), /SECRET/);
+    assert.equal(await readFile(join(root, "pi-verification-receipts.json"), "utf8"), "{not json");
+  }
+});
 test("deletion and orphan reconciliation revoke an in-flight observation publication", async (t) => {
   for (const deletion of ["delete", "reconcile"]) {
     const root = await fixture(t); const store = new PiVerificationStore(() => root);
