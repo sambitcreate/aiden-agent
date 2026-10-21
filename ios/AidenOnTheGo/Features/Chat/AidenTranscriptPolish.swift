@@ -131,6 +131,10 @@ struct AidenSelectTextRequest: Identifiable {
 /// Compact footer under each settled message: timestamp, the completed turn's
 /// "Worked for" duration, copy, and (latest reply only) Read Aloud.
 struct AidenMessageFooter: View {
+    /// The live reply reserves this height for its "Working for" row, so the
+    /// settled footer replaces it without moving the reply.
+    static let minimumHeight: CGFloat = 32
+
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let copyText: String?
@@ -171,7 +175,7 @@ struct AidenMessageFooter: View {
         .font(.caption)
         .foregroundStyle(palette.secondary)
         .buttonStyle(.borderless)
-        .frame(minHeight: 32)
+        .frame(minHeight: Self.minimumHeight)
     }
 }
 

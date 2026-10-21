@@ -1045,7 +1045,19 @@ final class AidenBotSessionModel {
     private let transport: any AidenBotSessionTransport
 
     private(set) var entries: [AidenBotSessionEntry] = []
-    private(set) var partial: String?
+    /// The streamed answer so far, as the Mac last sent it.
+    private(set) var partial: String? {
+        didSet { if partial != oldValue { pacePartialReveal() } }
+    }
+    /// What the chat draws of `partial`. It trails `partial` through
+    /// `AidenStreamingRevealGate`, so a burst of text drains in smoothly
+    /// instead of landing all at once. A snapshot, a rewrite or the end of
+    /// the partial applies at once.
+    private(set) var revealedPartial: String?
+    @ObservationIgnored private var partialRevealTask: Task<Void, Never>?
+    @ObservationIgnored private var partialHeldLastTick = false
+    /// Off under Reduce Motion: each tick shows every whole word received.
+    @ObservationIgnored var pacesPartialReveal = true
     private(set) var stateView: AidenBotSessionStateView?
     /// The A–E question the Bot is waiting on, or nil.
     private(set) var question: AidenRemoteBotQuestion?
@@ -1465,6 +1477,54 @@ final class AidenBotSessionModel {
         return .applied
     }
 
+    /// Follows a change to `partial`: growth is revealed tick by tick, and
+    /// anything else (cleared, rewritten) is shown at once.
+    private func pacePartialReveal() {
+        guard let partial, let revealed = revealedPartial, partial.hasPrefix(revealed) else {
+            if partial != nil, revealedPartial == nil {
+                revealedPartial = ""
+                schedulePartialRevealTick()
+                return
+            }
+            revealPartialNow()
+            return
+        }
+        if partial.count > revealed.count { schedulePartialRevealTick() }
+    }
+
+    private func revealPartialNow() {
+        partialRevealTask?.cancel()
+        partialRevealTask = nil
+        partialHeldLastTick = false
+        revealedPartial = partial
+    }
+
+    private func schedulePartialRevealTick() {
+        guard partialRevealTask == nil else { return }
+        partialRevealTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: AidenStreamingRevealGate.tick)
+            guard let self, !Task.isCancelled else { return }
+            self.partialRevealTask = nil
+            self.revealPartialTick()
+        }
+    }
+
+    private func revealPartialTick() {
+        guard let partial, let revealed = revealedPartial, partial.hasPrefix(revealed) else {
+            revealPartialNow()
+            return
+        }
+        let pending = String(partial.dropFirst(revealed.count))
+        let (shown, held) = AidenStreamingRevealGate.cut(
+            pending,
+            heldPreviousTick: partialHeldLastTick,
+            paced: pacesPartialReveal
+        )
+        partialHeldLastTick = !held.isEmpty
+        if !shown.isEmpty { revealedPartial = revealed + shown }
+        if !held.isEmpty { schedulePartialRevealTick() }
+    }
+
     /// The visible transcript stays until the new snapshot replaces it, so a
     /// failed refetch never blanks the chat.
     private func refetch() async -> EventOutcome {
@@ -1483,6 +1543,8 @@ final class AidenBotSessionModel {
         seq = session.seq
         entries = session.entries
         partial = session.partial.flatMap { $0.isEmpty ? nil : $0 }
+        // A snapshot is the state to show now, not new text to reveal.
+        revealPartialNow()
         setStateView(session.stateView)
         question = session.question
         approval = session.approval
