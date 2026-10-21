@@ -74,19 +74,28 @@ import {
   assertBoundarySelector,
   boundaryRefusalOf,
   BROWSER_BOUNDARY_ACTION_REFUSED,
+  BROWSER_BOUNDARY_NAME_SOURCE,
+  BROWSER_COVERED_OR_MOVED_TARGET,
+  BROWSER_COVERED_TARGET,
   BROWSER_HELD_TAB_REFUSED,
   BROWSER_IMAGE_MASKED_NOTE,
   BROWSER_RECALL_FIELD_FUNCTION,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
   browserBoundaryLocatorExpression,
+  browserBoundarySelectorsExpression,
   browserKeyInsertsText,
   browserTypingGuardSource,
   maskBrowserSnapshotImage,
   scrubBrowserSnapshot,
   type BoundaryViewport,
 } from "./credential-boundary.js";
-import { scanSensitiveFields, SensitiveFieldMemory, sensitiveFieldIds } from "./credential-fields.js";
+import {
+  scanSensitiveFieldReach,
+  scanSensitiveFields,
+  SensitiveFieldMemory,
+  type SensitiveFieldReach,
+} from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
 import { writeFileAtomic } from "../durable-fs.js";
@@ -525,7 +534,7 @@ export class BrowserService {
       await this.recallSensitiveFields(tab, signal);
       const probe = await this.evaluate(
         tab,
-        `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}const raw=${pick};if(!raw||raw.nodeType!==1)return null;const e=${control};const u=globalThis.__aidenPlaywright.utils;const attr=n=>{const v=e.getAttribute(n);return v===null?undefined:v.slice(0,200);};const form=e.form||e.closest('form');let host;try{if(form)host=new URL(form.getAttribute('action')||location.href,location.href).hostname;}catch{host=undefined;}let name;try{name=String(u.getElementAccessibleNameText(e,false)||'').slice(0,300)||undefined;}catch{name=undefined;}return{tag:String(e.localName||''),type:__aidenSensitive(e)&&!__aidenSensitiveNow(e)?'password':attr('type'),autocomplete:attr('autocomplete'),role:u.getAriaRole(e)||(e.isContentEditable?'textbox':undefined),accessibleName:name,formActionHost:host};})()`,
+        `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${BROWSER_BOUNDARY_NAME_SOURCE}const raw=${pick};if(!raw||raw.nodeType!==1)return null;const e=${control};const u=globalThis.__aidenPlaywright.utils;const attr=n=>{const v=e.getAttribute(n);return v===null?undefined:v.slice(0,200);};const form=e.form||e.closest('form');let host;try{if(form)host=new URL(form.getAttribute('action')||location.href,location.href).hostname;}catch{host=undefined;}let name;try{name=String(__aidenBoundaryName(e)).slice(0,300)||undefined;}catch{name=undefined;}return{tag:String(e.localName||''),type:__aidenSensitive(e)&&!__aidenSensitiveNow(e)?'password':attr('type'),autocomplete:attr('autocomplete'),role:u.getAriaRole(e)||(e.isContentEditable?'textbox':undefined),accessibleName:name,formActionHost:host};})()`,
         signal,
         true,
       );
@@ -1553,7 +1562,8 @@ export class BrowserService {
       const all=[]; const walk=root=>{ for(const e of root.querySelectorAll("*")){ if((${includeAllElements ? "!e.matches('html,body,script,style,link,meta')" : "e.matches('a[href],button,input,textarea,select,[role],[tabindex]')"})&&visible(e)) all.push(e); if(e.shadowRoot) walk(e.shadowRoot); if(all.length>=200) break; } }; walk(document);
       globalThis.__aidenElements = all.slice(0,200);
       const preserved=${JSON.stringify(preservedSelectors.map(({ ref, selector }) => ({ ref, selector })))}.map(input=>({...input,element:globalThis.__aidenPlaywright.querySelector(globalThis.__aidenPlaywright.parseSelector(input.selector),document,false)}));
-      const elements=globalThis.__aidenElements.map((e,i)=> { const r=e.getBoundingClientRect(); const original=preserved.find(input=>input.element===e);const selector=original?.selector??globalThis.__aidenPlaywright.generateSelectorSimple(e,{}); const attrs={}; for(const name of ['aria-label','placeholder','type','name','autocomplete','href','data-testid']) if(e.hasAttribute(name)) attrs[name]=e.getAttribute(name).slice(0,500); if(${includeAllElements}) {const style=getComputedStyle(e);for(const name of ['font-family','font-size','font-weight','line-height','color','background-color','opacity','border-radius','border-color','border-width','border-style','width','height','padding','margin','gap'])attrs['style:'+name]=style.getPropertyValue(name);} return {ref:original?.ref??${JSON.stringify(String(generation))}+'-'+i,tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||undefined,text:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||'').slice(0,500),selector,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},attributes:attrs}; });
+      const generated=${credentialBoundary ? browserBoundarySelectorsExpression("globalThis.__aidenElements") : "undefined"};
+      const elements=globalThis.__aidenElements.map((e,i)=> { const r=e.getBoundingClientRect(); const original=preserved.find(input=>input.element===e);const selector=original?.selector??(generated?generated[i]:globalThis.__aidenPlaywright.generateSelectorSimple(e,{})); const attrs={}; for(const name of ['aria-label','placeholder','type','name','autocomplete','href','data-testid']) if(e.hasAttribute(name)) attrs[name]=e.getAttribute(name).slice(0,500); if(${includeAllElements}) {const style=getComputedStyle(e);for(const name of ['font-family','font-size','font-weight','line-height','color','background-color','opacity','border-radius','border-color','border-width','border-style','width','height','padding','margin','gap'])attrs['style:'+name]=style.getPropertyValue(name);} return {ref:original?.ref??${JSON.stringify(String(generation))}+'-'+i,tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||undefined,text:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||'').slice(0,500),selector,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},attributes:attrs}; });
       return {text:(document.body?.innerText||'').slice(0,20000),elements,width:innerWidth,height:innerHeight};
     })()`,
       signal,
@@ -1591,14 +1601,16 @@ export class BrowserService {
       actionTimeline: clone(tab.timeline),
     });
     if (!credentialBoundary) return browserRedactPreviewUrls(snapshot);
-    // Fields read after the accessibility tree cover any that appeared during capture.
+    // Fields read after the accessibility tree cover any that appeared during
+    // capture, and the same read says which names could include what they hold.
+    let reach: SensitiveFieldReach;
     try {
-      for (const id of await sensitiveFieldIds(this.cdpPort(tab, signal), remembered)) sensitive.add(id);
+      reach = await scanSensitiveFieldReach(this.cdpPort(tab, signal), remembered, sensitive);
     } finally {
       await this.send(tab, "DOM.disable", {}, signal).catch(() => {});
     }
-    this.rememberSensitiveFields(tab, processId, sensitive);
-    return browserRedactPreviewUrls(scrubBrowserSnapshot(snapshot, sensitive));
+    this.rememberSensitiveFields(tab, processId, reach.sensitive);
+    return browserRedactPreviewUrls(scrubBrowserSnapshot(snapshot, reach));
   }
   /** Remember fields read in renderer process `processId`, unless the tab has moved to another since. */
   private rememberSensitiveFields(tab: LiveTab, processId: number, ids: Iterable<number>): void {
@@ -1729,7 +1741,7 @@ export class BrowserService {
       try {
         return await this.evaluate(
           tab,
-          `(() => { const e=${target}; if(!e||!e.isConnected) throw new Error('Element no longer exists; take a new snapshot.'); const injected=globalThis.__aidenPlaywright; if(!injected.elementState(e,'visible').matches||!injected.elementState(e,'enabled').matches) throw new Error('Element is hidden or disabled.'); e.scrollIntoView({block:'center',inline:'center'}); const r=e.getBoundingClientRect(); const x=r.x+r.width/2,y=r.y+r.height/2; const hit=injected.expectHitTarget({x,y},e); if(hit!=='done') throw new Error('Another element covers the target: '+(hit.hitTargetDescription||'')); ${pinClickTarget ? "globalThis.__aidenClickTarget=e;" : ""} return {x,y}; })()`,
+          `(() => { const e=${target}; if(!e||!e.isConnected) throw new Error('Element no longer exists; take a new snapshot.'); const injected=globalThis.__aidenPlaywright; if(!injected.elementState(e,'visible').matches||!injected.elementState(e,'enabled').matches) throw new Error('Element is hidden or disabled.'); e.scrollIntoView({block:'center',inline:'center'}); const r=e.getBoundingClientRect(); const x=r.x+r.width/2,y=r.y+r.height/2; const hit=injected.expectHitTarget({x,y},e); if(hit!=='done') throw new Error(${boundary ? JSON.stringify(BROWSER_COVERED_TARGET) : "'Another element covers the target: '+(hit.hitTargetDescription||'')"}); ${pinClickTarget ? "globalThis.__aidenClickTarget=e;" : ""} return {x,y}; })()`,
           signal,
           true,
         );
@@ -2652,7 +2664,7 @@ export class BrowserService {
                       const node=globalThis.__aidenClickTarget;
                       globalThis.__aidenClickGuard?.stop();
                       const guard=globalThis.__aidenPlaywright.setupHitTargetInterceptor(node,'mouse',${JSON.stringify(point)},false);
-                      if(typeof guard==='string')throw new Error('Another element covers the target or it moved: '+guard);
+                      if(typeof guard==='string')throw new Error(${context.credentialBoundary ? JSON.stringify(BROWSER_COVERED_OR_MOVED_TARGET) : "'Another element covers the target or it moved: '+guard"});
                       globalThis.__aidenClickGuard=guard;
                     })()`, signal, true);
                     check();

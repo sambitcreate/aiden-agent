@@ -4,7 +4,10 @@
 //
 // - Text: a sensitive field's accessibility value and everything under it
 //   (the text it renders) are dropped, and its element entry keeps only its
-//   label and placeholder.
+//   label and placeholder. Any other node whose accessible name, description
+//   or value could include what a field holds (a table cell, a checkbox whose
+//   label wraps a card field) loses it, and element locators are generated in
+//   a Bot's view of the page (`browserBoundarySelectorsExpression`).
 // - Image: main reads every sensitive field's box before and after capture
 //   and paints over the area each one covered, before the image leaves
 //   main. When a visible frame can't be inspected (a cross-site iframe), the
@@ -18,6 +21,7 @@ import {
   type CdpPort,
   type CssRect,
   type SensitiveFieldBoxes,
+  type SensitiveFieldReach,
 } from "./credential-fields.js";
 import { cssRectsToImageRects, paintRects, type RawBitmap } from "./credential-mask.js";
 
@@ -135,42 +139,139 @@ interface AxNode {
   nodeId?: unknown;
   backendDOMNodeId?: unknown;
   childIds?: unknown;
+  name?: unknown;
+  description?: unknown;
   value?: unknown;
   properties?: unknown;
   [key: string]: unknown;
 }
 
-function scrubAccessibility(tree: unknown, sensitive: ReadonlySet<number>): unknown {
+interface AxValue {
+  type?: unknown;
+  value?: unknown;
+  sources?: unknown;
+  relatedNodes?: unknown;
+  [key: string]: unknown;
+}
+
+interface AxSource {
+  type?: unknown;
+  attribute?: unknown;
+  value?: AxValue;
+  attributeValue?: AxValue;
+  nativeSourceValue?: AxValue;
+  superseded?: unknown;
+}
+
+function related(source: AxSource): Array<{ backendDOMNodeId?: unknown }> {
+  return [source.value, source.attributeValue, source.nativeSourceValue].flatMap((value) =>
+    Array.isArray(value?.relatedNodes) ? (value.relatedNodes as Array<{ backendDOMNodeId?: unknown }>) : [],
+  );
+}
+
+/** A copy of `value` without the `text` of any related node that reaches a sensitive field (Chromium's text for it). */
+function withoutRelatedText(value: unknown, reachesField: (id: unknown) => boolean): unknown {
+  if (Array.isArray(value)) return value.map((item) => withoutRelatedText(item, reachesField));
+  if (!value || typeof value !== "object") return value;
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    copy[key] = key === "relatedNodes" && Array.isArray(item)
+      ? item.map((node) => {
+          if (!node || typeof node !== "object" || !("text" in node) || !reachesField((node as { backendDOMNodeId?: unknown }).backendDOMNodeId)) return node;
+          const { text: _text, ...rest } = node as Record<string, unknown>;
+          return rest;
+        })
+      : withoutRelatedText(item, reachesField);
+  }
+  return copy;
+}
+
+/**
+ * An accessible name Chromium computed from what a field holds is blanked.
+ * Chromium reports which source gave the name: an attribute (`aria-label`,
+ * `title`) or a placeholder is the page's own text and stays; a name from
+ * `aria-labelledby` or a `<label>` is blanked when the labelling element
+ * reaches a field other than the node itself (a field's own label keeps
+ * naming it); any other name (its content) is blanked when the node reaches a
+ * field other than itself. The other sources Chromium lists, superseded ones
+ * included, are dropped from a node that reaches a field.
+ */
+function scrubAxName(name: AxValue, id: number, reach: SensitiveFieldReach, readsAny: (id: unknown) => boolean): AxValue {
+  const readsOther = (node: unknown): boolean =>
+    typeof node !== "number" || !reach.known.has(node) || [...(reach.reads.get(node) ?? [])].some((field) => field !== id);
+  const sources = (Array.isArray(name.sources) ? name.sources : []) as AxSource[];
+  const involved = readsAny(id) || sources.some((source) => related(source).some((node) => readsAny(node.backendDOMNodeId)));
+  if (!involved) return name;
+  const used = sources.find((source) => source && source.value !== undefined && source.superseded !== true);
+  const links = used ? related(used) : [];
+  const fixed = used !== undefined && links.length === 0
+    && ((used.type === "attribute" && used.attribute !== "aria-labelledby") || used.type === "placeholder");
+  const blank = fixed
+    ? false
+    : used?.type === "relatedElement" && links.length > 0
+      ? links.some((node) => readsOther(node.backendDOMNodeId))
+      : readsOther(id) || reach.selfNamed.has(id);
+  if (blank) return { type: name.type, value: "" };
+  return Array.isArray(name.sources) ? { ...name, sources: used ? [used] : [] } : name;
+}
+
+/**
+ * Drop what sensitive fields hold from the accessibility tree: each field's
+ * value and everything it renders, and, with `reach`, every node inside a
+ * field or not seen by the DOM read, accessible names and descriptions that
+ * include a field's content (`scrubAxName`), the value of an element holding
+ * another field, and Chromium's text for any related node that reaches one.
+ */
+function scrubAccessibility(tree: unknown, reach: SensitiveFieldReach): unknown {
+  const { sensitive } = reach;
   const nodes = (tree as { nodes?: unknown } | undefined)?.nodes;
   if (!Array.isArray(nodes) || sensitive.size === 0) return tree;
   const byId = new Map<string, AxNode>();
   for (const node of nodes as AxNode[]) if (node && typeof node.nodeId === "string") byId.set(node.nodeId, node);
-  // Everything a sensitive field renders (its text and inline boxes) goes.
+  const childIds = (node: AxNode | undefined): string[] =>
+    node && Array.isArray(node.childIds) ? node.childIds.filter((id): id is string => typeof id === "string") : [];
+  // Everything a sensitive field renders (its text and inline boxes) goes, as
+  // does any node inside one (moved out by `aria-owns`) or unseen by the DOM read.
   const dropped = new Set<string>();
   const queue: string[] = [];
   for (const node of nodes as AxNode[]) {
-    if (node && typeof node.backendDOMNodeId === "number" && sensitive.has(node.backendDOMNodeId) && Array.isArray(node.childIds)) {
-      queue.push(...node.childIds.filter((id): id is string => typeof id === "string"));
-    }
+    if (!node || typeof node.backendDOMNodeId !== "number") continue;
+    const id = node.backendDOMNodeId;
+    if (sensitive.has(id)) queue.push(...childIds(node));
+    else if ((reach.inside.has(id) || !reach.known.has(id)) && typeof node.nodeId === "string") queue.push(node.nodeId);
   }
   while (queue.length > 0) {
     const id = queue.pop()!;
     if (dropped.has(id)) continue;
     dropped.add(id);
-    const child = byId.get(id);
-    if (child && Array.isArray(child.childIds)) queue.push(...child.childIds.filter((next): next is string => typeof next === "string"));
+    queue.push(...childIds(byId.get(id)));
   }
+  const readsAny = (id: unknown): boolean => typeof id !== "number" || !reach.known.has(id) || (reach.reads.get(id)?.size ?? 0) > 0;
   return {
     ...(tree as object),
     nodes: (nodes as AxNode[]).flatMap((node) => {
       if (!node || typeof node !== "object") return [node];
       if (typeof node.nodeId === "string" && dropped.has(node.nodeId)) return [];
-      if (typeof node.backendDOMNodeId !== "number" || !sensitive.has(node.backendDOMNodeId)) return [node];
-      const { value: _value, childIds: _children, ...rest } = node;
-      const properties = Array.isArray(node.properties)
-        ? node.properties.filter((property) => (property as { name?: unknown })?.name !== "valuetext")
-        : node.properties;
-      return [{ ...rest, ...(properties === undefined ? {} : { properties }) }];
+      if (typeof node.backendDOMNodeId !== "number") return [node];
+      const id = node.backendDOMNodeId;
+      let next: AxNode = node;
+      if (sensitive.has(id) || [...(reach.holds.get(id) ?? [])].some((field) => field !== id)) {
+        const { value: _value, ...rest } = next;
+        const properties = Array.isArray(next.properties)
+          ? next.properties.filter((property) => (property as { name?: unknown })?.name !== "valuetext")
+          : next.properties;
+        next = { ...rest, ...(properties === undefined ? {} : { properties }) };
+      }
+      if (sensitive.has(id)) {
+        const { childIds: _children, ...rest } = next;
+        next = rest;
+      }
+      if (next.name && typeof next.name === "object") next = { ...next, name: scrubAxName(next.name as AxValue, id, reach, readsAny) };
+      const description = next.description as AxValue | undefined;
+      if (description && typeof description === "object" && description.value && (reach.describedBy.get(id) ?? []).some(readsAny)) {
+        next = { ...next, description: { type: description.type, value: "" } };
+      }
+      return [withoutRelatedText(next, readsAny) as AxNode];
     }),
   };
 }
@@ -209,16 +310,17 @@ function scrubElement(element: BrowserElement): BrowserElement {
 }
 
 /**
- * Drop sensitive field values from a snapshot's text parts. `sensitive` holds
- * the backend node ids main found in the page's DOM.
+ * Drop sensitive field values from a snapshot's text parts. `reach` holds the
+ * fields main found in the page's DOM and what reaches them, read after the
+ * accessibility tree.
  */
-export function scrubBrowserSnapshot(snapshot: BrowserSnapshot, sensitive: ReadonlySet<number>): BrowserSnapshot {
+export function scrubBrowserSnapshot(snapshot: BrowserSnapshot, reach: SensitiveFieldReach): BrowserSnapshot {
   return {
     ...snapshot,
     elements: snapshot.elements.map(scrubElement),
     ...(snapshot.accessibilityTree === undefined
       ? {}
-      : { accessibilityTree: scrubAccessibility(snapshot.accessibilityTree, sensitive) }),
+      : { accessibilityTree: scrubAccessibility(snapshot.accessibilityTree, reach) }),
   };
 }
 
@@ -284,10 +386,11 @@ export function boundaryRefusalOf(error: unknown): unknown {
 const VALUE_ATTRIBUTE = /\[\s*(?:[\w*-]*\|)?value\b|\\/iu;
 /**
  * Where Playwright's parser reads XPath: an `xpath=` engine, or a part that
- * starts with `//` or `..`, at the start, after `>>`, or opening a nested
- * selector's quoted body. A quick check in main; the page check is exact.
+ * starts with `//` or `..`, at the start, after `>>`, or opening the quoted
+ * body of a nested selector (`internal:has="…"`, `left-of="…"`…). A quick
+ * check in main; the page check is exact.
  */
-const XPATH_SELECTOR = /(?:^|>>|")\s*\*?\s*(?:xpath(?::light)?\s*=|\(*\/\/|\.\.)/iu;
+const XPATH_SELECTOR = /(?:^|>>|\*?\s*(?:internal:(?:has|has-not|and|or|chain)|left-of|right-of|above|below|near)\s*=\s*")\s*\*?\s*(?:xpath(?::light)?\s*=|\(*\/\/|\.\.)/iu;
 /** CSS comments, which a selector parser skips, so a comment can hide `[value`. */
 const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/gu;
 
@@ -306,37 +409,116 @@ export function assertBoundarySelector(selector: string | undefined): void {
 }
 
 /**
- * Resolves a Bot's locator in Aiden's isolated world, after
- * `BROWSER_SENSITIVE_FIELD_SOURCE`. Playwright's parser finds any XPath part,
- * nested ones included, and the selector is refused. Text and label engines
- * (`text=`, `internal:text`, `:has-text()`, `internal:label`...) read element
- * text through the evaluator's text cache, which is filled first with no text
- * for each sensitive field and everything inside it, so a field's contents
- * never decide a match, for the field or any element around it. More than
- * one match is refused without Playwright's previews, which quote attributes
- * and text.
+ * Whether an element's accessible name (or description) could include what
+ * a field holds, in Aiden's isolated world after
+ * `BROWSER_SENSITIVE_FIELD_SOURCE`: `__aidenNameReadsField(e, body)` for a
+ * role selector's body (it tests a name when the body mentions one), and
+ * `__aidenBoundaryName(e)`, Playwright's name for `e` or "" when it could.
+ * See `BROWSER_BOUNDARY_SCOPE_SOURCE` for the rules.
+ */
+export const BROWSER_BOUNDARY_NAME_SOURCE = `const __aidenNameReadsField=(()=>{
+const parent=(e)=>e.parentElement||(e.parentNode&&e.parentNode.host)||null;
+const inside=(e)=>{for(let a=parent(e);a;a=parent(a))if(__aidenSensitive(a))return true;return false;};
+const children=(e)=>[...e.children,...(e.shadowRoot?e.shadowRoot.children:[]),...(e.localName==="slot"&&typeof e.assignedElements==="function"?e.assignedElements({flatten:true}):[])];
+const refs=(e,name)=>{const value=e.getAttribute(name);const root=e.getRootNode();const found=[];if(!value||!root||typeof root.querySelector!=="function")return found;for(const id of new Set([...value.split(" "),...value.split(/\\s+/)])){if(!id)continue;const target=root.querySelector("#"+CSS.escape(id));if(target)found.push(target);}return found;};
+const reaches=(c,from,self)=>{const seen=new Set(self?[]:[c]);const queue=[...from];let budget=20000;while(queue.length>0){const e=queue.pop();if(seen.has(e))continue;seen.add(e);if(--budget<0||__aidenSensitive(e))return true;queue.push(...children(e),...refs(e,"aria-owns"),...refs(e,"aria-labelledby"),...(e.labels||[]));}return false;};
+return (c,body)=>{
+if(inside(c))return true;
+const named=/name|\\\\/i.test(body),described=/description|\\\\/i.test(body);
+if(!named&&!described)return false;
+if(__aidenSensitive(c)&&!["input","textarea","select"].includes(String(c.localName).toLowerCase()))return true;
+if(described&&reaches(c,refs(c,"aria-describedby"),true))return true;
+if(!named)return false;
+const label=c.getAttribute("aria-label");
+if(!c.hasAttribute("aria-labelledby")&&label&&label.trim())return false;
+return reaches(c,refs(c,"aria-labelledby"),true)||reaches(c,[...children(c),...refs(c,"aria-owns"),...(c.labels||[])],false);};
+})();
+const __aidenBoundaryName=(e)=>__aidenNameReadsField(e,"name")?"":String(globalThis.__aidenPlaywright.utils.getElementAccessibleNameText(e,false)||"");`;
+
+/**
+ * A Bot's view of the page for Playwright's selector engines, in Aiden's
+ * isolated world after `BROWSER_SENSITIVE_FIELD_SOURCE` and
+ * `BROWSER_BOUNDARY_NAME_SOURCE`: `__aidenBoundaryScope(run)` calls `run`
+ * with it in place and puts Playwright back after.
+ *
+ * - Text and label engines (`text=`, `internal:text`, `:has-text()`,
+ *   `internal:label`...) read element text through the evaluator's text
+ *   cache. It is cleared, then filled with no text for each sensitive field
+ *   and everything inside it.
+ * - Role engines (`role=`, `internal:role`) compute accessible names and
+ *   descriptions themselves, and read a field's live value (a password's
+ *   too) into the name of a cell, row, checkbox label or button around it.
+ *   Their matches leave out any element whose name or description, when the
+ *   role tests one, could read a field: through its content (children,
+ *   shadow tree, slotted elements), `aria-owns`, `<label>` elements or
+ *   `aria-labelledby` (`aria-describedby` for a description), followed from
+ *   element to element. A field's own label doesn't count, unless it is an
+ *   element it names by `aria-labelledby`, whose content Playwright reads
+ *   with the field's value in it. An element named by its own `aria-label`
+ *   alone keeps its name, as does a field named only by its label. Elements
+ *   inside a field (a card-expiry list's options) never match, and a field
+ *   that isn't an input, textarea or select (a contenteditable code field)
+ *   never matches by name.
+ *
+ * So a field's contents never decide a match, for the field or any element
+ * around it. Without the cache or the engines (another Playwright runtime),
+ * nothing runs.
+ */
+const BROWSER_BOUNDARY_SCOPE_SOURCE = `const __aidenBoundaryScope=(run)=>{
+const p=globalThis.__aidenPlaywright;const evaluator=p&&p._evaluator;const cache=evaluator&&evaluator._cacheText;const engines=p&&p._engines;
+const roles=engines instanceof Map?["role","internal:role"].map((name)=>[name,engines.get(name)]):[];
+if(!(cache instanceof Map)||typeof evaluator.begin!=="function"||typeof evaluator.end!=="function"||roles.length===0||roles.some(([,engine])=>!engine||typeof engine.queryAll!=="function"))throw new Error(${JSON.stringify(BROWSER_LOCATOR_UNCHECKED_REFUSED)});
+evaluator.begin();
+try{
+for(const key of Object.keys(evaluator)){const value=evaluator[key];if(key.startsWith("_cache")&&value instanceof Map)value.clear();}
+const blank=(node)=>cache.set(node,{full:"",normalized:"",immediate:[]});
+const blankAll=(root)=>{for(const e of root.querySelectorAll("*")){blank(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}};
+const hide=(root)=>{for(const e of root.querySelectorAll("*")){if(__aidenSensitive(e)){blank(e);blankAll(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}else if(e.shadowRoot)hide(e.shadowRoot);}};
+hide(document);
+for(const [name,engine] of roles)engines.set(name,{queryAll:(root,body)=>engine.queryAll(root,body).filter((e)=>!__aidenNameReadsField(e,String(body)))});
+return run();
+}finally{for(const [name,engine] of roles)engines.set(name,engine);evaluator.end();}};`;
+
+/**
+ * Resolves a Bot's locator, after `BROWSER_BOUNDARY_SCOPE_SOURCE`.
+ * Playwright's parser finds any XPath part, nested ones included, and the
+ * selector is refused. More than one match is refused without Playwright's
+ * previews, which quote attributes and text.
  */
 const BROWSER_BOUNDARY_QUERY_SOURCE = `const __aidenBoundaryQuery=(selector)=>{
 const p=globalThis.__aidenPlaywright;const parsed=p.parseSelector(selector);
 const xpath=(s)=>s.parts.some((part)=>part.name==="xpath"||part.name.startsWith("xpath:")||Boolean(part.body&&typeof part.body==="object"&&part.body.parsed&&xpath(part.body.parsed)));
 if(xpath(parsed))throw new Error(${JSON.stringify(BROWSER_XPATH_SELECTOR_REFUSED)});
-const evaluator=p._evaluator;const cache=evaluator&&evaluator._cacheText;
-if(!(cache instanceof Map)||typeof evaluator.begin!=="function"||typeof evaluator.end!=="function")throw new Error(${JSON.stringify(BROWSER_LOCATOR_UNCHECKED_REFUSED)});
-evaluator.begin();
-try{
-const blank=(node)=>cache.set(node,{full:"",normalized:"",immediate:[]});
-const blankAll=(root)=>{for(const e of root.querySelectorAll("*")){blank(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}};
-const hide=(root)=>{for(const e of root.querySelectorAll("*")){if(__aidenSensitive(e)){blank(e);blankAll(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}else if(e.shadowRoot)hide(e.shadowRoot);}};
-hide(document);
+return __aidenBoundaryScope(()=>{
 const found=p.querySelectorAll(parsed,document);
 if(found.length>1){const error=new Error("strict mode violation: this locator matches "+found.length+" elements. Use one that matches exactly one.");delete error.stack;throw error;}
-return found[0];
-}finally{evaluator.end();}};`;
+return found[0];});};`;
 
-/** An isolated-world expression for the one element a Bot's locator names (see `BROWSER_BOUNDARY_QUERY_SOURCE`). */
+/** An isolated-world expression for the one element a Bot's locator names (see `BROWSER_BOUNDARY_SCOPE_SOURCE`). */
 export function browserBoundaryLocatorExpression(selector: string): string {
-  return `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${BROWSER_BOUNDARY_QUERY_SOURCE}return __aidenBoundaryQuery(${JSON.stringify(selector)});})()`;
+  return `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${BROWSER_BOUNDARY_NAME_SOURCE}${BROWSER_BOUNDARY_SCOPE_SOURCE}${BROWSER_BOUNDARY_QUERY_SOURCE}return __aidenBoundaryQuery(${JSON.stringify(selector)});})()`;
 }
+
+/**
+ * An isolated-world expression for the selectors a Bot's snapshot gives the
+ * elements in `elements` (an expression for an array of them). Playwright's
+ * generator checks each candidate by running it, so in a Bot's view (see
+ * `BROWSER_BOUNDARY_SCOPE_SOURCE`) it never picks one whose match depends on
+ * what a field holds, such as the name of a button around a card textarea,
+ * and every selector it gives still finds its element for the Bot. Without
+ * that view it falls back to CSS selectors.
+ */
+export function browserBoundarySelectorsExpression(elements: string): string {
+  return `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${BROWSER_BOUNDARY_NAME_SOURCE}${BROWSER_BOUNDARY_SCOPE_SOURCE}const p=globalThis.__aidenPlaywright;const list=[...${elements}];try{return __aidenBoundaryScope(()=>list.map((e)=>p.generateSelectorSimple(e,{})));}catch{return list.map((e)=>p.generateSelectorSimple(e,{noText:true,omitInternalEngines:true}));}})()`;
+}
+
+/**
+ * What a Bot hears when another element covers its target. Playwright's own
+ * message previews the covering element's attributes and text, which for a
+ * card field laid over a label is the card number.
+ */
+export const BROWSER_COVERED_TARGET = "Another element covers the target.";
+export const BROWSER_COVERED_OR_MOVED_TARGET = "Another element covers the target or it moved.";
 
 /**
  * Whether a `browser_press` key would put text into the focused field: one

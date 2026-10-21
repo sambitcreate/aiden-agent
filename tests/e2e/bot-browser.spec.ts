@@ -101,6 +101,20 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.textLocators.button).toBe("ran");
   expect(result.textLocators.both).toMatch(/strict mode violation: this locator matches 2 elements/u);
   expect(result.textLocators.both).not.toMatch(/4111|737/u);
+  // Role names can't tell a password, code or card field's live value apart; the snapshot names nothing with one.
+  expect(result.roleLocators.right).toEqual([timedOut, timedOut, timedOut, timedOut]);
+  expect(result.roleLocators.wrong).toEqual(result.roleLocators.right);
+  expect(result.roleLocators.button).toBe("ran");
+  expect(result.roleLocators.cell).toBe("ran");
+  expect(result.tableSeen.leaked).toEqual([]);
+  expect(result.tableSeen.found.length).toBeGreaterThan(0);
+  expect(result.tableSeen.found.every((found: string) => found === "ran"), JSON.stringify(result.tableSeen.found)).toBe(true);
+  expect(result.tableSeen.probed.checkbox ?? "").not.toMatch(/5555/u);
+  expect(result.tableSeen.probed.button).toBe("Pay");
+  // A card field covering the target: Playwright's message quotes it; the Bot's doesn't.
+  expect(result.covered.unbounded).toMatch(/4111111111111111/u);
+  expect(result.covered.bot).toContain(result.expected.coveredTarget);
+  expect(result.covered.bot).not.toMatch(/4111|autocomplete|<input/u);
 
   // A cross-site frame can't be checked for fields: no image, and a note saying why.
   expect(result.frame).toEqual({ image: false, note: result.expected.frameNote, leaked: false });

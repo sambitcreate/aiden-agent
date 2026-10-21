@@ -58,6 +58,22 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
       // Card fields with text inside them: a textarea's default, or a framework's copy of what was typed.
       return html(`<form><label>Card number <textarea autocomplete="cc-number">4111111111111111</textarea></label>
         <label>Security code <textarea autocomplete="cc-csc">737</textarea></label><button type="button">Pay</button></form>`);
+    case "/card-table":
+      // A table-layout sign-in and payment form, and a checkbox whose label holds a card field:
+      // Chromium names each cell, row and the checkbox with the field's live value.
+      return html(`<form><table>
+        <tr><td>Password</td><td><input id="pw" type="password"></td></tr>
+        <tr><td>Code</td><td><input id="code" autocomplete="one-time-code"></td></tr>
+        <tr><td>Card</td><td><input id="number" autocomplete="cc-number"></td></tr></table>
+        <label><input type="checkbox"> Save <input id="saved" autocomplete="cc-number"></label>
+        <div role="button" tabindex="0"><textarea autocomplete="cc-csc">737</textarea></div>
+        <button type="button">Pay</button></form>
+        <script>for(const [id,value] of [["pw","hunter2xyz"],["code","550071"],["number","4000123412341234"],["saved","5555444433332222"]])document.getElementById(id).value=value;</script>`);
+    case "/covered":
+      // A card field laid over its floating label; Playwright's hit-target error previews it.
+      return html(`<div style="position:relative;width:300px;height:60px">
+        <label id="float" for="cc" style="position:absolute;left:8px;top:8px">Card number</label>
+        <input id="cc" autocomplete="cc-number" value="4111111111111111" style="position:absolute;left:0;top:0;width:300px;height:40px;background:transparent"></div>`);
     case "/framed":
       return html(`<p>Payment</p><iframe title="Pay" src="http://localhost:${port}/inner" style="width:300px;height:200px;border:0"></iframe>`);
     case "/inner":
@@ -195,6 +211,45 @@ void app.whenReady().then(async () => {
     button: await waitFor("text=Pay"),
     both: await outcome(agent({ action: "scroll", tabId: botTab, locator: "textarea", deltaX: 0, deltaY: 10 })),
   };
+  // Role names can't tell a field's live value apart either, and the
+  // snapshot names no element with one, in its accessibility tree or locators.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/card-table`);
+  const roleLocators = {
+    right: [
+      await waitFor("internal:role=cell[name=/^hunter/]"),
+      await waitFor("internal:role=row[name=/Password h/]"),
+      await waitFor("internal:role=checkbox[name=/Save 5555/]"),
+      await waitFor('form >> internal:has="internal:role=cell[name=/^4000/]"'),
+    ],
+    wrong: [
+      await waitFor("internal:role=cell[name=/^zzzz/]"),
+      await waitFor("internal:role=row[name=/Password z/]"),
+      await waitFor("internal:role=checkbox[name=/Save 9999/]"),
+      await waitFor('form >> internal:has="internal:role=cell[name=/^9999/]"'),
+    ],
+    button: await waitFor('internal:role=button[name="Pay"i]'),
+    cell: await waitFor('internal:role=cell[name="Password"i]'),
+  };
+  const table = await snapshot(botTab);
+  const tableSeen = {
+    leaked: ["hunter2xyz", "550071", "4000123412341234", "5555444433332222", "737"].filter((secret) =>
+      JSON.stringify([table.text, table.elements, table.accessibilityTree]).includes(secret)),
+    // Each element's locator still finds it for the Bot.
+    found: await Promise.all(table.elements.map((element) => outcome(agent({ action: "wait", tabId: botTab, locator: element.selector, timeoutMs: 300 })))),
+    // The name the Bot's rules see for a click on the checkbox, and on Pay.
+    probed: {
+      checkbox: (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { locator: "internal:role=checkbox", click: true }))?.accessibleName,
+      button: (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { locator: 'internal:role=button[name="Pay"i]', click: true }))?.accessibleName,
+    },
+  };
+  // A card field over the Bot's target: the error says so without describing the field.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/covered`);
+  await navigate(PERSON_WORKSPACE, personTab, `${origin}/covered`);
+  const covered = {
+    bot: await outcome(agent({ action: "click", tabId: botTab, locator: "#float", timeoutMs: 300 })),
+    // A workspace chat's agent on the person's browser gets Playwright's own message.
+    unbounded: await outcome(browser.command(PERSON_WORKSPACE, { action: "click", tabId: personTab, locator: "#float", timeoutMs: 300 }, { source: "agent" })),
+  };
 
   // 3. A visible cross-site frame can't be inspected for fields: the image is dropped, with a note.
   step("3 cross-site frame");
@@ -276,7 +331,7 @@ void app.whenReady().then(async () => {
     JSON.stringify(
       {
         electron: process.versions.electron, platform: process.platform,
-        isolation, masking, typing, noteTyping, pressing, navigationKey, refused, textLocators, frame,
+        isolation, masking, typing, noteTyping, pressing, navigationKey, refused, textLocators, roleLocators, tableSeen, covered, frame,
         hold: { heldState, held, personMayUse, afterRelease, heldTraces },
         reveal,
         cleared,
@@ -286,6 +341,7 @@ void app.whenReady().then(async () => {
           actionRefusal: boundary.BROWSER_BOUNDARY_ACTION_REFUSED,
           valueSelectorRefusal: boundary.BROWSER_VALUE_SELECTOR_REFUSED,
           xpathRefusal: boundary.BROWSER_XPATH_SELECTOR_REFUSED,
+          coveredTarget: boundary.BROWSER_COVERED_TARGET,
           frameNote: boundary.BROWSER_IMAGE_OMITTED.frame,
           maskedNote: boundary.BROWSER_IMAGE_MASKED_NOTE,
         },

@@ -8,6 +8,7 @@ import {
   isSensitiveField,
   quadsBounds,
   scanCredentialTree,
+  scanSensitiveFieldReach,
   scanSensitiveFields,
   SensitiveFieldMemory,
   sensitiveFieldBoxes,
@@ -24,8 +25,11 @@ import {
   BROWSER_VALUE_SELECTOR_REFUSED,
   BROWSER_XPATH_SELECTOR_REFUSED,
   browserBoundaryLocatorExpression,
+  browserBoundarySelectorsExpression,
   browserTypingGuardSource,
+  scrubBrowserSnapshot,
 } from "./credential-boundary.js";
+import type { BrowserTab } from "../../../renderer/shared/browser.js";
 import { playwrightInjectedSource } from "./playwright-source.generated.js";
 
 let nextId = 1;
@@ -286,12 +290,15 @@ test("Chromium: every selector that can tell a field's value apart is refused; o
   }
 });
 
-test("Chromium: a Bot's locator can't tell what a card or code field holds by its text; ordinary locators find the same element", { timeout: 30_000 }, async () => {
+test("Chromium: a Bot's locator can't tell what a password, card or code field holds; ordinary locators find the same element", { timeout: 30_000 }, async () => {
   // A textarea's text (its default or a framework's copy of what was typed)
   // and a contenteditable code field's text are what text, label and XPath
-  // engines read. The bundled runtime, installed as the browser service does
-  // in an isolated world, is the oracle: each form below finds the field, or
-  // an element around it, with the right prefix and nothing with a wrong one.
+  // engines read; role engines read a field's live value (a password's too)
+  // into the name of the cell, row, checkbox or button around it, and a code
+  // field's text into the description of a button that points at it. The
+  // bundled runtime, installed as the browser service does in an isolated
+  // world, is the oracle: each form below finds the field, or an element
+  // around it, with the right prefix and nothing with a wrong one.
   const reads = (prefix: string) => [
     `xpath=//textarea[starts-with(.,'${prefix}')]`,
     `//form[contains(.,'${prefix}')]`,
@@ -307,6 +314,12 @@ test("Chromium: a Bot's locator can't tell what a card or code field holds by it
     `label:has-text("${prefix}")`,
     `textarea:not(:has-text("${prefix}"))`,
     `#host >> text=${prefix}`,
+    `internal:role=cell[name=/^${prefix}/]`,
+    `internal:role=row[name=/Password ${prefix}/]`,
+    `internal:role=checkbox[name=/Save ${prefix}/]`,
+    `form >> internal:has="internal:role=cell[name=/^${prefix}/]"`,
+    `internal:role=button[name=/^${prefix}/]`,
+    `internal:role=button[description=/${prefix}/]`,
   ];
   const ordinary: Array<[selector: string, id: string]> = [
     ['internal:role=textbox[name="Card number"i]', "card"],
@@ -317,17 +330,33 @@ test("Chromium: a Bot's locator can't tell what a card or code field holds by it
     ['internal:role=button[name="Pay"i]', "pay"],
     ['form >> internal:has-text="Pay"i', "checkout"],
     ["text=Signed in as sam@example.com", "account"],
+    ['internal:role=form[name="Checkout"i]', "checkout"],
+    ['internal:role=cell[name="Password"i]', "pwlabel"],
+    ["internal:role=checkbox", "remember"],
+    ['internal:role=button[name="Help"i]', "help"],
   ];
   const options = { isUnderTest: false, sdkLanguage: "javascript", testIdAttributeName: "data-testid", stableRafCount: 1, browserName: "chromium", shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] };
   let browser: Browser | undefined;
   try {
     browser = await playwright.chromium.launch({ headless: true });
     const page = await browser.newPage();
-    await page.setContent(`<form id="checkout">
+    await page.setContent(`<form id="checkout" aria-label="Checkout">
       <label>Card number <textarea id="card" name="card" autocomplete="cc-number">4111111111111111</textarea></label>
-      <label>Code <div id="otp" contenteditable autocomplete="one-time-code"><span>482913</span></div></label>
-      <div id="host"></div><button id="pay">Pay</button></form><p id="account">Signed in as sam@example.com</p>
+      <label id="code">Code <div id="otp" contenteditable autocomplete="one-time-code"><span>482913</span></div></label>
+      <div id="host"></div>
+      <table><tr><td id="pwlabel">Password</td><td><input id="pw" type="password"></td></tr>
+        <tr><td>One-time code</td><td><input id="otp2" autocomplete="one-time-code"></td></tr>
+        <tr><td>Card</td><td><input id="cc" autocomplete="cc-number"></td></tr></table>
+      <label><input type="checkbox" id="remember"> Save <input id="cc2" autocomplete="cc-number"></label>
+      <button id="help" type="button" aria-describedby="code">Help</button>
+      <button id="pay">Pay</button></form>
+      <div role="button" id="wrap" tabindex="0"><input id="cc3" autocomplete="cc-number"></div>
+      <p id="account">Signed in as sam@example.com</p>
       <script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<textarea id="csc" autocomplete="cc-csc">737</textarea>';</script>`);
+    // Typed live, as the person would: the value is a property, never an attribute.
+    for (const [selector, value] of [["#pw", "hunter2xyz"], ["#otp2", "550071"], ["#cc", "4000123412341234"], ["#cc2", "5555444433332222"], ["#cc3", "6011000990139424"]] as const) {
+      await page.fill(selector, value);
+    }
     const session = await page.context().newCDPSession(page);
     const frame = (await session.send("Page.getFrameTree")).frameTree.frame.id;
     const { executionContextId: contextId } = await session.send("Page.createIsolatedWorld", { frameId: frame, worldName: "aiden-browser", grantUniveralAccess: false });
@@ -354,7 +383,7 @@ test("Chromium: a Bot's locator can't tell what a card or code field holds by it
     };
 
     const told = new Set<number>();
-    for (const [prefix, other] of [["4111", "9999"], ["4829", "9999"], ["737", "999"]] as const) {
+    for (const [prefix, other] of [["4111", "9999"], ["4829", "9999"], ["737", "999"], ["hunt", "zzzz"], ["5500", "9999"], ["4000", "9999"], ["5555", "9999"], ["6011", "9999"]] as const) {
       const right = reads(prefix), wrong = reads(other);
       for (const [index, selector] of right.entries()) {
         const [matched, missed] = [await plain(selector), await plain(wrong[index]!)];
@@ -381,6 +410,69 @@ test("Chromium: a Bot's locator can't tell what a card or code field holds by it
     for (const [selector, id] of ordinary) {
       assert.equal(await plain(selector), id, `${selector} finds its element`);
       assert.equal(await bot(selector), id, `${selector} still finds it for a Bot`);
+    }
+
+    // The snapshot's locators: Playwright's generator names the button around
+    // a card field by its number; in a Bot's view no locator carries a value,
+    // and each still finds its element for the Bot.
+    const listed = ["wrap", "remember", "card", "pay", "help", "pw", "cc"];
+    const list = `${JSON.stringify(listed)}.map((id)=>document.getElementById(id))`;
+    const values = /4111|4829|737|hunter2xyz|550071|4000123412341234|5555444433332222|6011000990139424/u;
+    const generated = async (expression: string) => {
+      const result = await session.send("Runtime.evaluate", { expression, contextId, returnByValue: true });
+      return result.result.value as string[];
+    };
+    assert.match(JSON.stringify(await generated(`${list}.map((e)=>globalThis.__aidenPlaywright.generateSelectorSimple(e,{}))`)), values);
+    const bounded = await generated(browserBoundarySelectorsExpression(list));
+    assert.doesNotMatch(JSON.stringify(bounded), values);
+    for (const [index, selector] of bounded.entries()) assert.equal(await bot(selector), listed[index], `${selector} finds #${listed[index]} for a Bot`);
+  } finally {
+    await browser?.close();
+  }
+});
+
+test("Chromium: a Bot's snapshot names no element with what a field holds; names from elsewhere stay", { timeout: 30_000 }, async () => {
+  // Chromium's accessibility tree names a table cell with the card number or
+  // code typed in it (a password's cell with one bullet per character), a
+  // checkbox with the card field inside its label, a fieldset with the field
+  // in its legend, a button that owns a field (`aria-owns`), a cell a field is
+  // slotted into, and describes a button with a code field it points at. The
+  // raw tree is the oracle.
+  let browser: Browser | undefined;
+  try {
+    browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.setContent(`<form aria-label="Checkout"><div role="dialog" aria-labelledby="title"><h2 id="title">Payment</h2>
+      <table><tr><td>Password</td><td><input id="pw" type="password"></td></tr>
+        <tr><td>Code</td><td><input id="otp" autocomplete="one-time-code"></td></tr>
+        <tr><td>Card</td><td><input id="cc" autocomplete="cc-number"></td></tr></table>
+      <label><input type="checkbox"> Save <input id="saved" autocomplete="cc-number"></label>
+      <fieldset><legend>Expiry <input id="exp" autocomplete="cc-exp"></legend></fieldset>
+      <div role="button" tabindex="0" aria-owns="owned">Use card</div><input id="owned" autocomplete="cc-number">
+      <div id="host"><input id="slotted" autocomplete="cc-csc"></div>
+      <p id="hint">Code <span contenteditable autocomplete="one-time-code">482913</span></p><button aria-describedby="hint">Resend</button>
+      <label>Card number <textarea autocomplete="cc-number">4111111111111111</textarea></label>
+      <button>Pay</button></div></form>
+      <script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<table><tr><td>Security code <slot></slot></td></tr></table>";</script>`);
+    const typed: Array<[string, string]> = [["#pw", "hunter2xyz"], ["#otp", "550071"], ["#cc", "4000123412341234"], ["#saved", "5555444433332222"], ["#exp", "1229"], ["#owned", "4242424242424242"], ["#slotted", "7373"]];
+    for (const [selector, value] of typed) await page.fill(selector, value);
+    const session = await page.context().newCDPSession(page);
+    const cdp = { call: (method: string, params?: Record<string, unknown>) => session.send(method as never, params as never) as Promise<unknown> };
+    const tree = (await session.send("Accessibility.getFullAXTree")) as { nodes: unknown[] };
+    const scrubbed = scrubBrowserSnapshot(
+      { tab: {} as BrowserTab, text: "", elements: [], diagnostics: [], accessibilityTree: tree },
+      await scanSensitiveFieldReach(cdp),
+    );
+    type Node = { ignored?: boolean; role?: { value?: string }; name?: { value?: string }; description?: { value?: string } };
+    const named = (nodes: Node[]) => nodes.filter((node) => !node.ignored && node.role?.value !== "StaticText" && node.role?.value !== "InlineTextBox");
+    const names = (nodes: Node[]) => named(nodes).map((node) => `${node.role?.value} ${JSON.stringify(node.name?.value ?? "")}${node.description?.value ? ` described ${JSON.stringify(node.description.value)}` : ""}`);
+    const before = names(tree.nodes as Node[]).join("\n"), after = names((scrubbed.accessibilityTree as { nodes: Node[] }).nodes).join("\n");
+    const secrets = ["\u2022".repeat(10), "550071", "4000123412341234", "5555444433332222", "1229", "4242424242424242", "7373", "482913"];
+    for (const secret of secrets) assert.ok(before.includes(secret), `Chromium names an element with ${secret}:\n${before}`);
+    assert.doesNotMatch(JSON.stringify(scrubbed.accessibilityTree), /hunter2xyz|\u2022\u2022|550071|4000123412341234|5555444433332222|1229|4242424242424242|7373|482913|4111111111111111/u);
+    // Names from the page's own text, labels and attributes stay.
+    for (const name of ['form "Checkout"', 'dialog "Payment"', 'LayoutTableCell "Password"', 'textbox "Card number "', 'button "Pay"', 'button "Resend"']) {
+      assert.ok(after.includes(name), `${name} stays:\n${after}`);
     }
   } finally {
     await browser?.close();

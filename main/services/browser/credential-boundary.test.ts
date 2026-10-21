@@ -14,7 +14,7 @@ import {
   type BoundaryViewport,
   type CredentialBoundaryPort,
 } from "./credential-boundary.js";
-import type { CdpDomNode, CssRect } from "./credential-fields.js";
+import { sensitiveFieldReach, type CdpDomNode, type CssRect } from "./credential-fields.js";
 import { CREDENTIAL_MASK_GRAY, type RawBitmap } from "./credential-mask.js";
 
 const PASSWORD = 11, NAME = 12, FRAME = 13;
@@ -177,7 +177,14 @@ test("scrubbing drops a sensitive field's value, value text and rendered text, a
       ],
     },
   };
-  const scrubbed = scrubBrowserSnapshot(snapshot, new Set([40]));
+  const page: CdpDomNode = {
+    backendNodeId: 1, nodeType: 9, nodeName: "#document",
+    children: [
+      { backendNodeId: 40, nodeType: 1, nodeName: "INPUT", localName: "input", attributes: ["autocomplete", "one-time-code", "aria-label", "Code"] },
+      { backendNodeId: 41, nodeType: 1, nodeName: "INPUT", localName: "input", attributes: ["type", "email", "aria-label", "Email"] },
+    ],
+  };
+  const scrubbed = scrubBrowserSnapshot(snapshot, sensitiveFieldReach(page, new Set([40])));
   const serialized = JSON.stringify(scrubbed);
   assert.doesNotMatch(serialized, /482913/u);
   assert.match(serialized, /ada@example\.com/u, "ordinary fields keep their values");
@@ -203,7 +210,7 @@ test("a sensitive field's locator never carries what it holds; other locators st
       { ref: "1-2", tag: "button", text: "Pay 4111", selector: 'internal:role=button[name="Pay 4111"i]', bounds: at },
     ],
   };
-  const scrubbed = scrubBrowserSnapshot(snapshot, new Set());
+  const scrubbed = scrubBrowserSnapshot(snapshot, sensitiveFieldReach({ backendNodeId: 1, nodeType: 9, nodeName: "#document" }, new Set()));
   assert.doesNotMatch(JSON.stringify(scrubbed.elements[0]), /4111/u);
   assert.ok(scrubbed.elements[0]!.selector.length > 0, "the field can still be found");
   assert.equal(scrubbed.elements[1]!.selector, "#pw");
@@ -236,10 +243,13 @@ test("a Bot can't find a field by what is typed in it, or use XPath", () => {
     "form >> //textarea[starts-with(.,'4')]",
     'form >> internal:has="//textarea[starts-with(.,\'4\')]"',
     'form >> internal:has=" xpath=//textarea"',
+    'form >> internal:or = "..//textarea"',
   ]) {
     assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_XPATH_SELECTOR_REFUSED }, selector);
   }
-  for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip", "text=Open https://example.com/docs", "text=Signed in as sam@example.com", "a[href^='https://example.com']"]) {
+  // Quoted text that starts like XPath is only text.
+  for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip", "text=Open https://example.com/docs", "text=Signed in as sam@example.com", "a[href^='https://example.com']",
+    'role=button[name="..."]', 'button:has-text("...more")', 'internal:role=button[name="...more"i]', 'a[href^="//cdn.example.com"]', 'text="//comment"', "text=Loading..."]) {
     assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
   }
 });

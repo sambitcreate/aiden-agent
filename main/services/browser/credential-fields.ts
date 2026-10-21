@@ -24,6 +24,8 @@ export interface CdpDomNode {
   children?: CdpDomNode[];
   shadowRoots?: CdpDomNode[];
   contentDocument?: CdpDomNode;
+  /** `::before`, `::after` and marker boxes, which the accessibility tree also lists. */
+  pseudoElements?: CdpDomNode[];
   /** Set on frame owner elements (`iframe`, `frame`). */
   frameId?: string;
 }
@@ -170,6 +172,159 @@ export async function scanSensitiveFields(port: CdpPort, remembered?: ReadonlySe
 /** Backend node ids of the page's sensitive fields, without reading where they are. */
 export async function sensitiveFieldIds(port: CdpPort, remembered?: ReadonlySet<number>): Promise<number[]> {
   return (await scanSensitiveFields(port, remembered)).sensitive;
+}
+
+/**
+ * Which nodes' accessible names, descriptions and values could include what a
+ * sensitive field holds. Chromium names a table cell, a row, a checkbox whose
+ * label wraps a card field or a fieldset whose legend holds one with the
+ * field's live value (a password's too), so the accessibility tree can carry
+ * it outside the field itself. Read from the same pierced DOM tree.
+ */
+export interface SensitiveFieldReach {
+  /** The fields the reach was computed for. */
+  readonly sensitive: ReadonlySet<number>;
+  /** Every node the DOM read saw. A node it didn't see (added or removed since) is treated as one that reaches a field. */
+  readonly known: ReadonlySet<number>;
+  /** Nodes inside a sensitive field (its text, options, shadow tree), the field itself not included. */
+  readonly inside: ReadonlySet<number>;
+  /**
+   * For each node, the fields its accessible name could read: through its
+   * content (children, shadow trees, slotted and pseudo elements),
+   * `aria-owns`, `aria-labelledby` and `<label>` elements, followed from node
+   * to node. A field reads itself.
+   */
+  readonly reads: ReadonlyMap<number, ReadonlySet<number>>;
+  /** For each node, the fields inside it (its flat-tree descendants), itself included. */
+  readonly holds: ReadonlyMap<number, ReadonlySet<number>>;
+  /** Each element's `aria-describedby` targets. */
+  readonly describedBy: ReadonlyMap<number, readonly number[]>;
+  /** Fields that may be named by what they hold, because they aren't an input, textarea or select (a contenteditable code field). */
+  readonly selfNamed: ReadonlySet<number>;
+}
+
+/** Elements a `<label>` names (HTML labelable elements; a custom element may be a form-associated one). */
+const LABELABLE: ReadonlySet<string> = new Set(["button", "input", "meter", "output", "progress", "select", "textarea"]);
+const NATIVE_FIELDS: ReadonlySet<string> = new Set(["input", "textarea", "select"]);
+
+/** What reaches each of `sensitive` in a pierced `DOM.getDocument` tree (see `SensitiveFieldReach`). */
+export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<number>): SensitiveFieldReach {
+  const known = new Set<number>(), inside = new Set<number>(), selfNamed = new Set<number>();
+  const parentOf = new Map<number, number>(), scopeOf = new Map<number, number>(), hostOf = new Map<number, number>();
+  const ids = new Map<number, Map<string, number>>();
+  const elementChildren = new Map<number, number[]>();
+  // `into.get(b)` lists every `a` whose name reads `b` directly.
+  const into = new Map<number, number[]>();
+  const edge = (from: number, to: number): void => {
+    const list = into.get(to);
+    if (list) list.push(from);
+    else into.set(to, [from]);
+  };
+  const references: Array<{ from: number; scope: number; value: string; kind: "name" | "description" | "for" }> = [];
+  const labels = new Set<number>(), labelable: number[] = [], slots: number[] = [];
+  const stack: Array<{ node: CdpDomNode; parent?: number; scope: number; under: boolean }> = [{ node: root, scope: root.backendNodeId, under: false }];
+  let visited = 0;
+  while (stack.length > 0) {
+    const { node, parent, scope, under } = stack.pop()!;
+    if (++visited > MAX_NODES) throw new Error("The page is too large to check for password fields.");
+    const id = node.backendNodeId;
+    known.add(id);
+    if (parent !== undefined) {
+      parentOf.set(id, parent);
+      edge(parent, id);
+    }
+    if (under) inside.add(id);
+    const element = node.nodeType === ELEMENT_NODE;
+    if (element) {
+      const name = (node.localName ?? node.nodeName).toLowerCase();
+      scopeOf.set(id, scope);
+      const own = attribute(node, "id");
+      if (own) {
+        const scoped = ids.get(scope) ?? new Map<string, number>();
+        if (!scoped.has(own)) scoped.set(own, id);
+        ids.set(scope, scoped);
+      }
+      for (const [attr, kind] of [["aria-labelledby", "name"], ["aria-owns", "name"], ["aria-describedby", "description"]] as const) {
+        const value = attribute(node, attr);
+        if (value) references.push({ from: id, scope, value, kind });
+      }
+      if (name === "label") {
+        labels.add(id);
+        const target = attribute(node, "for");
+        if (target) references.push({ from: id, scope, value: target, kind: "for" });
+      }
+      if (LABELABLE.has(name) || name.includes("-")) labelable.push(id);
+      if (name === "slot") slots.push(id);
+      if (sensitive.has(id) && !NATIVE_FIELDS.has(name)) selfNamed.add(id);
+      elementChildren.set(id, (node.children ?? []).filter((child) => child.nodeType === ELEMENT_NODE).map((child) => child.backendNodeId));
+    }
+    const below = under || (element && sensitive.has(id));
+    const next: Array<{ node: CdpDomNode; parent: number; scope: number; under: boolean }> = [];
+    for (const shadow of node.shadowRoots ?? []) {
+      hostOf.set(shadow.backendNodeId, id);
+      next.push({ node: shadow, parent: id, scope: shadow.backendNodeId, under: below });
+    }
+    if (node.contentDocument) next.push({ node: node.contentDocument, parent: id, scope: node.contentDocument.backendNodeId, under: below });
+    for (const child of [...(node.pseudoElements ?? []), ...(node.children ?? [])]) next.push({ node: child, parent: id, scope, under: below });
+    for (let index = next.length - 1; index >= 0; index -= 1) stack.push(next[index]!);
+  }
+  const describedBy = new Map<number, number[]>();
+  for (const { from, scope, value, kind } of references) {
+    const scoped = ids.get(scope);
+    // Playwright splits id lists on spaces, Chromium on any whitespace: both are followed.
+    const targets = [...new Set([...value.split(" "), ...value.split(/\s+/u)])].flatMap((ref) => {
+      const target = ref ? scoped?.get(ref) : undefined;
+      return target === undefined ? [] : [target];
+    });
+    if (kind === "description") describedBy.set(from, targets);
+    // A label's `for` control is named by the label.
+    else if (kind === "for") for (const control of targets) edge(control, from);
+    else for (const target of targets) edge(from, target);
+  }
+  // A control is also named by every label around it in its own tree.
+  for (const control of labelable) {
+    const scope = scopeOf.get(control);
+    for (let above = parentOf.get(control); above !== undefined && scopeOf.get(above) === scope; above = parentOf.get(above)) {
+      if (labels.has(above)) edge(control, above);
+    }
+  }
+  // A slot shows its host's children.
+  for (const slot of slots) {
+    const host = hostOf.get(scopeOf.get(slot) ?? -1);
+    for (const child of host === undefined ? [] : elementChildren.get(host) ?? []) edge(slot, child);
+  }
+  const reads = new Map<number, Set<number>>(), holds = new Map<number, Set<number>>();
+  const add = (map: Map<number, Set<number>>, node: number, field: number): void => {
+    const set = map.get(node);
+    if (set) set.add(field);
+    else map.set(node, new Set([field]));
+  };
+  for (const field of sensitive) {
+    if (!known.has(field)) continue;
+    for (let node: number | undefined = field; node !== undefined; node = parentOf.get(node)) add(holds, node, field);
+    const queue = [field];
+    const seen = new Set<number>();
+    while (queue.length > 0) {
+      const node = queue.pop()!;
+      if (seen.has(node)) continue;
+      seen.add(node);
+      add(reads, node, field);
+      queue.push(...(into.get(node) ?? []));
+    }
+  }
+  return { sensitive, known, inside, reads, holds, describedBy, selfNamed };
+}
+
+/** The page's sensitive fields (`remembered` and `also` included) and what reaches them, from one DOM read. */
+export async function scanSensitiveFieldReach(
+  port: CdpPort,
+  remembered?: ReadonlySet<number>,
+  also: Iterable<number> = [],
+): Promise<SensitiveFieldReach> {
+  const document = (await port.call("DOM.getDocument", { depth: -1, pierce: true })) as { root?: CdpDomNode };
+  if (!document.root) throw new Error("The page's document could not be read.");
+  const scan = scanCredentialTree(document.root, remembered);
+  return sensitiveFieldReach(document.root, new Set([...scan.sensitive, ...also]));
 }
 
 /** The bounding rectangle of DevTools quads (`[x1, y1, … x4, y4]` each). */
