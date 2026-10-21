@@ -44,7 +44,7 @@ export function createBotComputerActivity(): BotComputerActivity {
 }
 
 export interface BotComputerSessionsDependencies {
-  host: Pick<BotComputerHost, "ensureRunning" | "computer" | "onChange">;
+  host: Pick<BotComputerHost, "ensureRunning" | "runningConnection" | "computer" | "onChange">;
   control: BotComputerControlRegistry;
   activity?: BotComputerActivity;
   /** The Bot's display name, for "Ada's computer screen isn't available…". */
@@ -76,6 +76,34 @@ export function createBotComputerSessions(
     void cached.screen.then((screen) => screen.close()).catch(() => undefined);
   };
 
+  /** This run's cached screen, or a new one through the factory. */
+  const openFor = (
+    open: BotComputerScreenFactory,
+    botId: string,
+    connection: BotComputerConnection,
+    signal?: AbortSignal,
+  ): Promise<BotComputerScreen> => {
+    const key = connectionKey(connection);
+    const cached = screens.get(botId);
+    if (cached?.key === key) return cached.screen;
+    if (cached) drop(botId);
+    const opening = open(connection, signal);
+    screens.set(botId, { key, screen: opening });
+    opening.catch(() => {
+      if (screens.get(botId)?.screen === opening) screens.delete(botId);
+    });
+    return opening;
+  };
+
+  const opener = async (botId: string) => {
+    const open = factory;
+    if (!open) {
+      const name = (await deps.botName?.(botId)) ?? "The Bot";
+      throw new BotComputerError("unsupported", `${name}'s computer screen isn't available in this build.`);
+    }
+    return (connection: BotComputerConnection, signal?: AbortSignal) => openFor(open, botId, connection, signal);
+  };
+
   deps.host.onChange((botId) => {
     const ids = botId === undefined ? [...screens.keys()] : [botId];
     for (const id of ids) {
@@ -100,21 +128,16 @@ export function createBotComputerSessions(
     },
 
     async screen(botId: string, signal?: AbortSignal, options: { reason?: BotComputerStartReason } = {}) {
-      if (!factory) {
-        const name = (await deps.botName?.(botId)) ?? "The Bot";
-        throw new BotComputerError("unsupported", `${name}'s computer screen isn't available in this build.`);
-      }
-      const connection = await deps.host.ensureRunning(botId, { reason: options.reason ?? "tool", signal });
-      const key = connectionKey(connection);
-      const cached = screens.get(botId);
-      if (cached?.key === key) return cached.screen;
-      if (cached) drop(botId);
-      const opening = factory(connection, signal);
-      screens.set(botId, { key, screen: opening });
-      opening.catch(() => {
-        if (screens.get(botId)?.screen === opening) screens.delete(botId);
-      });
-      return opening;
+      const open = await opener(botId);
+      return open(await deps.host.ensureRunning(botId, { reason: options.reason ?? "tool", signal }), signal);
+    },
+
+    async runningScreen(botId, signal) {
+      const open = await opener(botId);
+      // Read with no await before the open: a stop can't land between the check and the use.
+      const connection = deps.host.runningConnection(botId);
+      if (!connection) throw new BotComputerError("cancelled", "The computer isn't running.");
+      return open(connection, signal);
     },
 
     recordPointer(botId, pointer) {

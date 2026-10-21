@@ -9,7 +9,7 @@ import { getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import { botRuleLabel, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
-import { createBotComputerControl } from "../bot-computers/control.js";
+import { BOT_COMPUTER_GIVE_BACK_NOTE, createBotComputerControl } from "../bot-computers/control.js";
 import { createBotComputerShellTool } from "../bot-computers/computer-shell-tool.js";
 import type { BotComputerDriverFacts } from "../bot-computers/computer-elements.js";
 import type { BotComputerArgs } from "../bot-computers/computer-schema.js";
@@ -19,6 +19,7 @@ import { createBotComputerTool, createBotComputerToolState } from "../bot-comput
 import type { BotComputerConnection, BotComputerScreen } from "../bot-computers/types.js";
 import type { BotOrdinaryCapabilityKind } from "../bot-capability-catalog-core.js";
 import { botComputerAction } from "./bot-computer-approval.js";
+import { botComputerCandidates } from "./bot-computer-candidates.js";
 import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { ruleAskUnattendedBlock } from "./bot-handoff-text.js";
@@ -307,7 +308,13 @@ function fakeComputer() {
     },
     { tool: createBotComputerShellTool(BOT, { host, control, botName: async () => "Ada" }, { routine }), replay: "unsafe" },
   ];
-  return { events, reasons, captures: () => captures, candidates, control };
+  // As the Bot computer services hand them to `botComputerCandidates` (no guest driver lane).
+  const services = {
+    host: { ...host, computer: async () => undefined, guestDriver: async () => undefined },
+    sessions: { screen: async () => screen, recordPointer: () => undefined, setActivity: () => undefined },
+    control,
+  };
+  return { events, reasons, captures: () => captures, candidates, control, services, state };
 }
 
 function computerDeps(
@@ -424,6 +431,63 @@ test("Click Place order asks the person on an attended turn, and a routine block
     assert.ok(textOf(order).includes(ruleAskUnattendedBlock(label)), textOf(order));
   } finally {
     await unattended.harness.close(ctx);
+  }
+});
+
+test("on a routine or Telegram run, a computer the person keeps is given up after one bounded wait, though the tools are built for an attended turn", async () => {
+  const shell = fauxAssistantMessage(
+    [fauxToolCall("computer_shell", { command: "ls ~/Shared", description: "List the shared folder" }, { id: "ls" })],
+    { stopReason: "toolUse" },
+  );
+  for (const requestId of [ROUTINE, TELEGRAM, "desk-1"]) {
+    const computer = fakeComputer();
+    // As production builds them: the registry holds the attended tool set (`refresh()` has no turn),
+    // so the run the call serves decides.
+    const candidates = await botComputerCandidates(BOT, {
+      granted: true,
+      hasComputer: true,
+      supportsImages: true,
+      routine: false,
+      telegram: false,
+      computers: () => computer.services,
+      state: () => computer.state,
+      botName: async () => "Ada",
+      unattendedWaitMs: 50,
+    });
+    computer.control.takeOver(BOT, "viewer");
+    const turn = await botTurn(
+      computerDeps(computer, { candidates: () => candidates }),
+      createFauxModels([capture("look"), shell, fauxAssistantMessage("told them")]),
+    );
+    try {
+      const running = (await turn.root.submit({ type: "input", content: "check the computer", requestId }, ctx)).wait(ctx);
+      let ended = false;
+      void running.then(() => (ended = true));
+      if (requestId === "desk-1") {
+        // Someone is there to give it back: the call waits for them.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        assert.equal(ended, false, "an attended run keeps waiting for Give back");
+        computer.control.giveBack(BOT);
+        await running;
+        const [look] = await toolResults(turn.root);
+        assert.equal(textOf(look), BOT_COMPUTER_GIVE_BACK_NOTE);
+        continue;
+      }
+      await waitFor(() => ended, { timeoutMs: 5_000, what: `the ${requestId} run to stop waiting` }).finally(() => computer.control.giveBack(BOT));
+      const results = await toolResults(turn.root);
+      assert.deepEqual(
+        results.map((result) => [result.toolName, result.isError]),
+        [
+          ["computer", true],
+          ["computer_shell", true],
+        ],
+      );
+      for (const result of results) assert.match(textOf(result), /still using Ada's computer.*say in your reply/u, requestId);
+      assert.equal(computer.captures(), 0, "nothing is captured while the person has it");
+      assert.deepEqual(computer.reasons, [], "and nothing starts or runs");
+    } finally {
+      await turn.harness.close(ctx);
+    }
   }
 });
 

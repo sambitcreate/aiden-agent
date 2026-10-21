@@ -131,11 +131,11 @@ test("a sign-in card names its site by origin, even when the title text says oth
   screen.getByText("Sign in to github.com for Ada");
 });
 
-test("a sign-in on the Bot's computer opens Ada's computer and says the Bot can't see the screen meanwhile", () => {
+test("a sign-in on the Bot's computer opens Ada's computer and says the Bot waits until the person answers", () => {
   const onComputer: BotPendingHandoff = { ...SIGN_IN, target: "computer" };
   const { answers, opens } = mount(onComputer);
   screen.getByText("Sign in to github.com for Ada");
-  screen.getByText("Opens on Ada’s own computer, with you in control. Ada can’t see the screen until you answer, and never sees your password.");
+  screen.getByText("Opens on Ada’s own computer, with you in control. Ada waits until you answer, and never sees your password.");
   assert.deepEqual(buttonNames(), ["Open Ada’s computer", "Skip", "I’m signed in"]);
   fireEvent.click(screen.getByRole("button", { name: "Open Ada’s computer" }));
   fireEvent.click(screen.getByRole("button", { name: "I’m signed in" }));

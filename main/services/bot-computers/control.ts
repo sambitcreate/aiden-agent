@@ -3,6 +3,61 @@ import { BotComputerError, BotComputerTakenOverError, type BotComputerControl, t
 /** The tool-result note P10 adds once the person gives the computer back (plan §8.5). */
 export const BOT_COMPUTER_GIVE_BACK_NOTE = "The person used the computer; take a fresh capture first.";
 
+/**
+ * How long a routine or Telegram turn waits, in all, for the person to give
+ * the computer back. Nobody answers on those turns, so its calls give up
+ * rather than holding the run open for as long as the person keeps the computer.
+ */
+export const BOT_COMPUTER_UNATTENDED_WAIT_MS = 5 * 60_000;
+
+/**
+ * What is left of one unattended turn's wait for Give back. The turn's
+ * `computer` and `computer_shell` share it, so a Bot that calls again after
+ * giving up doesn't wait the whole time over.
+ */
+export interface BotComputerGiveBackBudget {
+  remainingMs: number;
+}
+
+/** What a computer call on an unattended turn tells the Bot once it stopped waiting for the person. */
+export function botComputerUnattendedGaveUp(possessive: string): string {
+  return `The person is still using ${possessive} computer, so this run stopped waiting for it. Don't use the computer again on this run; say in your reply what's left to do.`;
+}
+
+/**
+ * Waits until the Bot has its computer again. With a `budget` (a turn nobody
+ * watches), it waits at most what is left of it, spends what it waited, and
+ * resolves false once it is used up; the person keeps the computer. The
+ * caller's own cancellation still rejects.
+ */
+export async function waitForBotWithin(
+  control: Pick<BotComputerControl, "waitForBot">,
+  botId: string,
+  signal: AbortSignal | undefined,
+  budget?: BotComputerGiveBackBudget,
+): Promise<boolean> {
+  if (budget === undefined) {
+    await control.waitForBot(botId, signal);
+    return true;
+  }
+  const giveUp = new AbortController();
+  // Used up: a computer the Bot has back still resolves at once; one the person holds doesn't wait.
+  if (budget.remainingMs <= 0) giveUp.abort();
+  const timer = budget.remainingMs > 0 ? setTimeout(() => giveUp.abort(), budget.remainingMs) : undefined;
+  timer?.unref?.();
+  const started = performance.now();
+  try {
+    await control.waitForBot(botId, signal ? AbortSignal.any([signal, giveUp.signal]) : giveUp.signal);
+    return true;
+  } catch (error) {
+    if (giveUp.signal.aborted && !signal?.aborted) return false;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    budget.remainingMs = giveUp.signal.aborted ? 0 : Math.max(0, budget.remainingMs - (performance.now() - started));
+  }
+}
+
 interface ControlEntry {
   controller: "bot" | "person";
   by?: BotComputerTakeOverSource;

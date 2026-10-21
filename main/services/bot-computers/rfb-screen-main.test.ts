@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -63,6 +64,44 @@ test("an owner-Mac recording holds only what the server sent, in a file only thi
     assert.equal(recorded.subarray(0, 12).toString("latin1"), "RFB 003.008\n");
     assert.equal(recorded.includes(Buffer.from("run-pass-2")), false, "no password in a recording");
     assert.equal((await stat(path.join(dir, "rfb-recordings", file))).mode & 0o777, 0o600);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a recording the disk refuses ends the recording, and the screen keeps working", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "aiden-rfb-recordings-"));
+  const server = new FakeRfbServer({ width: 16, height: 12, password: "run-pass-2", version: "3.8" });
+  const port = await server.listen();
+  const logged: string[] = [];
+  let writes = 0;
+  // The disk fills up after the first chunk the server sent.
+  const fullDisk = {
+    ...fs,
+    writeSync: ((fd: number, buffer: Buffer) => {
+      writes += 1;
+      if (writes > 1) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+      return fs.writeSync(fd, buffer);
+    }) as typeof fs.writeSync,
+  };
+  try {
+    const factory = createRfbScreenFactory({
+      encode,
+      recordingsDir: path.join(dir, "rfb-recordings"),
+      recordingFs: fullDisk,
+      log: (message) => void logged.push(message),
+    });
+    // The disk refused while the screen was still signing in.
+    server.paint({ x: 0, y: 0, width: 16, height: 12 }, [1, 2, 3]);
+    const screen = await factory(connectionTo(port, "run-pass-2"));
+    const shot = await screen.capture({ format: "png", maxWidth: 16 });
+    assert.deepEqual([...shot.image], [3, 2, 1, 255], "the screen goes on after the recording stopped");
+    await screen.close();
+    assert.equal(writes, 2, "nothing more is written once the disk refused");
+    assert.ok(logged.some((message) => /recording/iu.test(message)), "the stop is logged");
+    const [file] = await readdir(path.join(dir, "rfb-recordings"));
+    assert.equal((await readFile(path.join(dir, "rfb-recordings", file))).subarray(0, 12).toString("latin1"), "RFB 003.008\n");
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });

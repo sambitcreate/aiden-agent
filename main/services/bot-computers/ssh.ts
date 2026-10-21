@@ -130,9 +130,6 @@ export interface GuestSshDependencies {
   run?: ProcessRunner;
 }
 
-/** A SIGALRM from the remote `alarm` ends sh with 128 + 14. */
-const REMOTE_ALARM_EXIT = 142;
-
 export async function runGuestCommand(
   target: GuestSshTarget,
   command: string,
@@ -147,6 +144,7 @@ export async function runGuestCommand(
   }
   const args = [...guestSshArgs(target, deps.paths), guestRemoteCommand(command, options.timeoutMs)];
   const run = deps.run ?? runBoundedProcess;
+  const started = performance.now();
   const result = await run(deps.sshCommand ?? "/usr/bin/ssh", args, {
     env: deps.env,
     signal: options.signal,
@@ -163,7 +161,11 @@ export async function runGuestCommand(
     stdout: result.stdout,
     stderr: result.stderr,
     truncated: result.truncated,
-    timedOut: result.timedOut || result.exitCode === REMOTE_ALARM_EXIT,
+    // Aiden's own clock decides. The guest's alarm starts after the connection does, so it
+    // never fires before `timeoutMs` here. How its SIGALRM reaches ssh's exit status varies
+    // (sh's 142, OpenSSH's 255 when the login shell exec'd perl, or no status at all), and a
+    // command may exit 142 by itself; a failure once the time is up is the timeout.
+    timedOut: result.timedOut || (result.exitCode !== 0 && performance.now() - started >= options.timeoutMs),
   };
 }
 

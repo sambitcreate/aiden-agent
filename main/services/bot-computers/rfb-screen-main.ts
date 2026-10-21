@@ -9,7 +9,7 @@
 // `<userData>/bot-computers/rfb-recordings/<vm>-<time>.bin`, mode 0600. Server
 // bytes carry no password; they do show the guest's screen.
 
-import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
+import * as nodeFs from "node:fs";
 import { connect, type Socket } from "node:net";
 import path from "node:path";
 
@@ -33,27 +33,45 @@ export function nativeImageEncoder(native: {
 
 const RECORDING_LIMIT_BYTES = 32 * 1_048_576;
 
-/** Tees what the server sends into a 0600 file, up to the limit. */
-function recordServerBytes(socket: Socket, file: string, log: (message: string, error?: unknown) => void): void {
+/** The file calls a recording makes; tests stand in a disk that fills up. */
+export type RfbRecordingFs = Pick<typeof nodeFs, "mkdirSync" | "openSync" | "writeSync" | "closeSync">;
+
+/**
+ * Tees what the server sends into a 0600 file, up to the limit. A write the
+ * disk refuses (full, or an I/O error) ends the recording, never the screen:
+ * it runs inside the socket's data handler, where a throw would be uncaught.
+ */
+function recordServerBytes(socket: Socket, file: string, fs: RfbRecordingFs, log: (message: string, error?: unknown) => void): void {
   let fd: number | undefined;
   let written = 0;
   try {
-    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    fd = openSync(file, "wx", 0o600);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fd = fs.openSync(file, "wx", 0o600);
   } catch (error) {
     log("Could not open an RFB recording.", error);
     return;
   }
   const finish = () => {
     if (fd === undefined) return;
-    closeSync(fd);
+    const open = fd;
     fd = undefined;
+    try {
+      fs.closeSync(open);
+    } catch (error) {
+      log("Could not close an RFB recording.", error);
+    }
   };
   socket.on("data", (chunk: Buffer) => {
     if (fd === undefined) return;
     const slice = chunk.subarray(0, Math.max(0, RECORDING_LIMIT_BYTES - written));
     if (slice.length > 0) {
-      writeSync(fd, slice);
+      try {
+        fs.writeSync(fd, slice);
+      } catch (error) {
+        log("The RFB recording stopped: the disk refused a write.", error);
+        finish();
+        return;
+      }
       written += slice.length;
     }
     if (written >= RECORDING_LIMIT_BYTES) finish();
@@ -65,6 +83,8 @@ export interface RfbScreenFactoryOptions {
   encode: BotComputerImageEncoder;
   /** Where owner-Mac recordings go; recording is off without it. */
   recordingsDir?: string;
+  /** The recording's file calls (node:fs by default). */
+  recordingFs?: RfbRecordingFs;
   log?(message: string, error?: unknown): void;
   now?(): number;
 }
@@ -79,7 +99,12 @@ function openVnc(connection: BotComputerConnection, options: RfbScreenFactoryOpt
   socket.setNoDelay(true);
   if (options.recordingsDir) {
     const stamp = new Date((options.now ?? Date.now)()).toISOString().replace(/[:.]/gu, "-");
-    recordServerBytes(socket, path.join(options.recordingsDir, `${connection.vmName}-${stamp}.bin`), options.log ?? (() => undefined));
+    recordServerBytes(
+      socket,
+      path.join(options.recordingsDir, `${connection.vmName}-${stamp}.bin`),
+      options.recordingFs ?? nodeFs,
+      options.log ?? (() => undefined),
+    );
   }
   return connectRfb(socket, { password: connection.vnc.password, signal });
 }

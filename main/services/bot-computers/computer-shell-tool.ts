@@ -14,6 +14,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { boundedToolOutput } from "../tool-output-context.js";
+import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin, type BotComputerGiveBackBudget } from "./control.js";
 import {
   BOT_COMPUTER_SHELL_TOOL_NAME,
   BotComputerError,
@@ -56,10 +57,16 @@ export interface BotComputerShellDependencies {
   host: Pick<BotComputerHost, "ensureRunning" | "runGuestCommand" | "touch">;
   control: Pick<BotComputerControl, "controller" | "run" | "waitForBot">;
   botName(botId: string): Promise<string>;
+  /** How long an unattended turn waits for Give back in all (default `BOT_COMPUTER_UNATTENDED_WAIT_MS`). */
+  unattendedWaitMs?: number;
 }
 
 export interface BotComputerShellTurn {
   routine: boolean;
+  /** Nobody can answer on this turn (a routine or Telegram run). Defaults to `routine`. */
+  unattended?: boolean;
+  /** An unattended turn's wait for Give back, shared with its `computer` (its own otherwise). */
+  giveBackBudget?: BotComputerGiveBackBudget;
 }
 
 function textResult(value: string, isError = false): AgentToolResult<null> {
@@ -85,6 +92,11 @@ export function createBotComputerShellTool(
   turn: BotComputerShellTurn,
 ): AgentTool<typeof BotComputerShellParameters, null> {
   const reason: BotComputerStartReason = turn.routine ? "routine" : "tool";
+  // Nobody can give the computer back on behalf of a routine or Telegram run: it waits only so long, in all.
+  const giveBackBudget =
+    (turn.unattended ?? turn.routine)
+      ? (turn.giveBackBudget ?? { remainingMs: deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS })
+      : undefined;
   return {
     name: BOT_COMPUTER_SHELL_TOOL_NAME,
     label: "Computer shell",
@@ -96,12 +108,15 @@ export function createBotComputerShellTool(
       if (!command.trim()) return textResult("computer_shell needs a command.", true);
       const owner = (await deps.botName(botId).catch(() => undefined)) || "The Bot";
       const progress = (line: string) => onUpdate?.({ content: [{ type: "text", text: line }], details: null });
-      const waitForGiveBack = async () => {
+      /** False when an unattended turn stopped waiting; the person still has the computer. */
+      const waitForGiveBack = async (): Promise<boolean> => {
         progress(`Waiting for the person to give ${owner}'s computer back.`);
-        await deps.control.waitForBot(botId, signal);
+        return waitForBotWithin(deps.control, botId, signal, giveBackBudget);
       };
       try {
-        if (deps.control.controller(botId) === "person") await waitForGiveBack();
+        if (deps.control.controller(botId) === "person" && !(await waitForGiveBack())) {
+          return textResult(botComputerUnattendedGaveUp(`${owner}'s`), true);
+        }
         await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
         const result = await deps.control.run(botId, signal, (actionSignal) =>
           deps.host.runGuestCommand(botId, command, {
@@ -113,11 +128,10 @@ export function createBotComputerShellTool(
         return await formatBotComputerShellResult(result);
       } catch (error) {
         if (error instanceof BotComputerTakenOverError) {
-          await waitForGiveBack();
-          return textResult(
-            "The person took over the computer, so Aiden stopped waiting for the command. It may have partly run, or still be running in the computer: check before running it again.",
-            true,
-          );
+          const back = await waitForGiveBack();
+          const stopped =
+            "The person took over the computer, so Aiden stopped waiting for the command. It may have partly run, or still be running in the computer: check before running it again.";
+          return textResult(back ? stopped : `${stopped} ${botComputerUnattendedGaveUp(`${owner}'s`)}`, true);
         }
         if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
         if (error instanceof BotComputerError) return textResult(error.message, true);

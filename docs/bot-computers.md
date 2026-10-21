@@ -40,8 +40,12 @@ seeing and taking over a Bot's computer, and the tools a Bot uses inside it.
    a 100 GB sparse disk). Aiden then prepares it over SSH: it installs its own
    key, pins the guest's host key, replaces the preset's password with a random
    one, turns off password login for SSH, turns off automatic software updates
-   and first-run prompts, links `~/Shared` to the shared folder, and shuts the
-   base down. The restore image is deleted once the base is ready.
+   and first-run prompts, and links `~/Shared` to the shared folder. It then
+   installs its guest driver for element control and waits while you allow
+   that driver Accessibility and Screen Recording on the base computer's live
+   screen, shown in Settings (or choose **Skip**; see "Guest driver lane"),
+   and shuts the base down. The restore image is deleted once the base is
+   ready.
 4. **Give a Bot a computer.** In the Bot's profile, **Computer → Give a
    computer** makes the Bot its own copy of the base (`aiden-bot-<id>`). It
    stays off until it is needed, and stops again when idle.
@@ -104,6 +108,9 @@ Bot computer that was interrupted while it was being made is marked for
   computer before its files are erased. Quitting Aiden turns every running
   computer off at once (a forced stop, like holding the power button) so quit
   stays within a few seconds.
+- **A stop that fails:** if Lume can't stop a computer, Aiden asks Lume for its
+  state again. A computer that is still running stays shown as running (and
+  keeps its idle timer), rather than being shown as off while it runs.
 - **Startup** stops computers an earlier launch left running and marks
   interrupted ones for Reset. It never stops a computer this launch is already
   starting or using, or the base while Set up builds it. A Mac that never chose
@@ -135,6 +142,19 @@ and it goes away when the computer is removed.
   action, and that first input is not sent to the computer. The Bot's computer
   actions are refused until you choose **Give back**, so it never works on a
   screen you are using.
+- **Stopping gives it back.** When the computer stops while you control it
+  (Pause, the idle stop, Stop, or a failure), control goes back to the Bot, so
+  a call that was waiting goes on and its next call starts the computer again,
+  instead of waiting for a Give back nobody can press on a stopped computer.
+  The one exception is a sign-in card that holds the computer for you: that
+  hold lasts until the card is answered or withdrawn. While Reset, Remove,
+  Delete Bot or Remove everything is replacing or deleting the computer,
+  nothing starts it: a call that was waiting starts the fresh copy once Reset
+  is done, and finds no computer after the others.
+- **The screen never starts it.** In the tab, only Start or switching to
+  Computer starts a stopped computer. The live screen connects only to a
+  computer that is running at that moment, so a stop that lands just as the
+  screen opens leaves the computer off.
 - **Using it.** While you control it, clicks, drags, keys and scrolling on the
   focused screen go to the computer. Tab, Shift-Tab and Command shortcuts stay
   with Aiden, so the keyboard can always leave the screen. Giving it back, or
@@ -153,7 +173,9 @@ Confirming on a Mac: whether Apple's screen sharing accepts Aiden's sign-in,
 pixel format, key codes and scroll buttons. Launch Aiden with
 `AIDEN_BOT_COMPUTERS_RECORD_RFB=1` to record what the screen server sends
 (never the password) into `bot-computers/rfb-recordings/` in Aiden's data
-folder. The recordings show the guest's screen, so delete them afterwards.
+folder. The recordings show the guest's screen, so delete them afterwards. A
+recording ends when the disk refuses a write (for example, when it is full);
+the screen keeps working.
 
 ## Privacy and network
 
@@ -174,7 +196,11 @@ folder. The recordings show the guest's screen, so delete them afterwards.
 - **Screen.** Each start sets a new random screen-sharing password. Aiden uses
   the computer's screen only if Lume reports it on `127.0.0.1`, and stops the
   computer if the screen-sharing port also answers on any of the Mac's network
-  addresses.
+  addresses. Lume takes that password only on its command line
+  (`--vnc-password`), so a program on this Mac that can read the running
+  `lume run` process's arguments could also open the screen on `127.0.0.1`.
+  Whether macOS shows those arguments to other accounts is checked under
+  "Confirming on a Mac"; passing the password another way needs a Lume change.
 - **SSH.** Aiden reaches the guest with its own key, kept in Aiden's data
   folder, and the guest's pinned host key (one per base Aiden built; a Bot
   computer presents the key of the base it was copied from). Password login is turned off in the
@@ -235,7 +261,9 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   separate from `computer_use`: Computer Use drives the person's Mac, while
   `computer` drives only the Bot's own virtual machine.
 - **`computer`** sees and acts through the computer's screen (the VNC lane):
-  vision only, with no accessibility tree. Its actions are `capture`, `click`,
+  vision only, with no accessibility tree. On a computer with element control
+  it can also list an app's numbered elements and click them by number (see
+  "Guest driver lane"). Its actions are `capture`, `click`,
   `double_click`, `right_click`, `drag`, `scroll`, `type`, `key`, `wait` and
   `verify`. Screenshots are JPEG, at most 1280 pixels on the long side, at
   quality 70, and coordinates are pixels of the newest screenshot. Each request
@@ -260,7 +288,12 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 - **Take over.** While the person has the computer, nothing the Bot asks for
   runs and nothing is captured: a `computer` call waits until they give it
   back, then tells the Bot "The person used the computer; take a fresh capture
-  first.", and a `computer_shell` command waits and then runs. Take over stops
+  first.", and a `computer_shell` command waits and then runs. On routine runs
+  and Telegram turns, where nobody may be there to give it back, the run waits
+  at most 5 minutes in all, across both tools; then each call tells the Bot the
+  person is still using the computer, not to use it again on that run, and to
+  say in its reply what is left to do. Each call checks which run it serves,
+  because the Bot's tools are built once for an attended turn. Take over stops
   a `computer` action in progress and releases any key or button it held. For
   a running `computer_shell` command it ends the SSH connection and tells the
   Bot the command may have partly run or still be running: without a terminal
@@ -274,14 +307,15 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 - **Rules.** Inside its own computer the Bot's baseline is allowed: nothing asks
   per click, because the virtual machine is the boundary. Rules still apply:
   purchase, communicate, publish and delete ask, credentials and money hand
-  off, and the person's own rules match too. The rules read the stated intent;
-  a key chord that does more than type a character (Return, Command-S,
-  Command-Delete) counts as pressing a button. Backspace or Delete is typing
-  only while element control has the Bot in a text field it clicked; anywhere
-  else it can delete what is selected, so it presses too. "Install software"
-  covers the person's Mac, not the Bot's own computer, though a rule of the
-  person's own can still cover an install there. Shell commands aren't
-  classified by rules. See [Bot rules](bot-rules.md).
+  off, and the person's own rules match too. The rules read the stated intent
+  and, under element control, the element acted on (its app, window, role and
+  label; see "Guest driver lane"). A key chord that does more than type a
+  character (Return, Command-S, Command-Delete) counts as pressing a button.
+  Backspace or Delete is typing only while element control has the Bot in a
+  text field it clicked; anywhere else it can delete what is selected, so it
+  presses too. "Install software" covers the person's Mac, not the Bot's own
+  computer, though a rule of the person's own can still cover an install
+  there. Shell commands aren't classified by rules. See [Bot rules](bot-rules.md).
 - **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
   Bot's own description of each step. The tool's guidance tells the Bot to
   call `hand_off` for passwords, codes and payments and let the person do those
@@ -344,9 +378,12 @@ skipped, everything above applies unchanged.
   turns element control on.
 - **Skip or failure keeps the screen lane.** Skipping, running out of time, a
   failed install or a failed probe never fails setup: the base is ready with
-  screen-only Bots, and Settings says why. A ready base without element control
-  offers **Set up element control**, which starts the base once, installs the
-  driver and waits for the permissions again.
+  screen-only Bots, and Settings says why. **Skip** takes effect at once, even
+  during the first permission check, the driver's restart or the probe. A ready
+  base without element control offers **Set up element control**, which starts
+  the base once, installs the driver and waits for the permissions again. It
+  first waits for any Bot computer still being copied from the base (Give or
+  Reset), so the base never starts while its disk is being copied.
 - **Clones inherit it.** Every Bot computer made from a base with element
   control copies the grants with the disk. A computer given before element
   control was set up stays on the screen lane until you **Reset** it.
@@ -383,8 +420,9 @@ by default; one with the Browser too gets the Browser by default). It needs
 Bot computers on this Mac, a computer given to the Bot, and an attended turn.
 
 - **The card.** The sign-in card reads **Open Ada's computer** and says the
-  page opens on Ada's own computer with you in control, that Ada can't see the
-  screen until you answer, and never sees your password.
+  page opens on Ada's own computer with you in control, that Ada waits until
+  you answer, and never sees your password. It doesn't promise that nothing
+  records the screen meanwhile (see the limit below).
 - **Open.** Aiden starts the computer if it is stopped, takes it over for you
   before anything shows on its screen, stops the guest driver (removing its
   "enabled" file, ending every process signed as `cua-driver` that runs then,
@@ -401,7 +439,20 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   signature, so such a program could start the driver again and record the
   screen while you sign in, for the Bot to read once it has the computer back.
   Password fields stay masked on the screen, and the driver never reads a
-  secure field's value. A computer without element control has no such grant.
+  secure field's value. A computer whose base never had these permissions
+  allowed has no such grant. One whose base had them allowed but then had
+  element control skipped or failing its check (Skip during the driver's
+  restart or probe, or a failed probe) keeps the grants with its disk, though
+  Bots act on its screen only, so the same limit applies to it.
+  Repeating the sweep while you hold the computer wouldn't close this: each
+  sweep checks the signature of every process in the guest and takes seconds,
+  while a restarted driver needs well under a second for a capture. Closing it
+  needs one of: `computer_shell` running as a second guest user with no GUI
+  session (its programs can't reach the driver or the screen), a driver gate
+  only root can re-open together with ending the Bot's own processes at Open,
+  or not offering sign-in on a computer whose base had these permissions
+  allowed. Each is an owner
+  decision and needs a Mac to confirm.
 - **Answering.** I'm signed in, Skip, or the card being withdrawn (the Bot was
   stopped or paused) gives the computer back, unless you already gave it back
   or took it again from the viewer, which keeps it with you. The Bot then takes

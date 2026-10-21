@@ -73,12 +73,14 @@ test("a guest command passes secrets on stdin, bounds output, and reports the re
   const calls: { command: string; args: readonly string[]; options: BoundedProcessOptions }[] = [];
   const run = async (command: string, args: readonly string[], runOptions: BoundedProcessOptions): Promise<BoundedProcessResult> => {
     calls.push({ command, args, options: runOptions });
+    // The guest's alarm ends the command once its time is up.
+    await new Promise((resolve) => setTimeout(resolve, 60));
     return { exitCode: 142, signal: null, stdout: "partial", stderr: "", truncated: true, timedOut: false };
   };
   const result = await runGuestCommand(
     { host: "192.168.64.7", user: "lume" },
     "sleep 100",
-    { timeoutMs: 1_000, maxOutputBytes: 64, stdin: "secret\n" },
+    { timeoutMs: 40, maxOutputBytes: 64, stdin: "secret\n" },
     { paths, env: { PATH: "/usr/bin" }, run },
   );
   assert.deepEqual(result, { exitCode: 142, stdout: "partial", stderr: "", truncated: true, timedOut: true });
@@ -92,6 +94,26 @@ test("a guest command passes secrets on stdin, bounds output, and reports the re
     runGuestCommand({ host: "192.168.64.7", user: "lume" }, "true", { timeoutMs: 0, maxOutputBytes: 64 }, { paths, env: {}, run }),
     BotComputerError,
   );
+});
+
+test("whether a guest command timed out comes from Aiden's own clock, whatever exit status ssh reports", async () => {
+  const target = { host: "192.168.64.7", user: "lume" } as const;
+  const ending = (afterMs: number, exitCode: number | null) => async (): Promise<BoundedProcessResult> => {
+    await new Promise((resolve) => setTimeout(resolve, afterMs));
+    return { exitCode, signal: exitCode === null ? "SIGALRM" : null, stdout: "", stderr: "", truncated: false, timedOut: false };
+  };
+  const timedOut = async (afterMs: number, exitCode: number | null) =>
+    (await runGuestCommand(target, "sleep 100", { timeoutMs: 40, maxOutputBytes: 64 }, { paths, env: {}, run: ending(afterMs, exitCode) })).timedOut;
+  // The alarm's SIGALRM can surface as OpenSSH's 255 (the login shell exec'd perl) or as no exit status.
+  assert.equal(await timedOut(60, 255), true);
+  assert.equal(await timedOut(60, null), true);
+  assert.equal(await timedOut(60, 142), true);
+  // An ordinary failure within the time is never a timeout, even one whose status happens to be 142.
+  assert.equal(await timedOut(0, 255), false);
+  assert.equal(await timedOut(0, 142), false);
+  assert.equal(await timedOut(0, 1), false);
+  // A command that finished well, if late, did not time out.
+  assert.equal(await timedOut(60, 0), false);
 });
 
 test("the key pair is made once with ssh-keygen and kept owner-only", async () => {

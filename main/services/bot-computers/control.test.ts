@@ -67,6 +67,10 @@ function fakeHost(state: { running: boolean; port: number }) {
         state.running = true;
         return { vmName: "aiden-bot-0123456789abcdef", ip: "192.168.64.7", vnc: { host: "127.0.0.1", port: state.port, password: "pw" }, ssh: { host: "192.168.64.7", user: "lume" } };
       },
+      runningConnection: (): BotComputerConnection | undefined =>
+        state.running
+          ? { vmName: "aiden-bot-0123456789abcdef", ip: "192.168.64.7", vnc: { host: "127.0.0.1", port: state.port, password: "pw" }, ssh: { host: "192.168.64.7", user: "lume" } }
+          : undefined,
       computer: async (botId: string): Promise<BotComputerStatus> => ({
         botId,
         vmName: "aiden-bot-0123456789abcdef",

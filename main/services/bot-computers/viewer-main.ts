@@ -30,7 +30,7 @@ import {
   type BotComputerHost,
   type BotComputerScreen,
   type BotComputerScreenFactory,
-  type BotComputerStartReason,
+  type BotComputerSessions,
 } from "./types.js";
 import { BOT_COMPUTER_VIEWER_KEY_HEADER, startBotComputerViewerHub, type BotComputerViewerHub } from "./viewer-hub.js";
 
@@ -39,9 +39,7 @@ export const BOT_COMPUTER_BASE_VIEW_KEY = "#base-computer";
 
 export interface BotComputerViewerDependencies {
   host: Pick<BotComputerHost, "computer" | "ensureRunning" | "touch" | "onChange"> & Partial<Pick<BotComputerHost, "baseView">>;
-  sessions: {
-    screen(botId: string, signal?: AbortSignal, options?: { reason?: BotComputerStartReason }): Promise<BotComputerScreen>;
-  };
+  sessions: Pick<BotComputerSessions, "runningScreen">;
   control: Pick<BotComputerControl, "controller" | "takeOver" | "onChange">;
   /** Opens the base computer's screen while setup waits for the person (the same factory as the Bots'). */
   baseScreen?: BotComputerScreenFactory;
@@ -100,12 +98,14 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
     return screen;
   };
 
-  /** The hub only ever shows a computer that is already running; it never starts one. */
+  /**
+   * The hub only ever shows a computer that is already running; it never starts one. The
+   * running check and the connection are one read, so a stop that lands meanwhile can't
+   * turn into a start.
+   */
   const liveScreen = async (botId: string, signal: AbortSignal): Promise<BotComputerLiveScreen> => {
     if (botId === BOT_COMPUTER_BASE_VIEW_KEY) return baseLiveScreen(signal);
-    const computer = await deps.host.computer(botId);
-    if (computer?.state !== "running") throw new BotComputerError("cancelled", "The computer isn't running.");
-    const screen = await deps.sessions.screen(botId, signal, { reason: "viewer" });
+    const screen = await deps.sessions.runningScreen(botId, signal);
     if (!isLiveScreen(screen)) throw new BotComputerError("unsupported", "This computer's screen can't be viewed.");
     return screen;
   };

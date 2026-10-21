@@ -299,7 +299,7 @@ function ComputerState({ bot, computer, start }: { bot: ComputerBot; computer: B
           : `It starts when ${bot.name} needs it, or when you start it here.`}
       </p>
       {start.error ? (
-        <p role="alert" className="text-status-red">
+        <p role="alert">
           {start.error}
         </p>
       ) : null}

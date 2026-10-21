@@ -13,14 +13,18 @@
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit, vncHost, stopDelayMs, hostKey and vncUpstream of a JSON file named by a
-// leading `--fake-config <file>`):
+// keys log, stale, limit, vncHost, stopDelayMs, stopFails, cloneDelayMs, hostKey and vncUpstream of a
+// JSON file named by a leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)";
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
 //   Virtualization VM-limit error (written to the --log-file, as the detached run does);
 //   an unattended `create` boots its VM, so it fails the same way, on stderr;
 // - AIDEN_FAKE_LUME_VNC_HOST: the host `get` reports in vncUrl (default 127.0.0.1);
 // - AIDEN_FAKE_LUME_STOP_DELAY_MS: how long `stop` takes before the VM is off (default 0);
+// - AIDEN_FAKE_LUME_STOP_FAILS: comma-separated VM names whose `stop` (graceful or forced)
+//   fails and leaves the VM running;
+// - AIDEN_FAKE_LUME_CLONE_DELAY_MS: how long `clone` copies the disk. A source that starts
+//   running meanwhile fails the clone: the real copy would be torn, and the fake says so.
 // - AIDEN_FAKE_LUME_HOST_KEY: the `ssh-ed25519 …` host key a fresh install gets
 //   (every macOS install makes its own; clones keep their source's). The VM's
 //   key is in the fake state, so host tests can check what ssh would trust.
@@ -49,6 +53,8 @@ if (args[0] === "--fake-config") {
     limit: "AIDEN_FAKE_LUME_LIMIT",
     vncHost: "AIDEN_FAKE_LUME_VNC_HOST",
     stopDelayMs: "AIDEN_FAKE_LUME_STOP_DELAY_MS",
+    stopFails: "AIDEN_FAKE_LUME_STOP_FAILS",
+    cloneDelayMs: "AIDEN_FAKE_LUME_CLONE_DELAY_MS",
     hostKey: "AIDEN_FAKE_LUME_HOST_KEY",
     vncUpstream: "AIDEN_FAKE_LUME_VNC_UPSTREAM",
   };
@@ -282,6 +288,13 @@ async function main() {
       if (!vm) fail(`Virtual machine not found: ${source}`);
       if (isRunning(vm)) fail(`Virtual machine already running: ${source}`);
       if (state.vms[target]) fail(`Virtual machine already exists with name: ${target}`);
+      const cloneDelay = Number(process.env.AIDEN_FAKE_LUME_CLONE_DELAY_MS ?? "0");
+      if (cloneDelay > 0) {
+        await sleep(cloneDelay);
+        const copied = readState(storage);
+        if (copied.vms[source] && isRunning(copied.vms[source])) fail(`fake lume: ${source} started while its disk was being copied`);
+        Object.assign(state, copied);
+      }
       const count = Object.keys(state.vms).length;
       state.vms[target] = {
         status: "stopped",
@@ -356,6 +369,7 @@ async function main() {
       const vm = state.vms[name];
       if (!vm) fail(`Virtual machine not found: ${name}`);
       if (!isRunning(vm)) fail(`Virtual machine not running: ${name}`);
+      if ((process.env.AIDEN_FAKE_LUME_STOP_FAILS ?? "").split(",").includes(name)) fail(`Failed to stop virtual machine: ${name}`);
       const stopDelay = Number(process.env.AIDEN_FAKE_LUME_STOP_DELAY_MS ?? "0");
       if (stopDelay > 0) await sleep(stopDelay);
       // Re-read: other Lume calls may have changed the state while this one waited.

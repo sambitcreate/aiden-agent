@@ -38,6 +38,8 @@ interface FakeConfig {
   limit?: number;
   vncHost?: string;
   stopDelayMs?: number;
+  stopFails?: string;
+  cloneDelayMs?: number;
   hostKey?: string;
 }
 
@@ -49,6 +51,8 @@ interface FakeVm {
 }
 
 interface LoggedCall {
+  /** When the fake started handling the call (ms since the epoch). */
+  at?: number;
   kind: string;
   pid?: number;
   op?: string;
@@ -505,6 +509,109 @@ test("idle stop fires after the idle time, but not while the person has control"
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert.equal((await context.host.computer("ada"))?.state, "stopped");
+  });
+});
+
+test("a computer that stops while the person holds it goes back to the Bot, unless a sign-in card holds it", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.give("ada");
+    await context.host.ensureRunning("ada", { reason: "viewer" });
+    context.host.control.takeOver("ada", "viewer");
+    // The Bot's next call waits for Give back.
+    let resumed = false;
+    void context.host.control.waitForBot("ada", undefined).then(() => {
+      resumed = true;
+    });
+
+    await context.host.stop("ada", { reason: "pause" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal((await context.host.computer("ada"))?.controller, "bot", "nobody can use a computer that is off");
+    assert.equal(resumed, true, "the waiting call goes on instead of waiting for a Give back the tab can't offer");
+
+    // Started again, it idles out as usual.
+    await context.host.ensureRunning("ada", { reason: "viewer" });
+    context.advance(2 * 60_000);
+    last(context.idle.filter((entry) => !entry.cancelled))?.callback();
+    await waitFor(async () => (await context.host.computer("ada"))?.state === "stopped", "the idle stop");
+
+    // A sign-in hold lasts until its card settles or is withdrawn, even across a stop.
+    await context.host.ensureRunning("ada", { reason: "viewer" });
+    context.host.control.takeOver("ada", "sign_in");
+    await context.host.stop("ada", { reason: "person" });
+    assert.equal((await context.host.computer("ada"))?.controller, "person");
+    assert.equal(context.host.control.takenOverBy("ada"), "sign_in");
+  });
+});
+
+test("a stop Lume fails to carry out leaves the computer running, as Lume reports it", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    const connection = await context.host.ensureRunning("ada", { reason: "tool" });
+    context.config.stopFails = vmName;
+    context.writeConfig();
+    await assert.rejects(context.host.stop("ada", { reason: "person" }), (error: unknown) => error instanceof BotComputerError && error.code === "lume_failed");
+    assert.equal(context.vmRunning(vmName), true);
+    assert.equal((await context.host.computer("ada"))?.state, "running", "still running, still taking its place");
+    assert.equal(context.host.runningConnection("ada")?.vnc.port, connection.vnc.port);
+    assert.equal((await context.host.ensureRunning("ada", { reason: "tool" })).vnc.password, connection.vnc.password, "no second start");
+
+    context.config.stopFails = undefined;
+    context.writeConfig();
+    await context.host.stop("ada", { reason: "person" });
+    assert.equal(context.vmRunning(vmName), false);
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+    assert.equal(context.host.runningConnection("ada"), undefined);
+  });
+});
+
+test("a Bot call that waited for Give back starts nothing while Reset, Delete or Remove everything replaces the computer", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    // The person holds the computer, and the Bot's next call waits for it, as the computer tool does.
+    const botCall = () => {
+      context.host.control.takeOver("ada", "viewer");
+      return context.host.control.waitForBot("ada", undefined).then(() => context.host.ensureRunning("ada", { reason: "tool" }));
+    };
+    const cli = () => context.calls().filter((call) => call.kind === "cli");
+
+    // Reset stops the computer, which gives it back to the Bot, then copies the base afresh.
+    const afterReset = botCall();
+    const reset = await context.host.reset("ada");
+    assert.equal(reset.outdated, false);
+    const connection = await afterReset;
+    const ops = cli().map((call) => call.op);
+    assert.ok(ops.lastIndexOf("clone") < ops.lastIndexOf("run"), "the Bot's call starts the fresh copy, after it was made");
+    assert.equal(context.vmRunning(vmName), true);
+    assert.equal(context.host.runningConnection("ada")?.vnc.password, connection.vnc.password);
+
+    // Deleting the Bot's computer, then Remove everything: the waiting call finds no computer,
+    // and nothing starts while the VM or its files go.
+    const removals: Array<[string, () => Promise<unknown>]> = [
+      ["delete", () => context.host.deleteForBot("ada")],
+      ["remove everything", () => context.host.removeEverything()],
+    ];
+    for (const [what, remove] of removals) {
+      if (!(await context.host.computer("ada"))) {
+        await context.host.give("ada");
+        await context.host.ensureRunning("ada", { reason: "tool" });
+      }
+      const waiting = botCall();
+      const before = cli().length;
+      await remove();
+      await assert.rejects(waiting, (error: unknown) => error instanceof BotComputerError && error.code === "no_computer", what);
+      assert.deepEqual(
+        cli()
+          .slice(before)
+          .filter((call) => call.op === "run"),
+        [],
+        `no computer starts during ${what}`,
+      );
+      assert.equal(context.vmRunning(vmName), false, what);
+    }
   });
 });
 
@@ -1050,8 +1157,9 @@ test("Remove everything turns off a computer an earlier launch left running befo
 const GUEST_FIXTURE = path.resolve("main/services/bot-computers/fixtures/guest-cua-driver.mjs");
 
 /** A host whose guest sessions run the fake guest driver, with grants read from a file. */
-function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () => Promise<string> } = {}) {
+function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () => Promise<string>; hangOn?: string } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "p11-guest-"));
+  const callLog = path.join(dir, "guest-calls.jsonl");
   const permissions = path.join(dir, "permissions.json");
   writeFileSync(permissions, JSON.stringify({ accessibility: false, screen_recording: false }));
   const driverFile = path.join(dir, "cua-driver");
@@ -1068,7 +1176,15 @@ function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () 
           bridges.push(await bridge());
           return {
             command: process.execPath,
-            args: [GUEST_FIXTURE, "--permissions-file", permissions, ...(options.grantOnPrompt ? ["--grant-on-prompt"] : [])],
+            args: [
+              GUEST_FIXTURE,
+              "--permissions-file",
+              permissions,
+              "--log",
+              callLog,
+              ...(options.grantOnPrompt ? ["--grant-on-prompt"] : []),
+              ...(options.hangOn ? ["--hang-on", options.hangOn] : []),
+            ],
             env: { PATH: "/usr/bin:/bin" },
           };
         },
@@ -1081,6 +1197,15 @@ function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () 
     noticeFile,
     bridges,
     grant: () => writeFileSync(permissions, JSON.stringify({ accessibility: true, screen_recording: true })),
+    /** The driver tools the guest was asked to run, in order. */
+    toolCalls: (): string[] =>
+      existsSync(callLog)
+        ? readFileSync(callLog, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => (JSON.parse(line) as { name: string }).name)
+        : [],
   };
 }
 
@@ -1183,6 +1308,59 @@ test("skipping the grants keeps the screen-only lane, and element control can be
     await context.host.give("bea");
     assert.ok(await context.host.guestDriver("bea"));
   }, guest.overrides);
+});
+
+test("Skip ends the permission step at once, even while the guest is still answering the first check", async () => {
+  const guest = guestDriverHarness({ hangOn: "check_permissions" });
+  await withHost(async (context) => {
+    answerGuest(context);
+    const setup = context.host.setUp();
+    await waitFor(() => guest.toolCalls().includes("check_permissions"), "the first permission check");
+    const skippedAt = Date.now();
+    context.host.skipPermissions();
+    await setup;
+    assert.ok(Date.now() - skippedAt < 5_000, "Skip doesn't wait for the guest's answer");
+    const status = (await context.host.status()).setup;
+    assert.equal(status.kind, "ready");
+    assert.equal(status.kind === "ready" && status.elementControl, false);
+    assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /skipped/u);
+    assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false, "the base is shut down");
+  }, guest.overrides);
+});
+
+test("Skip during the probe after the grants also finishes without element control", async () => {
+  const guest = guestDriverHarness({ grantOnPrompt: true, hangOn: "health_report" });
+  await withHost(async (context) => {
+    answerGuest(context);
+    const setup = context.host.setUp();
+    await waitFor(() => guest.toolCalls().includes("health_report"), "the probe");
+    const skippedAt = Date.now();
+    context.host.skipPermissions();
+    await setup;
+    assert.ok(Date.now() - skippedAt < 5_000, "Skip doesn't wait for the probe's own time limit");
+    const status = (await context.host.status()).setup;
+    assert.equal(status.kind === "ready" && status.elementControl, false);
+    assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /skipped/u);
+  }, guest.overrides);
+});
+
+test("element control setup waits for a computer still being copied from the base before it boots the base", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    context.config.cloneDelayMs = 400;
+    context.writeConfig();
+    const giving = context.host.give("ada");
+    await waitFor(() => context.calls().some((call) => call.op === "clone"), "the copy to begin");
+    const elementControl = context.host.setUpElementControl();
+    const given = await giving;
+    await elementControl;
+    assert.equal(given.vmName, botComputerVmName("ada"), "the copy finished whole");
+    const cli = context.calls().filter((call) => call.kind === "cli");
+    const copy = cli.find((call) => call.op === "clone");
+    const boot = cli.find((call) => call.op === "run" && call.args?.includes(BOT_COMPUTER_BASE_VM) && (call.at ?? 0) > (copy?.at ?? 0));
+    assert.ok(copy?.at !== undefined && boot?.at !== undefined, "the copy and then the base's boot both ran");
+    assert.ok(boot.at >= copy.at + 400, "the base boots only once the copy is done");
+  });
 });
 
 test("a guest driver that can't be installed leaves a working base that acts on the screen only", async () => {

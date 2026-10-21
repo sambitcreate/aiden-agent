@@ -74,8 +74,10 @@ async function setup() {
   const viewer = createBotComputerViewer({
     host,
     sessions: {
-      screen: async (_botId, _signal, options) => {
-        screens.push(options?.reason);
+      // As P8's sessions do: only a running computer's screen, never a start.
+      runningScreen: async () => {
+        if (state.computer?.state !== "running") throw new Error("The computer isn't running.");
+        screens.push("viewer");
         return screen;
       },
     },
@@ -195,6 +197,7 @@ test("as main wires them, the Bot's screen and the viewer share one VNC connecti
   const listeners = new Set<(botId: string | undefined) => void>();
   const host = {
     computer: async () => ({ ...state.computer }),
+    runningConnection: () => (state.computer.state === "running" ? connection() : undefined),
     ensureRunning: async () => {
       state.computer.state = "running";
       return connection();
@@ -252,6 +255,48 @@ test("as main wires them, the Bot's screen and the viewer share one VNC connecti
   }
 });
 
+test("a computer that stopped after a status read said it was running is never started again for the viewer", async () => {
+  // Main's composition again: the hub reads the screen through P8's sessions.
+  const server = new FakeRfbServer({ width: 32, height: 24, password: "run-pass-1" });
+  const port = await server.listen();
+  const connection: BotComputerConnection = {
+    vmName: VM,
+    ip: "192.168.64.5",
+    vnc: { host: "127.0.0.1", port, password: "run-pass-1" },
+    ssh: { host: "192.168.64.5", user: "lume" },
+  };
+  let running = true;
+  const starts: BotComputerStartReason[] = [];
+  const host = {
+    // A status read from just before the stop (Pause, the idle timer) landed: it still says running.
+    computer: async (): Promise<BotComputerStatus> => ({ botId: BOT, vmName: VM, state: "running", baseBuild: "25G83", outdated: false, controller: "bot" }),
+    runningConnection: () => (running ? connection : undefined),
+    ensureRunning: async (_botId: string, options: { reason: BotComputerStartReason }) => {
+      starts.push(options.reason);
+      running = true;
+      return connection;
+    },
+    touch: () => undefined,
+    onChange: () => () => undefined,
+  };
+  const control = createBotComputerControl();
+  const sessions = createBotComputerSessions({ host, control });
+  sessions.setScreenFactory(createRfbScreenFactory({ encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }) }));
+  const viewer = createBotComputerViewer({ host, sessions, control, botName: () => "Ada", allowedOrigins: ["file://"] });
+  try {
+    const lent = await viewer.grant(BOT, { start: false });
+    running = false;
+    const stream = await get(streamUrl(lent));
+    assert.equal(stream.response.statusCode, 503, "the stopped computer isn't shown");
+    stream.response.destroy();
+    assert.deepEqual(starts, [], "and the viewer never boots it");
+    assert.equal(server.connections.length, 0);
+  } finally {
+    await viewer.close();
+    await server.close();
+  }
+});
+
 test("Settings sees the base computer only while setup waits for the person, and its view ends with that step", async () => {
   const server = new FakeRfbServer({ width: 32, height: 24, password: "base-pass" });
   const port = await server.listen();
@@ -275,7 +320,7 @@ test("Settings sees the base computer only while setup waits for the person, and
       },
       baseView: () => waiting,
     },
-    sessions: { screen: async () => assert.fail("the base is not a Bot's computer") },
+    sessions: { runningScreen: async () => assert.fail("the base is not a Bot's computer") },
     control: createBotComputerControl(),
     baseScreen: createRfbScreenFactory({
       encode: async (_bgra, width, height) => {

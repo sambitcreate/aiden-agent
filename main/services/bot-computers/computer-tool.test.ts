@@ -85,6 +85,10 @@ function harness(
     height?: number;
     screen?: ReturnType<typeof fakeScreen>;
     routine?: boolean;
+    /** A Telegram turn: nobody answers there either. */
+    unattended?: boolean;
+    /** How long an unattended turn waits for Give back. */
+    unattendedWaitMs?: number;
     /** The guest driver lane's host, as `host.guestDriver` hands it out. */
     guestDriver?: () => CuaDriverHostFactory | undefined;
   } = {},
@@ -122,8 +126,12 @@ function harness(
     state,
     botName: async () => "Ada",
     sleep: async () => undefined,
+    ...(options.unattendedWaitMs === undefined ? {} : { unattendedWaitMs: options.unattendedWaitMs }),
   };
-  const tool = createBotComputerTool("ada", deps, { routine: options.routine === true });
+  const tool = createBotComputerTool("ada", deps, {
+    routine: options.routine === true,
+    ...(options.unattended === undefined ? {} : { unattended: options.unattended }),
+  });
   const call = (args: Record<string, unknown> & { action: string }, signal?: AbortSignal) =>
     tool.execute("call", args as unknown as BotComputerArgs, signal) as Promise<AgentToolResult<BotComputerResultDetails>>;
   return {
@@ -277,6 +285,51 @@ test("Take over interrupts the action, nothing stays held, and Give back returns
   assert.equal(h.fake.events.length, before);
   await h.call({ action: "capture" });
   assert.equal((await h.call({ action: "click", coordinate: [10, 10], intent: "Click Search" })).isError, undefined);
+});
+
+/** The call's result, or "still waiting" if it hasn't settled within `ms`. */
+async function within<T>(call: Promise<T>, ms: number): Promise<T | "still waiting"> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<"still waiting">((resolve) => {
+    timer = setTimeout(() => resolve("still waiting"), ms);
+  });
+  try {
+    return await Promise.race([call, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test("on a routine or Telegram turn, a computer the person keeps using is given up after a bounded wait", async () => {
+  for (const turn of [{ routine: true }, { unattended: true }]) {
+    const h = harness({ ...turn, unattendedWaitMs: 40 });
+    h.control.takeOver("ada", "viewer");
+    const result = await within(h.call({ action: "capture" }), 2_000);
+    assert.notEqual(result, "still waiting", `${JSON.stringify(turn)}: the run doesn't wait for a person who isn't there to answer`);
+    if (result === "still waiting") continue;
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /still using Ada's computer.*say in your reply/u);
+    assert.equal(h.fake.captures.length, 0, "nothing is captured while the person has it");
+    assert.equal(h.control.controller("ada"), "person", "the person keeps the computer");
+
+    // Taken over in the middle of an action, too.
+    h.control.giveBack("ada");
+    const typing = harness({ ...turn, unattendedWaitMs: 40, screen: fakeScreen(2560, 1600, { blockKeysAfter: 1 }) });
+    await typing.call({ action: "capture" });
+    const pending = typing.call({ action: "type", text: "Ab", intent: "Type the search terms" });
+    await new Promise((resolve) => setImmediate(resolve));
+    typing.control.takeOver("ada", "input");
+    const interrupted = await within(pending, 2_000);
+    assert.notEqual(interrupted, "still waiting");
+    if (interrupted !== "still waiting") assert.match(textOf(interrupted), /still using Ada's computer/u);
+  }
+  // A person's own turn keeps waiting for Give back.
+  const attended = harness({ unattendedWaitMs: 40 });
+  attended.control.takeOver("ada", "viewer");
+  const pending = attended.call({ action: "capture" });
+  assert.equal(await within(pending, 150), "still waiting");
+  attended.control.giveBack("ada");
+  assert.equal(textOf(await pending), BOT_COMPUTER_GIVE_BACK_NOTE);
 });
 
 test("a capture from an earlier run of the computer doesn't place a click", async () => {
