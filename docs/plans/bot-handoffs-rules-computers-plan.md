@@ -334,7 +334,7 @@ Claim 36 (the next after `main`'s 35) at merge time, and update the fixture, Ope
   - `paused` on Bot detail and summary;
   - `POST /bots/{id}/pause` to pause and `DELETE /bots/{id}/pause` to unpause (`POST /bots/{id}/resume` already exists for resuming an interrupted turn, so unpausing must not reuse it);
   - error `bot_paused`;
-- devices without it get a `state` frame and a text notice "Ada needs you on your Mac", the same fallback pattern as `bot:cards`, and see a paused Bot as `unavailable` (the legacy projection that ships in PR 2, §7.2).
+- devices without it get a text notice "Ada needs you on your Mac" (an `entry` frame when the hand-off opens, and a `snapshot` without the notice when it settles or is replaced), the same fallback pattern as `bot:cards`, and see a paused Bot as `unavailable` (the legacy projection that ships in PR 2, §7.2).
 
 Clients:
 

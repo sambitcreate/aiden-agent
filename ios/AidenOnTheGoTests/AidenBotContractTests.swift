@@ -2159,7 +2159,15 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertEqual(notice.role, .assistant)
         XCTAssertEqual(notice.text, "Scout needs you on your Mac: Enter the 2FA code your bank sent you")
         XCTAssertNil(notice.createdAt)
-        XCTAssertEqual(legacy.events.map(\.wireType), ["entry", "state", "entry", "state"])
+        XCTAssertEqual(legacy.events.map(\.wireType), ["entry", "snapshot", "entry", "state"])
+        // The settled hand-off is a snapshot, which replaces an older phone's
+        // transcript, so the line goes; the frames end where a fresh read stands.
+        guard case let .snapshot(settled) = legacy.events[1].kind,
+              case let .entry(answer) = legacy.events[2].kind else {
+            return XCTFail("the legacy view settles the hand-off with a snapshot, then the answer")
+        }
+        XCTAssertFalse(settled.entries.contains { $0.id.hasPrefix("handoff-notice:") })
+        XCTAssertEqual(legacy.pausedSession.entries, settled.entries + [answer])
         XCTAssertEqual(legacy.pausedSession.state, .unavailable)
         XCTAssertFalse(legacy.pausedSummary.paused)
         XCTAssertEqual(legacy.pausedSummary.sessionState, .unavailable)

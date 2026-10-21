@@ -28,8 +28,9 @@
 //   state and the `bot_paused` refusal, and may answer a hand-off, open it on
 //   the Mac, and pause or unpause the Bot. Other devices keep the revision-35
 //   view: a paused Bot reads as unavailable (writes are `operation_stale`), and
-//   a waiting hand-off is an assistant line asking them to go to the Mac,
-//   replaced by a no-op state frame when it settles. The person's answer is
+//   a waiting hand-off is an assistant line asking them to go to the Mac. When
+//   it settles or another takes its place, they get a snapshot at that seq,
+//   which drops the old line from their transcript. The person's answer is
 //   their message for everyone. Idempotent results are stored in the holder
 //   view and projected per device after the ledger returns.
 // - Routines, connection requests and starter presets call their main services.
@@ -888,13 +889,17 @@ class BotLiveProjector {
   }
 
   /**
-   * `notice` (revision 37, `handoff` frames only): what a device without
-   * `bot:handoffs` gets at this seq instead, an entry frame with the hand-off's
-   * line; a settled hand-off (no notice) reaches it as a no-op state frame.
+   * `legacy` (revision 37, `handoff` frames only): what a device without
+   * `bot:handoffs` gets at this seq instead. A hand-off that opens with none
+   * shown before it is an entry frame with its line. Once a line is shown, a
+   * hand-off that settles or gives way to another is `"snapshot"`: shipped
+   * clients have no frame that removes an entry, and a snapshot replaces their
+   * whole transcript, so the old line goes and a replacement's line is the
+   * newest entry, as a fresh read shows it.
    */
   private frame(
     event: Omit<AidenRemoteBotSessionEvent, "protocolVersion" | "botId" | "epoch" | "seq">,
-    notice?: AidenRemoteBotSessionEntry,
+    legacy?: AidenRemoteBotSessionEntry | "snapshot",
   ): void {
     this.seq += 1;
     const data = {
@@ -927,7 +932,8 @@ class BotLiveProjector {
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
       if (handoffOnly && !audience.handoffs) {
-        return notice ? sseFrame(id, "entry", { ...data, type: "entry", payload: { entry: notice } }) : noOp(audience);
+        if (legacy === "snapshot") return this.snapshotFrame(audience);
+        return legacy ? sseFrame(id, "entry", { ...data, type: "entry", payload: { entry: legacy } }) : noOp(audience);
       }
       if (event.type === "state" && !audience.handoffs) {
         const payload = stateViewForAudience(event.payload as AidenRemoteBotSessionStateView, audience);
@@ -1166,8 +1172,10 @@ class BotLiveProjector {
       this.frame({ type: "approval", payload: { approval } });
     }
     if (handoff?.handoff.waitId !== this.handoff?.handoff.waitId) {
+      // Every device without `bot:handoffs` holds the line of the hand-off this replaces.
+      const shown = this.handoff !== null;
       this.handoff = handoff;
-      this.frame({ type: "handoff", payload: { handoff: handoff?.handoff ?? null } }, handoff?.notice);
+      this.frame({ type: "handoff", payload: { handoff: handoff?.handoff ?? null } }, shown ? "snapshot" : handoff?.notice);
     }
     // After the state frame, so a phone never sees a phase for a turn that already ended.
     if (JSON.stringify(activity) !== JSON.stringify(this.activity)) {

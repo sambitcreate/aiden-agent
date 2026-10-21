@@ -155,14 +155,19 @@ class AidenBotHandoffsContractTest {
         assertEquals(AidenBotMessageRole.ASSISTANT, notice.role)
         assertNull(notice.createdAt)
 
+        val events = legacy.getValue("events").jsonArray.map(::frame)
+        // The settled hand-off is a snapshot: an older phone replaces its transcript, so the line goes.
+        val settled = events[1].payload as AidenBotSessionEventPayload.Snapshot
+        assertFalse(settled.session.entries.any { it.id.startsWith("handoff-notice:") })
         var current = session
-        for (event in legacy.getValue("events").jsonArray.map(::frame)) {
+        for (event in events) {
             assertFalse("an older phone is never sent a hand-off frame", event.payload is AidenBotSessionEventPayload.Handoff)
             current = (aidenApplyBotSessionEvent(current, event) as AidenBotSessionEventOutcome.Applied).session
         }
         val paused = asClientReads("botSession", AidenBotSession.serializer(), legacy.getValue("pausedSession"))
         assertEquals(AidenBotSessionState.UNAVAILABLE, paused.state)
-        assertEquals(paused.entries.map { it.id }, current.entries.map { it.id }.filterNot { it.startsWith("handoff-notice:") })
+        // The frames end where a fresh read of the session stands.
+        assertEquals(paused, current)
 
         val summary = asClientReads("botSummary", AidenBotSummary.serializer(), legacy.getValue("pausedSummary"))
         assertFalse(summary.paused)

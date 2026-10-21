@@ -2708,6 +2708,10 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const leaky = structuredClone(raw);
   leaky.botHandoffs.legacy.pausedSummary = raw.botHandoffs.pausedSummary;
   assert.throws(() => parseAidenRemoteContractFixture(leaky), /must not carry paused/u);
+  const leakySnapshot = structuredClone(raw);
+  const settled = leakySnapshot.botHandoffs.legacy.events.find((event: { type: string }) => event.type === "snapshot");
+  settled.payload.session.handoff = null;
+  assert.throws(() => parseAidenRemoteContractFixture(leakySnapshot), /must not carry hand-off or paused/u);
   const wrongCode = structuredClone(raw);
   wrongCode.botHandoffs.legacy.pausedError.error.code = "bot_paused";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);

@@ -15502,7 +15502,7 @@
             ]
           },
           "payload": {
-            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. At the same seq, other devices get an entry frame with the hand-off's notice when it opens and a no-op state frame when it settles.",
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. At the same seq, other devices get an entry frame with the hand-off's notice when it opens, and a snapshot frame (which replaces their transcript, so the notice goes) when it settles or another hand-off takes its place.",
             "type": "object"
           }
         },

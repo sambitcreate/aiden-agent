@@ -30,6 +30,7 @@ import { createBotHandoffs } from "./bot-runtime/bot-handoffs.js";
 import { signInCandidate } from "./bot-runtime/bot-sign-in-tool.js";
 import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import { applyRemoteBotSessionEvent, remoteBotSessionView, type RemoteBotSessionView } from "../../renderer/lib/hosts/remote-bot-session.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { createBotLiveProjection, createBotRunStarts } from "./bot-runtime/live-projection.js";
@@ -44,6 +45,7 @@ import {
   parseAidenRemoteBotSessionEvent,
   parseAidenRemoteBotSummary,
   parseAidenSseFrames,
+  type AidenRemoteBotSessionEvent,
 } from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -2789,7 +2791,8 @@ function handoffSession(
 
 /** A session without its Bot id and stream cursor, which differ between a test host and the fixture. */
 const withoutCursor = ({ botId: _botId, epoch: _epoch, seq: _seq, ...session }: Record<string, unknown>) => session;
-const framesOf = (frames: Frame[]) => frames.map(({ type, payload }) => ({ type, payload }));
+const framesOf = (frames: Frame[]) =>
+  frames.map(({ type, payload }) => ({ type, payload: type === "snapshot" ? { session: withoutCursor(payload.session) } : payload }));
 
 test("a waiting hand-off reads as the shared fixture shows it, to holders and to every other device", async () => {
   const fixture = (await contractFixture()).botHandoffs;
@@ -2869,6 +2872,88 @@ test("a hand-off, its answer and a pause reach holders and other devices frame f
     );
   } finally {
     await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+/** A stream's frames folded by a Mac's Bot session reducer, as a client without `bot:handoffs` shows them. */
+function reducedView(frames: Frame[]): RemoteBotSessionView {
+  const [first, ...rest] = frames as unknown as AidenRemoteBotSessionEvent[];
+  assert.equal(first?.type, "snapshot", "a stream opens with a snapshot");
+  let view = remoteBotSessionView((first as Extract<AidenRemoteBotSessionEvent, { type: "snapshot" }>).payload.session);
+  for (const event of rest) {
+    const next = applyRemoteBotSessionEvent(view, event);
+    assert.ok(next, `frame ${event.seq} follows the one before it`);
+    view = next;
+  }
+  return view;
+}
+
+const noticesOf = (view: RemoteBotSessionView) =>
+  view.snapshot.entries.flatMap((entry) => (entry.id.startsWith("handoff-notice:") ? [entry.id] : []));
+
+test("a device without bot:handoffs drops a hand-off's line once it is answered, withdrawn or replaced, as a fresh read shows it", async () => {
+  const driven = drivenConversation(scoutConversation());
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, { conversation: driven });
+  const legacy = await openAudienceStream(service, {});
+  /** What the stream shows once it reached the seq a fresh read is at, beside that read. */
+  const shownAndRead = async () => {
+    const read = await service.session(BOT_ID);
+    await legacy.until(() => last(legacy.frames)?.seq === read.seq, `the stream at seq ${read.seq}`);
+    return { shown: reducedView(legacy.frames), read: remoteBotSessionView(read) };
+  };
+  try {
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+
+    // Done from a phone that holds `bot:handoffs`, then the answer's row.
+    const asked = handOff();
+    let { shown, read } = await shownAndRead();
+    assert.deepEqual(noticesOf(shown), [`handoff-notice:${HANDOFF_WAIT_ID}`], "the waiting hand-off's line");
+    assert.deepEqual(shown, read);
+    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0201", { outcome: "done" }, HOLDER);
+    await asked;
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), [], "an answered hand-off leaves no line");
+    assert.deepEqual(shown, read);
+    await driven.emit([
+      ...scoutConversation(),
+      handoffResult(42, { kind: "action", outcome: "done", action: "Enter the 2FA code your bank sent you", toolCallId: "call_fixture_36" }),
+    ]);
+    ({ shown, read } = await shownAndRead());
+    assert.equal(last(shown.snapshot.entries)?.type, "user", "the person's answer is the newest line");
+    assert.deepEqual(shown, read);
+
+    // Withdrawn by Stop, Dismiss, delete or quit.
+    const controller = new AbortController();
+    const withdrawn = handOff({ waitId: "5a0d3e2f-8b4c-4d6e-8f90-1b2c3d4e5f60" }, controller.signal);
+    ({ shown } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), ["handoff-notice:5a0d3e2f-8b4c-4d6e-8f90-1b2c3d4e5f60"]);
+    controller.abort();
+    await assert.rejects(withdrawn);
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), [], "a withdrawn hand-off leaves no line");
+    assert.deepEqual(shown, read);
+
+    // Two cards wait; answering the first puts the second in its place.
+    const first = handOff({ waitId: "6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071" });
+    const second = handOff({ waitId: "7c2f5041-ad6e-4f80-ab12-3d4e5f607182", action: "Approve the transfer in your bank's app" });
+    ({ shown } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), ["handoff-notice:6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071"], "the older card is the one shown");
+    await service.answerHandoff(DEVICE_ID, BOT_ID, "6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071", "handoff-request-0202", { outcome: "skipped" }, HOLDER);
+    await first;
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), ["handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182"], "only the replacement's line");
+    assert.equal(last(shown.snapshot.entries)?.id, "handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182", "and it is the newest line");
+    assert.deepEqual(shown, read);
+    await service.answerHandoff(DEVICE_ID, BOT_ID, "7c2f5041-ad6e-4f80-ab12-3d4e5f607182", "handoff-request-0203", { outcome: "done" }, HOLDER);
+    await second;
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), []);
+    assert.deepEqual(shown, read);
+    assert.ok(gapless(legacy.frames));
+    for (const line of legacy.raw) assert.doesNotMatch(line, /"handoff"|"paused"/u);
+  } finally {
     await legacy.close();
     await service.close();
   }

@@ -6088,7 +6088,12 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
     }
   }
   for (const event of legacy.events) {
-    if (event.type === "handoff" || (event.type === "state" && event.payload.state === "paused")) {
+    const session = event.type === "snapshot" ? event.payload.session : undefined;
+    if (
+      event.type === "handoff" ||
+      (event.type === "state" && event.payload.state === "paused") ||
+      (session && (session.handoff !== undefined || session.state === "paused"))
+    ) {
       throw new Error("Legacy Bot session frames must not carry hand-off or paused frames.");
     }
   }

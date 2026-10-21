@@ -10,7 +10,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
   - There is a `handoff` frame `{handoff}`, a `paused` state, and `bot_paused` and `handoff_expired` codes.
   - Summary `paused` arrives only as true; detail `paused` is a Boolean. A flag that disagrees with a `paused` sessionState is refused.
   - Every client decodes a missing flag as false and never writes false back, so a legacy Bot round-trips unchanged. (On Android this is `@EncodeDefault(NEVER)`; without it `AidenBotRevision25ContractTest`'s round trips fail.)
-- **Legacy devices** see `unavailable` instead of paused and a `handoff-notice:<waitId>` assistant message without createdAt. A write to a paused Bot gets `operation_stale`. `handoff_result` reaches every device as a user message.
+- **Legacy devices** see `unavailable` instead of paused and a `handoff-notice:<waitId>` assistant message without createdAt. The notice opens as an `entry` frame; when the card settles or is replaced the host sends a `snapshot` (shipped clients replace their transcript with it), so the fixture's `legacy.events` fold to exactly `legacy.pausedSession` on all three clients. A write to a paused Bot gets `operation_stale`. `handoff_result` reaches every device as a user message.
 - **Card** ("Your turn: <action>"), next to the question and approval cards:
   - **Action:** Open (only for a URL the rule accepts), Skip and Done.
   - **Sign-in:** Finish on your Mac (`open-on-mac`, then "Finish signing in on your Mac." or "Open Aiden on your Mac to finish signing in.") and Skip. It never sends Done (that is a 400).
