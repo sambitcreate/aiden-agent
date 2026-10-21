@@ -9,6 +9,7 @@ const liveLmStudioAcceptance = process.env.AIDEN_E2E_LIVE_LMSTUDIO === "1";
  */
 const config: PlaywrightTestConfig = {
   testDir: "./tests/e2e",
+  globalSetup: "./tests/e2e/global-setup.ts",
   testMatch: liveLmStudioAcceptance ? "**/*.live.spec.ts" : "**/*.spec.ts",
   testIgnore: liveLmStudioAcceptance
     ? "**/._*"
