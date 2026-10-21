@@ -2944,8 +2944,10 @@ test("an answer the card does not accept is invalid and the card keeps waiting; 
   }
 });
 
-test("a sign-in the Bot asks for reaches a holder as a sign_in card and other devices as a needs-you line, and Skip from the phone answers the Bot", async () => {
-  const { service, handoffs } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+test("a sign-in the Bot asks for reaches a holder as a sign_in card and other devices as a needs-you line, Finish on your Mac opens it there, and Skip from the phone answers the Bot", async () => {
+  const { service, handoffs, openedOnMac } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, {
+    opened: "browser",
+  });
   const holder = await openAudienceStream(service, HOLDER);
   try {
     await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
@@ -2973,6 +2975,19 @@ test("a sign-in the Bot asks for reaches a holder as a sign_in card and other de
     const legacy = await service.session(BOT_ID);
     const notice = last(legacy.entries);
     assert.equal(notice?.type === "message" && notice.text, "Scout needs you on your Mac: Sign in to github.com");
+
+    // Finish on your Mac: the Mac opens this card where the Bot signs in, and the card still waits.
+    assert.deepEqual(await service.openHandoffOnMac(DEVICE_ID, BOT_ID, card.waitId, "open-request-000101", {}), {
+      waitId: card.waitId,
+      opened: true,
+    });
+    assert.deepEqual(openedOnMac, [[BOT_ID, card.waitId]]);
+    assert.equal(handoffs.get(BOT_ID, card.waitId)?.kind, "sign_in", "opening it answers nothing");
+    // Signing in happens on the Mac: a phone can't say it is done.
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0100", { outcome: "done" }, HOLDER),
+      isError("invalid_request", 400),
+    );
 
     await service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0101", { outcome: "skipped" }, HOLDER);
     const result = await asked;

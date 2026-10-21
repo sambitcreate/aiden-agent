@@ -53,7 +53,7 @@ function browserIpc(state: () => BrowserState) {
   };
 }
 
-async function mountBotChat(state: () => BrowserState) {
+async function mountBotChat(state: () => BrowserState, handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
   const calls = installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
@@ -61,6 +61,7 @@ async function mountBotChat(state: () => BrowserState) {
     "bots:live:unsubscribe": () => undefined,
     "bots:routines:list": () => [],
     ...browserIpc(state),
+    ...handlers,
   });
   const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
   await screen.findByRole("button", { name: "Planner profile" });
@@ -184,4 +185,33 @@ test("a sign-in opened from a phone shows its held tab once the chat opens, and 
   tabs = [...tabs, browserTab({ id: "tab-2", title: "Sign in to Slack", heldForPerson: { reason: "sign_in" } })];
   await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
   await waitFor(() => assert.equal(selectedTab(), "Browser"));
+});
+
+test("Open sign-in on the Mac moves the person into the Bot's Browser tab, where the held sign-in page is", async () => {
+  let tabs: BrowserTab[] = [];
+  const signIn = {
+    botId: "bot-1", waitId: "wait-s", toolCallId: "tool-s", kind: "sign_in" as const, action: "Sign in to github.com",
+    open: { url: "https://github.com" }, origin: "https://github.com", target: "browser" as const, source: "tool" as const,
+  };
+  await mountBotChat(() => browserState(tabs), {
+    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: signIn }),
+    // As main opens it: a new tab, shown and held for the person, then the answer.
+    "bots:openHandoff": () => {
+      tabs = [browserTab({ heldForPerson: { reason: "sign_in" } })];
+      emitBotTestNotification("browser:event", { type: "show", workspaceId: WORKSPACE, tabId: "tab-1" });
+      emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) });
+      return { opened: "browser" };
+    },
+  });
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  const open = within(card).getByRole("button", { name: "Open sign-in" });
+  open.focus();
+  await act(async () => fireEvent.click(open));
+
+  await waitFor(() => assert.equal(selectedTab(), "Browser"));
+  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u));
+  // The person asked for it, so focus follows them there; a tab the Bot opens leaves focus alone.
+  await waitFor(() => assert.equal(document.activeElement?.textContent, "Browser"));
+  assert.ok(botPanel().contains(document.activeElement));
 });
