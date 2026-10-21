@@ -27,6 +27,7 @@ import {
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
 import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { createBotHandoffs } from "./bot-runtime/bot-handoffs.js";
+import { signInCandidate } from "./bot-runtime/bot-sign-in-tool.js";
 import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
@@ -2939,6 +2940,48 @@ test("an answer the card does not accept is invalid and the card keeps waiting; 
     await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0012", { outcome: "skipped", note: "Not today." }, HOLDER);
     assert.deepEqual(await signIn, { outcome: "skipped", note: "Not today." });
   } finally {
+    await service.close();
+  }
+});
+
+test("a sign-in the Bot asks for reaches a holder as a sign_in card and other devices as a needs-you line, and Skip from the phone answers the Bot", async () => {
+  const { service, handoffs } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const holder = await openAudienceStream(service, HOLDER);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    // The Bot's sign_in call, as its tool runs it in a turn.
+    const asked = signInCandidate(BOT_ID, handoffs)
+      .bind!({
+        callId: "call_sign_in_1",
+        signal: new AbortController().signal,
+        entries: async () => [],
+        submissions: async () => [],
+        appendEntry: async () => {},
+        memo: async (_name, candidate) => candidate,
+      })
+      .execute("call_sign_in_1", { site: "GitHub.com/login", why: "To read your issues." } as never);
+    await holder.until(() => holder.frames.some((frame) => frame.type === "handoff"), "the sign-in frame");
+    const card = holder.frames.find((frame) => frame.type === "handoff")!.payload.handoff as { waitId: string };
+    // The phone gets what it shows: the site's name, never the Bot's own page.
+    assert.deepEqual(card, {
+      waitId: card.waitId,
+      kind: "sign_in",
+      action: "Sign in to github.com",
+      why: "To read your issues.",
+      open: { url: "https://github.com" },
+    });
+    const legacy = await service.session(BOT_ID);
+    assert.equal(last(legacy.entries)?.type === "message" && last(legacy.entries)?.text, "Scout needs you on your Mac: Sign in to github.com");
+
+    await service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0101", { outcome: "skipped" }, HOLDER);
+    const result = await asked;
+    assert.equal(
+      result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+      "The person chose not to do this: Sign in to github.com. Do not try another way to do it; say what you will do instead.",
+    );
+    await holder.until(() => last(holder.frames.filter((frame) => frame.type === "handoff"))?.payload.handoff === null, "the settled frame");
+  } finally {
+    await holder.close();
     await service.close();
   }
 });
