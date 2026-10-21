@@ -108,6 +108,19 @@ protocol AidenBotSessionTransport: Sendable {
     /// Revision 33 (`bot-attachments-v1`): stage one upload for the next message.
     func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference
     func removeBotAttachment(botId: String, attachmentId: String) async throws
+    /// Revision 37 (`bot:handoffs`): Done or Skip for the waiting hand-off.
+    func answerBotHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotHandoffAnswerReceipt
+    /// Revision 37: bring a hand-off (a sign-in) forward on the Mac.
+    func openBotHandoffOnMac(botId: String, waitId: String, idempotencyKey: UUID) async throws -> AidenBotHandoffOpenOnMacReceipt
+    /// Revision 37: `POST /bots/{botId}/pause`.
+    func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
+    /// Revision 37: `DELETE /bots/{botId}/pause`.
+    func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
 }
 
 extension AidenBotSessionTransport {
@@ -117,9 +130,42 @@ extension AidenBotSessionTransport {
     }
 
     func removeBotAttachment(botId: String, attachmentId: String) async throws {}
+
+    /// A transport without hand-offs refuses them, as a Mac without `bot:handoffs` does.
+    func answerBotHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotHandoffAnswerReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
+
+    func openBotHandoffOnMac(botId: String, waitId: String, idempotencyKey: UUID) async throws -> AidenBotHandoffOpenOnMacReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
+
+    func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        throw AidenRemoteClientError.invalidResponse
+    }
+
+    func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        throw AidenRemoteClientError.invalidResponse
+    }
 }
 
 extension AidenRemoteClient: AidenBotSessionTransport {}
+
+/// What the Mac said after Finish on your Mac (revision 37).
+struct AidenBotHandoffMacPrompt: Equatable, Sendable {
+    let waitId: String
+    /// The Mac brought the hand-off forward; otherwise no Aiden window could show it.
+    let opened: Bool
+
+    var text: String {
+        opened ? AidenBotSessionCopy.finishSigningInOnMac : AidenBotSessionCopy.openAidenOnMac
+    }
+}
 
 /// The exact copy shared with desktop and Android.
 enum AidenBotSessionCopy {
@@ -130,7 +176,10 @@ enum AidenBotSessionCopy {
     static let dismiss = "Dismiss"
     static let accessChanged = "This Bot's access changed. Review it in Advanced."
     static let openAdvanced = "Advanced"
-    static let pausedSubtitle = "Paused — tap to resume"
+    /// A reply that stopped before it finished (a quit, a crash, or a lifted pause).
+    static let interruptedSubtitle = "Interrupted — tap to resume"
+    /// Revision 37: the person paused the Bot.
+    static let pausedSubtitle = "Paused"
     static let needsModel = "Needs an AI model"
     static let needsModelHint = "Set up on your Mac"
     static let setUp = "Set up"
@@ -150,6 +199,24 @@ enum AidenBotSessionCopy {
     static let retry = "Retry"
 
     static func connectTitle(_ name: String) -> String { "Connect \(name)" }
+
+    // Revision 37 (`bot:handoffs`), shared with desktop and Android.
+    static func handoffTitle(_ action: String) -> String { "Your turn: \(action)" }
+    static let handoffDone = "Done"
+    static let handoffSkip = "Skip"
+    static let handoffOpen = "Open"
+    static let handoffNotePlaceholder = "Add a note and send to mark it done"
+    static let signInPlaceholder = "Finish signing in on your Mac, or skip it."
+    static let handoffExpired = "That card was already answered or closed."
+    static let handoffNotSent = "That answer wasn’t sent. Please try again."
+    static let handoffNoteTooLong = "Keep the note under 4,000 characters."
+    static let finishSigningInOnMac = "Finish signing in on your Mac."
+    static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
+    static let pauseBot = "Pause Bot"
+    static let resumeBot = "Resume Bot"
+    static func pausedTitle(_ name: String) -> String { "\(name) is paused." }
+    static func pausedDetail(_ name: String) -> String { "\(name) won’t reply or run routines until you resume it." }
+    static func pausedPlaceholder(_ name: String) -> String { "\(name) is paused" }
 
     static let memoryUpdated = "Memory updated"
     static let proposalTitle = "Add a routine?"
@@ -953,6 +1020,8 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
 final class AidenBotSessionModel {
     enum Action: Hashable, Sendable {
         case send, resume, dismiss, stop, answerQuestion, answerApproval, retry
+        /// Revision 37 (`bot:handoffs`).
+        case answerHandoff, openHandoffOnMac, pause, unpause
     }
 
     let botID: String
@@ -965,6 +1034,10 @@ final class AidenBotSessionModel {
     private(set) var question: AidenRemoteBotQuestion?
     /// The tool approval the Bot is waiting on, or nil.
     private(set) var approval: AidenRemoteBotApproval?
+    /// Revision 37 (`bot:handoffs`): the hand-off the Bot is waiting on, or nil.
+    private(set) var handoff: AidenRemoteBotHandoff?
+    /// What the Mac said after Finish on your Mac, for the hand-off it names.
+    private(set) var handoffMacPrompt: AidenBotHandoffMacPrompt?
     private(set) var epoch: String?
     private(set) var seq = 0
     private(set) var hasLoaded = false
@@ -1009,6 +1082,11 @@ final class AidenBotSessionModel {
     @ObservationIgnored private let retryDelays: [Duration]
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
+    @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
+    @ObservationIgnored private var retainedHandoffOpen: (waitId: String, key: UUID)?
+    /// Called when a hand-off frame (never a snapshot) names a new wait, so
+    /// the chat can alert a person who has left it (G24).
+    @ObservationIgnored var onHandoffArrived: ((AidenRemoteBotHandoff) -> Void)?
     @ObservationIgnored private var connectionKeys: [String: UUID] = [:]
     /// The key of a proposal answer that failed ambiguously, by proposal id.
     @ObservationIgnored private var proposalKeys: [String: (decision: AidenBotRoutineProposalDecision, key: UUID)] = [:]
@@ -1034,6 +1112,7 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var stateWrites = 0
     @ObservationIgnored private var questionWrites = 0
     @ObservationIgnored private var approvalWrites = 0
+    @ObservationIgnored private var handoffWrites = 0
 
     private enum Intent { case none, requested, acknowledged }
 
@@ -1103,9 +1182,12 @@ final class AidenBotSessionModel {
     var isRunning: Bool { state == .running }
     var isInterrupted: Bool { stateView?.interrupted == true }
     var isAccessBlocked: Bool { stateView?.blocked == .accessChanged }
-    /// The composer takes a message unless the Mac said this Bot can't take one.
-    /// Before the first snapshot it waits in the outbox (R14).
-    var canSend: Bool { !needsModel && state != .unavailable }
+    /// Revision 37: the person paused this Bot; nothing runs until it is resumed.
+    var isPaused: Bool { state == .paused }
+    /// The composer takes a message unless the Mac said this Bot can't take one
+    /// (it needs a model, is unavailable or is paused). Before the first
+    /// snapshot it waits in the outbox (R14).
+    var canSend: Bool { !needsModel && state != .unavailable && state != .paused }
 
     /// No snapshot yet: the chat draws skeleton bubbles where it has no transcript (R14).
     var showsSkeleton: Bool { !hasLoaded && entries.isEmpty }
@@ -1311,6 +1393,12 @@ final class AidenBotSessionModel {
             if next != nil { resumeIntent = .none }
         case let .queued(next):
             queued = next
+        case let .handoff(next):
+            let previous = handoff?.waitId
+            handoff = next
+            handoffWrites += 1
+            if next?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
+            if let next, next.waitId != previous { onHandoffArrived?(next) }
         case .closed:
             return .closed
         }
@@ -1340,8 +1428,11 @@ final class AidenBotSessionModel {
         setStateView(session.stateView)
         question = session.question
         approval = session.approval
+        handoff = session.handoff
         questionWrites += 1
         approvalWrites += 1
+        handoffWrites += 1
+        if session.handoff?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
         activity = session.activity
         queued = session.queued
         hasLoaded = true
@@ -1790,6 +1881,114 @@ final class AidenBotSessionModel {
         }
     }
 
+    // MARK: Hand-offs (revision 37, `bot:handoffs`)
+
+    var canAnswerHandoff: Bool {
+        hasLoaded && handoff != nil && !inFlight.contains(.answerHandoff)
+    }
+
+    /// While a step (not a sign-in) waits, the composer's text is its note:
+    /// Send marks the step done (desktop parity).
+    var composerAnswersHandoff: Bool { handoff?.kind == .action }
+
+    /// Answers the waiting hand-off: Done or Skip, with an optional note. A
+    /// sign-in is finished on the Mac, so a phone can only skip it. The card
+    /// goes at once and comes back with an error if the answer didn't reach
+    /// the Mac (R18). The request UUID survives an ambiguous failure, so
+    /// retrying the same answer replays the Mac's receipt; another answer is a
+    /// new request. When nothing waits any more (`handoff_expired`), the card
+    /// stays gone. Returns false when the answer was refused or not sent.
+    @discardableResult
+    func answerHandoff(_ outcome: AidenBotHandoffOutcome, note rawNote: String? = nil) async -> Bool {
+        guard canAnswerHandoff, let shown = handoff else { return false }
+        if outcome == .done, shown.kind == .signIn { return false }
+        let trimmed = rawNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard trimmed.unicodeScalars.count <= AidenBotHandoffWire.maxNoteLength,
+              let request = try? AidenBotHandoffAnswerRequest(outcome: outcome, note: trimmed.isEmpty ? nil : trimmed) else {
+            errorMessage = AidenBotSessionCopy.handoffNoteTooLong
+            return false
+        }
+        let waitId = shown.waitId
+        let key: UUID
+        if let retainedHandoff, retainedHandoff.waitId == waitId, retainedHandoff.request == request {
+            key = retainedHandoff.key
+        } else {
+            key = UUID()
+            retainedHandoff = (waitId, request, key)
+        }
+        let mark = handoffWrites
+        handoff = nil
+        inFlight.insert(.answerHandoff)
+        defer { inFlight.remove(.answerHandoff) }
+        do {
+            _ = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.answerBotHandoff(botId: botID, waitId: waitId, request: request, idempotencyKey: key)
+            }
+            retainedHandoff = nil
+            return true
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedHandoff = nil }
+            if case let AidenRemoteClientError.server(_, body) = error, body.code.rawValue == "handoff_expired" {
+                // Answered elsewhere or withdrawn: the card stays gone.
+                errorMessage = AidenBotSessionCopy.handoffExpired
+                return false
+            }
+            if handoffWrites == mark { handoff = shown }
+            if error is CancellationError { return false }
+            errorMessage = AidenBotSessionCopy.handoffNotSent
+            return false
+        }
+    }
+
+    /// Finish on your Mac: asks the Mac to bring the hand-off forward. The
+    /// card stays; it says whether the Mac showed it.
+    func finishHandoffOnMac() async {
+        guard hasLoaded, let shown = handoff, !inFlight.contains(.openHandoffOnMac) else { return }
+        let waitId = shown.waitId
+        let key: UUID
+        if let retained = retainedHandoffOpen, retained.waitId == waitId {
+            key = retained.key
+        } else {
+            key = UUID()
+            retainedHandoffOpen = (waitId, key)
+        }
+        inFlight.insert(.openHandoffOnMac)
+        defer { inFlight.remove(.openHandoffOnMac) }
+        do {
+            let receipt = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.openBotHandoffOnMac(botId: botID, waitId: waitId, idempotencyKey: key)
+            }
+            retainedHandoffOpen = nil
+            if handoff?.waitId == waitId { handoffMacPrompt = AidenBotHandoffMacPrompt(waitId: waitId, opened: receipt.opened) }
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedHandoffOpen = nil }
+            if error is CancellationError { return }
+            if case let AidenRemoteClientError.server(_, body) = error, body.code.rawValue == "handoff_expired" {
+                if handoff?.waitId == waitId { handoff = nil }
+                errorMessage = AidenBotSessionCopy.handoffExpired
+                return
+            }
+            errorMessage = "That didn’t work. Please try again."
+        }
+    }
+
+    /// Resume on a paused Bot. The Mac's answer stands: a reply the pause cut
+    /// short comes back interrupted, with its own Resume and Dismiss.
+    func unpause() async {
+        guard isPaused, !inFlight.contains(.unpause) else { return }
+        await perform(.unpause) { [transport, botID] key in
+            try await transport.unpauseBot(botId: botID, idempotencyKey: key)
+        }
+    }
+
+    /// Pause shows at once and goes back if the Mac didn't take it (R18).
+    func pause() async {
+        guard hasLoaded, !isPaused, !needsModel, state != .unavailable, !inFlight.contains(.pause) else { return }
+        await perform(.pause, optimistic: try? AidenBotSessionStateView(state: .paused)) { [transport, botID] key in
+            try await transport.pauseBot(botId: botID, idempotencyKey: key)
+        }
+    }
+
     // MARK: Turn controls
 
     /// Sends one message (R14). It shows at once as an outgoing message, and
@@ -1821,7 +2020,7 @@ final class AidenBotSessionModel {
     }
 
     /// Whether the + can open now: the Mac takes attachments and nothing is uploading.
-    var canAttach: Bool { attachmentsSupported && canSend && !isAttaching && attachmentCapacity > 0 }
+    var canAttach: Bool { attachmentsSupported && canSend && handoff == nil && !isAttaching && attachmentCapacity > 0 }
 
     /// Prepares each picked item and stages it on the Mac, in order, up to the
     /// room left. Returns how many couldn't be added; the rest stay ready to send.

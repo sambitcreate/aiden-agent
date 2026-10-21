@@ -665,11 +665,32 @@ struct AidenBotSessionChatView: View {
                 .disabled(!canRespondToApprovals || !model.canAnswerApproval)
                 .id(approval.waitId)
             }
+            if let handoff = model.handoff {
+                // Revision 37: the step the Bot handed back. A sign-in is
+                // finished on the Mac; any other step is Done or Skip here.
+                AidenBotHandoffCard(
+                    handoff: handoff,
+                    canAnswer: canWrite && model.canAnswerHandoff,
+                    isFinishing: model.inFlight.contains(.openHandoffOnMac),
+                    macPrompt: model.handoffMacPrompt.flatMap { $0.waitId == handoff.waitId ? $0.text : nil },
+                    onDone: { Task { await model.answerHandoff(.done) } },
+                    onSkip: { Task { await model.answerHandoff(.skipped) } },
+                    onFinishOnMac: { Task { await model.finishHandoffOnMac() } }
+                )
+                .id(handoff.waitId)
+            }
             if model.needsModel {
                 AidenBotNeedsModelCard(
                     botName: bot?.name ?? "this Bot",
                     canSetUp: canWrite,
                     onSetUp: { isShowingAdvanced = true }
+                )
+            } else if model.isPaused {
+                AidenBotPausedCard(
+                    botName: bot?.name ?? "This Bot",
+                    isBusy: model.inFlight.contains(.unpause),
+                    canAct: canWrite,
+                    onResume: { Task { await model.unpause() } }
                 )
             } else if model.isInterrupted {
                 AidenBotInterruptedCard(
@@ -723,8 +744,18 @@ struct AidenBotSessionChatView: View {
     }
 
     /// The draft clears at once and the bubble shows (R14); a refused message
-    /// comes back to the composer.
+    /// comes back to the composer. While a step waits (revision 37), the text
+    /// is its note instead and Send marks the step done.
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
+        if model.composerAnswersHandoff {
+            guard !draftIsEmpty, model.pendingAttachments.isEmpty else { return }
+            let note = draft
+            draft = ""
+            Task {
+                if !(await model.answerHandoff(.done, note: note)), draft.isEmpty { draft = note }
+            }
+            return
+        }
         guard hasMessage(model), !model.isAttaching else { return }
         let text = draft
         draft = ""
@@ -787,7 +818,7 @@ struct AidenBotSessionChatView: View {
                 }
                 if dynamicTypeSize.isAccessibilitySize {
                     VStack(alignment: .trailing, spacing: 8) {
-                        composerField
+                        composerField(model)
                         HStack(spacing: 6) {
                             if model.attachmentsSupported { attachButton(model) }
                             Spacer(minLength: 0)
@@ -797,7 +828,7 @@ struct AidenBotSessionChatView: View {
                 } else {
                     HStack(alignment: .bottom, spacing: 6) {
                         if model.attachmentsSupported { attachButton(model) }
-                        composerField
+                        composerField(model)
                         composerControls(model)
                     }
                 }
@@ -817,14 +848,29 @@ struct AidenBotSessionChatView: View {
         }
     }
 
-    private var composerField: some View {
-        TextField("Message", text: $draft, axis: .vertical)
+    private func composerField(_ model: AidenBotSessionModel) -> some View {
+        TextField(composerPlaceholder(model), text: $draft, axis: .vertical)
             .lineLimit(1...6)
             .focused($composerFocused)
             .padding(.horizontal, 4)
             .padding(.vertical, 11)
             .frame(minHeight: max(44, controlSize))
-            .disabled(!canCompose)
+            .disabled(!canCompose || composerIsHeld(model))
+    }
+
+    /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
+    /// finished on the Mac or skipped, so the composer waits for either.
+    private func composerIsHeld(_ model: AidenBotSessionModel) -> Bool {
+        model.isPaused || model.handoff?.kind == .signIn
+    }
+
+    private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
+        if model.isPaused { return AidenBotSessionCopy.pausedPlaceholder(bot?.name ?? "This Bot") }
+        switch model.handoff?.kind {
+        case .action: return AidenBotSessionCopy.handoffNotePlaceholder
+        case .signIn: return AidenBotSessionCopy.signInPlaceholder
+        case nil: return "Message"
+        }
     }
 
     /// The workspace chat's +: Files, Camera and Photos.
@@ -948,7 +994,10 @@ struct AidenBotSessionChatView: View {
     @ViewBuilder
     private func composerControls(_ model: AidenBotSessionModel) -> some View {
         if model.isRunning {
-            if model.offersBusyModes {
+            if model.composerAnswersHandoff {
+                // A waiting step's note goes with a plain Send, never Steer or Queue.
+                sendButton(model)
+            } else if model.offersBusyModes {
                 busyPill(model)
             }
             Button {
@@ -964,17 +1013,24 @@ struct AidenBotSessionChatView: View {
             .disabled(!canWrite || model.isStopping || model.inFlight.contains(.stop))
             .accessibilityLabel("Stop")
         } else {
-            Button {
-                submit(model, whenBusy: nil)
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.body.weight(.semibold))
-                    .frame(width: max(44, controlSize), height: max(44, controlSize))
-            }
-            .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
-            .disabled(!canCompose || !model.canSend || !hasMessage(model) || model.isAttaching)
-            .accessibilityLabel("Send")
+            sendButton(model)
         }
+    }
+
+    private func sendButton(_ model: AidenBotSessionModel) -> some View {
+        Button {
+            submit(model, whenBusy: nil)
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.body.weight(.semibold))
+                .frame(width: max(44, controlSize), height: max(44, controlSize))
+        }
+        .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
+        .disabled(
+            !canCompose || !model.canSend || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
+                || (model.composerAnswersHandoff && !model.canAnswerHandoff)
+        )
+        .accessibilityLabel(model.composerAnswersHandoff ? "Send and mark done" : "Send")
     }
 
     @MainActor
@@ -995,6 +1051,23 @@ struct AidenBotSessionChatView: View {
         )
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
         model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
+        // G24: a hand-off that arrives while the person is away from this
+        // chat (the app went to the background) alerts once, on this phone.
+        let instanceID = context.instanceId
+        let botID = botID
+        model.onHandoffArrived = { handoff in
+            let name = bot?.name ?? "Your Bot"
+            Task { @MainActor in
+                await AidenRunAlertNotifier.shared.notifyBotHandoff(
+                    waitID: handoff.waitId,
+                    kind: handoff.kind,
+                    instanceID: instanceID,
+                    botID: botID,
+                    botName: name,
+                    isChatOnScreen: true
+                )
+            }
+        }
         self.model = model
         // Nothing waits on another: the first snapshot, the Bot's detail and the
         // stream (with the outbox it sends) start together.

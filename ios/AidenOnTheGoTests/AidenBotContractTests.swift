@@ -2101,4 +2101,147 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertEqual(resent["name"] as? String, "Scout")
         XCTAssertFalse(decodes(AidenBotCreateRequest.self, create.merging(["greeting": "Hello"]) { $1 }))
     }
+
+    // MARK: Contract revision 37 (`bot:handoffs`)
+
+    /// The shared fixture's hand-off, as a `bot:handoffs` phone reads it and as
+    /// an older phone reads the same moments.
+    func testRevision37FixtureDecodesHandoffsAndPauseForHoldersAndOlderPhones() throws {
+        let fixture = try decodedSharedFixture()
+        XCTAssertGreaterThanOrEqual(fixture.contractRevision, 37)
+        let handoffs = try XCTUnwrap(fixture.botHandoffs)
+        XCTAssertEqual(handoffs.capability, .botHandoffs)
+
+        let card = try XCTUnwrap(handoffs.session.handoff)
+        XCTAssertEqual(card.waitId, "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f")
+        XCTAssertEqual(card.kind, .action)
+        XCTAssertEqual(card.action, "Enter the 2FA code your bank sent you")
+        XCTAssertEqual(card.why, "The bank asks for a code only you can see.")
+        XCTAssertEqual(card.open?.url, "https://bank.example.com/verify")
+
+        guard handoffs.events.count == 4,
+              case let .handoff(opened?) = handoffs.events[0].kind,
+              case .handoff(nil) = handoffs.events[1].kind,
+              case let .entry(.message(result)) = handoffs.events[2].kind,
+              case let .state(paused) = handoffs.events[3].kind else {
+            return XCTFail("the holder sees the card open, settle, its result and the pause")
+        }
+        XCTAssertEqual(opened, card)
+        XCTAssertEqual(handoffs.events.map(\.wireType), ["handoff", "handoff", "entry", "state"])
+        // The person's answer is their own message, for every device.
+        XCTAssertEqual(result.role, .user)
+        XCTAssertEqual(result.text, "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.")
+        XCTAssertEqual(paused.state, .paused)
+        XCTAssertFalse(paused.interrupted)
+
+        XCTAssertEqual(handoffs.answer.request.outcome, .done)
+        XCTAssertEqual(handoffs.answer.request.note, "The code was from 9:01.")
+        XCTAssertEqual(handoffs.answer.response.waitId, card.waitId)
+        XCTAssertEqual(handoffs.openOnMac.response.waitId, card.waitId)
+        XCTAssertTrue(handoffs.openOnMac.response.opened)
+        XCTAssertEqual(handoffs.pause.response.state, .paused)
+        XCTAssertEqual(handoffs.unpause.response.state, .idle)
+
+        XCTAssertEqual(handoffs.pausedSession.state, .paused)
+        XCTAssertNil(handoffs.pausedSession.handoff)
+        XCTAssertTrue(handoffs.pausedSummary.paused)
+        XCTAssertEqual(handoffs.pausedSummary.sessionState, .paused)
+        XCTAssertTrue(handoffs.pausedDetail.paused)
+        XCTAssertEqual(handoffs.pausedError.error.code.rawValue, "bot_paused")
+
+        // An older phone: an assistant notice instead of a card, and a paused
+        // Bot that reads as unavailable.
+        let legacy = handoffs.legacy
+        XCTAssertNil(legacy.session.handoff)
+        guard case let .message(notice) = try XCTUnwrap(legacy.session.entries.last) else {
+            return XCTFail("the legacy session ends on the notice")
+        }
+        XCTAssertEqual(notice.role, .assistant)
+        XCTAssertEqual(notice.text, "Scout needs you on your Mac: Enter the 2FA code your bank sent you")
+        XCTAssertNil(notice.createdAt)
+        XCTAssertEqual(legacy.events.map(\.wireType), ["entry", "state", "entry", "state"])
+        XCTAssertEqual(legacy.pausedSession.state, .unavailable)
+        XCTAssertFalse(legacy.pausedSummary.paused)
+        XCTAssertEqual(legacy.pausedSummary.sessionState, .unavailable)
+        XCTAssertEqual(legacy.pausedError.error.code.rawValue, "operation_stale")
+
+        // A holder's session survives the cache round trip with its card.
+        let roundTripped = try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONEncoder().encode(handoffs.session))
+        XCTAssertEqual(roundTripped, handoffs.session)
+        let summary = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONEncoder().encode(handoffs.pausedSummary))
+        XCTAssertTrue(summary.paused)
+    }
+
+    /// Hand-offs fail closed like the Mac's own parser.
+    func testRevision37HandoffShapesFailClosedLikeTheHostParsers() throws {
+        let raw = try XCTUnwrap(try sharedFixtureObject()["botHandoffs"] as? [String: Any])
+        let session = try XCTUnwrap(raw["session"] as? [String: Any])
+        let card = try XCTUnwrap(session["handoff"] as? [String: Any])
+        XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card))
+        XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.filter { $0.key != "why" && $0.key != "open" }), "why and open are optional")
+        XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.merging(["kind": "sign_in"]) { $1 }))
+        let refused: [(String, [String: Any])] = [
+            ("an unknown key", card.merging(["origin": "https://bank.example.com"]) { $1 }),
+            ("an unknown kind", card.merging(["kind": "approve"]) { $1 }),
+            ("a blank action", card.merging(["action": "   "]) { $1 }),
+            ("a long action", card.merging(["action": String(repeating: "a", count: 161)]) { $1 }),
+            ("a long why", card.merging(["why": String(repeating: "a", count: 401)]) { $1 }),
+            ("a wait id outside the grammar", card.merging(["waitId": "wait/1"]) { $1 }),
+            ("an http page", card.merging(["open": ["url": "http://bank.example.com/verify"]]) { $1 }),
+            ("a page with a user name", card.merging(["open": ["url": "https://me@bank.example.com/verify"]]) { $1 }),
+            ("a page with spaces around it", card.merging(["open": ["url": " https://bank.example.com"]]) { $1 }),
+            ("an open with another key", card.merging(["open": ["url": "https://bank.example.com", "target": "browser"]]) { $1 }),
+        ]
+        for (reason, object) in refused {
+            XCTAssertFalse(decodes(AidenRemoteBotHandoff.self, object), reason)
+        }
+
+        // The answer: a note is non-blank and at most 4,000 characters.
+        XCTAssertNoThrow(try AidenBotHandoffAnswerRequest(outcome: .skipped))
+        XCTAssertNoThrow(try AidenBotHandoffAnswerRequest(outcome: .done, note: String(repeating: "n", count: 4_000)))
+        XCTAssertThrowsError(try AidenBotHandoffAnswerRequest(outcome: .done, note: " \n "))
+        XCTAssertThrowsError(try AidenBotHandoffAnswerRequest(outcome: .done, note: String(repeating: "n", count: 4_001)))
+        let skip = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(try AidenBotHandoffAnswerRequest(outcome: .skipped))) as? [String: Any])
+        XCTAssertEqual(skip as NSDictionary, ["outcome": "skipped"] as NSDictionary, "no note key without a note")
+
+        // A `handoff` frame always carries its key, and nothing else.
+        let frame = try XCTUnwrap((raw["events"] as? [[String: Any]])?.first)
+        XCTAssertTrue(decodes(AidenBotSessionEvent.self, frame))
+        XCTAssertFalse(decodes(AidenBotSessionEvent.self, frame.merging(["payload": [String: Any]()]) { $1 }))
+        XCTAssertFalse(decodes(AidenBotSessionEvent.self, frame.merging(["payload": ["handoff": NSNull(), "approval": NSNull()]]) { $1 }))
+
+        // A `paused` flag and a `paused` state always travel together.
+        let summary = try XCTUnwrap(raw["pausedSummary"] as? [String: Any])
+        XCTAssertFalse(decodes(AidenBotSummary.self, summary.filter { $0.key != "paused" }), "a paused state without the flag")
+        XCTAssertFalse(decodes(AidenBotSummary.self, summary.merging(["sessionState": "idle"]) { $1 }), "the flag without the state")
+        let detail = try XCTUnwrap(raw["pausedDetail"] as? [String: Any])
+        XCTAssertTrue(decodes(AidenBotDetail.self, detail.merging(["sessionState": "idle", "paused": false]) { $1 }))
+        XCTAssertFalse(decodes(AidenBotDetail.self, detail.merging(["paused": false]) { $1 }))
+    }
+
+    /// Revision 37: `bot:handoffs` is negotiable, and the phone offers the
+    /// hand-off UI only when the Mac lists it and this device holds it. There
+    /// is no feature token.
+    func testBotHandoffsNeedTheMacsOfferAndThisDevicesGrant() throws {
+        let response = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteDeviceCapabilitiesUpdateResponse.self,
+            from: Data(#"{"capabilities":["server:read","bot:read","bot:write","bot:handoffs"]}"#.utf8)
+        )
+        XCTAssertTrue(response.capabilities.contains(.botHandoffs))
+
+        let server = try XCTUnwrap(try sharedFixtureObject()["server"] as? [String: Any])
+        let granted = try XCTUnwrap(server["capabilities"] as? [String])
+        let supported = try XCTUnwrap(server["serverCapabilities"] as? [String]).filter { $0 != "bot:handoffs" }
+        func decoded(offered: Bool, grant: Bool) throws -> AidenServer {
+            var object = server
+            object["serverCapabilities"] = offered ? supported + ["bot:handoffs"] : supported
+            object["capabilities"] = grant ? granted.filter { $0 != "bot:handoffs" } + ["bot:handoffs"] : granted.filter { $0 != "bot:handoffs" }
+            return try AidenRemoteJSONDecoder.decode(AidenServer.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        XCTAssertFalse(try decoded(offered: false, grant: false).offersBotHandoffs, "an older Mac does not offer it")
+        let offered = try decoded(offered: true, grant: false)
+        XCTAssertTrue(offered.offersBotHandoffs, "the phone may ask for it")
+        XCTAssertFalse(offered.supportsBotHandoffs, "but has not been granted it yet")
+        XCTAssertTrue(try decoded(offered: true, grant: true).supportsBotHandoffs)
+    }
 }

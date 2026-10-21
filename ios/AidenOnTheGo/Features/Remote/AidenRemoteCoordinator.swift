@@ -813,6 +813,11 @@ final class AidenRemoteCoordinator {
             installationId: installation.id,
             generation: generation
         )
+        await negotiateBotHandoffsIfNeeded(
+            client: client,
+            installationId: installation.id,
+            generation: generation
+        )
     }
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
@@ -867,6 +872,45 @@ final class AidenRemoteCoordinator {
             }
             // Feature discovery and the device-capability update are additive;
             // older Macs remain connected with the existing feature set.
+        }
+    }
+
+    /// Contract revision 37: `bot:handoffs` is asked for in a call of its own,
+    /// after the progress batch. A Mac that does not know a name refuses the
+    /// whole request with a 400, so naming it in the batch could cost the
+    /// device every other opt-in. A refusal leaves the earlier grants as they are.
+    private func negotiateBotHandoffsIfNeeded(
+        client: AidenRemoteClient,
+        installationId: String,
+        generation: Int
+    ) async {
+        guard isCurrentContext(installationId: installationId, generation: generation),
+              let server = self.server, server.instanceId == installationId, server.offersBotHandoffs,
+              let installation = installationStore.installations.first(where: { $0.id == installationId }),
+              !installation.hasNegotiatedAccess(to: .botHandoffs) else {
+            return
+        }
+        do {
+            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: [.botHandoffs])
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return }
+            let refreshedServer = try await client.server()
+            guard isCurrentContext(installationId: installationId, generation: generation),
+                  refreshedServer.instanceId == installationId else { return }
+            try installationStore.updateNegotiatedDeviceCapabilities(
+                negotiatedCapabilities,
+                confirmedBy: refreshedServer
+            )
+            self.server = refreshedServer
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            if let context = try? requestContext(for: installationId),
+               isCurrentContext(installationId: installationId, generation: generation),
+               await handleCredentialRevocation(error, context: context) {
+                return
+            }
+            // A Mac without the route, or a refusal (400 or 404), keeps the
+            // grants the device already has; hand-offs stay on the Mac.
         }
     }
 

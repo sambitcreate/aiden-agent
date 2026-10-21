@@ -216,6 +216,51 @@ struct AidenBotLegacyNonNegotiatingFixture: Decodable, Equatable {
     private enum CodingKeys: String, CodingKey { case pairingExchange, server }
 }
 
+/// Contract revision 37 (`bot:handoffs`): one hand-off as a holder reads it,
+/// its answer, open-on-Mac, pause and resume, the paused Bot, and the same
+/// moments as a device without `bot:handoffs` reads them.
+struct AidenBotHandoffsContractFixture: Decodable {
+    struct Answer: Decodable {
+        let request: AidenBotHandoffAnswerRequest
+        let response: AidenBotHandoffAnswerReceipt
+    }
+
+    struct OpenOnMac: Decodable {
+        let request: AidenBotSessionActionRequest
+        let response: AidenBotHandoffOpenOnMacReceipt
+    }
+
+    struct Pause: Decodable {
+        let request: AidenBotSessionActionRequest
+        let response: AidenBotSessionStateView
+    }
+
+    struct Unpause: Decodable {
+        let response: AidenBotSessionStateView
+    }
+
+    struct Legacy: Decodable {
+        let session: AidenBotSession
+        let events: [AidenBotSessionEvent]
+        let pausedSession: AidenBotSession
+        let pausedSummary: AidenBotSummary
+        let pausedError: AidenRemoteErrorEnvelope
+    }
+
+    let capability: AidenRemoteCapability
+    let session: AidenBotSession
+    let events: [AidenBotSessionEvent]
+    let answer: Answer
+    let openOnMac: OpenOnMac
+    let pause: Pause
+    let unpause: Unpause
+    let pausedSession: AidenBotSession
+    let pausedSummary: AidenBotSummary
+    let pausedDetail: AidenBotDetail
+    let pausedError: AidenRemoteErrorEnvelope
+    let legacy: Legacy
+}
+
 extension AidenBotCreateContractFixture: AidenBotPrivateResponseScoped {
     static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCreate") }
 }
@@ -400,6 +445,8 @@ struct AidenRemoteContractFixture: Decodable {
     let botRoutineSuggestions: AidenBotRoutineSuggestionList
     let botRoutineNotifications: AidenBotRoutineNotificationFeed
     let botSessionCards: AidenBotSession
+    /// Revision 37: present from a revision-37 fixture.
+    let botHandoffs: AidenBotHandoffsContractFixture?
     let taskProgress: AidenRemoteChatTaskProgress?
     let agentRoster: AidenRemoteChatAgentRoster?
     let agentInterrupt: AgentInterruptFixture?
@@ -475,6 +522,7 @@ struct AidenRemoteContractFixture: Decodable {
             forKey: .botRoutineNotifications
         )
         botSessionCards = try values.decode(AidenBotSession.self, forKey: .botSessionCards)
+        botHandoffs = try values.decodeIfPresent(AidenBotHandoffsContractFixture.self, forKey: .botHandoffs)
         taskProgress = try values.decodeIfPresent(AidenRemoteChatTaskProgress.self, forKey: .taskProgress)
         agentRoster = try values.decodeIfPresent(AidenRemoteChatAgentRoster.self, forKey: .agentRoster)
         agentInterrupt = try values.decodeIfPresent(AgentInterruptFixture.self, forKey: .agentInterrupt)
@@ -577,6 +625,7 @@ struct AidenRemoteContractFixture: Decodable {
               botAvatarMetadata == botDetail.avatar.asset,
               botSession.botId == botID,
               botSessionCards.botId == botID,
+              botHandoffs.map({ $0.session.botId == botID && $0.pausedDetail.id == botID }) ?? true,
               botMemory.botId == botID,
               botMemoryEdit.response.view.botId == botID,
               botRoutineNotifications.notifications.allSatisfy({ $0.botId == botID }),
@@ -599,7 +648,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botConnectionRequest, botPresets, botPresetCreate
         case legacyNonNegotiating
         case botMemory, botMemoryEdit, botRoutineProposalRespond, botRoutineSuggestions
-        case botRoutineNotifications, botSessionCards
+        case botRoutineNotifications, botSessionCards, botHandoffs
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
         case scheduleRunNotification, error, runControlError, phoneRunEvents

@@ -486,6 +486,50 @@ final class AidenRunAlertNotifier {
         try? await center.add(request)
     }
 
+    /// Contract revision 37 (`bot:handoffs`, G24): one Time Sensitive alert
+    /// when a Bot hands the person a step while they are away from its chat.
+    /// Fixed copy, like the other run alerts: the step's own words stay in
+    /// the app. It opens the Bot's chat on the Mac it came from. Local-only,
+    /// so it fires only while the app still holds the Bot's session stream.
+    func notifyBotHandoff(
+        waitID: String,
+        kind: AidenBotHandoffKind,
+        instanceID: String,
+        botID: String,
+        botName: String,
+        isChatOnScreen: Bool
+    ) async {
+        guard isEnabled else { return }
+        let status = await center.currentAuthorizationStatus()
+        let key = "\(instanceID)|handoff|\(botID)|\(waitID)"
+        var alerted = defaults.stringArray(forKey: Self.alertedKeysKey) ?? []
+        guard AidenRunAlertPolicy.shouldPost(
+            appState: appState(),
+            isChatOnScreen: isChatOnScreen,
+            alreadyAlerted: alerted.contains(key),
+            isAuthorized: AidenRunAlertPolicy.isAuthorized(status)
+        ), let url = AidenDeepLink.botChatURL(instanceId: instanceID, botId: botID) else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = AidenScheduledRunNotifier.displaySafe(botName, limit: 120)
+        content.body = kind == .signIn
+            ? String(localized: "Needs you to sign in")
+            : String(localized: "Handed you a step")
+        content.threadIdentifier = "aiden.run.bot.\(instanceID).\(botID)"
+        content.userInfo = [Self.deepLinkUserInfoKey: url.absoluteString]
+        content.interruptionLevel = .timeSensitive
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "\(Self.identifierPrefix)handoff.\(instanceID).\(botID).\(waitID)",
+            content: content,
+            trigger: nil
+        )
+        // Recorded before posting: a dropped alert beats a repeated one.
+        alerted.append(key)
+        defaults.set(Array(alerted.suffix(Self.maximumAlertedKeys)), forKey: Self.alertedKeysKey)
+        try? await center.add(request)
+    }
+
     /// The chat link carried by a tapped run alert, if it is a valid Aiden link.
     nonisolated static func deepLink(from userInfo: [AnyHashable: Any]) -> URL? {
         guard let value = userInfo[deepLinkUserInfoKey] as? String,
