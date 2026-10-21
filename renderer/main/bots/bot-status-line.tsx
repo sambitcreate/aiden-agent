@@ -5,6 +5,7 @@
 // mounted while the line comes and goes, at most once every 2 seconds.
 
 import * as React from "react";
+import { useNowSecond } from "../../lib/second-clock";
 import { Square } from "lucide-react";
 import { AidenActivityMark } from "../../components/aiden-activity-mark";
 import { Button, Text } from "../../components/ui";
@@ -17,16 +18,6 @@ import {
 } from "../../shared/bot-activity";
 import type { BotLiveActivity } from "../../shared/bot-live";
 import type { BotChatActivityWording } from "../../shared/bots";
-
-function useClock(fixed: number | undefined): number {
-  const [now, setNow] = React.useState(() => fixed ?? Date.now());
-  React.useEffect(() => {
-    if (fixed !== undefined) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [fixed]);
-  return fixed ?? now;
-}
 
 const SILENT: BotAnnouncement = { text: "", at: Number.NEGATIVE_INFINITY };
 
@@ -102,7 +93,8 @@ export function BotStatusLine({
   onLayoutChange?(key: string): void;
 }) {
   const { display, detail } = botStatusParts(activity, wording);
-  const now = useClock(fixedNow);
+  const clockNow = useNowSecond(fixedNow === undefined);
+  const now = fixedNow ?? clockNow;
   const elapsed = botElapsedLabel(activity.startedAt, now);
   // Waiting on the person, or already stopping: "I'll message you when it's done" would mislead.
   const stillGoing =
