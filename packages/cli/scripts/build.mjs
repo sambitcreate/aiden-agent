@@ -138,8 +138,9 @@ ${load}`);
       source = source.replace(publication, `        const claimedPluginNames = new Set(skillsResult.skills.map((skill) => skill.name.normalize("NFKC").toLowerCase()));
         for (const plugin of this.aidenPluginSkills ?? []) {
             const identity = plugin.name.normalize("NFKC").toLowerCase();
-            if (claimedPluginNames.has(identity) || plugin.userInvocable === false) continue;
+            if (claimedPluginNames.has(identity)) continue;
             claimedPluginNames.add(identity);
+            if (plugin.userInvocable === false) continue;
             skillsResult.skills.push({ name: plugin.name, description: plugin.description, filePath: plugin.path, baseDir: dirname(plugin.path), disableModelInvocation: plugin.modelInvocable === false, sourceInfo: { source: "auto", scope: plugin.source === "workspace" ? "project" : "user", origin: "top-level", baseDir: dirname(plugin.path) } });
         }
 ${publication}`);

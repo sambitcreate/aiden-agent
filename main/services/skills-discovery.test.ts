@@ -685,6 +685,17 @@ test("manifest collections and root skills use bounded plugin containment and pr
   assert.equal(skills.find((skill) => skill.name === "tools:normal")?.instructions, "User override.");
   const candidates = await discoverSkillCandidates(undefined, home);
   assert.equal(candidates.filter((skill) => skill.name === "tools:custom").length, 1);
+  await writeSkill(root, "audit", "Root collection audit instructions.");
+  assert.ok(!(await discoverSkillCandidates(undefined, home)).some((skill) => skill.name === "tools:audit"), "the implicit root fallback must remain direct-only");
+  for (const collection of [".", "./"]) {
+    await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ skills: collection }));
+    for (const discover of [discoverSkillCandidates, discoverPluginSkillCandidates]) {
+      const declared = await discover(undefined, home);
+      assert.equal(declared.find((skill) => skill.name === "tools:audit")?.instructions, "Root collection audit instructions.");
+      assert.equal(declared.filter((skill) => skill.name === "tools:custom").length, 1);
+      assert.ok(!declared.some((skill) => skill.name === "tools:escaped"));
+    }
+  }
 });
 
 test("malformed plugin metadata and nonboolean enablement fail closed without hiding ordinary skills", async (t) => {

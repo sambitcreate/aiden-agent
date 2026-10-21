@@ -519,6 +519,8 @@ test("built CLI discovers additional directories and enabled plugin skills after
 		assert.equal(rpcCommandDetails([], options).find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
 		assert.equal(rpcCommandDetails(["--approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Project plugin review.");
 		assert.equal(rpcCommandDetails(["--no-approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
+		writeFileSync(path.join(projectPlugin, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Automatic-only project review.\nuser-invocable: false\n---\nAutomatic review instructions.\n");
+		assert.ok(!rpcCommands(["--approve"], options).includes("skill:tools:review"), "omitting an automatic-only project winner must not expose the shadowed global implementation");
 		const explicit = makeProbeSkill(path.join(root, "explicit"), "tools:review", "Explicit override.");
 		assert.equal(rpcCommandDetails(["--skill", explicit, "--approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Explicit override.");
 	} finally {

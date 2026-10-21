@@ -76,9 +76,9 @@ export function claudePluginSkillRoots(home: string, workspaceRoot?: string): Pl
     const custom = typeof manifest?.skills === "string" ? [manifest.skills] : Array.isArray(manifest?.skills) ? manifest.skills : [];
     const searches = [{ base: "skills", maxDepth: 12 }];
     for (const candidate of custom.slice(0, PLUGIN_DISCOVERY_LIMITS.pathsPerPlugin)) {
-      if (typeof candidate !== "string" || path.isAbsolute(candidate) || candidate.includes("\\")) continue;
+      if (typeof candidate !== "string" || !candidate || path.isAbsolute(candidate) || candidate.includes("\\")) continue;
       const relative = path.relative(root, path.resolve(root, candidate));
-      if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`)) continue;
+      if (relative === ".." || relative.startsWith(`..${path.sep}`)) continue;
       // A manifest may name a skill directory, a collection, or SKILL.md itself.
       searches.push({ base: candidate.endsWith("SKILL.md") ? path.dirname(relative) : relative, maxDepth: 12 });
     }
