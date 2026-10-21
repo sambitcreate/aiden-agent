@@ -51,7 +51,9 @@ swaps them. Existing Bot computers keep working and show "Made from an older
 base" until you **Reset** them.
 
 If setup fails, Settings shows why and offers **Try again**; a download that
-stopped part-way continues where it left off. A base left half-built by a quit
+stopped part-way continues where it left off. After a failed **Update base**,
+Try again retries the update beside the current base, which keeps working (and
+Bots can still be given computers from it) meanwhile. A base left half-built by a quit
 or crash is deleted at the next launch or replaced when Set up runs again, and a
 Bot computer that was interrupted while it was being made is marked for
 **Reset**.
@@ -61,6 +63,10 @@ Bot computer that was interrupted while it was being made is marked for
 - **Set up** checks for free space before it downloads: the remaining download
   plus 60 GiB for the base and headroom (about 84 GB on an empty start).
   Settings states that figure before you choose Set up.
+- **Set up** also checks for 8 GB of available memory before it downloads, and
+  again before it installs macOS into the base, which runs as a computer while
+  it is built. Update base, with Bot computers running, checks once, after it
+  has made a place for the base (see Limits).
 - **The base** takes about 50 GB once macOS is installed.
 - **Each Bot computer** starts as an APFS copy of the base and takes space only
   as it changes. Settings → Bot computers shows the disk used by the base, the
@@ -77,6 +83,13 @@ Bot computer that was interrupted while it was being made is marked for
   it is idle. A computer is idle when nothing is using it, the person is not
   controlling it, and it has not been used for a minute. If none is idle, the
   next Bot waits, and its computer shows "Waiting for another Bot's computer".
+- **Building the base** (Set up or Update base) runs it as a computer, so it
+  takes one of those places while macOS installs and Aiden prepares it. An idle
+  computer stops to make room. If every running computer is in use, Update base
+  stops and says so; stop a Bot's computer and choose Try again. A Bot whose
+  computer needs to start meanwhile waits for the place. If another app's macOS
+  virtual machine holds the last place, the install fails with a message saying
+  so.
 - **Stop when idle:** a running computer nobody has used for 5, 10 (default),
   15, 30 or 60 minutes stops. It never stops while the person is controlling it
   or a Bot action is running.

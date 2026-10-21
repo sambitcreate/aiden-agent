@@ -61,7 +61,9 @@ export interface BotComputersStatus {
 /** Every Bot-computer IPC channel. Invoke channels share the `botComputers:` prefix. */
 export const BOT_COMPUTER_CHANNELS = {
   status: "botComputers:status", // invoke() → BotComputersStatus
-  setUp: "botComputers:setUp", // invoke() → BotComputersStatus (resolves when setup settles)
+  // Set up and Update base start the work and reply with the status at once;
+  // progress, the result and any failure arrive as `botComputers:changed`.
+  setUp: "botComputers:setUp", // invoke() → BotComputersStatus
   cancelSetUp: "botComputers:cancelSetUp", // invoke() → void
   updateBase: "botComputers:updateBase", // invoke() → BotComputersStatus
   removeEverything: "botComputers:removeEverything", // invoke() → BotComputersStatus

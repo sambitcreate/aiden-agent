@@ -13,12 +13,14 @@
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit and vncHost of a JSON file named by a leading
-// `--fake-config <file>`):
+// keys log, stale, limit, vncHost and stopDelayMs of a JSON file named by a
+// leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)";
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
 //   Virtualization VM-limit error (written to the --log-file, as the detached run does);
-// - AIDEN_FAKE_LUME_VNC_HOST: the host `get` reports in vncUrl (default 127.0.0.1).
+//   an unattended `create` boots its VM, so it fails the same way, on stderr;
+// - AIDEN_FAKE_LUME_VNC_HOST: the host `get` reports in vncUrl (default 127.0.0.1);
+// - AIDEN_FAKE_LUME_STOP_DELAY_MS: how long `stop` takes before the VM is off (default 0).
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -34,7 +36,13 @@ let args = process.argv.slice(2);
 // switches as `--fake-config <file>` ahead of the real arguments instead.
 if (args[0] === "--fake-config") {
   const config = JSON.parse(readFileSync(args[1], "utf8"));
-  const names = { log: "AIDEN_E2E_FAKE_LUME_LOG", stale: "AIDEN_FAKE_LUME_STALE", limit: "AIDEN_FAKE_LUME_LIMIT", vncHost: "AIDEN_FAKE_LUME_VNC_HOST" };
+  const names = {
+    log: "AIDEN_E2E_FAKE_LUME_LOG",
+    stale: "AIDEN_FAKE_LUME_STALE",
+    limit: "AIDEN_FAKE_LUME_LIMIT",
+    vncHost: "AIDEN_FAKE_LUME_VNC_HOST",
+    stopDelayMs: "AIDEN_FAKE_LUME_STOP_DELAY_MS",
+  };
   for (const [key, name] of Object.entries(names)) {
     if (config[key] !== undefined && config[key] !== null) process.env[name] = String(config[key]);
   }
@@ -223,6 +231,13 @@ async function main() {
       if (options["--os"] !== "macOS" || options["--unattended"] !== "tahoe") fail("unexpected create options", 74);
       if (!options["--ipsw"] || !existsSync(options["--ipsw"])) fail("restore image not found");
       if (state.vms[name]) fail(`Virtual machine already exists with name: ${name}`);
+      // `--unattended` boots the new VM to drive Setup Assistant, so it needs one of
+      // the macOS VM places like `run` does (assumed, confirm on the owner Mac).
+      const createLimit = Number(process.env.AIDEN_FAKE_LUME_LIMIT ?? "0");
+      if (createLimit > 0 && Object.values(state.vms).filter(isRunning).length >= createLimit) {
+        process.stderr.write(readFileSync(path.join(fixtures, "lume-error-vm-limit.txt"), "utf8"));
+        process.exit(1);
+      }
       const count = Object.keys(state.vms).length;
       state.vms[name] = { status: "stopped", ip: `192.168.64.${10 + count}`, mac: `a6:4f:2c:9e:13:${String(10 + count)}` };
       mkdirSync(path.join(storage, name), { recursive: true });
@@ -305,10 +320,15 @@ async function main() {
       const vm = state.vms[name];
       if (!vm) fail(`Virtual machine not found: ${name}`);
       if (!isRunning(vm)) fail(`Virtual machine not running: ${name}`);
-      vm.status = "stopped";
-      const pid = vm.pid;
-      vm.pid = undefined;
-      writeState(storage, state);
+      const stopDelay = Number(process.env.AIDEN_FAKE_LUME_STOP_DELAY_MS ?? "0");
+      if (stopDelay > 0) await sleep(stopDelay);
+      // Re-read: other Lume calls may have changed the state while this one waited.
+      const latest = readState(storage);
+      const stopping = latest.vms[name] ?? vm;
+      const pid = stopping.pid;
+      stopping.status = "stopped";
+      stopping.pid = undefined;
+      writeState(storage, latest);
       try {
         process.kill(pid, "SIGTERM");
       } catch {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -21,6 +21,7 @@ interface FakeConfig {
   stale?: string;
   limit?: number;
   vncHost?: string;
+  stopDelayMs?: number;
 }
 
 interface LoggedCall {
@@ -55,7 +56,9 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     sshCalls.push({ args, stdin: options.stdin });
     return { ...done, stdout: "guest says hi\n" };
   };
-  const host = createBotComputerHost({
+  // Restore images by URL; anything else gets the default pin's bytes.
+  const served = new Map<string, Buffer>();
+  const deps: BotComputerHostDependencies = {
     root,
     lume: async () => ({ command: process.execPath, prefixArgs: [fake, "--fake-config", configFile] }),
     support: () => ({ ok: true }),
@@ -71,7 +74,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     resources: { freeDiskBytes: async () => 1e13, availableMemoryBytes: async () => 64 * 1024 ** 3 },
     fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
       fetches.push({ url: String(url), redirect: init?.redirect });
-      return new Response(new Uint8Array(restoreImage));
+      return new Response(new Uint8Array(served.get(String(url)) ?? restoreImage));
     }) as typeof fetch,
     image: {
       version: "26.6.2",
@@ -95,7 +98,15 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     onSetupReady: () => void (events.ready += 1),
     onRemoved: () => void (events.removed += 1),
     ...overrides,
-  });
+  };
+  const host = createBotComputerHost(deps);
+  // A later launch over the same storage, for example an Aiden release that pins a newer image.
+  const relaunched: ReturnType<typeof createBotComputerHost>[] = [];
+  const relaunch = (changes: Partial<BotComputerHostDependencies>) => {
+    const next = createBotComputerHost({ ...deps, ...changes });
+    relaunched.push(next);
+    return next;
+  };
   const calls = (): LoggedCall[] =>
     existsSync(config.log)
       ? readFileSync(config.log, "utf8")
@@ -134,11 +145,16 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     events,
     calls,
     vmRunning,
+    relaunch,
+    serve: (url: string, bytes: Buffer) => void served.set(url, bytes),
+    /** The VMs the fake Lume holds in Aiden's storage. */
+    vmNames: () => Object.keys(fakeState().vms).sort(),
     advance: (ms: number) => {
       clock += ms;
     },
     async cleanup() {
       await host.shutdown(5_000).catch(() => undefined);
+      for (const other of relaunched) await other.shutdown(5_000).catch(() => undefined);
       for (const vm of Object.values(fakeState().vms)) {
         if (vm.pid) {
           try {
@@ -226,6 +242,93 @@ test("Set up with too little disk says so before downloading", async () => {
   );
 });
 
+test("Set up with too little free memory says so before downloading, and again before it boots the base", async () => {
+  const plenty = 64 * 1024 ** 3;
+  const short = 2 * 1024 ** 3;
+  let memory = short;
+  // What the Mac has free once the download has run, which takes a while.
+  let memoryAfterDownload = plenty;
+  let downloads = 0;
+  await withHost(
+    async (context) => {
+      await assert.rejects(
+        context.host.setUp(),
+        (error: unknown) => error instanceof BotComputerError && error.code === "low_memory" && /free memory/u.test(error.message),
+      );
+      assert.equal(downloads, 0, "nothing downloads");
+      assert.equal(context.calls().length, 0, "no Lume runs");
+      assert.equal((await context.host.status()).setup.kind, "failed");
+
+      memory = plenty;
+      memoryAfterDownload = short;
+      await assert.rejects(context.host.setUp(), (error: unknown) => error instanceof BotComputerError && error.code === "low_memory");
+      assert.equal(downloads, 1);
+      assert.equal(context.calls().some((call) => call.op === "create"), false, "no VM is made without the memory to boot it");
+
+      memory = plenty;
+      memoryAfterDownload = plenty;
+      await context.host.setUp();
+      assert.equal((await context.host.status()).setup.kind, "ready");
+      assert.equal(downloads, 1, "the verified download is reused");
+    },
+    {
+      resources: { freeDiskBytes: async () => 1e13, availableMemoryBytes: async () => memory },
+      fetchImpl: (async () => {
+        downloads += 1;
+        memory = memoryAfterDownload;
+        return new Response(new Uint8Array(restoreImage));
+      }) as typeof fetch,
+    },
+  );
+});
+
+test("cancelling Set up keeps the partial download, and the next Set up resumes it with Range", async () => {
+  const half = Math.floor(restoreImage.length / 2);
+  const ranges: (string | null)[] = [];
+  await withHost(
+    async (context) => {
+      const partial = path.join(context.root, "restore-images", "UniversalMac_25G83_Restore.ipsw.part");
+      const first = context.host.setUp();
+      for (let attempt = 0; attempt < 200 && !(existsSync(partial) && statSync(partial).size === half); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(statSync(partial).size, half, "half the image arrived before Cancel");
+      context.host.cancelSetUp();
+      await first;
+      assert.deepEqual((await context.host.status()).setup, {
+        kind: "failed",
+        message: "Set up was cancelled. Choose Set up to continue where it stopped.",
+        resumable: true,
+      });
+      assert.equal(context.calls().length, 0, "no VM work starts after Cancel");
+
+      await setUp(context);
+      assert.deepEqual(ranges, [null, `bytes=${half}-`]);
+    },
+    {
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        const range = new Headers(init?.headers).get("range");
+        ranges.push(range);
+        if (range) {
+          const from = Number(/^bytes=(\d+)-$/u.exec(range)?.[1]);
+          return new Response(new Uint8Array(restoreImage.subarray(from)), {
+            status: 206,
+            headers: { "content-range": `bytes ${from}-${restoreImage.length - 1}/${restoreImage.length}` },
+          });
+        }
+        // The first answer sends half the image, then nothing until it is cancelled.
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(restoreImage.subarray(0, half)));
+            init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true });
+          },
+        });
+        return new Response(body);
+      }) as typeof fetch,
+    },
+  );
+});
+
 test("the free space Settings states before Set up is the space Set up checks for", async () => {
   let free = 0;
   await withHost(
@@ -279,6 +382,19 @@ test("give, run, stop and delete a Bot's computer; delete is idempotent", async 
     await context.host.deleteForBot("never-had-one");
     await assert.rejects(context.host.ensureRunning("ada", { reason: "tool" }), (error: unknown) => error instanceof BotComputerError && error.code === "no_computer");
   });
+});
+
+test("a Bot whose Computer folder path holds a colon is refused a computer before anything is made", async () => {
+  const colonDir = mkdtempSync(path.join(tmpdir(), "p8-colon-"));
+  await withHost(
+    async (context) => {
+      await setUp(context);
+      await assert.rejects(context.host.give("ada"), (error: unknown) => error instanceof BotComputerError && error.code === "invalid" && /colon/u.test(error.message));
+      assert.equal(context.calls().some((call) => call.op === "clone"), false);
+      assert.equal(await context.host.computer("ada"), undefined);
+    },
+    { botComputerDir: async (botId) => path.join(colonDir, `bot:${botId}`, "Computer") },
+  );
 });
 
 test("at the cap the least recently used idle computer stops; with none idle, the start waits", async () => {
@@ -357,6 +473,43 @@ test("pausing a Bot stops its computer, including one still waiting for a slot",
   });
 });
 
+test("quitting stops every running computer inside its budget, and nothing starts afterwards", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.updateSettings({ maxRunning: 1 });
+    await context.host.give("ada");
+    await context.host.give("ben");
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    // Quit settles the waiting start, so its outcome is kept from the start.
+    const waiting = context.host.ensureRunning("ben", { reason: "routine" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal((await context.host.computer("ben"))?.state, "waiting_for_slot");
+
+    // A stop that takes longer than the budget can't hold quit.
+    context.config.stopDelayMs = 1_500;
+    context.writeConfig();
+    const started = Date.now();
+    await context.host.shutdown(300);
+    assert.ok(Date.now() - started < 1_200, `shutdown returned at its deadline (${Date.now() - started} ms)`);
+    assert.ok((await waiting) instanceof BotComputerError, "the waiting start gives up");
+    await assert.rejects(context.host.ensureRunning("ada", { reason: "tool" }), (error: unknown) => error instanceof BotComputerError && error.code === "busy");
+
+    // The forced stop still lands, so no VM outlives Aiden.
+    for (let attempt = 0; attempt < 150 && context.vmRunning(botComputerVmName("ada")); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(context.vmRunning(botComputerVmName("ada")), false);
+    const stop = context.calls().find((call) => call.op === "stop" && call.args?.includes(botComputerVmName("ada")));
+    assert.ok(stop?.args?.includes("--force"), "quit powers the computer off rather than waiting on the guest");
+    assert.equal(context.vmRunning(botComputerVmName("ben")), false, "the waiting computer never started");
+    context.config.stopDelayMs = undefined;
+    context.writeConfig();
+  });
+});
+
 test("reconcile stops VMs an earlier launch left running and reports stale ones for Reset", async () => {
   await withHost(async (context) => {
     await setUp(context);
@@ -389,6 +542,29 @@ test("reconcile stops VMs an earlier launch left running and reports stale ones 
   });
 });
 
+test("a base left half-installed by a crash is deleted at the next launch, and Settings says Set up was interrupted", async () => {
+  await withHost(async (context) => {
+    // An earlier launch quit while Lume was installing macOS into the base.
+    mkdirSync(path.join(context.root, "vms", BOT_COMPUTER_BASE_VM), { recursive: true });
+    writeFileSync(
+      path.join(context.root, "vms", ".fake-state.json"),
+      JSON.stringify({ vms: { [BOT_COMPUTER_BASE_VM]: { status: "stopped", ip: "192.168.64.10", mac: "a6:4f:2c:9e:13:10" } } }),
+    );
+    context.config.stale = BOT_COMPUTER_BASE_VM;
+    context.writeConfig();
+    await context.host.reconcile();
+    assert.deepEqual(context.vmNames(), []);
+    assert.deepEqual((await context.host.status()).setup, {
+      kind: "failed",
+      message: "Set up was interrupted. Choose Set up to try again.",
+      resumable: true,
+    });
+    context.config.stale = undefined;
+    context.writeConfig();
+    await setUp(context);
+  });
+});
+
 test("Lume's VM-limit failure becomes a clear message, and the slot is released", async () => {
   await withHost(async (context) => {
     await setUp(context);
@@ -403,6 +579,111 @@ test("Lume's VM-limit failure becomes a clear message, and the slot is released"
       (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /two virtual machines/u.test(error.message),
     );
     assert.equal((await context.host.computer("ben"))?.state, "stopped");
+  });
+});
+
+const newerImage = Buffer.from("a newer fake macOS restore image for host tests\n".repeat(80));
+
+/** The pin a later Aiden release ships, served by the harness's fetch. */
+function newerPin(context: Harness) {
+  const pin = {
+    version: "26.7",
+    build: "25H5",
+    url: "https://updates.cdn-apple.com/test/UniversalMac_26.7_25H5_Restore.ipsw",
+    bytes: newerImage.length,
+    sha256: createHash("sha256").update(newerImage).digest("hex"),
+  };
+  context.serve(pin.url, newerImage);
+  return pin;
+}
+
+test("Update base builds the newer pinned base beside the old one; Bot computers keep theirs until Reset", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.give("ada");
+    await context.host.shutdown(5_000);
+
+    // The next Aiden release pins a newer macOS.
+    const pin = newerPin(context);
+    const host = context.relaunch({ image: pin });
+    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: true });
+    assert.equal((await host.computer("ada"))?.outdated, false);
+
+    await host.updateBase();
+    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.7", baseBuild: "25H5", updateAvailable: false });
+    assert.equal(last(context.fetches)?.url, pin.url);
+    const installs = context.calls().filter((call) => call.op === "create");
+    assert.equal(installs.length, 2);
+    assert.match(installs[1]?.args?.[installs[1].args.indexOf("--ipsw") + 1] ?? "", /25H5/u, "the new base installs the newer image");
+    assert.deepEqual(context.vmNames(), [BOT_COMPUTER_BASE_VM, botComputerVmName("ada")].sort(), "the new base is swapped in, nothing left beside it");
+    assert.equal(existsSync(path.join(context.root, "restore-images", "UniversalMac_25H5_Restore.ipsw")), false);
+    assert.equal(context.events.ready, 2);
+
+    const ada = await host.computer("ada");
+    assert.equal(ada?.outdated, true);
+    assert.equal(ada?.baseBuild, "25G83");
+    // Ada's computer still starts on its old base; Reset moves it to the new one.
+    await host.ensureRunning("ada", { reason: "tool" });
+    const reset = await host.reset("ada");
+    assert.equal(reset.outdated, false);
+    assert.equal(reset.baseBuild, "25H5");
+
+    const fetched = context.fetches.length;
+    await host.updateBase();
+    assert.equal(context.fetches.length, fetched, "an up-to-date base downloads nothing");
+  });
+});
+
+test("building a base needs a running place: an idle computer gives up its own, a busy Mac is refused, and Try again keeps the working base", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    for (const botId of ["ada", "ben", "cyd"]) await context.host.give(botId);
+    await context.host.shutdown(5_000);
+    const host = context.relaunch({ image: newerPin(context) });
+    // macOS runs at most two macOS VMs; the fake refuses a third start or unattended install.
+    context.config.limit = 2;
+    context.writeConfig();
+    await host.ensureRunning("ada", { reason: "tool" });
+    context.advance(10_000);
+    await host.ensureRunning("ben", { reason: "tool" });
+
+    // Both were used within the last minute, so neither gives up its place.
+    await assert.rejects(
+      host.updateBase(),
+      (error: unknown) => error instanceof BotComputerError && error.code === "busy" && /Stop a Bot's computer/u.test(error.message),
+    );
+    assert.equal((await host.status()).setup.kind, "failed");
+    assert.equal(context.vmRunning(botComputerVmName("ada")), true);
+    assert.equal(context.vmRunning(botComputerVmName("ben")), true);
+    assert.equal(context.calls().filter((call) => call.op === "create").length, 1, "no install is tried past the limit");
+
+    // Another app holds the second macOS place, so the install itself fails.
+    await host.stop("ben", { reason: "person" });
+    context.config.limit = 1;
+    context.writeConfig();
+    // "Try again" in Settings is Set up. With a working base it retries the update;
+    // it never rebuilds, in place, the base the Bots' computers came from.
+    await assert.rejects(
+      host.setUp(),
+      (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /two virtual machines/u.test(error.message),
+    );
+    assert.deepEqual(
+      context.vmNames().filter((name) => name.startsWith("aiden-base")),
+      [BOT_COMPUTER_BASE_VM],
+      "the working base is kept and the half-made one removed",
+    );
+    assert.equal((await host.give("dot")).baseBuild, "25G83", "Bots can still get a computer from the working base");
+
+    // Once the computers have sat idle, the one used longest ago stops for the base.
+    context.config.limit = 2;
+    context.writeConfig();
+    context.advance(20_000);
+    await host.ensureRunning("ben", { reason: "tool" });
+    context.advance(2 * 60_000);
+    await host.updateBase();
+    assert.equal((await host.status()).setup.kind, "ready");
+    assert.equal((await host.computer("ada"))?.state, "stopped", "Ada's was used longest ago");
+    assert.equal((await host.computer("ben"))?.state, "running");
   });
 });
 

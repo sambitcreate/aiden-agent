@@ -179,6 +179,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   let setupAbort: AbortController | undefined;
   let shuttingDown = false;
   let diskCache: { at: number; bytes: number } | undefined;
+  /** A base being built boots as a VM too, so it holds one of the running places. */
+  let baseHoldsSlot = false;
 
   const emit = (botId?: string) => {
     diskCache = undefined;
@@ -201,7 +203,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }
     return found;
   };
-  const occupied = () => [...runtimes.values()].filter((entry) => SLOT_STATES.has(entry.state)).length;
+  const occupied = () =>
+    [...runtimes.values()].filter((entry) => SLOT_STATES.has(entry.state)).length + (baseHoldsSlot ? 1 : 0);
   const wakeSlotWaiters = () => {
     const waiters = [...slotWaiters];
     slotWaiters.clear();
@@ -341,7 +344,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }
   }
 
-  function idleCandidate(except: string): string | undefined {
+  function idleCandidate(except?: string): string | undefined {
     let candidate: { botId: string; lastUsedAt: number } | undefined;
     const current = now();
     for (const [botId, entry] of runtimes) {
@@ -386,6 +389,39 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         signal.addEventListener("abort", abort, { once: true });
       });
     }
+  }
+
+  /**
+   * Lume's unattended install and the provisioning after it boot the base, so a
+   * base build takes one of the running places. An idle computer gives up its
+   * place, as at the cap; when every running computer is in use the build is
+   * refused rather than pushed past macOS's limit or left waiting silently.
+   * Bot computers that start meanwhile wait for the place like any other.
+   */
+  async function acquireBaseSlot(signal: AbortSignal): Promise<void> {
+    for (;;) {
+      if (signal.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+      if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
+      const { settings } = await store.read();
+      if (occupied() < settings.maxRunning) {
+        baseHoldsSlot = true;
+        return;
+      }
+      const idle = idleCandidate();
+      if (!idle) {
+        throw new BotComputerError(
+          "busy",
+          "Building the base computer needs one of the places Bot computers run in, and they're all in use. Stop a Bot's computer in its profile, then try again.",
+        );
+      }
+      await stopComputer(idle, "limit");
+    }
+  }
+
+  function releaseBaseSlot(): void {
+    if (!baseHoldsSlot) return;
+    baseHoldsSlot = false;
+    wakeSlotWaiters();
   }
 
   function armIdle(botId: string, entry: Runtime, minutes: number): void {
@@ -578,6 +614,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
   async function performSetup(mode: "setup" | "update", signal: AbortSignal): Promise<void> {
     const target = mode === "setup" ? BOT_COMPUTER_BASE_VM : BOT_COMPUTER_STAGING_BASE_VM;
+    // Booting the base needs a running computer's memory. Say so before a long
+    // download; with Bot computers running, their memory is not free yet (an idle
+    // one may stop for the base), so only the check before the install applies.
+    if (occupied() === 0) {
+      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+    }
     setupState = { kind: "downloading", receivedBytes: await downloader.partialBytes(), totalBytes: image.bytes };
     emit();
     const ipsw = await downloader.download({
@@ -593,6 +635,22 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await store.update((draft) => {
       draft.setup.ipswPath = ipsw;
     });
+    await acquireBaseSlot(signal);
+    try {
+      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+      await buildAndInstallBase(mode, target, ipsw, signal);
+    } finally {
+      releaseBaseSlot();
+    }
+    await store.update((draft) => {
+      draft.setup = { baseBuild: image.build, baseVersion: image.version };
+    });
+    setupState = undefined;
+    deps.onSetupReady?.();
+  }
+
+  /** Install macOS into `target`, provision it, and (for an update) swap it in as the base. */
+  async function buildAndInstallBase(mode: "setup" | "update", target: string, ipsw: string, signal: AbortSignal): Promise<void> {
     setupState = { kind: "building_base", step: "create" };
     emit();
     const keyEnv = guestSshEnvironment(deps.env ?? process.env, dirs.home);
@@ -608,12 +666,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       signal,
       deleteVm: () => deleteVm(target),
       create: async () => {
-        await lumeOrThrow(
-          { op: "create", name: target, ipsw, unattended: "tahoe" },
-          3 * 60 * 60_000,
-          "Installing macOS on the base computer failed. Choose Set up to try again.",
-          signal,
-        );
+        const result = await lume({ op: "create", name: target, ipsw, unattended: "tahoe" }, 3 * 60 * 60_000, signal);
+        if (result.exitCode === 0) return;
+        log(`lume create failed: ${result.stderr.slice(-600)}`);
+        // The unattended install boots the VM, so another app's macOS VM can fill the last place.
+        if (failureKind(result) === "vm_limit") throw startFailure("vm_limit", "The base");
+        throw new BotComputerError("lume_failed", "Installing macOS on the base computer failed. Choose Set up to try again.");
       },
       start: async () => {
         const { info } = await runAndWait(target, dirs.baseShared, "The base", signal, true);
@@ -638,11 +696,6 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       );
       await deleteVm(BOT_COMPUTER_STAGING_BASE_VM);
     }
-    await store.update((draft) => {
-      draft.setup = { baseBuild: image.build, baseVersion: image.version };
-    });
-    setupState = undefined;
-    deps.onSetupReady?.();
   }
 
   function startSetup(mode: "setup" | "update"): Promise<void> {
@@ -715,6 +768,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     },
 
     async setUp() {
+      // With a working base, Set up (which is also Settings' "Try again" after a
+      // failed update) retries the update beside it. It never rebuilds, in place,
+      // the base the Bots' computers came from.
+      if (!setupTask && ready(await store.read())) return host.updateBase();
       return startSetup("setup");
     },
 
