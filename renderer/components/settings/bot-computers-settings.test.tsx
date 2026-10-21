@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
@@ -37,7 +37,10 @@ function status(setup: BotComputerSetupState, extra: Partial<BotComputersStatus>
 const READY: BotComputerSetupState = { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false };
 
 /** Main as the page sees it: a status that Set up, Remove everything and settings change. */
-function mount(initial: BotComputersStatus, options: { botComputers?: boolean; failSettings?: boolean } = {}) {
+function mount(
+  initial: BotComputersStatus,
+  options: { botComputers?: boolean; failSettings?: boolean; handlers?: Record<string, (...args: unknown[]) => unknown> } = {},
+) {
   let current = initial;
   const calls = installBotTestIpc({
     "botComputers:status": () => current,
@@ -58,6 +61,7 @@ function mount(initial: BotComputersStatus, options: { botComputers?: boolean; f
       current = { ...current, settings: { ...current.settings, ...(patch as object) } };
       return current.settings;
     },
+    ...options.handlers,
   });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
@@ -174,4 +178,93 @@ test("without the Bot computers capability the page asks main for nothing", asyn
   await flush();
   assert.ok(screen.getByText("Bot computers need a Mac with Apple silicon."));
   assert.deepEqual(calls, []);
+});
+
+const PERMISSIONS: BotComputerSetupState = {
+  kind: "building_base",
+  step: "permissions",
+  permissions: { accessibility: true, screenRecording: false },
+};
+
+/** The base's screen is lent but never connects in the DOM. */
+const never = () => new Promise<never>(() => undefined);
+
+test("while setup waits for the grants, the page shows the base computer, what is allowed so far, Check again and Skip", async () => {
+  let grants = 0;
+  const { channels, push } = mount(status(PERMISSIONS), {
+    handlers: {
+      // The first grant names the base's screen; the stream's own request for a grant is held,
+      // so no socket connects in the DOM.
+      "botComputers:baseViewerGrant": () =>
+        (grants += 1) === 1
+          ? {
+              hostId: "bot-computers",
+              deviceId: "aiden-bot-computers-base",
+              grant: { origin: "http://127.0.0.1:52100", token: "a".repeat(43), expiresAt: Date.now() + 60_000 },
+            }
+          : never(),
+      "botComputers:checkPermissions": () => undefined,
+      "botComputers:skipPermissions": () => undefined,
+    },
+  });
+  const step = await screen.findByRole("group", { name: "Allow Accessibility and Screen Recording for cua-driver" });
+  await waitFor(() => assert.ok(within(step).getByRole("application", { name: /base computer's screen/u })));
+  const rows = within(step).getByRole("list", { name: "Permissions in the base computer" });
+  assert.deepEqual(
+    within(rows)
+      .getAllByRole("listitem")
+      .map((row) => row.textContent),
+    ["AccessibilityAllowed", "Screen RecordingNot yet"],
+  );
+  assert.equal(screen.queryByRole("progressbar"), null, "no progress bar while setup waits on the person");
+
+  fireEvent.click(within(step).getByRole("button", { name: "Check again" }));
+  await flush();
+  fireEvent.click(within(step).getByRole("button", { name: "Skip" }));
+  await flush();
+  assert.deepEqual(
+    channels().filter((channel) => channel === "botComputers:checkPermissions" || channel === "botComputers:skipPermissions"),
+    ["botComputers:checkPermissions", "botComputers:skipPermissions"],
+  );
+
+  // Once both are on and the probe passes, the step goes and the base is ready with element control.
+  act(() => push(status({ ...READY, elementControl: true })));
+  await waitForElementToBeRemoved(() => screen.queryByRole("group", { name: /Allow Accessibility/u }));
+  assert.ok(screen.getByRole("group", { name: "Element control" }).textContent?.includes("On"));
+});
+
+test("a base the lent screen can't reach says so and offers Try again", async () => {
+  mount(status(PERMISSIONS), {
+    handlers: {
+      "botComputers:baseViewerGrant": () => {
+        throw new Error("Error invoking remote method 'botComputers:baseViewerGrant': Error: The base computer isn't waiting for you.");
+      },
+    },
+  });
+  const alert = await screen.findByRole("alert");
+  assert.match(alert.textContent ?? "", /The base computer isn't waiting for you\./u);
+  assert.ok(screen.getByRole("button", { name: "Try again" }));
+});
+
+test("a ready base without element control says why and offers to set it up", async () => {
+  const { channels } = mount(
+    status({ ...READY, elementControl: false, elementControlNote: "Element control was skipped, so Bots act on the screen only." }),
+    {
+      handlers: {
+        "botComputers:setUpElementControl": () => status({ kind: "building_base", step: "guest_driver" }),
+        "botComputers:baseViewerGrant": never,
+      },
+    },
+  );
+  const row = await screen.findByRole("group", { name: "Element control" });
+  assert.match(row.textContent ?? "", /Element control was skipped, so Bots act on the screen only\./u);
+  assert.match(row.textContent ?? "", /get it after a Reset/u);
+  fireEvent.click(within(row).getByRole("button", { name: "Set up element control" }));
+  await flush();
+  assert.deepEqual(
+    channels().filter((channel) => channel === "botComputers:setUpElementControl"),
+    ["botComputers:setUpElementControl"],
+  );
+  await waitFor(() => assert.match(document.body.textContent ?? "", /Installing Aiden's helper in the base computer/u));
+  assert.equal(screen.queryByRole("group", { name: "Element control" }), null);
 });
