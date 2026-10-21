@@ -5,6 +5,7 @@
  * `control` and `sessions` without reaching into their implementations.
  */
 
+import type { CuaDriverHostFactory } from "../computer-use/controller.js";
 import type {
   BotComputerSetupState,
   BotComputersSettings,
@@ -67,6 +68,19 @@ export interface BotComputerHost {
     command: string,
     options: { timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal },
   ): Promise<BotComputerGuestCommandResult>;
+  /**
+   * The guest driver lane (plan §8.6) for this Bot's computer: a host factory
+   * for `ComputerUseController`, only when the computer was made from a base
+   * whose guest driver passed its probe for the pinned version.
+   */
+  guestDriver(botId: string): Promise<CuaDriverHostFactory | undefined>;
+  /** Element control on a ready base without it: boots the base, installs the driver, waits for the grants. */
+  setUpElementControl(): Promise<void>;
+  /** While setup waits for the grants: check them now, or finish without element control. */
+  checkPermissions(): void;
+  skipPermissions(): void;
+  /** The base computer while setup waits for the person's grants (Settings shows its screen). */
+  baseView(): BotComputerConnection | undefined;
   reconcile(): Promise<void>;
   shutdown(timeoutMs: number): Promise<void>;
   onChange(listener: (botId: string | undefined) => void): () => void;

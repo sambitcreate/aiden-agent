@@ -8,12 +8,22 @@ import {
 import { writeJsonAtomic } from "../durable-fs.js";
 import { isAidenVmName } from "./vm-names.js";
 
+/** The guest driver a base passed its readiness probe with (and so every computer made from it). */
+export interface BotComputerGuestDriverRecord {
+  version: string;
+  /** The guest user's home and uid the driver was installed under. */
+  home: string;
+  uid: number;
+}
+
 /** One Bot's computer: its VM, the base it was cloned from and when it was last used. */
 export interface BotComputerRecord {
   vmName: string;
   baseBuild: string;
   createdAt: number;
   lastUsedAt?: number;
+  /** Copied from the base at clone time: this computer's guest driver passed with these grants. */
+  guestDriver?: BotComputerGuestDriverRecord;
 }
 
 export interface BotComputersSetupRecord {
@@ -22,6 +32,8 @@ export interface BotComputersSetupRecord {
   baseVersion?: string;
   /** The verified restore image waiting to become a base, kept so a failed build retries without a download. */
   ipswPath?: string;
+  /** Set when the base's guest driver passed its probe; unset keeps every computer on the VNC lane. */
+  guestDriver?: BotComputerGuestDriverRecord;
 }
 
 export interface BotComputersState {
@@ -41,6 +53,15 @@ function text(value: unknown, limit = 64): string | undefined {
 
 function time(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function guestDriver(value: unknown): BotComputerGuestDriverRecord | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { version, home, uid } = value as Record<string, unknown>;
+  if (typeof version !== "string" || !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/u.test(version)) return undefined;
+  if (typeof home !== "string" || !/^\/Users\/[A-Za-z0-9._-]{1,64}$/u.test(home)) return undefined;
+  if (typeof uid !== "number" || !Number.isSafeInteger(uid) || uid < 0 || uid > 9_999_999) return undefined;
+  return { version, home, uid };
 }
 
 /** Read what is valid and drop the rest, so one bad field never strands every computer. */
@@ -63,6 +84,8 @@ export function parseBotComputersState(value: unknown): BotComputersState {
     if (baseBuild) state.setup.baseBuild = baseBuild;
     if (baseVersion) state.setup.baseVersion = baseVersion;
     if (ipswPath && path.isAbsolute(ipswPath)) state.setup.ipswPath = ipswPath;
+    const driver = guestDriver(setup.guestDriver);
+    if (driver && baseBuild) state.setup.guestDriver = driver;
   }
   const computers = input.computers as Record<string, unknown> | undefined;
   if (computers && typeof computers === "object" && !Array.isArray(computers)) {
@@ -74,7 +97,14 @@ export function parseBotComputersState(value: unknown): BotComputersState {
       const createdAt = time(entry.createdAt);
       if (!vmName || !isAidenVmName(vmName) || baseBuild === undefined || createdAt === undefined) continue;
       const lastUsedAt = time(entry.lastUsedAt);
-      state.computers[botId] = { vmName, baseBuild, createdAt, ...(lastUsedAt !== undefined ? { lastUsedAt } : {}) };
+      const driver = guestDriver(entry.guestDriver);
+      state.computers[botId] = {
+        vmName,
+        baseBuild,
+        createdAt,
+        ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
+        ...(driver ? { guestDriver: driver } : {}),
+      };
     }
   }
   return state;

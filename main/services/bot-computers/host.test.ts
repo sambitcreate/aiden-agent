@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
+import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
 import { createBotComputerHost, type BotComputerHostDependencies } from "./host.js";
 import { BOT_COMPUTER_GUEST_PASSWORD_SECRET, BotComputerError } from "./types.js";
 import { BOT_COMPUTER_BASE_VM, botComputerVmName } from "./vm-names.js";
@@ -64,13 +65,16 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
   const writeConfig = () => writeFileSync(configFile, JSON.stringify(config));
   writeConfig();
   const secrets = new Map<string, string>();
-  const sshCalls: { args: readonly string[]; stdin?: string }[] = [];
+  const sshCalls: { args: readonly string[]; stdin?: string; stdinFile?: string }[] = [];
   const fetches: { url: string; redirect?: RequestRedirect }[] = [];
   const idle: { botId?: string; callback: () => void; ms: number; cancelled: boolean }[] = [];
   let clock = 1_000_000_000;
   const events = { ready: 0, removed: 0 };
-  /** A guest command that should fail, for example one step of provisioning. */
-  const ssh: { fails?: (args: readonly string[]) => boolean } = {};
+  /** A guest command that should fail, for example one step of provisioning, or answer with its own output. */
+  const ssh: {
+    fails?: (args: readonly string[]) => boolean;
+    stdout?: (args: readonly string[]) => string | undefined;
+  } = {};
   const runProcess = async (command: string, args: readonly string[], options: BoundedProcessOptions): Promise<BoundedProcessResult> => {
     const done = { exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false };
     if (command.endsWith("ssh-keygen")) {
@@ -79,7 +83,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       writeFileSync(`${file}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAidenKeyForBotComputerProvisioningTests012345678 aiden\n");
       return done;
     }
-    sshCalls.push({ args, stdin: options.stdin });
+    sshCalls.push({ args, stdin: options.stdin, stdinFile: options.stdinFile });
     // As ssh with StrictHostKeyChecking=yes: the guest's own host key must be pinned under the alias.
     const address = args[args.indexOf("--") + 1];
     const guest = Object.values(fakeState().vms).find((vm) => vm.ip === address);
@@ -89,7 +93,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       return { ...done, exitCode: 255, stderr: "Host key verification failed.\n" };
     }
     if (ssh.fails?.(args)) return { ...done, exitCode: 1, stderr: "the guest step failed\n" };
-    return { ...done, stdout: "guest says hi\n" };
+    return { ...done, stdout: ssh.stdout?.(args) ?? "guest says hi\n" };
   };
   // Restore images by URL; anything else gets the default pin's bytes.
   const served = new Map<string, Buffer>();
@@ -253,7 +257,7 @@ test("Set up downloads the pinned image, builds and provisions the base, then de
     await setUp(context);
     assert.equal(await context.host.baseReady(), true);
     const status = await context.host.status();
-    assert.deepEqual(status.setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false });
+    assert.deepEqual(status.setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false, elementControl: false });
     assert.deepEqual(context.fetches, [{ url: "https://updates.cdn-apple.com/test/UniversalMac_26.6.2_25G83_Restore.ipsw", redirect: "error" }]);
     const ops = context.calls().filter((call) => call.kind === "cli").map((call) => call.op);
     assert.ok(ops.indexOf("create") < ops.indexOf("run"));
@@ -654,11 +658,11 @@ test("Update base builds the newer pinned base beside the old one; Bot computers
     // The next Aiden release pins a newer macOS.
     const pin = newerPin(context);
     const host = context.relaunch({ image: pin });
-    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: true });
+    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: true, elementControl: false });
     assert.equal((await host.computer("ada"))?.outdated, false);
 
     await host.updateBase();
-    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.7", baseBuild: "25H5", updateAvailable: false });
+    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.7", baseBuild: "25H5", updateAvailable: false, elementControl: false });
     assert.equal(last(context.fetches)?.url, pin.url);
     const installs = context.calls().filter((call) => call.op === "create");
     assert.equal(installs.length, 2);
@@ -1039,4 +1043,155 @@ test("Remove everything turns off a computer an earlier launch left running befo
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(processRunning(pid), false, "no VM keeps running unseen once Aiden's storage is gone");
   });
+});
+
+// ── The guest driver lane (P11) ─────────────────────────────────────────────
+
+const GUEST_FIXTURE = path.resolve("main/services/bot-computers/fixtures/guest-cua-driver.mjs");
+
+/** A host whose guest sessions run the fake guest driver, with grants read from a file. */
+function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () => Promise<string> } = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), "p11-guest-"));
+  const permissions = path.join(dir, "permissions.json");
+  writeFileSync(permissions, JSON.stringify({ accessibility: false, screen_recording: false }));
+  const driverFile = path.join(dir, "cua-driver");
+  writeFileSync(driverFile, "vendored driver bytes");
+  const bridges: { command: string; args: readonly string[] }[] = [];
+  const overrides: Partial<BotComputerHostDependencies> = {
+    guestDriverExecutable: options.executable ?? (async () => driverFile),
+    guestDriverHost: (bridge) =>
+      createGuestCuaDriverHostFactory({
+        bridge: async () => {
+          bridges.push(await bridge());
+          return {
+            command: process.execPath,
+            args: [GUEST_FIXTURE, "--permissions-file", permissions, ...(options.grantOnPrompt ? ["--grant-on-prompt"] : [])],
+            env: { PATH: "/usr/bin:/bin" },
+          };
+        },
+      }),
+    permissionPollMs: 20,
+  };
+  return {
+    overrides,
+    driverFile,
+    bridges,
+    grant: () => writeFileSync(permissions, JSON.stringify({ accessibility: true, screen_recording: true })),
+  };
+}
+
+/** The guest answers the install's location step as a macOS guest would. */
+function answerGuest(context: Harness): void {
+  context.ssh.stdout = (args) => (last(args)?.includes("aiden-guest-driver") ? "aiden-guest-driver 501 /Users/lume\n" : undefined);
+}
+
+async function waitFor(check: () => boolean | Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (!(await check())) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test("Set up installs the guest driver, waits in the base's live view for the grants, and records element control", async () => {
+  const guest = guestDriverHarness();
+  await withHost(async (context) => {
+    answerGuest(context);
+    const setup = context.host.setUp();
+    await waitFor(async () => {
+      const state = (await context.host.status()).setup;
+      return state.kind === "building_base" && state.step === "permissions" && state.permissions !== undefined;
+    }, "the permission step");
+    // While it waits, Settings can show the running base's screen.
+    const view = context.host.baseView();
+    assert.equal(view?.vmName, BOT_COMPUTER_BASE_VM);
+    assert.equal(view?.vnc.host, "127.0.0.1");
+    assert.deepEqual((await context.host.status()).setup, {
+      kind: "building_base",
+      step: "permissions",
+      permissions: { accessibility: false, screenRecording: false },
+    });
+
+    guest.grant();
+    context.host.checkPermissions();
+    await setup;
+    assert.equal(context.host.baseView(), undefined, "the view ends with the step");
+    const status = await context.host.status();
+    assert.equal(status.setup.kind === "ready" && status.setup.elementControl, true);
+
+    // The vendored file went over stdin; the password only ever on stdin.
+    const password = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET) ?? "";
+    assert.ok(context.sshCalls.some((call) => call.stdinFile === guest.driverFile));
+    const restart = context.sshCalls.find((call) => last(call.args)?.includes("kickstart -k gui/501/com.aiden.bot-computer.cua-driver"));
+    assert.equal(restart?.stdin, `${password}\n`);
+    for (const call of context.sshCalls) assert.equal(call.args.join(" ").includes(password), false);
+    // Every guest session went over Aiden's own ssh to the base, ending in the driver's MCP proxy.
+    assert.ok(guest.bridges.length >= 2, "one session to wait for the grants, one to probe after the restart");
+    for (const bridge of guest.bridges) {
+      assert.equal(bridge.command, "/usr/bin/ssh");
+      assert.match(last(bridge.args) ?? "", /mcp --embedded --socket/u);
+    }
+
+    // Clones inherit the base's disk, grants and flag; the Bot's computer offers the driver lane.
+    await context.host.give("ada");
+    assert.ok(await context.host.guestDriver("ada"));
+  }, guest.overrides);
+});
+
+test("skipping the grants keeps the screen-only lane, and element control can be set up later on the ready base", async () => {
+  const guest = guestDriverHarness();
+  await withHost(async (context) => {
+    answerGuest(context);
+    const setup = context.host.setUp();
+    await waitFor(async () => {
+      const state = (await context.host.status()).setup;
+      return state.kind === "building_base" && state.step === "permissions";
+    }, "the permission step");
+    context.host.skipPermissions();
+    await setup;
+    const skipped = (await context.host.status()).setup;
+    assert.equal(skipped.kind, "ready");
+    assert.equal(skipped.kind === "ready" && skipped.elementControl, false);
+    assert.match(skipped.kind === "ready" ? (skipped.elementControlNote ?? "") : "", /skipped/u);
+    await context.host.give("ada");
+    assert.equal(await context.host.guestDriver("ada"), undefined, "a computer from that base stays on the VNC lane");
+
+    // Later, from Settings: the base boots once, the person allows them, and it shuts down again.
+    const runsBefore = context.calls().filter((call) => call.kind === "cli" && call.op === "run").length;
+    const later = context.host.setUpElementControl();
+    await waitFor(async () => {
+      const state = (await context.host.status()).setup;
+      return state.kind === "building_base" && state.step === "permissions";
+    }, "the permission step again");
+    await assert.rejects(context.host.give("bea"), (error: unknown) => error instanceof BotComputerError && error.code === "busy");
+    guest.grant();
+    context.host.checkPermissions();
+    await later;
+    const ready = (await context.host.status()).setup;
+    assert.equal(ready.kind === "ready" && ready.elementControl, true);
+    const cli = context.calls().filter((call) => call.kind === "cli");
+    assert.equal(cli.filter((call) => call.op === "run").length, runsBefore + 1);
+    assert.equal(last(cli)?.op, "stop", "the base is shut down again");
+    assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false);
+    // Ada's computer predates the grant; a new one gets it.
+    assert.equal(await context.host.guestDriver("ada"), undefined);
+    await context.host.give("bea");
+    assert.ok(await context.host.guestDriver("bea"));
+  }, guest.overrides);
+});
+
+test("a guest driver that can't be installed leaves a working base that acts on the screen only", async () => {
+  const guest = guestDriverHarness({
+    executable: async () => {
+      throw new Error("The pinned cua-driver has not been vendored.");
+    },
+  });
+  await withHost(async (context) => {
+    answerGuest(context);
+    await setUp(context);
+    const status = (await context.host.status()).setup;
+    assert.equal(status.kind === "ready" && status.elementControl, false);
+    assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /couldn't install its helper/u);
+    assert.equal(guest.bridges.length, 0, "no guest session without a driver");
+  }, guest.overrides);
 });

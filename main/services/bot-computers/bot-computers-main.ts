@@ -9,6 +9,7 @@ import { app, ipcMain, logger, nativeImage } from "../../platform.js";
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
+import { resolveVendoredCuaDriverExecutable } from "../computer-use/binary.js";
 import { secrets } from "../secrets.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
 import { createBotComputerHost } from "./host.js";
@@ -82,6 +83,12 @@ export function botComputers(): BotComputers {
     },
     control,
     activity,
+    // The guest driver lane copies Aiden's own vendored, pinned cua-driver into the base; never a download.
+    guestDriverExecutable: (signal) =>
+      resolveVendoredCuaDriverExecutable(
+        { platform: process.platform, isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() },
+        signal,
+      ),
     // A ready base or Remove everything changes what the Bot runtime offers;
     // starting and stopping a computer never does.
     onSetupReady: () => invalidateBotRuntimeInventoryAuthority("inventory_changed"),
@@ -90,18 +97,18 @@ export function botComputers(): BotComputers {
   });
   const sessions = createBotComputerSessions({ host, control, activity, botName });
   // The screen is a VNC connection per run (P9); the Bot's `computer` tool and the viewer share it.
-  sessions.setScreenFactory(
-    createRfbScreenFactory({
-      encode: nativeImageEncoder(nativeImage),
-      // Owner-Mac fixture recording only (main/services/bot-computers/fixtures/rfb/README.md).
-      recordingsDir:
-        process.env.AIDEN_BOT_COMPUTERS_RECORD_RFB === "1"
-          ? path.join(app.getPath("userData"), "bot-computers", "rfb-recordings")
-          : undefined,
-      log,
-    }),
-  );
-  const viewer = createBotComputerViewer({ host, sessions, control, botName, log });
+  const screenFactory = createRfbScreenFactory({
+    encode: nativeImageEncoder(nativeImage),
+    // Owner-Mac fixture recording only (main/services/bot-computers/fixtures/rfb/README.md).
+    recordingsDir:
+      process.env.AIDEN_BOT_COMPUTERS_RECORD_RFB === "1"
+        ? path.join(app.getPath("userData"), "bot-computers", "rfb-recordings")
+        : undefined,
+    log,
+  });
+  sessions.setScreenFactory(screenFactory);
+  // The base's screen, too, while setup waits for the person's grants (the guest driver lane).
+  const viewer = createBotComputerViewer({ host, sessions, control, baseScreen: screenFactory, botName, log });
   singleton = { host, control, activity, sessions, viewer };
   return singleton;
 }

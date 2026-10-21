@@ -60,6 +60,8 @@ test("the steps run in order: key and host key over lume ssh, the rest over Aide
     "disable_updates",
     "suppress_prompts",
     "shared_folder",
+    "guest_driver",
+    "permissions",
     "shut_down",
   ]);
   assert.deepEqual(
@@ -84,6 +86,25 @@ test("the new password is stored before the guest changes, travels only on stdin
   const sudoAfter = events.slice(rotate + 1).filter((event) => event.command?.includes("sudo"));
   assert.ok(sudoAfter.length >= 3);
   for (const event of sudoAfter) assert.equal(event.stdin?.split("\n")[0], stored);
+});
+
+test("the guest driver installs and waits for its grants with the rotated password, before the base shuts down", async () => {
+  const events: Event[] = [];
+  const driver: string[] = [];
+  await provisionBase(
+    context(events, {
+      guestDriver: {
+        install: async (password) => void driver.push(`install:${password}`),
+        grant: async (password) => {
+          driver.push(`grant:${password}`);
+          assert.equal(events.some((event) => event.channel === "lume"), false, "the base is still running");
+        },
+      },
+    }),
+  );
+  const stored = events.find((event) => event.channel === "store")?.value ?? "";
+  assert.deepEqual(driver, [`install:${stored}`, `grant:${stored}`]);
+  assert.equal(events[events.length - 1]?.channel, "lume");
 });
 
 test("a failing step stops provisioning there", async () => {

@@ -88,6 +88,13 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
       listeners.add(listener);
       return () => void listeners.delete(listener);
     },
+    setUpElementControl: () =>
+      new Promise<void>(() => {
+        reached.push("setUpElementControl");
+        setup = { kind: "building_base", step: "permissions", permissions: { accessibility: true, screenRecording: false } };
+      }),
+    checkPermissions: () => void reached.push("checkPermissions"),
+    skipPermissions: () => void reached.push("skipPermissions"),
   };
   return { host, reached, computers, finish: () => finishSetup?.() };
 }
@@ -111,6 +118,11 @@ function fakeViewer() {
             }),
         });
       }),
+    grantBase: async () => ({
+      hostId: "bot-computers",
+      deviceId: "aiden-base",
+      grant: { origin: "http://127.0.0.1:4100", token: "b".repeat(43), expiresAt: Date.now() + 60_000 },
+    }),
   };
   return { viewer, grants };
 }
@@ -257,6 +269,21 @@ test("Take over interrupts the Bot's action and Give back returns the computer, 
   const back = (await invoke(BOT_COMPUTER_CHANNELS.giveBack, BOT)) as BotComputerStatus;
   assert.equal(back.controller, "bot");
   await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.takeOver, "bot:ghost"), /no longer exists/u);
+});
+
+test("element control starts at once; while it waits, Settings can see the base, check again or skip", async () => {
+  const { invoke, reached } = setup();
+  const status = parseBotComputersStatus(await invoke(BOT_COMPUTER_CHANNELS.setUpElementControl));
+  assert.deepEqual(status?.setup, {
+    kind: "building_base",
+    step: "permissions",
+    permissions: { accessibility: true, screenRecording: false },
+  });
+  const grant = (await invoke(BOT_COMPUTER_CHANNELS.baseViewerGrant)) as BotComputerViewerGrant;
+  assert.equal(grant.deviceId, "aiden-base");
+  await invoke(BOT_COMPUTER_CHANNELS.checkPermissions);
+  await invoke(BOT_COMPUTER_CHANNELS.skipPermissions);
+  assert.deepEqual(reached, ["setUpElementControl", "checkPermissions", "skipPermissions"]);
 });
 
 test("the pointer is the Bot's last action point, or null before it acted", async () => {

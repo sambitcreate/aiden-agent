@@ -251,3 +251,56 @@ test("as main wires them, the Bot's screen and the viewer share one VNC connecti
     await Promise.all(servers.map((server) => server.close()));
   }
 });
+
+test("Settings sees the base computer only while setup waits for the person, and its view ends with that step", async () => {
+  const server = new FakeRfbServer({ width: 32, height: 24, password: "base-pass" });
+  const port = await server.listen();
+  const base: BotComputerConnection = {
+    vmName: "aiden-base",
+    ip: "192.168.64.9",
+    vnc: { host: "127.0.0.1", port, password: "base-pass" },
+    ssh: { host: "192.168.64.9", user: "lume" },
+  };
+  let waiting: BotComputerConnection | undefined;
+  const listeners = new Set<(botId: string | undefined) => void>();
+  const opened: string[] = [];
+  const viewer = createBotComputerViewer({
+    host: {
+      computer: async () => undefined,
+      ensureRunning: async () => assert.fail("the base view never starts a Bot's computer"),
+      touch: () => assert.fail("the base has no idle timer to restart"),
+      onChange: (listener) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+      baseView: () => waiting,
+    },
+    sessions: { screen: async () => assert.fail("the base is not a Bot's computer") },
+    control: createBotComputerControl(),
+    baseScreen: createRfbScreenFactory({
+      encode: async (_bgra, width, height) => {
+        return { image: Buffer.from("JPEG"), width, height };
+      },
+    }),
+    allowedOrigins: ["file://"],
+  });
+  try {
+    await assert.rejects(viewer.grantBase(), /isn't waiting for you/u);
+    waiting = base;
+    const lent = await viewer.grantBase();
+    opened.push(lent.deviceId);
+    assert.equal(lent.deviceId, "aiden-base");
+    const stream = await get(streamUrl(lent));
+    assert.equal(stream.response.statusCode, 200);
+    await until(() => stream.body().includes("--frame\r\nContent-Type: image/jpeg"));
+
+    // The grants are in (or skipped): the view closes and isn't lent again.
+    waiting = undefined;
+    for (const listener of listeners) listener(undefined);
+    await until(() => stream.response.readableEnded || stream.response.destroyed || stream.response.complete);
+    await assert.rejects(viewer.grantBase(), /isn't waiting for you/u);
+  } finally {
+    await viewer.close();
+    await server.close();
+  }
+});

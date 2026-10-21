@@ -6,7 +6,6 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import plist from "plist";
 
 import {
   GUEST_DRIVER_BINARY,
@@ -25,6 +24,65 @@ import {
   type GuestDriverPin,
 } from "./guest-driver-install.js";
 import { BotComputerError, type BotComputerGuestCommandResult } from "./types.js";
+
+/** A small XML property-list reader (dict, array, string, integer, true, false), independent of the generator. */
+function parsePlist(xml: string): unknown {
+  const body = /<plist version="1\.0">([\s\S]*)<\/plist>/u.exec(xml)?.[1];
+  assert.ok(body, "a plist document");
+  const tokens = [...body.matchAll(/<(\/?)(dict|array|key|string|integer|true|false)(\/?)>|([^<]+)/gu)];
+  let index = 0;
+  const unescape = (text: string) =>
+    text.replace(/&lt;/gu, "<").replace(/&gt;/gu, ">").replace(/&quot;/gu, '"').replace(/&amp;/gu, "&");
+  const next = () => {
+    while (index < tokens.length && tokens[index]?.[4] !== undefined && tokens[index]![4]!.trim() === "") index += 1;
+    return tokens[index++];
+  };
+  const text = (tag: string) => {
+    const content = tokens[index]?.[4] !== undefined ? unescape(tokens[index++]![4]!) : "";
+    const close = next();
+    assert.equal(close?.[1] === "/" && close[2], tag);
+    return content;
+  };
+  const value = (): unknown => {
+    const open = next();
+    assert.ok(open && open[1] === "");
+    switch (open[2]) {
+      case "true":
+      case "false":
+        assert.equal(open[3], "/");
+        return open[2] === "true";
+      case "string":
+        return text("string");
+      case "integer":
+        return Number(text("integer"));
+      case "array": {
+        const items: unknown[] = [];
+        for (;;) {
+          const peek = tokens.slice(index).find((token) => token[4] === undefined || token[4].trim() !== "");
+          if (peek?.[1] === "/" && peek[2] === "array") {
+            next();
+            return items;
+          }
+          items.push(value());
+        }
+      }
+      case "dict": {
+        const entries: Record<string, unknown> = {};
+        for (;;) {
+          const key = next();
+          if (key?.[1] === "/" && key[2] === "dict") return entries;
+          assert.equal(key?.[2], "key");
+          entries[text("key")] = value();
+        }
+      }
+      default:
+        assert.fail(`unexpected <${open[2]}>`);
+    }
+  };
+  const result = value();
+  assert.equal(next(), undefined, "one top-level value");
+  return result;
+}
 
 const PIN: GuestDriverPin = {
   version: "0.36.0",
@@ -93,7 +151,7 @@ test("install locates the guest home, streams the vendored file, verifies it the
   const agent = calls[3];
   assert.ok(agent.stdin?.startsWith("GuestPassword0123456789abcdefgh\n<?xml"));
   for (const call of calls) assert.equal(call.command.includes("GuestPassword0123456789abcdefgh"), false);
-  const parsed = plist.parse(agent.stdin!.slice(agent.stdin!.indexOf("\n") + 1)) as Record<string, unknown>;
+  const parsed = parsePlist(agent.stdin!.slice(agent.stdin!.indexOf("\n") + 1)) as Record<string, unknown>;
   assert.equal(parsed.Label, "com.aiden.bot-computer.cua-driver");
 });
 
@@ -139,7 +197,7 @@ test("the guest location must be a plain home under /Users", () => {
 });
 
 test("the agent runs the daemon from absolute paths in the GUI session, kept alive only while enabled", () => {
-  const parsed = plist.parse(guestDriverLaunchAgentPlist(LOCATION)) as Record<string, unknown>;
+  const parsed = parsePlist(guestDriverLaunchAgentPlist(LOCATION)) as Record<string, unknown>;
   assert.deepEqual(parsed.ProgramArguments, [
     "/Users/lume/Library/Application Support/Aiden/cua-driver/cua-driver",
     "serve",

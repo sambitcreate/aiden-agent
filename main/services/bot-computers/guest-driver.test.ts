@@ -53,7 +53,7 @@ test("a guest session speaks MCP over the bridge child and keeps only Aiden's al
   // start_session ran first, with Aiden's own session id on every call that declares one.
   const calls = logged(log);
   assert.equal(calls[0].name, "start_session");
-  assert.equal(calls.at(-1)?.name, "list_apps");
+  assert.equal(calls[calls.length - 1]?.name, "list_apps");
   assert.equal(calls.some((call) => call.name === "run_script"), false, "a refused tool never reaches the guest");
 });
 
@@ -141,7 +141,7 @@ test("the production bridge is Aiden's own ssh to the guest, ending in the drive
   const separator = bridge.args.indexOf("--");
   assert.deepEqual(bridge.args.slice(separator, separator + 2), ["--", "192.168.64.7"]);
   assert.ok(bridge.args.includes("BatchMode=yes"));
-  const remote = bridge.args.at(-1) ?? "";
+  const remote = bridge.args[bridge.args.length - 1] ?? "";
   assert.match(remote, /^perl -e 'alarm \d+; exec @ARGV' \/bin\/sh -c /u);
   assert.match(remote, /mcp --embedded --socket/u);
   assert.deepEqual(Object.keys(bridge.env).sort(), ["HOME", "PATH"]);
