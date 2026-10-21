@@ -62,6 +62,7 @@ const PROCESS_EXIT_TIMEOUT_MS = 10_000;
 // service cleanup. Hosted macOS runners can reach those bounds under load even
 // when Electron exits cleanly, so keep the harness bound above their aggregate.
 const ELECTRON_EXIT_TIMEOUT_MS = 35_000;
+const EXITED_PROCESS_REAP_MS = 1_000;
 const DEFAULT_LIVE_LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
 const DEFAULT_LM_STUDIO_ORIGIN = new URL(DEFAULT_LIVE_LM_STUDIO_BASE_URL).origin;
 const LM_STUDIO_REDIRECT_ENV = "AIDEN_E2E_LMSTUDIO_REDIRECT_ORIGIN";
@@ -778,7 +779,10 @@ export async function closeAiden(app: ElectronApplication | undefined): Promise<
   } catch (error) {
     closeError = error;
   }
-  const leaked = Boolean(pid && processIsAlive(pid));
+  // close() can settle when Playwright's connection drops, before this
+  // process has reaped the exited main PID: right after a test's own SIGKILL
+  // the PID still reads alive. Give the reap a moment, not a longer shutdown.
+  const leaked = Boolean(pid && !(await waitForProcessExit(pid, EXITED_PROCESS_REAP_MS)));
   if (leaked) await terminateOwnedProcess(child);
   // Playwright can miss Electron's child-process exit event on macOS even
   // after the owned main PID has already terminated. The PID is the
