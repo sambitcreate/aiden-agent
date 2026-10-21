@@ -1056,9 +1056,12 @@ function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () 
   writeFileSync(permissions, JSON.stringify({ accessibility: false, screen_recording: false }));
   const driverFile = path.join(dir, "cua-driver");
   writeFileSync(driverFile, "vendored driver bytes");
+  const noticeFile = path.join(dir, "LICENSE.cua-driver.md");
+  writeFileSync(noticeFile, "MIT License");
   const bridges: { command: string; args: readonly string[] }[] = [];
   const overrides: Partial<BotComputerHostDependencies> = {
     guestDriverExecutable: options.executable ?? (async () => driverFile),
+    guestDriverNotice: () => noticeFile,
     guestDriverHost: (bridge) =>
       createGuestCuaDriverHostFactory({
         bridge: async () => {
@@ -1075,6 +1078,7 @@ function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () 
   return {
     overrides,
     driverFile,
+    noticeFile,
     bridges,
     grant: () => writeFileSync(permissions, JSON.stringify({ accessibility: true, screen_recording: true })),
   };
@@ -1119,9 +1123,10 @@ test("Set up installs the guest driver, waits in the base's live view for the gr
     const status = await context.host.status();
     assert.equal(status.setup.kind === "ready" && status.setup.elementControl, true);
 
-    // The vendored file went over stdin; the password only ever on stdin.
+    // The vendored file, and its licence notice, went over stdin; the password only ever on stdin.
     const password = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET) ?? "";
     assert.ok(context.sshCalls.some((call) => call.stdinFile === guest.driverFile));
+    assert.ok(context.sshCalls.some((call) => call.stdinFile === guest.noticeFile && /LICENSE\.cua-driver\.md/u.test(last(call.args) ?? "")));
     const restart = context.sshCalls.find((call) => last(call.args)?.includes("kickstart -k gui/501/com.aiden.bot-computer.cua-driver"));
     assert.equal(restart?.stdin, `${password}\n`);
     for (const call of context.sshCalls) assert.equal(call.args.join(" ").includes(password), false);

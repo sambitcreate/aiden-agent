@@ -3,8 +3,9 @@
 // during Set up or Update base, and run there as a LaunchAgent in the
 // logged-in session so it can reach the guest's window server.
 //
-// - Only the upstream-signed `cua-driver` executable is copied. Aiden's broker
-//   stays on the Mac: it authenticates the Aiden process it runs under.
+// - Only the upstream-signed `cua-driver` executable is copied, with its MIT
+//   notice beside it. Aiden's broker stays on the Mac: it authenticates the
+//   Aiden process it runs under.
 // - The guest checks the copy itself before it is put in place: its SHA-256
 //   against Aiden's compiled pin, and its signature against the pinned Cua
 //   identity and Team ID. Nothing is downloaded in the guest, and no PATH
@@ -24,6 +25,8 @@ export const GUEST_DRIVER_LABEL = "com.aiden.bot-computer.cua-driver";
 /** Under the guest user's home. None of these contain a quote or a backslash. */
 export const GUEST_DRIVER_SUPPORT_DIR = "Library/Application Support/Aiden";
 export const GUEST_DRIVER_BINARY = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver/cua-driver`;
+/** cua-driver's MIT notice, beside the copy it covers. */
+export const GUEST_DRIVER_NOTICE = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver/LICENSE.cua-driver.md`;
 export const GUEST_DRIVER_SOCKET = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver.sock`;
 export const GUEST_DRIVER_PID_FILE = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver.pid`;
 export const GUEST_DRIVER_ENABLED_FILE = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver.enabled`;
@@ -52,13 +55,15 @@ export interface GuestDriverInstallContext {
   ): Promise<BotComputerGuestCommandResult>;
   /** The vendored driver on this Mac, already verified against the pin. */
   driverPath: string;
+  /** Its licence notice from the same helper bundle, copied beside it in the guest. */
+  noticePath?: string;
   pin: GuestDriverPin;
   /** The guest password sudo needs to load the agent into the logged-in session. */
   password: string;
   signal?: AbortSignal;
 }
 
-export type GuestDriverInstallStep = "locate" | "copy" | "verify" | "agent" | "wait_for_socket";
+export type GuestDriverInstallStep = "locate" | "copy" | "verify" | "notice" | "agent" | "wait_for_socket";
 
 function absolute(location: GuestDriverLocation, relative: string): string {
   return `${location.home}/${relative}`;
@@ -170,6 +175,11 @@ export function parseGuestDriverLocation(stdout: string): GuestDriverLocation {
 /** Receive the copy on stdin. */
 export function guestDriverCopyScript(): string {
   return `umask 077 && /bin/cat > "$HOME/${GUEST_DRIVER_STAGING}"`;
+}
+
+/** Receive cua-driver's licence notice on stdin, beside the driver it covers. */
+export function guestDriverNoticeScript(): string {
+  return `umask 022 && /bin/cat > "$HOME/${GUEST_DRIVER_NOTICE}"`;
 }
 
 /**
@@ -300,6 +310,10 @@ export async function installGuestDriver(
   check("copy", await context.guestSsh(guestDriverCopyScript(), { stdinFile: context.driverPath, timeoutMs: 300_000 }));
   step("verify");
   check("verify", await context.guestSsh(guestDriverVerifyScript(context.pin), { timeoutMs: 120_000 }));
+  if (context.noticePath !== undefined) {
+    step("notice");
+    check("notice", await context.guestSsh(guestDriverNoticeScript(), { stdinFile: context.noticePath, timeoutMs: 30_000 }));
+  }
   step("agent");
   check(
     "agent",

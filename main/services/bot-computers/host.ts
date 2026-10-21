@@ -99,6 +99,8 @@ export interface BotComputerHostDependencies {
    * are made for the VNC lane only.
    */
   guestDriverExecutable?(signal: AbortSignal): Promise<string>;
+  /** cua-driver's licence notice from the same helper bundle, copied beside the driver in the guest. */
+  guestDriverNotice?(): string | undefined;
   /** The guest lane's host factory over a bridge; tests swap in the fake driver. */
   guestDriverHost?(bridge: () => Promise<GuestDriverBridgeCommand>): CuaDriverHostFactory;
   /** How long setup waits for the person's grants before it finishes without element control. */
@@ -895,9 +897,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         show("guest_driver");
         try {
           const driverPath = await deps.guestDriverExecutable(signal);
+          const noticePath = deps.guestDriverNotice?.();
           location = await installGuestDriver({
             guestSsh: guestSshTo(target, signal),
             driverPath,
+            ...(noticePath === undefined ? {} : { noticePath }),
             pin: CUA_DRIVER_UPSTREAM_PIN,
             password,
             signal,

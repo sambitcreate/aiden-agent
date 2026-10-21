@@ -240,7 +240,8 @@ element reads and element clicks there. It is the same executable and pin, not
 a second artifact:
 
 - Set up and Update base copy only the upstream-signed `cua-driver`
-  executable from the vendored helper into the base over Aiden's SSH. The
+  executable from the vendored helper into the base over Aiden's SSH, with the
+  helper's `LICENSE.cua-driver.md` beside it. The
   guest checks its SHA-256 against the compiled pin and its signature against
   the pinned Cua identifier and Team ID before it is put in place. The guest
   never downloads a driver, never resolves one from `PATH`, and never runs the

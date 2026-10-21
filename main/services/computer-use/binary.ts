@@ -206,6 +206,22 @@ export async function verifyCuaDriverBridgeProcess(
   });
 }
 
+function vendoredHelperAppPath(options: CuaDriverPathOptions): string {
+  return options.isPackaged
+    ? path.resolve(options.resourcesPath, "..", "Helpers", "CuaDriver.app")
+    : path.join(options.appPath, "build", "computer-use", "CuaDriver.app");
+}
+
+/**
+ * The cua-driver licence notice the vendor step puts inside the helper
+ * bundle (`Contents/Resources/LICENSE.cua-driver.md`, which the package
+ * verifier requires). A copy of the driver made elsewhere, such as in a Bot
+ * computer's guest, carries this notice beside it.
+ */
+export function vendoredCuaDriverNoticePath(options: CuaDriverPathOptions): string {
+  return path.join(vendoredHelperAppPath(options), "Contents", "Resources", "LICENSE.cua-driver.md");
+}
+
 /**
  * The vendored, untouched upstream `cua-driver` executable inside Aiden's
  * helper bundle, after the same hash and signing-requirement checks the
@@ -217,17 +233,24 @@ export async function resolveVendoredCuaDriverExecutable(
   signal?: AbortSignal,
 ): Promise<string> {
   throwIfAborted(signal);
-  const brokerAppPath = options.isPackaged
-    ? path.resolve(options.resourcesPath, "..", "Helpers", "CuaDriver.app")
-    : path.join(options.appPath, "build", "computer-use", "CuaDriver.app");
+  if (options.platform !== "darwin") {
+    throw new CuaDriverError("unsupported_platform", "The guest driver is copied only from a Mac.");
+  }
+  const brokerAppPath = vendoredHelperAppPath(options);
   const driverPath = path.join(brokerAppPath, "Contents", "MacOS", "cua-driver");
-  await verifyRegularExecutable(
-    driverPath,
-    options.isPackaged
-      ? "The packaged cua-driver executable is missing or invalid."
-      : "The pinned cua-driver has not been vendored. Run npm run computer-use:vendor.",
-    signal,
-  );
+  const missing = options.isPackaged
+    ? "The packaged cua-driver executable is missing or invalid."
+    : "The pinned cua-driver has not been vendored. Run npm run computer-use:vendor.";
+  // As for the helper itself: a symlinked bundle is never the vendored one.
+  try {
+    const appInfo = await lstat(brokerAppPath);
+    throwIfAborted(signal);
+    if (!appInfo.isDirectory() || appInfo.isSymbolicLink()) throw new Error("invalid app");
+  } catch {
+    throwIfAborted(signal);
+    throw new CuaDriverError("driver_missing", missing);
+  }
+  await verifyRegularExecutable(driverPath, missing, signal);
   const resolvedApp = await realpath(brokerAppPath);
   const resolvedDriver = await realpath(driverPath);
   if (!resolvedDriver.startsWith(`${resolvedApp}${path.sep}Contents${path.sep}MacOS${path.sep}`)) {

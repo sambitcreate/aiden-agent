@@ -9,7 +9,7 @@ import { app, ipcMain, logger, nativeImage } from "../../platform.js";
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
-import { resolveVendoredCuaDriverExecutable } from "../computer-use/binary.js";
+import { resolveVendoredCuaDriverExecutable, vendoredCuaDriverNoticePath } from "../computer-use/binary.js";
 import { secrets } from "../secrets.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
 import { createBotComputerHost } from "./host.js";
@@ -52,6 +52,11 @@ function hostSupport(): { ok: true } | { ok: false; reason: "platform" | "host_o
   return hostMacosSupportsBotComputers(version) ? { ok: true } : { ok: false, reason: "host_os" };
 }
 
+/** Where Computer Use's vendored helper bundle lives, whose cua-driver the guest driver lane copies. */
+function helperPaths() {
+  return { platform: process.platform, isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() };
+}
+
 /** The process-wide Bot computers. Throws where the platform has none. */
 export function botComputers(): BotComputers {
   if (!botComputersEnabled()) throw new Error("Bot computers need a Mac with Apple silicon.");
@@ -83,12 +88,10 @@ export function botComputers(): BotComputers {
     },
     control,
     activity,
-    // The guest driver lane copies Aiden's own vendored, pinned cua-driver into the base; never a download.
-    guestDriverExecutable: (signal) =>
-      resolveVendoredCuaDriverExecutable(
-        { platform: process.platform, isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() },
-        signal,
-      ),
+    // The guest driver lane copies Aiden's own vendored, pinned cua-driver into the base, with its
+    // licence notice; never a download.
+    guestDriverExecutable: (signal) => resolveVendoredCuaDriverExecutable(helperPaths(), signal),
+    guestDriverNotice: () => vendoredCuaDriverNoticePath(helperPaths()),
     // A ready base or Remove everything changes what the Bot runtime offers;
     // starting and stopping a computer never does.
     onSetupReady: () => invalidateBotRuntimeInventoryAuthority("inventory_changed"),

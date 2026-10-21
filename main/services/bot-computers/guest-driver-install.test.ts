@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -153,6 +153,31 @@ test("install locates the guest home, streams the vendored file, verifies it the
   for (const call of calls) assert.equal(call.command.includes("GuestPassword0123456789abcdefgh"), false);
   const parsed = parsePlist(agent.stdin!.slice(agent.stdin!.indexOf("\n") + 1)) as Record<string, unknown>;
   assert.equal(parsed.Label, "com.aiden.bot-computer.cua-driver");
+});
+
+test("the driver's licence notice is copied beside it once the copy passed its checks", async (t) => {
+  const notice = "/Applications/Aiden Agent.app/Contents/Helpers/CuaDriver.app/Contents/Resources/LICENSE.cua-driver.md";
+  const calls: Call[] = [];
+  const steps: string[] = [];
+  await installGuestDriver(context(calls, { noticePath: notice }), { onStep: (step) => steps.push(step) });
+  assert.deepEqual(steps, ["locate", "copy", "verify", "notice", "agent", "wait_for_socket"]);
+  const sent = calls.find((call) => call.stdinFile === notice);
+  assert.ok(sent, "the notice goes over stdin from the helper bundle");
+
+  // Run as the guest would: the notice lands next to the driver.
+  const home = tempHome(t);
+  const ran = sh(sent.command, home, "MIT License\n\nCopyright (c) Cua AI, Inc.\n");
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.match(readFileSync(path.join(home, path.dirname(GUEST_DRIVER_BINARY), "LICENSE.cua-driver.md"), "utf8"), /^MIT License/u);
+
+  // A copy that fails its checks is never given a notice, or loaded.
+  const refused: Call[] = [];
+  await assert.rejects(
+    installGuestDriver(
+      context(refused, { noticePath: notice, guestSsh: guest(refused, (_call, index) => result(index === 2 ? 70 : 0)) }),
+    ),
+  );
+  assert.equal(refused.some((call) => call.stdinFile === notice), false);
 });
 
 test("a failed guest check stops the install and says which one", async () => {
