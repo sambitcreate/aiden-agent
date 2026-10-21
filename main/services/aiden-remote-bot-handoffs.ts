@@ -29,9 +29,14 @@ export function legacyHandoffNoticeId(waitId: string): string {
   return `handoff-notice:${waitId}`;
 }
 
-/** A waiting hand-off card as a `bot:handoffs` device sees it. A link that is not a safe https page is left out. */
+/**
+ * A waiting hand-off card as a `bot:handoffs` device sees it. A link that is
+ * not a safe https page is left out, and so is a rule card's page: it is the
+ * Bot's own tab on the Mac, and in the device's browser the step would act on
+ * the person's own session.
+ */
 export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHandoff {
-  const url = prompt.open?.url;
+  const url = prompt.source === "rule" ? undefined : prompt.open?.url;
   const why = prompt.why?.trim();
   return parseAidenRemoteBotHandoff({
     waitId: prompt.waitId,

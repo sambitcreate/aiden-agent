@@ -119,3 +119,16 @@ test("a paused Bot's summary and detail project to the fixture's two views", asy
   assert.equal(projectBotDetailForAudience(idleDetail, HOLDER).paused, false);
   assert.equal("paused" in projectBotDetailForAudience(idleDetail, LEGACY_AUDIENCE), false);
 });
+
+test("a rule's card reaches a phone without its page: that page is the Bot's own tab on the Mac, and the phone's browser would act on the person's own session", () => {
+  const ruled = toRemoteBotHandoff(prompt({
+    action: "Make a purchase",
+    why: "Your rule “Make a purchase” hands this to you. Scout was about to: Click Place your order in its browser",
+    open: { url: "https://shop.example.com/cart" },
+    source: "rule",
+    rule: { id: "default.purchase", label: "Make a purchase" },
+  }));
+  assert.equal("open" in ruled, false);
+  assert.equal(ruled.action, "Make a purchase", "the card itself still arrives, answered Done or Skip");
+  assert.deepEqual(toRemoteBotHandoff(prompt()).open, { url: "https://bank.example.com/verify" }, "a link the Bot gave keeps its Open");
+});

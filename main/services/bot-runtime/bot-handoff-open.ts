@@ -1,18 +1,21 @@
 // What **Open** on a hand-off card does (plan §4.1, §5.2), from the Mac or a
 // phone. Pure: the openers come in as dependencies.
 //
-// | Card                  | From the Mac                                    | From a phone                         |
-// |-----------------------|-------------------------------------------------|--------------------------------------|
-// | sign-in               | the Bot's computer or browser, by `target`      | the Bot's chat, then the same opener |
-// | action with a link    | the Bot's browser, else the system browser      | the Bot's chat (the phone opens it)  |
-// | action without a link | nothing                                         | the Bot's chat                       |
+// | Card                  | From the Mac                                    | From a phone                            |
+// |-----------------------|-------------------------------------------------|-----------------------------------------|
+// | sign-in               | the Bot's computer or browser, by `target`      | the Bot's chat, then the same opener    |
+// | action with a link    | the Bot's browser, else the system browser      | the Bot's chat (the phone opens it)     |
+// | a rule's, with a link | the Bot's browser only                          | the Bot's chat (the phone gets no link) |
+// | action without a link | nothing                                         | the Bot's chat                          |
 //
 // A link is checked again here, so only an https page without credentials is
 // opened. A sign-in never falls back to the system browser: the Bot could not
-// use a sign-in made there. When the Bot's browser fails to open an action's
-// link (a full tab strip, a browser that won't load), the system browser
-// opens it instead; a sign-in's failure reaches the person on the Mac, and a
-// phone's Open still brings the chat forward.
+// use a sign-in made there. Nor does a rule's card, whose page is the Bot's
+// own tab (a rule handed the Bot's browser step to the person). When the Bot's
+// browser fails to open the link of a card the Bot wrote (a full tab strip, a
+// browser that won't load), the system browser opens it instead; a sign-in's
+// failure reaches the person on the Mac, and a phone's Open still brings the
+// chat forward.
 
 import { isBotHandoffOpenUrl, type BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 
@@ -73,6 +76,9 @@ export async function openBotHandoff(
   }
   if (link === undefined) return "none";
   if (await openInBotBrowser(prompt, link, openers)) return "browser";
+  // A rule's page is the Bot's own tab: in the person's browser the step
+  // (Buy, Send, a password) would act on their own session instead.
+  if (prompt.source === "rule") return "none";
   await openers.external(link);
   return "external";
 }
