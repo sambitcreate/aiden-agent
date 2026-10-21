@@ -275,12 +275,13 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   per click, because the virtual machine is the boundary. Rules still apply:
   purchase, communicate, publish and delete ask, credentials and money hand
   off, and the person's own rules match too. The rules read the stated intent;
-  a key chord that does more than edit text at the caret (Return, Command-S,
-  Command-Delete) counts as pressing a button, while a character, Backspace or
-  Delete is typing. "Install software" covers the person's Mac, not the
-  Bot's own computer, though a rule of the person's own can still cover an
-  install there. Shell commands aren't classified by rules. See
-  [Bot rules](bot-rules.md).
+  a key chord that does more than type a character (Return, Command-S,
+  Command-Delete) counts as pressing a button. Backspace or Delete is typing
+  only while element control has the Bot in a text field it clicked; anywhere
+  else it can delete what is selected, so it presses too. "Install software"
+  covers the person's Mac, not the Bot's own computer, though a rule of the
+  person's own can still cover an install there. Shell commands aren't
+  classified by rules. See [Bot rules](bot-rules.md).
 - **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
   Bot's own description of each step. The tool's guidance tells the Bot to
   call `hand_off` for passwords, codes and payments and let the person do those

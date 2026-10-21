@@ -11,6 +11,7 @@ import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@ear
 import { botRuleLabel, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { createBotComputerControl } from "../bot-computers/control.js";
 import { createBotComputerShellTool } from "../bot-computers/computer-shell-tool.js";
+import type { BotComputerDriverFacts } from "../bot-computers/computer-elements.js";
 import type { BotComputerArgs } from "../bot-computers/computer-schema.js";
 import { createGuestCuaDriverHostFactory } from "../bot-computers/guest-driver.js";
 import { classifyBotAction } from "../bot-rules/classify.js";
@@ -132,14 +133,24 @@ test("the rules read a computer step's stated intent; looking and invalid calls 
     action: "key",
     intent: "Type A",
   });
-  // Backspace or Delete erases a character the Bot typed: editing text, not deleting something, whatever the intent says.
-  const classesOf = (args: Record<string, unknown>) => [...classifyBotAction(botComputerAction({ args }).action!, []).classes];
+  const classesOf = (args: Record<string, unknown>, driverFacts?: BotComputerDriverFacts) => [
+    ...classifyBotAction(botComputerAction({ args }, driverFacts).action!, []).classes,
+  ];
+  const inField = { run: "run-1", epoch: 1, app: "Notes", focused: { role: "AXTextArea", label: "Note body" } };
+  // In a text field the Bot clicked, Backspace or Delete erases a character it typed: editing text, not deleting something.
   for (const keys of ["backspace", "Delete", "forwarddelete", "shift+backspace"]) {
-    assert.deepEqual(classesOf({ action: "key", keys, intent: "Delete the extra letter" }), [], keys);
+    assert.deepEqual(classesOf({ action: "key", keys, intent: "Delete the extra letter" }, inField), [], keys);
   }
-  assert.deepEqual(classesOf({ action: "key", keys: "backspace", intent: "Delete the old password" }), ["credentials"]);
+  assert.deepEqual(
+    classesOf({ action: "key", keys: "backspace", intent: "Delete the old password" }, { ...inField, focused: { role: "AXSecureTextField" } }),
+    ["credentials"],
+  );
+  // Anywhere else the same key deletes what is selected: a message in Mail, or whatever the VNC lane can't see.
+  const inList = { run: "run-1", epoch: 1, app: "Mail", focused: { role: "AXRow", label: "Ada Lovelace, Lunch on Friday" } };
+  assert.deepEqual(classesOf({ action: "key", keys: "backspace", intent: "Delete the email from Ada" }, inList), ["delete"]);
+  assert.deepEqual(classesOf({ action: "key", keys: "Delete", intent: "Delete the email from Ada" }), ["delete"]);
   // With Command, Delete is a command (Finder's Move to Trash), and a click that deletes still deletes.
-  assert.deepEqual(classesOf({ action: "key", keys: "cmd+backspace", intent: "Delete the file" }), ["delete"]);
+  assert.deepEqual(classesOf({ action: "key", keys: "cmd+backspace", intent: "Delete the file" }, inField), ["delete"]);
   assert.deepEqual(classesOf({ action: "click", coordinate: [1, 2], intent: "Delete the file" }), ["delete"]);
   assert.deepEqual(botComputerAction({ args: { action: "capture" } }), { approval: null });
   assert.deepEqual(botComputerAction({ args: { action: "click", coordinate: [1, 2] } }), { approval: null });

@@ -9,19 +9,35 @@
 // secure text field reads as credentials. Typed text never reaches the
 // classifier.
 //
-// A key chord that only edits text at the caret (a character, or a plain
-// Backspace or Delete erasing one) is typing, so an intent such as "Delete the
-// extra letter" never reads as deleting something. Any other chord (Return,
-// Command-S, Command-Delete) presses something, so its intent can make any
-// class a click's can: pressing Return to send a message is sending.
+// A key chord that types a character is typing. A plain Backspace or Delete
+// is typing too while the guest driver lane has the Bot in a text field (it
+// clicked one, and only typed or erased since), so an intent such as "Delete
+// the extra letter" never reads as deleting something. Anywhere else (the VNC
+// lane, a selected message in Mail) the same key can delete what is selected,
+// so it presses something, like every other chord (Return, Command-S,
+// Command-Delete): its intent can make any class a click's can, and pressing
+// Return to send a message is sending.
 
 import type { BotComputerDriverFacts, BotComputerElement } from "../bot-computers/computer-elements.js";
 import { BOT_COMPUTER_MUTATING_ACTIONS, botComputerIntentOf, isBotComputerAction } from "../bot-computers/computer-schema.js";
-import { botComputerChordEditsText } from "../bot-computers/computer-keystrokes.js";
+import { botComputerChordEditsText, botComputerChordErases } from "../bot-computers/computer-keystrokes.js";
 import type { BotToolCallCheck } from "./bot-extension.js";
 import type { BotLiveApproval } from "./bot-tool-assembly.js";
 
 const ELEMENT_CLICKS = new Set(["click", "double_click", "right_click"]);
+/** Roles that take typed text: text fields and areas (secure and search fields among them) and combo boxes. */
+const TEXT_ENTRY_ROLES = ["textfield", "textarea", "searchfield", "combobox", "textbox", "searchbox"];
+
+function takesText(element: BotComputerElement | undefined): boolean {
+  const role = (element?.role ?? "").toLowerCase().replace(/[^a-z]/gu, "");
+  return TEXT_ENTRY_ROLES.some((kind) => role.includes(kind));
+}
+
+/** Whether a `key` chord edits text: a character anywhere, Backspace or Delete only in a text field the Bot is in. */
+function editsText(keys: string, facts: BotComputerDriverFacts | undefined): boolean {
+  if (!botComputerChordEditsText(keys)) return false;
+  return !botComputerChordErases(keys) || takesText(facts?.focused);
+}
 
 /** The element a guest-driver-lane call acts on, with its app and window, as far as Aiden knows. */
 function elementFacts(
@@ -56,8 +72,7 @@ export function botComputerAction(call: Pick<BotToolCallCheck, "args">, facts?: 
   const intent = botComputerIntentOf(args);
   // A mutating call without an intent never runs: the tool refuses it before acting.
   if (intent === undefined) return { approval: null };
-  const classified =
-    action === "key" && typeof args.keys === "string" && !botComputerChordEditsText(args.keys) ? "press" : action;
+  const classified = action === "key" && typeof args.keys === "string" && !editsText(args.keys, facts) ? "press" : action;
   return {
     approval: null,
     action: { surface: "computer", action: classified, intent, ...elementFacts(action, args, facts) },

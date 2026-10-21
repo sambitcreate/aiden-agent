@@ -40,10 +40,14 @@ implementation notes are in `.memory/bot-rules.md`.
   [Bot computers](bot-computers.md#how-the-bot-uses-its-computer). On the VNC lane a
   click is only coordinates, so the rules read the Bot's stated intent; on
   the guest driver lane they also read the element it acts on.
-  - A key that only edits text at the caret (a character, or Backspace or
-    Delete with no modifier but Shift) is typing, so "Delete the extra
-    letter" never reads as deleting something. Command-Delete presses
-    something, like a click.
+  - A key that types a character is typing. Backspace or Delete (no
+    modifier but Shift) is typing only while the guest driver lane has the
+    Bot in a text field it clicked, so "Delete the extra letter" there never
+    reads as deleting something. Anywhere else (a selected message in Mail,
+    or the VNC lane, where Aiden can't see what has focus) the same key can
+    delete what is selected, so it presses something, like a click, and an
+    intent that says delete asks first. Command-Delete always presses
+    something.
 - **Connection (MCP) tools the Bot is granted as mutating**: the tool's name,
   its call summary, and the live server's title, first description sentence
   and annotations. Arguments never reach the rules.
