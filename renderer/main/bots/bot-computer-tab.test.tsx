@@ -368,3 +368,37 @@ test("Finish on your Mac from a phone brings Planner's computer forward here onc
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.equal(selectedTab(), "Files");
 });
+
+test("reopening a chat whose remembered view still shows a sign-in answered since never pulls the panel to Computer", async () => {
+  const state = { computers: [computer({ state: "running" })] };
+  const signIn = {
+    botId: "bot-1", waitId: "wait-r", toolCallId: "tool-r", kind: "sign_in" as const, action: "Sign in to github.com",
+    open: { url: "https://github.com" }, origin: "https://github.com", target: "computer" as const, source: "tool" as const,
+  };
+  const running = { kind: "running" as const, submissionId: "sub-1" };
+  let subscribe: () => unknown = () => ({ ...chatSnapshot(), state: running, handoff: signIn });
+  const { calls } = await mountBotChat(state, { "bots:live:subscribe": () => subscribe() });
+  await screen.findByRole("group", { name: "Planner needs you" });
+
+  // Leave the chat; this window remembers its last view for an instant reopen.
+  cleanup();
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  // Meanwhile a phone's Finish on your Mac handed the computer to the person, and the card was answered there.
+  state.computers = [computer({ state: "running", controller: "person" })];
+  let answer: (snapshot: BotLiveSnapshot) => void = () => undefined;
+  subscribe = () => new Promise<BotLiveSnapshot>((resolve) => (answer = resolve));
+  const statusReads = computerCalls(calls, "botComputers:status").length;
+  await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat", capabilities: MAC });
+  await waitFor(() => assert.ok(computerCalls(calls, "botComputers:status").length > statusReads));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(botPanel().getAttribute("data-state"), "closed", "a remembered card moves nothing");
+  assert.ok(screen.getByRole("group", { name: "Planner needs you" }), "the remembered view shows at once");
+
+  // The fresh snapshot has no card; it lands inside act so its updates settle before the checks.
+  await act(async () => {
+    answer({ ...chatSnapshot(), state: running });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null);
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+});

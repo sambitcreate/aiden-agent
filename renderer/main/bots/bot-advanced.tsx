@@ -21,7 +21,7 @@ import {
   Text,
   toast,
 } from "../../components/ui";
-import { botsApi } from "../../lib/ipc";
+import { botsApi, type BotAccessState } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import {
   queryKeys,
@@ -499,14 +499,16 @@ export function BotAdvanced({
     }
     const update = buildBotAccessUpdate(rebased, latestCatalog);
     if (botAccessDiffers(update, state)) {
-      // The answer is the saved view: it takes the access query now, and the
-      // catalog (an inventory rebuild) rereads in the background.
+      // The answer is the saved access view alone: it takes the access query's
+      // `access` now, and the model choices beside it, like the catalog (an
+      // inventory rebuild), reread in the background.
       const saved = await botsApi.updateBotAccess({
         botId: bot.id,
         expectedRevision: state.access.revision,
         access: update,
       });
-      qc.setQueryData(queryKeys.botAccess(bot.id), saved);
+      qc.setQueryData<BotAccessState>(queryKeys.botAccess(bot.id), { ...state, access: saved });
+      void qc.invalidateQueries({ queryKey: queryKeys.botAccess(bot.id) });
     } else {
       qc.setQueryData(queryKeys.botAccess(bot.id), state);
     }

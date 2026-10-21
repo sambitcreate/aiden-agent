@@ -222,23 +222,34 @@ test("Advanced names only the model in its control, says what it reads under the
 
 function advancedIpc() {
   const accessUpdates: unknown[] = [];
+  // Like main: a save answers with the saved access view alone, and the next read returns it.
+  let access: Record<string, unknown> = { botId: "bot-1", revision: "acc-1", policyEpoch: "e", summary: "", accessMode: "full" };
   const store = botStoreIpc(botFixture(), {
     "bots:getCapabilityCatalog": () => catalogFixture(),
     "bots:getBotAccess": () => ({
-      access: { botId: "bot-1", revision: "acc-1", policyEpoch: "e", summary: "", accessMode: "full" },
+      access,
       modelSelection: { providerId: "prov-text", modelId: "model-text" },
       visionModelSelection: { providerId: "prov-vision", modelId: "model-vision" },
     }),
     "bots:updateBotAccess": (input) => {
       accessUpdates.push(input);
-      return {};
+      const { access: update } = input as { access: { accessMode: string; custom?: unknown } };
+      access = {
+        botId: "bot-1",
+        revision: `${String(access.revision)}+`,
+        policyEpoch: "e",
+        summary: "",
+        accessMode: update.accessMode,
+        ...(update.custom ? { custom: update.custom } : {}),
+      };
+      return access;
     },
     "bots:getTelegramBinding": () => null,
   });
   return { ...store, accessUpdates };
 }
 
-test("Advanced saves access with the toolbar's one Save, then has nothing left to save", async () => {
+test("Advanced saves access with the toolbar's one Save, then has nothing left to save, and opens again on the saved choice", async () => {
   const store = advancedIpc();
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
   const access = await screen.findByRole("radiogroup", { name: "What it can use" });
@@ -256,6 +267,14 @@ test("Advanced saves access with the toolbar's one Save, then has nothing left t
   await waitFor(() =>
     assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true),
   );
+
+  // Back to the Profile and into Advanced again: the page opens on what was saved.
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  await screen.findByRole("button", { name: "Instructions" });
+  await openMenu("More for Planner");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced" }));
+  const reopened = await screen.findByRole("radiogroup", { name: "What it can use" });
+  assert.equal(within(reopened).getByRole("radio", { name: "Only what I choose" }).getAttribute("aria-checked"), "true");
 });
 
 test("Advanced turns on web search for an Everything Bot that doesn't have it yet", async () => {

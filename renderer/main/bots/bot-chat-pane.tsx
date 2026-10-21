@@ -632,11 +632,12 @@ export function BotChatPane({ botId }: { botId: string }) {
   const menuAction = useBotMenuActions(() => setDeleteOpen(true));
   const [retrying, setRetrying] = React.useState(false);
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
-  // The paused card leaves the moment Resume or Dismiss is clicked and comes
-  // back only if that request fails; `pausedRequestIds` keeps one request id
-  // per paused turn so a second click after a failure replays, never doubles.
-  const [hiddenPausedSubmission, setHiddenPausedSubmission] = React.useState<string | null>(null);
-  const pausedRequestIds = React.useRef(new Map<string, string>());
+  // The interrupted card leaves the moment Resume or Dismiss is clicked and
+  // comes back only if that request fails; `interruptedRequestIds` keeps one
+  // request id per interrupted turn so a second click after a failure replays,
+  // never doubles. A Bot the person paused shows BotPausedCard instead.
+  const [hiddenInterruptedSubmission, setHiddenInterruptedSubmission] = React.useState<string | null>(null);
+  const interruptedRequestIds = React.useRef(new Map<string, string>());
   // Sends show at once as pending echoes, each under one request id. A send
   // that failed keeps its id, so the same words sent again are deduplicated by
   // main instead of delivered twice; Retry reuses one id per failed turn.
@@ -676,11 +677,12 @@ export function BotChatPane({ botId }: { botId: string }) {
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
   React.useEffect(() => {
-    // The card hides for one paused turn; a new state (running, idle, or a later pause) clears that.
-    if (hiddenPausedSubmission && (state?.kind !== "interrupted" || state.submissionId !== hiddenPausedSubmission)) {
-      setHiddenPausedSubmission(null);
+    // The card hides for one interrupted turn; any other state (running, idle,
+    // paused by the person, or a later interruption) clears that.
+    if (hiddenInterruptedSubmission && (state?.kind !== "interrupted" || state.submissionId !== hiddenInterruptedSubmission)) {
+      setHiddenInterruptedSubmission(null);
     }
-  }, [hiddenPausedSubmission, state]);
+  }, [hiddenInterruptedSubmission, state]);
 
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
@@ -854,34 +856,34 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  /** One request id per paused turn and action, so a retry after a failure replays instead of doubling. */
-  const pausedRequestId = (action: "resume" | "dismiss", submissionId: string) => {
+  /** One request id per interrupted turn and action, so a retry after a failure replays instead of doubling. */
+  const interruptedRequestId = (action: "resume" | "dismiss", submissionId: string) => {
     const key = `${action}:${submissionId}`;
-    const existing = pausedRequestIds.current.get(key);
+    const existing = interruptedRequestIds.current.get(key);
     if (existing) return existing;
     const minted = crypto.randomUUID();
-    pausedRequestIds.current.set(key, minted);
+    interruptedRequestIds.current.set(key, minted);
     return minted;
   };
 
-  const paused = async (action: "resume" | "dismiss") => {
-    if (state?.kind !== "interrupted" || hiddenPausedSubmission) return;
+  const answerInterrupted = async (action: "resume" | "dismiss") => {
+    if (state?.kind !== "interrupted" || hiddenInterruptedSubmission) return;
     const { submissionId } = state;
     // The card leaves now; main's state event confirms it, and a failure brings it back.
-    setHiddenPausedSubmission(submissionId);
+    setHiddenInterruptedSubmission(submissionId);
     try {
       const after =
         action === "resume"
-          ? await botsApi.resume(current.id, pausedRequestId(action, submissionId))
-          : await botsApi.dismiss(current.id, pausedRequestId(action, submissionId));
+          ? await botsApi.resume(current.id, interruptedRequestId(action, submissionId))
+          : await botsApi.dismiss(current.id, interruptedRequestId(action, submissionId));
       // Main answered, so the id is spent: main remembers its answer (even a refusal) per id,
       // and the next click after, say, fixing access must be a new request. Only a thrown
       // IPC error keeps the id for a replay.
-      pausedRequestIds.current.delete(`${action}:${submissionId}`);
-      // Main's answer is the state now: a turn still paused (for example, blocked) shows its card again.
-      if (after.kind === "interrupted") setHiddenPausedSubmission(null);
+      interruptedRequestIds.current.delete(`${action}:${submissionId}`);
+      // Main's answer is the state now: a turn still interrupted (for example, blocked) shows its card again.
+      if (after.kind === "interrupted") setHiddenInterruptedSubmission(null);
     } catch (error) {
-      setHiddenPausedSubmission((hidden) => (hidden === submissionId ? null : hidden));
+      setHiddenInterruptedSubmission((hidden) => (hidden === submissionId ? null : hidden));
       toast.error(
         userFacingErrorMessage(
           error,
@@ -890,8 +892,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       );
     }
   };
-  const resume = () => paused("resume");
-  const dismiss = () => paused("dismiss");
+  const resume = () => answerInterrupted("resume");
+  const dismiss = () => answerInterrupted("dismiss");
 
   const answerQuestion = async (question: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
     setAnswering(true);
@@ -1171,7 +1173,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
-      {state?.kind === "interrupted" && hiddenPausedSubmission !== state.submissionId ? (
+      {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId ? (
         <BotInterruptedCard
           name={current.name}
           {...(state.blocked ? { blocked: state.blocked } : {})}

@@ -118,6 +118,32 @@ test("a send whose acknowledgement was lost keeps the draft and retries with the
   assert.deepEqual(sent[1]!.body, sent[0]!.body, "the retry replays the original request");
 });
 
+test("Retry on a failed reply from another Mac resends the person's words there, not the failed turn's id", async () => {
+  const { peerCalls } = await mount(HOST, {
+    "remote:peerCall": (_hostId, operation) => {
+      const { operation: name } = operation as PeerOperation;
+      if (name === "botSession") {
+        return {
+          ok: true,
+          value: {
+            ...SESSION,
+            entries: [
+              { type: "message", id: "m1", role: "user", text: "Move the dentist" },
+              { type: "failed_turn", id: "a1:failed", retryText: "Move the dentist" },
+            ],
+          },
+        };
+      }
+      if (name === "botSend") return { ok: true, value: { submissionId: "s2", deduped: false, state: "running", interrupted: false } };
+      return { ok: false, error: { code: "failed", message: `unexpected ${name}` } };
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botSend").length, 1));
+  const sent = peerCalls().find((call) => call.operation === "botSend")!;
+  assert.deepEqual(sent.body, { text: "Move the dentist" });
+});
+
 test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
   const { peerCalls } = await mount();
   await screen.findByText("Two meetings and a dentist.");

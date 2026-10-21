@@ -187,7 +187,7 @@ test("a new epoch from a reopened Bot replaces the view with a fresh snapshot", 
 test("an interrupted Bot offers Resume and Dismiss, each sent once with a request id, and the card leaves on the click", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1" } }),
-    // Still paused after the Resume (say, the readmission was refused): the card comes back.
+    // Still interrupted after the Resume (say, the readmission was refused): the card comes back.
     "bots:resume": () => ({ kind: "interrupted", submissionId: "s1" }),
     "bots:dismiss": () => ({ kind: "idle" }),
   });
@@ -406,7 +406,7 @@ test("Resume clicked twice, or Resume then Dismiss, sends one request until the 
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
   assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 0);
   assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null, "the card is gone while main answers");
-  // Answered as still paused: the card is back and works again.
+  // Answered as still interrupted: the card is back and works again.
   answer({ kind: "interrupted", submissionId: "s1" });
   const back = await screen.findByRole("group", { name: "Planner was interrupted" });
   fireEvent.click(within(back).getByRole("button", { name: "Dismiss" }));
@@ -1138,6 +1138,7 @@ test("typing while a hand-off waits answers it Done with that note, never as a q
     { botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Code entered, it said 'verified'." },
   ]);
   assert.equal(calls.some((call) => call.channel === "bots:send"), false, "the note never reaches the Bot as a message of its own");
+  assert.equal(document.querySelector("[data-bot-pending-send]"), null, "nor shows as a message being sent");
 
   fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));

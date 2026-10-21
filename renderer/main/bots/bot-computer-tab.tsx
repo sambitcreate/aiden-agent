@@ -117,7 +117,9 @@ export function useBotComputerStart(bot: Pick<ComputerBot, "id" | "name">): BotC
  * brings the Computer tab forward, once per card, without moving focus. This
  * is how the Mac's window shows the computer after Finish on your Mac on a
  * phone, where nobody pressed Open here; an Open on this Mac shows the tab
- * itself (`use-bot-handoff-actions.ts`). Renders nothing.
+ * itself (`use-bot-handoff-actions.ts`). A remembered view shown while the
+ * chat reopens is not enough: that card may have been answered since, so only
+ * the fresh snapshot moves the panel. Renders nothing.
  */
 export function BotComputerSignInReveal({
   botId,
@@ -129,7 +131,8 @@ export function BotComputerSignInReveal({
   controller: BotComputerStatus["controller"] | undefined;
   onReveal(): void;
 }) {
-  const handoff = useBotLive(botId).snapshot?.handoff ?? null;
+  const live = useBotLive(botId);
+  const handoff = live.stale ? null : (live.snapshot?.handoff ?? null);
   const waitId = handoff?.kind === "sign_in" && handoff.target === "computer" ? handoff.waitId : null;
   const revealed = React.useRef<string | null>(null);
   const onRevealRef = React.useRef(onReveal);

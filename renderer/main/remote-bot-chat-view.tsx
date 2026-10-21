@@ -648,7 +648,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           connectLabel={`Finish on ${hostName}`}
           connecting={busy === "connect"}
           onReply={reply}
-          onRetry={(text) => void retry(text)}
+          // The failed turn's id comes first; the host only needs its words.
+          onRetry={(_failedId, text) => void retry(text)}
         />
       </MessageAttachmentPreviewProvider>
       {statusActivity ? (
