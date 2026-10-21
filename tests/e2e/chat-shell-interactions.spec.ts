@@ -197,11 +197,15 @@ test.describe("with a workspace", () => {
 
   test("joined editor actions keep square hover seams and visible keyboard focus", async ({ aiden }) => {
     const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler("workspaces:externalEditors");
       ipcMain.handle("workspaces:externalEditors", () => [{ id: "finder", label: "Finder", iconDataUrl: null }]);
     });
-    await finishLmStudioOnboarding(page);
+    // The picker reads the installed editors when it mounts, which can be
+    // under onboarding and before the override; read them again.
+    await page.reload();
+    await expect(page.locator("textarea")).toBeVisible();
     const group = page.getByRole("group", { name: "Open workspace in editor" });
     const open = group.getByRole("button", { name: "Open workspace in Finder", exact: true });
     const choose = group.getByRole("button", { name: "Choose editor", exact: true });
