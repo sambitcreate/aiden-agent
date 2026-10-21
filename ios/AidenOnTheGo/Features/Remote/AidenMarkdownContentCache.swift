@@ -645,11 +645,12 @@ enum AidenStreamingMarkdownTail {
 
     /// Whether the newline at `newline` ends a block, so inline spans never
     /// continue across it. Quote markers are looked through: the line before
-    /// (from `lineStart`) being a heading, or the line after starting a
-    /// heading, list item or quote deeper than any in the block so far, ends
-    /// the block. An ordered item numbered other than 1 interrupts only
-    /// another list item, and a line with fewer quote markers that starts no
-    /// block continues the quoted paragraph lazily (its markers may resume).
+    /// (from `lineStart`) being a heading, the line after starting a heading,
+    /// list item or quote deeper than any in the block so far, or a blank
+    /// (possibly quoted) line on either side ends the block. An ordered item
+    /// numbered other than 1 interrupts only another list item, and a line
+    /// with fewer quote markers that starts no block continues the quoted
+    /// paragraph lazily (its markers may resume).
     /// `deepestQuote` carries the block's deepest quote between calls.
     private static func isBlockBoundary(
         _ text: [Character],
@@ -661,7 +662,8 @@ enum AidenStreamingMarkdownTail {
         let next = quoteContent(text, at: newline + 1)
         deepestQuote = max(deepestQuote, previous.depth)
         let boundary: Bool
-        if next.depth > deepestQuote || startsHeading(text, at: previous.start) ||
+        if next.depth > deepestQuote || isBlank(text, at: previous.start) || isBlank(text, at: next.start) ||
+            startsHeading(text, at: previous.start) ||
             startsHeading(text, at: next.start) || startsBullet(text, at: next.start) {
             boundary = true
         } else if let number = orderedListNumber(text, at: next.start) {
@@ -672,6 +674,17 @@ enum AidenStreamingMarkdownTail {
         }
         if boundary { deepestQuote = 0 }
         return boundary
+    }
+
+    /// Whether the line from `start` holds only spaces: a quoted blank line
+    /// (`>`) ends the quoted paragraph.
+    private static func isBlank(_ text: [Character], at start: Int) -> Bool {
+        var position = start
+        while position < text.count, text[position] != "\n" {
+            guard text[position] == " " || text[position] == "\t" || text[position] == "\r" else { return false }
+            position += 1
+        }
+        return true
     }
 
     /// How many block quote markers open the line at `start`, and where the

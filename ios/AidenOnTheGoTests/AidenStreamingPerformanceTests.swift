@@ -533,6 +533,8 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             // Omitted nested-quote markers may resume within one paragraph.
             "> > *foo\n> bar\n> > baz*",
             "> > `foo\n> bar\n> > [label](url`",
+            // A quoted blank line ends the quoted paragraph.
+            "> > `literal\n>\n> > Use `code`",
         ] {
             XCTAssertEqual(tail(text), text, text)
         }
