@@ -316,7 +316,9 @@ skipped, everything above applies unchanged.
   `resources/computer-use/cua-driver-artifact.json`) into the base at
   `~/Library/Application Support/Aiden/cua-driver/cua-driver`. The guest checks
   the copy's SHA-256 against Aiden's compiled pin and its code signature
-  against Cua's identifier and Team ID before it is put in place. Nothing is
+  against Cua's identifier and Team ID before it is put in place, and the
+  driver's MIT notice (`LICENSE.cua-driver.md`, from the same helper bundle) is
+  copied beside it. Nothing is
   downloaded in the guest, no driver is ever found on `PATH`, and the driver is
   updated only with an Aiden release.
 - **Runs in the logged-in session.** A LaunchAgent
@@ -391,8 +393,11 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   a fresh capture. The guest driver starts again on the Bot's next element
   step.
 - **From a phone.** Aiden Remote keeps the card's **Finish on your Mac**: Open
-  from the phone opens the page on the Bot's computer on the Mac, where the
-  person signs in. No new remote fields are involved.
+  from the phone brings the Bot's chat forward on the Mac and opens the page
+  on the Bot's computer there, with the person in control. Once the Mac's
+  window sees the person holding the computer for that card, its panel shows
+  the Computer tab, once per card and without moving keyboard focus. No new
+  remote fields are involved.
 - **Confirming on a Mac.** Open from the card takes the computer over, Safari
   opens at the site (`/usr/bin/open -b com.apple.Safari` over SSH reaching the
   logged-in session), the driver's processes are gone, and answering gives the

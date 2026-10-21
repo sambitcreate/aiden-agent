@@ -318,9 +318,53 @@ test("Open Planner's computer on a sign-in card moves the person into the Comput
   await act(async () => fireEvent.click(open));
 
   await waitFor(() => assert.equal(selectedTab(), "Computer"));
+  // The person asked for it, so focus follows them there.
+  await waitFor(() => assert.equal(document.activeElement?.textContent, "Computer"));
+  assert.ok(botPanel().contains(document.activeElement));
   assert.deepEqual(
     calls.filter((call) => call.channel === "bots:openHandoff").map((call) => call.args),
     [[{ botId: "bot-1", waitId: "wait-s" }]],
   );
   assert.ok(await within(botPanel()).findByRole("button", { name: "Give back" }), "the person holds the computer");
+});
+
+test("Finish on your Mac from a phone brings Planner's computer forward here once, without taking focus", async () => {
+  const state = { computers: [computer({ state: "running" })] };
+  const signIn = {
+    botId: "bot-1", waitId: "wait-p", toolCallId: "tool-p", kind: "sign_in" as const, action: "Sign in to github.com",
+    open: { url: "https://github.com" }, origin: "https://github.com", target: "computer" as const, source: "tool" as const,
+  };
+  const { calls } = await mountBotChat(state, {
+    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: signIn }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  within(card).getByRole("button", { name: "Open Planner’s computer" }).focus();
+  // The card waits while the Bot still has its computer: nothing moves.
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+
+  // The phone's Open reached main, which took the computer over for the person; nobody pressed Open here.
+  act(() => {
+    state.computers = [computer({ state: "running", controller: "person" })];
+    emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status(state.computers));
+  });
+  await waitFor(() => assert.equal(selectedTab(), "Computer"));
+  assert.notEqual(botPanel().getAttribute("data-state"), "closed");
+  assert.ok(await within(botPanel()).findByRole("button", { name: "Give back" }), "the person holds the computer");
+  assert.equal(botPanel().contains(document.activeElement), false, "focus stays where the person left it");
+  assert.equal(calls.some((call) => call.channel === "bots:openHandoff"), false);
+
+  // Once shown, a later change for the same card never pulls the panel back to Computer.
+  fireEvent.click(within(botPanel()).getByRole("tab", { name: "Files" }));
+  await waitFor(() => assert.equal(selectedTab(), "Files"));
+  act(() => {
+    state.computers = [computer({ state: "running", controller: "bot" })];
+    emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status(state.computers));
+  });
+  act(() => {
+    state.computers = [computer({ state: "running", controller: "person" })];
+    emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status(state.computers));
+  });
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(selectedTab(), "Files");
 });

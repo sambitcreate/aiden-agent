@@ -23,6 +23,7 @@ import { DEVICE_SCREEN_CONTAINER_STYLE, fittedScreenStyle } from "../../lib/devi
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { useBotComputersCache, useBotComputersStatus } from "../../lib/use-bot-computers";
+import { useBotLive } from "../../lib/use-bot-live";
 import { useDeviceScreenWheel } from "../../lib/use-device-screen-wheel";
 import { useDeviceStream } from "../../lib/use-device-stream";
 import { cn } from "../../lib/ui-utils";
@@ -109,6 +110,36 @@ export function useBotComputerStart(bot: Pick<ComputerBot, "id" | "name">): BotC
       });
   }, [bot.id, bot.name, cache]);
   return { pending, error, start };
+}
+
+/**
+ * A sign-in on the Bot's own computer (plan §8.8) that the person now holds
+ * brings the Computer tab forward, once per card, without moving focus. This
+ * is how the Mac's window shows the computer after Finish on your Mac on a
+ * phone, where nobody pressed Open here; an Open on this Mac shows the tab
+ * itself (`use-bot-handoff-actions.ts`). Renders nothing.
+ */
+export function BotComputerSignInReveal({
+  botId,
+  controller,
+  onReveal,
+}: {
+  botId: string;
+  /** Who drives the Bot's computer now, or undefined when it has none. */
+  controller: BotComputerStatus["controller"] | undefined;
+  onReveal(): void;
+}) {
+  const handoff = useBotLive(botId).snapshot?.handoff ?? null;
+  const waitId = handoff?.kind === "sign_in" && handoff.target === "computer" ? handoff.waitId : null;
+  const revealed = React.useRef<string | null>(null);
+  const onRevealRef = React.useRef(onReveal);
+  onRevealRef.current = onReveal;
+  React.useEffect(() => {
+    if (waitId === null || controller !== "person" || revealed.current === waitId) return;
+    revealed.current = waitId;
+    onRevealRef.current();
+  }, [waitId, controller]);
+  return null;
 }
 
 /** Take over and Give back, keeping the cached status in step with main's reply. */
