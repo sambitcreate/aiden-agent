@@ -9,6 +9,7 @@ export const SETTINGS_SECTIONS = [
   "remoteAccess",
   "approvals",
   "computerUse",
+  "botComputers",
   "simulator",
   "memory",
   "scheduledTasks",
@@ -141,6 +142,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
   },
   {
+    id: "botComputers",
+    title: "Bot computers",
+    group: "Agent",
+    keywords: ["virtual machine", "vm", "lume", "macos", "bot computer", "disk space", "apple silicon"],
+  },
+  {
     id: "simulator",
     title: "Simulator",
     group: "Agent",
@@ -202,11 +209,28 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
 export function availableSettingsDestinations(capabilities: {
   computerUse: boolean;
   devices: boolean;
+  botComputers: boolean;
 }): typeof SETTINGS_DESTINATIONS {
   return SETTINGS_DESTINATIONS.filter(
     (destination) =>
       (destination.id !== "computerUse" || capabilities.computerUse) &&
-      (destination.id !== "simulator" || capabilities.devices),
+      (destination.id !== "simulator" || capabilities.devices) &&
+      (destination.id !== "botComputers" || capabilities.botComputers),
+  );
+}
+
+/**
+ * The sections the assistant may name and open on this host: Simulator only with the
+ * devices feature, Bot computers only on Apple silicon.
+ */
+export function assistantSettingsSections(capabilities: {
+  devices: boolean;
+  botComputers: boolean;
+}): SettingsSection[] {
+  return SETTINGS_SECTIONS.filter(
+    (section) =>
+      (section !== "simulator" || capabilities.devices) &&
+      (section !== "botComputers" || capabilities.botComputers),
   );
 }
 

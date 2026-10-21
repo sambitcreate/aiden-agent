@@ -4,6 +4,7 @@ import { isServer } from "@tanstack/router-core/isServer";
 import { Window } from "happy-dom";
 import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 import { defaultBotRulesView } from "../../shared/bot-rules";
+import { DEFAULT_BOT_COMPUTERS_SETTINGS } from "../../shared/bot-computers";
 
 // With the router's server build, routed pages never follow a navigation and
 // tests that navigate pass while showing the wrong page. Fail loudly instead.
@@ -102,6 +103,20 @@ const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
   "bots:browser:workspace": () => null,
   // Profile → Rules: a Bot nobody has changed the rules of.
   "bots:rules:get": (botId) => defaultBotRulesView(String(botId)),
+  // Bot computers on a Mac that never chose Set up (asked only with the botComputers capability).
+  "botComputers:status": () => ({
+    setup: { kind: "not_set_up" },
+    settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
+    diskUsedBytes: 0,
+    computers: [],
+    requirements: {
+      downloadBytes: 19_772_231_540,
+      baseDiskBytes: 50_000_000_000,
+      setupFreeBytes: 84_196_731_252,
+      memoryPerComputerBytes: 8 * 1024 ** 3,
+      baseVersion: "26.6.2",
+    },
+  }),
 };
 
 export interface BotTestIpcCall {
