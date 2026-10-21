@@ -44,7 +44,6 @@ import {
   boundBotProviderModelFingerprint,
   parseBoundBotProviderModel,
   parseBoundBotCustomSelection,
-  refreshBoundBotProviderModel,
   type BoundBotCustomSelection,
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
@@ -593,7 +592,10 @@ export class BotCapabilityStore {
       let state = await this.persistence.load();
       let editor = this.editor(state);
       editor.assertBotMayAct(input);
-      if (input.snapshot && this.hasStaleModelBinding(editor, input.botId, input.snapshot)) {
+      if (
+        input.snapshot &&
+        editor.hasStaleModelBindings({ botId: input.botId, snapshot: input.snapshot })
+      ) {
         const snapshot = input.snapshot;
         await this.persistence.update((draft) =>
           this.editor(draft).refreshStaleModelBindings({ botId: input.botId, snapshot }),
@@ -635,18 +637,6 @@ export class BotCapabilityStore {
         lease,
       };
     });
-  }
-
-  private hasStaleModelBinding(
-    editor: BotCapabilityStateEditor,
-    botId: string,
-    snapshot: BotCapabilityCatalogSnapshot,
-  ): boolean {
-    return [editor.getBotModelAuthority(botId), editor.getBotVisionModelAuthority(botId)].some(
-      (authority) =>
-        authority !== undefined &&
-        refreshBoundBotProviderModel(authority.binding, snapshot) !== undefined,
-    );
   }
 
   /** Delete/global/inventory owners use this immediate process fence. */

@@ -1676,26 +1676,47 @@ export class BotCapabilityStateEditor {
   }
 
   /**
-   * Repair model bindings whose provider connection, model identity,
+   * Model bindings whose provider connection, model identity, public id,
    * availability and image capability all still match the current catalog but
-   * whose model fingerprint is stale. Public ids are identity-stable, so the
-   * selection and every chat reduction keep naming the same model; only the
-   * private fingerprints move. Authority is unchanged, so the policy epoch is
-   * kept and no lease is fenced. Returns false when nothing needed repair.
+   * whose model fingerprint is stale. Only the Full model and the companion
+   * vision model qualify: a Custom binding's public ids are re-verified
+   * against its exact facts on every catalog read, and a legacy (v1) id
+   * embeds the old fingerprint, so its repair would strand the Bot. Custom
+   * drift keeps failing closed until the model is chosen again.
+   */
+  private staleModelRefreshes(
+    policy: StoredBotCapabilityPolicy,
+    snapshot: BotCapabilityCatalogSnapshot,
+  ): { model?: BoundBotProviderModel; visionModel?: BoundBotProviderModel } {
+    const model =
+      policy.accessMode === "full" && policy.model
+        ? refreshBoundBotProviderModel(policy.model.binding, snapshot)
+        : undefined;
+    const visionModel = policy.visionModel
+      ? refreshBoundBotProviderModel(policy.visionModel.binding, snapshot)
+      : undefined;
+    return { ...(model ? { model } : {}), ...(visionModel ? { visionModel } : {}) };
+  }
+
+  hasStaleModelBindings(input: { botId: string; snapshot: BotCapabilityCatalogSnapshot }): boolean {
+    const refreshes = this.staleModelRefreshes(this.policy(input.botId), input.snapshot);
+    return refreshes.model !== undefined || refreshes.visionModel !== undefined;
+  }
+
+  /**
+   * Repair the stale model bindings found by `staleModelRefreshes`. Public ids
+   * are unchanged, so the selection and every chat reduction keep naming the
+   * same model; only the private fingerprints move. Authority is unchanged, so
+   * the policy epoch is kept and no lease is fenced. Returns false when
+   * nothing needed repair.
    */
   refreshStaleModelBindings(input: {
     botId: string;
     snapshot: BotCapabilityCatalogSnapshot;
   }): boolean {
     const policy = this.policy(input.botId);
-    const primary = storedBotModelAuthority(policy);
-    const refreshedPrimary = primary
-      ? refreshBoundBotProviderModel(primary.binding, input.snapshot)
-      : undefined;
-    const refreshedVision = policy.visionModel
-      ? refreshBoundBotProviderModel(policy.visionModel.binding, input.snapshot)
-      : undefined;
-    if (!refreshedPrimary && !refreshedVision) return false;
+    const refreshes = this.staleModelRefreshes(policy, input.snapshot);
+    if (!refreshes.model && !refreshes.visionModel) return false;
     const refreshed = (
       authority: StoredBotModelAuthority,
       binding: BoundBotProviderModel | undefined,
@@ -1713,7 +1734,7 @@ export class BotCapabilityStateEditor {
       createdAt: policy.createdAt,
       updatedAt: Math.max(policy.updatedAt, this.timestamp()),
       ...(policy.visionModel
-        ? { visionModel: refreshed(policy.visionModel, refreshedVision) }
+        ? { visionModel: refreshed(policy.visionModel, refreshes.visionModel) }
         : {}),
     } as StoredBotPolicyBase;
     this.state.policies[this.state.policies.indexOf(policy)] =
@@ -1722,18 +1743,13 @@ export class BotCapabilityStateEditor {
             ...common,
             accessMode: "custom",
             custom: cloneBotCustomSelection(policy.custom),
-            binding: {
-              ...cloneBoundBotCustomSelection(policy.binding),
-              ...(refreshedPrimary
-                ? { provider: cloneBoundBotProviderModel(refreshedPrimary) }
-                : {}),
-            },
+            binding: cloneBoundBotCustomSelection(policy.binding),
           }
         : {
             ...common,
             accessMode: "full",
             webSearchEnabled: policy.webSearchEnabled === true,
-            ...(policy.model ? { model: refreshed(policy.model, refreshedPrimary) } : {}),
+            ...(policy.model ? { model: refreshed(policy.model, refreshes.model) } : {}),
           };
     return true;
   }

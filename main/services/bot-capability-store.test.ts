@@ -20,9 +20,11 @@ import {
 } from "./bot-capability-store-core.js";
 import {
   bindBotCustomSelection,
+  assertBoundBotCustomSelectionOpaqueIds,
   assertBoundBotProviderModelCurrent,
   BotCapabilityBindingDriftError,
   createBotCapabilityOpaqueIdMint,
+  mintLegacyBotCapabilityOpaqueId,
   withBotCapabilityTombstones,
 } from "./bot-capability-bindings.js";
 import {
@@ -1104,38 +1106,47 @@ test("model binding repair never covers a changed connection, image capability, 
   });
 });
 
-test("a Custom Bot's stale model fingerprint is repaired under its retained public ids", async (t) => {
+test("a Custom Bot's stale model fingerprint fails closed and keeps its legacy ids verifiable", async (t) => {
   const root = await temporaryRoot(t);
   const { store } = storeAt(root);
   await store.initialize();
   await store.acknowledgeNotice("device:a", acknowledgement());
-  const stale = staleModelSnapshot();
-  const custom = firstModelSelection(stale);
+  // Legacy (v1) public ids embed the exact fingerprint they were minted with.
+  const staleInventory = inventory();
+  staleInventory.providers[0]!.models[0]!.modelFingerprint = digest("model-with-old-context-window");
+  const legacyStale = buildBotCapabilityCatalogSnapshot({
+    inventory: staleInventory,
+    notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
+    mintOpaqueId: (namespace, source, exact) =>
+      mintLegacyBotCapabilityOpaqueId(opaqueKey, namespace, source, exact),
+  });
+  const custom = firstModelSelection(legacyStale);
   const staleBinding = bindBotCustomSelection({
     selection: custom,
-    catalogRevision: stale.catalog.revision,
-    snapshot: stale,
+    catalogRevision: legacyStale.catalog.revision,
+    snapshot: legacyStale,
   });
   await store.createBotPolicy({
     botId: "bot:custom",
-    catalog: stale.catalog,
-    access: { accessMode: "custom", catalogRevision: stale.catalog.revision, custom },
+    catalog: legacyStale.catalog,
+    access: { accessMode: "custom", catalogRevision: legacyStale.catalog.revision, custom },
     binding: staleBinding,
   });
-  // Production runtime snapshots retain the Bot's binding as tombstones.
-  const runtimeSnapshot = withBotCapabilityTombstones(snapshot, [staleBinding]);
+  const before = await store.getBotBinding("bot:custom");
 
-  const admission = await store.admit({
-    audienceId: "device:a",
-    botId: "bot:custom",
-    snapshot: runtimeSnapshot,
-  });
-  admission.lease.release();
-  const repaired = await store.getBotBinding("bot:custom");
-  assert.equal(repaired?.provider.modelOption.id, custom.modelId);
-  assert.equal(
-    repaired?.provider.modelExactFingerprint,
-    snapshot.resources.providers[0]!.models.find(({ sourceId }) => sourceId === "private-model")!
-      .exactFingerprint,
+  // Production runtime snapshots retain the Bot's binding as tombstones.
+  await assert.rejects(
+    store.admit({
+      audienceId: "device:a",
+      botId: "bot:custom",
+      snapshot: withBotCapabilityTombstones(snapshot, [staleBinding]),
+    }),
+    BotCapabilityBindingDriftError,
+  );
+  const after = await store.getBotBinding("bot:custom");
+  assert.deepEqual(after, before);
+  // Every runtime and access-settings catalog read re-verifies these ids.
+  assert.doesNotThrow(() =>
+    assertBoundBotCustomSelectionOpaqueIds(after!, createBotCapabilityOpaqueIdMint(opaqueKey)),
   );
 });
