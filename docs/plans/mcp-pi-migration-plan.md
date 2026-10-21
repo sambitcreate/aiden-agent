@@ -128,7 +128,7 @@ Unblocks Figma, Vercel and Supabase sign-in before the migration lands.
 Implemented 2026-10-21. Outcome, where it differs from the list below:
 
 - Aiden keeps its own `OAuthClientProvider` (now Electron-free in `main/services/mcp-oauth-provider-core.ts`) instead of Pi's `McpOAuthProvider` + `McpOAuthStateStore`: Pi's provider writes per-URL state unconditionally, and Aiden needs private transactions with rollback, generation gates, compare-and-set refresh saves, compare-and-delete invalidation, background modes that never register or redirect, and live status. Tests drive this real provider against a fake OAuth + MCP server (`mcp-oauth-test-server.ts`).
-- Removed: the token, registration and metadata normalizers, `withoutEmptyChallengeScope` and the metadata observation fetch (the CLI keeps copies in `packages/cli/src/mcp-sdk-oauth-compat.ts` until Phase 3, because its SDK provider still needs them). Kept: `prompt=consent` when Aiden merges a granted `offline_access` scope that Pi did not see (fake-server test).
+- Removed: the token, registration and metadata normalizers, `withoutEmptyChallengeScope` and the metadata observation fetch (the CLI kept copies in `packages/cli/src/mcp-sdk-oauth-compat.ts` until Phase 3 removed them). Kept: `prompt=consent` when Aiden merges a granted `offline_access` scope that Pi did not see (fake-server test).
 - `scope=" "` (whitespace only) in a challenge is no longer rewritten; Pi treats only `scope=""` as absent.
 - The custom-server "OAuth client name" field is gone (part of Phase 5 done early). Custom servers can carry a pre-registered `oauthClientId` and `oauthClientSecret` (the secret in the encrypted field-secret store).
 - CIMD is wired (`AIDEN_MCP_CLIENT_METADATA_URL`, unset) with the document to host in `docs/mcp/aiden-agent-client-metadata.json`; its `client_id` is a placeholder until the URL exists.
@@ -158,6 +158,15 @@ Implemented 2026-10-21. Outcome, where it differs from the list below:
   - Register-and-invoke tests for the authorize and sign-out IPC.
 
 ### Phase 3 — One MCP stack in the CLI
+
+Implemented 2026-10-21. Outcome:
+
+- `packages/cli/src/mcp.ts` runs the desktop's `main/services` layer: `createMcpClient`/`connectMcpClient`, `createMcpRemoteTransport` (fetch policy), `createMcpStdioTransport` (new `stderr: "pipe"` option, since the TUI owns the terminal), and the provider core (`createBackgroundMcpOAuthProvider`, `authorizeMcpServerWithRuntime`) behind a CLI `McpOAuthRuntime`: sessions in the encrypted `credentials/insights.json` (same AES-GCM file store, keyed by `mcpCredentialId`), compare-and-set via the writer lease, a process-wide operation gate, no live status, and the sign-in URL printed to stderr. `mcp-sdk-oauth-compat.ts` and every SDK import are gone; the CLI build fails if the SDK client is bundled again (the CLI never declared `@modelcontextprotocol/sdk`; it resolved from the root install).
+- Redirect: a dynamically registered client uses a random loopback port (it registers afresh on every login); a pre-registered client or a metadata document uses the fixed `http://127.0.0.1:41390/callback`.
+- Pre-registered clients are supported: `mcp add` moves `oauthClientSecret` into the encrypted store and keeps the desktop's marker in `aiden-mcp.json`.
+- An OAuth server without a stored sign-in is not contacted at all (stricter than the desktop, which sends one unauthenticated request before stopping).
+- Pi's built-in MCP extension is off: `aiden` always passes `--no-mcp`, and Aiden's extension registers its own `/mcp`. `aiden pi-mcp` routing is removed; native `mcp.json` entries are not migrated. Pi's shipped `docs/mcp.md` is replaced in the bundle, and the MCP parts of `docs/cli.md` and `docs/configuration.md` are patched (the build fails if Pi's text moves). CLI credential writes queue in-process and wait for another process's writer lease; refresh saves compare and set under it (optional `McpOAuthSessionStore.update`).
+- Sessions saved in the old CLI shape (`client`/`incarnation`, no binding) are not migrated: users sign in again.
 
 - Point `packages/cli/src/mcp.ts` at the shared `main/services` OAuth and client layer, which the build already bundles through `aidenRelativeTsRewritePlugin`, and delete the second provider.
 - Turn off Pi's native MCP extension and the `pi-mcp add|login` commands, or route them into Aiden's encrypted store, per decision 5.

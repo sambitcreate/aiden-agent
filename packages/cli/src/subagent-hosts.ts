@@ -5,8 +5,7 @@ import { SubagentMcpInventoryCache, resolveBoundedSubagentMcpInventory } from ".
 import { createSubagentMcpMutationHost } from "../../../main/services/subagents/subagent-mcp-mutation-host-core.js";
 import { SubagentWebProxyHost } from "../../../main/services/subagents/subagent-web-proxy.js";
 import { callMcpTool, type createMcpToolCallGuard } from "../../../main/services/mcp-tool-inventory.js";
-import { createCliMcpPool, mcpCredentialId, storeFor } from "./mcp.ts";
-import { insightCredentials } from "./credentials.ts";
+import { createCliMcpPool, mcpCredentialSecrets, storeFor } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
 import { readJson } from "./state.ts";
 
@@ -24,16 +23,13 @@ export function createCliSubagentHosts(agentDir: string) {
     async resolveServer(id, signal) { signal.throwIfAborted(); return (await storeFor(agentDir).load()).find((item) => item.id === id); },
     async withClient(server, signal, operation) {
       if (server.transport === "stdio") throw new Error("Delegated MCP requires a remote transport.");
-      const expected = revision(), pool = createCliMcpPool(agentDir, 256 * 1024);
+      const expected = revision(), pool = createCliMcpPool(agentDir, { child: true });
       const assertCurrent = () => { signal.throwIfAborted(); if (revision() !== expected) throw new Error("MCP configuration or credentials changed."); };
       const close = () => { void pool.close(); };
       signal.addEventListener("abort", close, { once: true });
       try {
         const client = await pool.connection(server);
-        const serialized = await insightCredentials(agentDir).read(mcpCredentialId(server));
-        const oauth = serialized ? JSON.parse(serialized) : {};
-        const secrets = [...Object.values(server.headers ?? {}), ...Object.values(oauth.tokens ?? {}), ...Object.values(oauth.client ?? {})]
-          .filter((value): value is string => typeof value === "string" && value.length >= 4);
+        const secrets = await mcpCredentialSecrets(agentDir, server);
         assertCurrent();
         // The guard of the inventory this operation last inspected on this client.
         let guard: ReturnType<typeof createMcpToolCallGuard> | undefined;

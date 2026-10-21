@@ -18,6 +18,11 @@ export interface McpStdioTransportOptions {
   maxBufferSize?: number;
   /** Wait after closing stdin, and again after SIGTERM, before escalating. */
   closeGraceMs?: number;
+  /**
+   * `inherit` (default) forwards the server's stderr to Aiden's; `pipe` keeps
+   * a bounded tail in the transport instead (the CLI's TUI owns the terminal).
+   */
+  stderr?: "inherit" | "pipe";
 }
 
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
@@ -161,7 +166,7 @@ export function createMcpStdioTransport(options: McpStdioTransportOptions): McpT
     env: { ...defaultMcpStdioEnvironment(), ...options.env },
     inheritEnv: false,
     cwd: options.cwd,
-    stderr: "inherit",
+    stderr: options.stderr ?? "inherit",
     ...(options.maxBufferSize === undefined ? {} : { maxMessageBytes: options.maxBufferSize }),
     closeTimeoutMs: graceMs,
   };

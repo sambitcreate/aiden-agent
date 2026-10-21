@@ -59,6 +59,12 @@ export interface McpOAuthSessionStore {
   get(serverId: string, isCurrent?: () => boolean): Promise<McpOAuthSession>;
   set(serverId: string, session: McpOAuthSession, isCurrent?: () => boolean): Promise<void>;
   clear(serverId: string, isCurrent?: () => boolean): Promise<void>;
+  /**
+   * Optional atomic read-modify-write for stores shared across processes (the
+   * CLI): `mutate` sees the stored session under the store's lock and returns
+   * the next one, or undefined to keep it. Token saves use it when present.
+   */
+  update?(serverId: string, mutate: (current: McpOAuthSession) => McpOAuthSession | undefined, isCurrent?: () => boolean): Promise<void>;
 }
 
 /** The live sign-in health Settings shows (see McpLiveStatusRegistry). */
@@ -374,18 +380,29 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     this.observeTokens?.(tokens);
     const exchangedCode = this.exchangingCode;
     this.exchangingCode = false;
-    const session = await this.boundSession();
     // An authorization-code exchange always wins. A refresh response that
     // arrives after another client already rotated past the tokens it presented
     // must not roll the stored pair back to credentials the server consumed.
-    const next = exchangedCode
+    const merge = (session: McpOAuthSession) => exchangedCode
       ? sessionWithSavedMcpTokens(session, this.binding, tokens, this.authorization.requestedScope)
       : sessionWithRefreshedMcpTokens(session, this.binding, this.lastTokens, tokens, this.authorization.requestedScope);
+    let next: McpOAuthSession | undefined;
+    const update = this.transaction ? undefined : this.runtime.store.update;
+    if (update) {
+      // Compare and set under the store's own lock (other processes share it).
+      this.assertCanMutate();
+      await update.call(this.runtime.store, this.serverId, (current) => {
+        next = merge(sessionMatchesMcpBinding(current, this.binding) ? current : { authorizationBinding: this.binding }) ?? undefined;
+        return next;
+      }, this.mutationIsCurrent);
+    } else {
+      next = merge(await this.boundSession()) ?? undefined;
+      if (next) await this.saveSession(next);
+    }
     if (!next) {
       this.runtime.log.info(`Kept newer stored tokens for "${this.serverId}" over a late refresh response.`);
       return;
     }
-    await this.saveSession(next);
     this.lastTokens = { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
   }
 

@@ -1,25 +1,31 @@
-import { createMcpFetchPolicy } from "../../../main/services/mcp-fetch-policy.js";
-import { mcpOAuthMetadataUrlForServer } from "../../../renderer/shared/mcp-oauth-config.js";
-import { mcpServerOffersTools, mcpToolsOfferedToModel, validateMcpExposureFields } from "../../../renderer/shared/mcp-exposure.js";
-import { loadMcpOAuthMetadataOverride } from "../../../main/services/mcp-oauth-metadata.js";
-import { McpOAuthAuthorizationFlow } from "../../../main/services/mcp-oauth-session.js";
+import { validateMcpServerMetadata } from "../../../renderer/shared/mcp-oauth-config.js";
+import { isMcpFieldSecretMarker, MCP_FIELD_SECRET_PREFIX } from "../../../renderer/shared/mcp-field-secrets.js";
+import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
 import { mcpAuthorityConnectionSnapshot } from "../../../main/services/mcp-credential-cleanup-core.js";
-import { createBoundedSubagentMcpFetch } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
-import { SdkIssuerPolicyObserver, withSdkOAuthCompat } from "./mcp-sdk-oauth-compat.ts";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { ResultSchema, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { OAuthTokens, OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { createServer } from "node:http";
-import { createHash, randomUUID } from "node:crypto";
+import { createBoundedSubagentMcpFetch, MAX_SUBAGENT_MCP_RAW_RESPONSE_BYTES } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
+import { connectMcpClient, createMcpClient } from "../../../main/services/mcp-client.js";
+import { createMcpRemoteTransport } from "../../../main/services/mcp-remote-transport.js";
+import { createMcpStdioTransport } from "../../../main/services/mcp-stdio-transport.js";
+import { AIDEN_MCP_CLIENT_METADATA_URL, MCP_OAUTH_LOOPBACK_PORT, MCP_OAUTH_REDIRECT_URI } from "../../../main/services/mcp-oauth-client-metadata.js";
+import { mcpOAuthBindingForServer, mcpOAuthClientIdentity } from "../../../main/services/mcp-oauth-identity.js";
+import { McpOAuthOperationGate } from "../../../main/services/mcp-oauth-operation.js";
+import { McpOAuthCredentialStorageError } from "../../../main/services/mcp-oauth-session-cache.js";
+import { mcpOAuthSignInState, parseMcpOAuthSession, type McpOAuthSession } from "../../../main/services/mcp-oauth-session.js";
+import {
+  authorizeMcpServerWithRuntime,
+  createBackgroundMcpOAuthProvider,
+  type McpOAuthAuthorizationResult,
+  type McpOAuthRuntime,
+  type McpOAuthSessionStore,
+} from "../../../main/services/mcp-oauth-provider-core.js";
+import type { McpClient } from "@earendil-works/pi-mcp";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { VERSION, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "../../../main/services/types.js";
-import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer, mcpOAuthClientNameForServer } from "../../../main/services/mcp-presets.js";
+import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } from "../../../main/services/mcp-presets.js";
 import { markMcpAgentTool, mcpAgentToolNames } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
@@ -44,7 +50,7 @@ export const storeFor = (dir: string) => {
 export function validateMcpServer(value: unknown): McpServer {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid MCP server.");
   const server = value as McpServer;
-  if (server.authProvider !== undefined) throw new Error("Desktop MCP provider approvals do not apply to the CLI. Configure native MCP auth.provider separately.");
+  if (server.authProvider !== undefined) throw new Error("Desktop MCP provider approvals do not apply to the CLI.");
   // Types first: a non-string id would otherwise stringify past the pattern ("undefined", "123").
   if (typeof server.id !== "string" || !server.id) throw new Error("MCP server needs a string id.");
   // Pi reads a leading + or - in tool lists as an include/exclude modifier.
@@ -62,8 +68,8 @@ export function validateMcpServer(value: unknown): McpServer {
     if (url.username || url.password || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) throw new Error("Remote MCP needs HTTPS (HTTP is permitted on loopback only).");
   } else throw new Error("Unknown MCP transport.");
   for (const fields of [server.env, server.headers]) if (fields !== undefined && (!fields || typeof fields !== "object" || Array.isArray(fields) || Object.values(fields).some((value) => typeof value !== "string"))) throw new Error("MCP env and headers must be string maps.");
-  validateMcpExposureFields(server);
-  if (server.oauthClientId !== undefined || server.oauthClientSecret !== undefined) throw new Error("Pre-registered OAuth clients are not supported by the CLI yet.");
+  // Exposure, the OAuth metadata override, the description and a pre-registered OAuth client: the desktop's rules.
+  validateMcpServerMetadata(server);
   assertMcpPresetServer(server);
   return server;
 }
@@ -73,6 +79,52 @@ export function mcpCredentialId(server: McpServer): string {
     ? `\0${JSON.stringify([server.authServerMetadataUrl, null])}` : "";
   return `mcp-${createHash("sha256").update(`${server.id}\0${server.url}${override}`).digest("hex")}`;
 }
+
+/**
+ * A pre-registered OAuth client secret lives in the encrypted credential store;
+ * aiden-mcp.json keeps only the desktop's opaque marker in its place.
+ */
+function clientSecretCredentialId(marker: string): string {
+  return `mcp-oauth-client-secret-${marker.slice(MCP_FIELD_SECRET_PREFIX.length)}`;
+}
+
+/** The server with its stored client secret in place of the marker, for the OAuth provider only. */
+async function withClientSecret(agentDir: string, server: McpServer): Promise<McpServer> {
+  if (server.oauthClientSecret === undefined) return server;
+  if (!isMcpFieldSecretMarker(server.oauthClientSecret)) {
+    // Only `mcp add` stores a secret; one written into the file by hand (or an
+    // older migrated configuration) is plaintext and is never used.
+    throw new Error(`MCP server ${server.id} has a plaintext oauthClientSecret in aiden-mcp.json. Run aiden mcp add <server.json> to store it encrypted.`);
+  }
+  const secret = await insightCredentials(agentDir).read(clientSecretCredentialId(server.oauthClientSecret!));
+  if (!secret) throw new Error(`The OAuth client secret for MCP server ${server.id} is missing. Add the server again with aiden mcp add.`);
+  return { ...server, oauthClientSecret: secret };
+}
+
+/** The stored OAuth session; an unreadable one reads as the desktop's storage error. */
+/** The desktop's storage error (sign-in recovers from it), with the CLI's remedy. */
+class CliMcpOAuthStorageError extends McpOAuthCredentialStorageError {
+  constructor(serverId: string, cause: unknown) {
+    super({ cause });
+    this.message = `Aiden could not read the saved sign-in for MCP server ${serverId} in credentials/insights.json. Run aiden mcp login ${serverId} again.`;
+  }
+}
+
+function parseStoredOAuthSession(server: McpServer, serialized: string | undefined): McpOAuthSession {
+  if (!serialized) return {};
+  try { return parseMcpOAuthSession(JSON.parse(serialized)); }
+  catch (cause) { throw new CliMcpOAuthStorageError(server.id, cause); }
+}
+
+async function readOAuthSession(agentDir: string, server: McpServer): Promise<McpOAuthSession> {
+  return parseStoredOAuthSession(server, await insightCredentials(agentDir).read(mcpCredentialId(server)));
+}
+
+/** Grant identity: minted per interactive sign-in and kept across refreshes (the registration, for older sessions). */
+function oauthIncarnation(session: McpOAuthSession): string {
+  return session.grantId ?? createHash("sha256").update(JSON.stringify(session.clientInformation ?? null)).digest("hex");
+}
+
 /**
  * Bot capability credential input: the connection's authority (no display
  * name or description; env and headers only as hashes) plus the OAuth sign-in
@@ -83,110 +135,152 @@ export async function mcpCredentialSignature(agentDir: string, server: McpServer
   let oauth: unknown = null;
   if (server.oauth) {
     const serialized = await insightCredentials(agentDir).read(mcpCredentialId(server));
-    const state: OAuthState | undefined = serialized ? JSON.parse(serialized) : undefined;
-    oauth = !state ? "absent" : {
-      signedIn: Boolean(state.tokens),
-      incarnation: state.incarnation ?? createHash("sha256").update(JSON.stringify(state.client ?? null)).digest("hex"),
+    let session: McpOAuthSession | undefined;
+    try { session = serialized ? parseMcpOAuthSession(JSON.parse(serialized)) : undefined; } catch { session = undefined; }
+    oauth = !serialized ? "absent" : !session ? "unreadable" : {
+      signedIn: mcpOAuthSignInState(session, mcpOAuthBindingForServer(server)).authorized,
+      incarnation: oauthIncarnation(session),
     };
   }
   return createHash("sha256").update(JSON.stringify({ connection: mcpAuthorityConnectionSnapshot(server), oauth })).digest("hex");
 }
 
-/** `incarnation` is minted per interactive sign-in and survives token refreshes. */
-interface OAuthState { tokens?: OAuthTokens; client?: OAuthClientInformationMixed; redirectUrl?: string; grantedScope?: string; incarnation?: string; }
-async function oauthProvider(agentDir: string, server: McpServer, interaction?: { redirectUrl: string; flow: McpOAuthAuthorizationFlow; issuerPolicy: SdkIssuerPolicyObserver; notify(url: URL): void }): Promise<OAuthClientProvider> {
-  const credentials = insightCredentials(agentDir);
-  const id = mcpCredentialId(server);
-  const load = async (): Promise<OAuthState> => { const serialized = await credentials.read(id); return serialized ? JSON.parse(serialized) : {}; };
-  let stored = await load();
-  // A retained connection outlives refreshes committed by other sessions: read the
-  // persisted state on every use, and mutate that rather than a construction-time copy.
-  // An interactive sign-in owns its in-memory state until it saves.
-  const current = async () => { if (!interaction) stored = await load(); return stored; };
-  if (interaction) { stored.grantedScope = stored.tokens?.scope || stored.grantedScope; delete stored.client; delete stored.tokens; stored.redirectUrl = interaction.redirectUrl; stored.incarnation = randomUUID(); }
-  const flow = interaction?.flow ?? new McpOAuthAuthorizationFlow();
-  const metadataUrl = mcpOAuthMetadataUrlForServer(server);
-  let verifier: string | undefined;
-  const save = () => credentials.write(id, JSON.stringify(stored));
+/** Values a delegated MCP operation must never echo: header values, OAuth tokens, and client secrets. */
+export async function mcpCredentialSecrets(agentDir: string, server: McpServer): Promise<string[]> {
+  const values: unknown[] = [...Object.values(server.headers ?? {})];
+  if (server.oauth) {
+    const session = await readOAuthSession(agentDir, server).catch(() => ({}) as McpOAuthSession);
+    values.push(...Object.values(session.tokens ?? {}), ...Object.values(session.clientInformation ?? {}));
+    values.push(isMcpFieldSecretMarker(server.oauthClientSecret) ? (await withClientSecret(agentDir, server).catch(() => server)).oauthClientSecret : server.oauthClientSecret);
+  }
+  return values.filter((value): value is string => typeof value === "string" && value.length >= 4 && !isMcpFieldSecretMarker(value));
+}
+
+/** One gate per process: a sign-in supersedes background writers of the same server. */
+const oauthOperations = new McpOAuthOperationGate();
+const SIGN_IN_TIMEOUT_MS = 180_000;
+const noLiveStatus: McpOAuthRuntime["status"] = { clearAuthFailure() {}, authFailure() {}, backgroundSignInRequired() {} };
+
+/**
+ * Where `aiden mcp login` listens for the browser's redirect. A dynamically
+ * registered client is registered afresh on every interactive sign-in with
+ * whatever redirect URI that sign-in uses, so it gets a random free loopback
+ * port. A pre-registered client (and Aiden's Client ID Metadata Document)
+ * names its redirect URI up front, so it uses the desktop's fixed
+ * `http://127.0.0.1:41390/callback`, the URI to register with the provider.
+ */
+export function cliMcpOAuthLoopback(server: McpServer, clientMetadataUrl: string | undefined = AIDEN_MCP_CLIENT_METADATA_URL): McpOAuthRuntime["loopback"] {
+  return mcpOAuthClientIdentity(server).kind === "pre-registered" || clientMetadataUrl !== undefined
+    ? { port: MCP_OAUTH_LOOPBACK_PORT, redirectUri: MCP_OAUTH_REDIRECT_URI, timeoutMs: SIGN_IN_TIMEOUT_MS }
+    : { port: 0, redirectUri: "http://127.0.0.1/callback", timeoutMs: SIGN_IN_TIMEOUT_MS };
+}
+
+function printSignInUrl(url: string): void {
+  process.stderr.write(`Open this URL to sign in:\n${url}\n`);
+}
+
+/** The desktop's provider core over the CLI's encrypted credential store, for one server. */
+function cliOAuthRuntime(agentDir: string, server: McpServer, options: { openBrowser?: (url: string) => void | Promise<void>; loopback?: McpOAuthRuntime["loopback"] } = {}): McpOAuthRuntime {
+  const credentials = insightCredentials(agentDir), id = mcpCredentialId(server);
+  const store: McpOAuthSessionStore = {
+    get: () => readOAuthSession(agentDir, server),
+    set: (_serverId, session, isCurrent) => credentials.write(id, JSON.stringify(session), isCurrent),
+    clear: (_serverId, isCurrent) => credentials.delete(id, isCurrent),
+    // Token saves compare and set under the writer lease: a TUI and `aiden serve` share this file.
+    update: (_serverId, mutate, isCurrent) => credentials.update(id, (serialized) => {
+      const next = mutate(parseStoredOAuthSession(server, serialized));
+      return next && JSON.stringify(next);
+    }, isCurrent),
+  };
   return {
-    redirectUrl: stored.redirectUrl ?? "http://127.0.0.1/callback",
-    clientMetadata: { client_name: mcpOAuthClientNameForServer(server), redirect_uris: [stored.redirectUrl ?? "http://127.0.0.1/callback"], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
-    state: () => flow.state,
-    saveDiscoveryState: (state) => flow.saveDiscovery(interaction ? interaction.issuerPolicy.apply(state) : state),
-    async discoveryState() {
-      if (metadataUrl && !flow.discoveryState()) flow.saveDiscovery(await loadMcpOAuthMetadataOverride(metadataUrl, { serviceUrl: server.url!, serviceHeaders: server.headers }));
-      return flow.discoveryState();
-    },
-    clientInformation: async () => (await current()).client,
-    saveClientInformation: async (client) => { (await current()).client = client; await save(); },
-    tokens: async () => (await current()).tokens,
-    saveTokens: async (tokens) => { await current(); stored.grantedScope = tokens.scope || flow.requestedScope || stored.grantedScope; stored.tokens = tokens; await save(); },
-    redirectToAuthorization(url) { if (!interaction) throw new Error(`Sign in with aiden mcp login ${server.id}.`); interaction.notify(flow.authorizationUrl(url, stored.tokens?.scope || stored.grantedScope)); },
-    saveCodeVerifier(value) { verifier = value; },
-    codeVerifier() { if (!verifier) throw new Error("No active MCP OAuth verifier."); return verifier; },
-    invalidateCredentials: async (scope) => { await current(); if (scope === "all" || scope === "discovery") flow.clearDiscovery(); if (scope === "all" || scope === "tokens") { stored.grantedScope = stored.tokens?.scope || stored.grantedScope; delete stored.tokens; } if (scope === "all" || scope === "client") delete stored.client; await save(); },
+    store,
+    gate: oauthOperations,
+    status: noLiveStatus,
+    openBrowser: async (url) => { await (options.openBrowser ?? printSignInUrl)(url); },
+    // Info and warnings repeat what the caller already returns or throws; errors
+    // (a sign-in that could not be rolled back) have no other channel.
+    log: { info() {}, warn() {}, error: (message, error) => { process.stderr.write(`aiden: MCP sign-in: ${message}${error ? ` (${errorText(error)})` : ""}\n`); } },
+    clientVersion: VERSION,
+    loopback: options.loopback ?? cliMcpOAuthLoopback(server),
+    clientMetadataUrl: AIDEN_MCP_CLIENT_METADATA_URL,
+    publish: (_serverId, operation) => operation(),
   };
 }
 
-export async function mcpLogin(agentDir: string, server: McpServer): Promise<void> {
-  if (!server.oauth || !server.url) throw new Error("This server is not configured for OAuth.");
+/**
+ * `aiden mcp login <id>`: the desktop's attended sign-in (discovery, a
+ * registration, Client ID Metadata Document or pre-registered client, PKCE,
+ * the code exchange and a verifying connection), with the URL printed to stderr.
+ */
+export async function mcpLogin(
+  agentDir: string,
+  server: McpServer,
+  options: { openBrowser?: (url: string) => void | Promise<void>; loopback?: McpOAuthRuntime["loopback"] } = {},
+): Promise<McpOAuthAuthorizationResult> {
   validateMcpServer(server);
-  const flow = new McpOAuthAuthorizationFlow();
-  let finish: (value: string) => void = () => {};
-  let deny: (error: Error) => void = () => {};
-  const code = new Promise<string>((resolve, reject) => { finish = resolve; deny = reject; });
-  void code.catch(() => undefined);
-  const listener = createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method !== "GET" || url.pathname !== "/callback") { response.writeHead(400).end("Invalid OAuth callback."); return; }
-    try {
-      const result = flow.callback(url);
-      if ("error" in result) deny(result.error); else finish(result.code);
-      response.writeHead(200, { "content-type": "text/plain" }).end("Aiden received your sign-in. You can close this tab.");
-    } catch { response.writeHead(400).end("Invalid OAuth callback."); }
-  });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await new Promise<void>((resolve, reject) => { listener.once("error", reject); listener.listen(0, "127.0.0.1", resolve); });
-    const port = (listener.address() as import("node:net").AddressInfo).port;
-    const issuerPolicy = new SdkIssuerPolicyObserver();
-    const provider = await oauthProvider(agentDir, server, { flow, issuerPolicy, redirectUrl: `http://127.0.0.1:${port}/callback`, notify: (url) => process.stderr.write(`Open this URL to sign in:\n${url.href}\n`) });
-    const fetchFn = issuerPolicy.wrap(withSdkOAuthCompat(createMcpFetchPolicy({ serviceUrl: server.url, serviceHeaders: server.headers })));
-    const status = await auth(provider, { serverUrl: server.url, fetchFn });
-    if (status === "REDIRECT") {
-      const authorizationCode = await Promise.race([code, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("MCP login timed out.")), 180_000); })]);
-      await auth(provider, { serverUrl: server.url, authorizationCode, fetchFn });
-    }
-  } finally { if (timer) clearTimeout(timer); listener.closeAllConnections(); await new Promise<void>((resolve) => listener.close(() => resolve())); }
+  if (!server.oauth || !server.url) throw new Error("This server is not configured for OAuth.");
+  return authorizeMcpServerWithRuntime(cliOAuthRuntime(agentDir, server, options), await withClientSecret(agentDir, server));
+}
+
+/** Keep a pre-registered client secret out of aiden-mcp.json. */
+async function storeClientSecret(agentDir: string, server: McpServer, previous: McpServer | undefined): Promise<McpServer> {
+  const secret = server.oauthClientSecret;
+  if (secret === undefined) return server;
+  if (isMcpFieldSecretMarker(secret)) {
+    if (previous?.oauthClientSecret === secret && previous.oauthClientId === server.oauthClientId) return server;
+    throw new Error("Enter the OAuth client secret itself, not a saved marker.");
+  }
+  const marker = `${MCP_FIELD_SECRET_PREFIX}${randomBytes(16).toString("hex")}`;
+  await insightCredentials(agentDir).write(clientSecretCredentialId(marker), secret);
+  return { ...server, oauthClientSecret: marker };
+}
+
+async function deleteClientSecret(agentDir: string, server: McpServer | undefined, keep?: McpServer): Promise<void> {
+  const marker = server?.oauthClientSecret;
+  if (isMcpFieldSecretMarker(marker) && marker !== keep?.oauthClientSecret) await insightCredentials(agentDir).delete(clientSecretCredentialId(marker!));
 }
 
 export async function mcpCommand(agentDir: string, args: string[]) {
   const [action = "list", value] = args, store = storeFor(agentDir);
   if (action === "presets") return MCP_PRESETS;
-  if (action === "list") return (await store.load()).map(({ headers: _headers, env: _env, ...server }) => server);
-  if (action === "login") { const server = (await store.load()).find((item) => item.id === value); if (!server) throw new Error("MCP server not found."); await mcpLogin(agentDir, server); return { signedIn: value }; }
+  if (action === "list") return (await store.load()).map(({ headers: _headers, env: _env, oauthClientSecret, ...server }) => ({ ...server, ...(oauthClientSecret === undefined ? {} : { hasOAuthClientSecret: true }) }));
+  if (action === "login") {
+    const server = (await store.load()).find((item) => item.id === value);
+    if (!server) throw new Error("MCP server not found.");
+    const result = await mcpLogin(agentDir, server);
+    return { signedIn: value, ...(result.connectionError ? { connectionError: result.connectionError } : {}) };
+  }
   if (action === "logout") {
     const server = (await store.load()).find((item) => item.id === value);
     if (!server) throw new Error("MCP server not found.");
+    oauthOperations.invalidate(server.id);
     await insightCredentials(agentDir).delete(mcpCredentialId(server));
     return { signedOut: value };
   }
   if (action === "remove") {
     const removed = await store.update((servers) => { const index = servers.findIndex((server) => server.id === value); if (index < 0) throw new Error("MCP server not found."); return servers.splice(index, 1)[0]!; });
+    oauthOperations.invalidate(removed.id);
     await insightCredentials(agentDir).delete(mcpCredentialId(removed));
+    await deleteClientSecret(agentDir, removed);
     return { removed: value };
   }
   if (action === "add" || action === "preset") {
     if (!value) throw new Error("Provide a server JSON file or preset id.");
     const preset = action === "preset" ? getMcpPreset(value) : undefined;
     if (action === "preset" && !preset) throw new Error("MCP preset not found.");
-    const server = validateMcpServer(preset ? serverFromPreset(preset) : JSON.parse(readFileSync(value, "utf8")));
-    const replaced = await store.update((servers) => { const index = servers.findIndex((item) => item.id === server.id); const previous = index >= 0 ? servers[index] : undefined; if (index >= 0) servers[index] = server; else servers.push(server); return previous; });
+    const parsed = validateMcpServer(preset ? serverFromPreset(preset) : JSON.parse(readFileSync(value, "utf8")));
+    const existing = (await store.load()).find((item) => item.id === parsed.id);
+    const server = await storeClientSecret(agentDir, parsed, existing);
+    let replaced: McpServer | undefined;
+    try {
+      replaced = await store.update((servers) => { const index = servers.findIndex((item) => item.id === server.id); const previous = index >= 0 ? servers[index] : undefined; if (index >= 0) servers[index] = server; else servers.push(server); return previous; });
+    } catch (error) { await deleteClientSecret(agentDir, server, existing); throw error; }
     // A credential is bound to its server's endpoint identity; an edit that moves it orphans the old one.
     if (replaced && mcpCredentialId(replaced) !== mcpCredentialId(server)) await insightCredentials(agentDir).delete(mcpCredentialId(replaced));
+    if (replaced) { oauthOperations.invalidate(replaced.id); await deleteClientSecret(agentDir, replaced, server); }
     return { saved: server.id };
   }
-  throw new Error("Usage: mcp list|presets|add <file>|preset <id>|login <id>|remove <id>");
+  throw new Error("Usage: mcp list|presets|add <file>|preset <id>|login <id>|logout <id>|remove <id>");
 }
 
 /**
@@ -208,8 +302,10 @@ function createCredentialIncarnations(agentDir: string) {
     let value = values.get(id);
     if (value === undefined) {
       const serialized = await insightCredentials(agentDir).read(id);
-      const state: OAuthState | undefined = serialized ? JSON.parse(serialized) : undefined;
-      value = !state ? "absent" : state.incarnation ?? createHash("sha256").update(JSON.stringify(state.client ?? null)).digest("hex");
+      let session: McpOAuthSession | undefined;
+      try { session = serialized ? parseMcpOAuthSession(JSON.parse(serialized)) : undefined; } catch { session = undefined; }
+      value = !serialized ? "absent" : !session ? "unreadable"
+        : `${mcpOAuthSignInState(session, mcpOAuthBindingForServer(server)).authorized ? "signed-in" : "signed-out"}:${oauthIncarnation(session)}`;
       values.set(id, value);
     }
     return value;
@@ -221,36 +317,10 @@ const CLI_MCP_INVENTORY_MAX_BYTES = 1_048_576;
 type McpListedTool = Awaited<ReturnType<typeof listMcpToolPage>>["tools"][number];
 interface McpInventory { tools: McpListedTool[]; guard: ReturnType<typeof createMcpToolCallGuard>; }
 /** `attempt` is the client being connected (closable mid-connect); `client` is set once it is live. */
-interface PoolEntry { key: string; pending: Promise<CliMcpClient>; attempt?: CliMcpClient; client?: CliMcpClient; }
-
-/**
- * The CLI's SDK client in the shape the shared desktop MCP helpers drive
- * (Pi's `McpClient` surface). Phase 3 of the Pi MCP migration replaces it.
- */
-export interface CliMcpClient {
-  request<T = unknown>(method: string, params?: Record<string, unknown>, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<T>;
-  onNotification(method: string, listener: (params: unknown) => void): void;
-  readonly serverCapabilities: ReturnType<Client["getServerCapabilities"]>;
-  close(): Promise<void>;
-}
-
-function cliMcpClient(client: Client): CliMcpClient {
-  return {
-    request: <T>(method: string, params?: Record<string, unknown>, options?: { signal?: AbortSignal; timeoutMs?: number }) =>
-      client.request({ method, ...(params === undefined ? {} : { params }) }, ResultSchema, {
-        ...(options?.signal ? { signal: options.signal } : {}),
-        ...(options?.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, maxTotalTimeout: options.timeoutMs }),
-      }) as Promise<T>,
-    onNotification(method, listener) {
-      if (method !== ToolListChangedNotificationSchema.shape.method.value) throw new Error(`Unsupported MCP notification ${method}.`);
-      client.setNotificationHandler(ToolListChangedNotificationSchema, (notification) => listener(notification.params));
-    },
-    get serverCapabilities() { return client.getServerCapabilities(); },
-    close: () => client.close(),
-  };
-}
+interface PoolEntry { key: string; pending: Promise<McpClient>; attempt?: McpClient; client?: McpClient; }
 
 function errorText(error: unknown): string {
+
   const text = error instanceof Error ? (error.name === "TimeoutError" ? "timed out" : error.message) : String(error);
   return text.replace(/\s+/gu, " ").trim().slice(0, 300) || "unknown error";
 }
@@ -271,7 +341,11 @@ function untilSignal<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
  * Inventories are complete and bounded; a live client reuses its inventory
  * only when the server promises notifications/tools/list_changed.
  */
-export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 * 1024) {
+/**
+ * `child` pools serve delegated (subagent) MCP: responses are bounded to the
+ * subagent transport limit and redirects fail closed.
+ */
+export function createCliMcpPool(agentDir: string, options: { child?: boolean } = {}) {
   const clients = new Map<string, PoolEntry>();
   const inventories = createMcpToolInventoryCache<McpInventory>();
   const incarnation = createCredentialIncarnations(agentDir);
@@ -290,7 +364,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     // Synchronous from here to clients.set: concurrent callers share one attempt.
     const cached = clients.get(server.id);
     if (cached?.key === key) return cached.pending;
-    const entry: PoolEntry = { key, pending: undefined as unknown as Promise<CliMcpClient> };
+    const entry: PoolEntry = { key, pending: undefined as unknown as Promise<McpClient> };
     // Published before the attempt runs, so its synchronous prefix already sees itself as current.
     clients.set(server.id, entry);
     entry.pending = (async () => {
@@ -298,18 +372,29 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
         await (cached.attempt ?? await cached.pending.catch(() => undefined))?.close().catch(() => {});
         if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
       }
-      const sdkClient = new Client({ name: "aiden-cli", version: "0.1.0" });
-      const client = cliMcpClient(sdkClient);
+      // An OAuth server without a stored sign-in is never contacted: no MCP
+      // request, discovery or registration happens until `aiden mcp login`.
+      const resolved = server.oauth ? await withClientSecret(agentDir, server) : server;
+      if (server.oauth && !mcpOAuthSignInState(await readOAuthSession(agentDir, server), mcpOAuthBindingForServer(server)).authorized) {
+        throw new Error(`Sign in with aiden mcp login ${server.id}.`);
+      }
+      // Shutdown or a newer attempt may have landed during the credential reads; start nothing then.
+      if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
+      const client = createMcpClient("aiden-cli", VERSION);
       entry.attempt = client;
       inventories.watch(client);
       try {
-        const options = server.transport === "stdio" ? undefined : { fetch: withSdkOAuthCompat(createBoundedSubagentMcpFetch(createMcpFetchPolicy({ serviceUrl: server.url!, serviceHeaders: server.headers }), maxResponseBytes)), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
-        // Shutdown or a newer attempt may have landed during the credential read; start nothing then.
-        if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
-        const transport = server.transport === "stdio" ? new StdioClientTransport({ command: server.command!, args: server.args, env: { ...getDefaultEnvironment(), ...server.env }, stderr: "pipe" })
-          : new StreamableHTTPClientTransport(new URL(server.url!), options);
-        if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
-        await sdkClient.connect(transport, { timeout: 10_000 });
+        const transport = server.transport === "stdio"
+          ? createMcpStdioTransport({ command: server.command!, args: server.args ?? [], env: server.env ?? {}, stderr: "pipe" })
+          : createMcpRemoteTransport({
+            serviceUrl: server.url!, serviceHeaders: server.headers,
+            ...(options.child ? { fetch: createBoundedSubagentMcpFetch(), maximumBytes: MAX_SUBAGENT_MCP_RAW_RESPONSE_BYTES } : {}),
+            // Stored tokens only: refreshes them, never registers or opens a browser.
+            authProvider: server.oauth ? createBackgroundMcpOAuthProvider(cliOAuthRuntime(agentDir, server), resolved) : undefined,
+            // A server that proved the session gone retires this connection; the next call reconnects.
+            onTerminalFailure: () => { if (clients.get(server.id) === entry) clients.delete(server.id); },
+          });
+        await connectMcpClient(client, transport, { timeoutMs: 10_000 });
         if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
         entry.client = client;
         return client;
@@ -319,7 +404,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     catch (error) { if (clients.get(server.id) === entry) clients.delete(server.id); throw error; }
   }
   /** The complete guarded inventory for the server's current live client. */
-  async function inventory(server: McpServer, signal?: AbortSignal): Promise<McpInventory & { client: CliMcpClient }> {
+  async function inventory(server: McpServer, signal?: AbortSignal): Promise<McpInventory & { client: McpClient }> {
     const client = await connection(server);
     const assertCurrent = () => { if (closed || clients.get(server.id)?.client !== client) throw new Error("MCP connection changed or was closed."); };
     // A shared (cached) read is bounded by the inventory deadline, not one caller's signal.
@@ -376,14 +461,23 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
   } };
 }
 
-export function createMcpExtension(agentDir: string, options: { startupBudgetMs?: number } = {}): InlineExtension {
+/**
+ * Aiden's MCP servers for one session, and its `/mcp` command. Registering
+ * `/mcp` is also what turns Pi's built-in MCP extension off: Pi leaves out a
+ * replaceable built-in whose command another extension registers, so the
+ * native `mcp.json` / `mcp-auth.json` stack never loads and `aiden-mcp.json`
+ * is the CLI's only MCP configuration. `connect: false` registers the command
+ * alone (child sessions).
+ */
+export function createMcpExtension(agentDir: string, options: { startupBudgetMs?: number; connect?: boolean } = {}): InlineExtension {
   return { name: "aiden-mcp", async factory(pi) {
-    const pool = createCliMcpPool(agentDir);
-    pi.on("session_shutdown", () => pool.close());
-    pi.registerCommand("aiden-mcp", { description: "Configure MCP servers and inspect presets (login from a terminal)", handler: async (args, ctx) => {
+    pi.registerCommand("mcp", { description: "Aiden MCP servers: list, presets, add <file>, preset <id>, logout <id>, remove <id> (sign in with aiden mcp login <id> in a terminal)", handler: async (args, ctx) => {
       const parsed = splitArgs(args); if (parsed[0] === "login") throw new Error("Run aiden mcp login <id> in a terminal.");
       ctx.ui.notify(JSON.stringify(await mcpCommand(agentDir, parsed), null, 2), "info");
     } });
+    if (options.connect === false) return;
+    const pool = createCliMcpPool(agentDir);
+    pi.on("session_shutdown", () => pool.close());
     let servers: McpServer[];
     try { servers = (await pool.listServers()).filter((server) => server.enabled && mcpServerOffersTools(server)); }
     catch (error) { process.stderr.write(`aiden: MCP servers unavailable (${errorText(error)}).\n`); return; }
