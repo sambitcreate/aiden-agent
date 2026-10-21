@@ -13,7 +13,11 @@ import {
 import { boundBrowserSnapshot } from "./browser/snapshot-budget.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 
-/** The shared native browser needs an ordinary workspace and a live app document. */
+/**
+ * The shared native browser needs an ordinary workspace and a live app
+ * document. A Bot never gets these workspace tools: durable Bot turns get
+ * their own browser set (`bot-browser-tools.ts`, `profile: "bot"`).
+ */
 export function canUseBrowserTools(input: { permission: string; rendererOwner: boolean; assistantMode: boolean; bot: boolean }): boolean {
   return input.rendererOwner && !input.assistantMode && !input.bot && (input.permission === "full" || input.permission === "ask");
 }
@@ -29,6 +33,14 @@ export const BROWSER_MUTATION_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 const browserToolNames: ReadonlySet<string> = new Set(BROWSER_TOOL_NAMES);
 export const isBrowserToolName = (name: string): boolean => browserToolNames.has(name);
+/**
+ * Never offered to a Bot: a page script can read a field's value directly,
+ * and a recording would show what the person types.
+ */
+export const BROWSER_BOT_OMITTED_TOOLS: ReadonlySet<string> = new Set([
+  "browser_evaluate", "browser_recording_start", "browser_recording_stop",
+]);
+const BOT_LOCAL_FILE_REFUSED = "A Bot's browser opens web pages only, not local files.";
 
 export const BROWSER_AGENT_GUIDANCE =
   "For browser work use Aiden's browser tools, which control the same browser shown in the Environment sidebar. " +
@@ -54,6 +66,8 @@ export interface BrowserToolContext {
   port: BrowserToolPort;
   revalidate?(): Promise<void>;
   selection?: { initialized: boolean; tabId?: string };
+  /** `bot`: a Bot's own browser, without page scripts, recording or local files. */
+  profile?: "workspace" | "bot";
 }
 
 const text = (value: unknown): AgentToolResult<null> => ({
@@ -71,6 +85,7 @@ const locator = {
   selector: Type.Optional(Type.String({ minLength: 1, description: "Legacy CSS selector. Prefer locator." })),
 };
 const url = Type.String({ minLength: 1, maxLength: 2048, description: "HTTP(S) URL or bare host (loopback uses HTTP). Local HTML/PDF: use path, or a file URL; outside-workspace files require approval." });
+const webUrl = Type.String({ minLength: 1, maxLength: 2048, description: "HTTP(S) URL or bare host (loopback uses HTTP)." });
 const localFile = {
   path: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Local HTML/PDF path. Mutually exclusive with url/target. Opens an app-managed preview; never start a separate server." })),
   assetPaths: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 64, description: "Exact dependent local asset paths; undeclared files are blocked. External files require approval." })),
@@ -153,13 +168,17 @@ function status(state: BrowserState, tab: BrowserTab | undefined) {
 /** Each instance holds its own tab selection and serializes calls, including concurrent model calls. */
 export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[] {
   if (!context.workspaceId || !context.chatId || !context.generationId) throw new Error("Browser tools require a generation-bound workspace and chat.");
+  const bot = context.profile === "bot";
+  // A Bot's open and navigate take web URLs only.
+  const files = bot ? {} : localFile;
+  const pageUrl = bot ? webUrl : url;
   const selection = context.selection ?? { initialized: false, tabId: undefined as string | undefined };
   let queue: Promise<unknown> = Promise.resolve();
   let queueRevision = 0;
   const definitions = [
     ["browser_status", "Browser status", "Report the current browser URL, title, visibility, loading and viewport. A closed browser can be initialized with browser_open.", schema({})],
-    ["browser_open", "Open browser", "Open a collaborative browser tab. Defaults to the current tab; reuseExistingTab=false creates another. open=false performs background automation. Navigate separately when readiness waiting matters.", schema({ ...localFile, url: Type.Optional(url), open: Type.Optional(Type.Boolean()), show: Type.Optional(Type.Boolean({ description: "Deprecated alias for open." })), reuseExistingTab: Type.Optional(Type.Boolean()) })],
-    ["browser_navigate", "Navigate browser", "Navigate using exactly one URL or environment-relative dev-server port. Wait for load by default.", schema({ ...localFile, url: Type.Optional(url), target: Type.Optional(Type.Union([Type.Object({ kind: Type.Literal("url"), url }, { additionalProperties: false }), Type.Object({ kind: Type.Literal("environment-port"), port: Type.Integer({ minimum: 1, maximum: 65535 }), protocol: Type.Optional(enumType(["http", "https"])), path: Type.Optional(Type.String()) }, { additionalProperties: false })])), readiness: Type.Optional(enumType(["load", "domContentLoaded", "none"])), ...timeout })],
+    ["browser_open", "Open browser", "Open a collaborative browser tab. Defaults to the current tab; reuseExistingTab=false creates another. open=false performs background automation. Navigate separately when readiness waiting matters.", schema({ ...files, url: Type.Optional(pageUrl), open: Type.Optional(Type.Boolean()), show: Type.Optional(Type.Boolean({ description: "Deprecated alias for open." })), reuseExistingTab: Type.Optional(Type.Boolean()) })],
+    ["browser_navigate", "Navigate browser", "Navigate using exactly one URL or environment-relative dev-server port. Wait for load by default.", schema({ ...files, url: Type.Optional(pageUrl), target: Type.Optional(Type.Union([Type.Object({ kind: Type.Literal("url"), url: pageUrl }, { additionalProperties: false }), Type.Object({ kind: Type.Literal("environment-port"), port: Type.Integer({ minimum: 1, maximum: 65535 }), protocol: Type.Optional(enumType(["http", "https"])), path: Type.Optional(Type.String()) }, { additionalProperties: false })])), readiness: Type.Optional(enumType(["load", "domContentLoaded", "none"])), ...timeout })],
     ["browser_resize", "Resize browser", "Set fill, exact freeform, or device-preset CSS viewport size. Presets do not change the desktop user agent.", schema({ mode: enumType(["fill", "freeform", "preset"]), preset: Type.Optional(enumType(BROWSER_VIEWPORT_PRESETS.map(({ id }) => id))), width: Type.Optional(Type.Integer({ minimum: 240, maximum: 3840 })), height: Type.Optional(Type.Integer({ minimum: 240, maximum: 3840 })), orientation: Type.Optional(enumType(["portrait", "landscape"])), ...timeout })],
     ["browser_set_appearance", "Set browser appearance", "Emulate page prefers-color-scheme without changing the app or OS theme.", schema({ colorScheme: enumType(["system", "light", "dark"]) })],
     ["browser_snapshot", "Inspect browser page", "Inspect page text, semantic elements, accessibility, diagnostics, actions and a PNG screenshot. Call before interacting; includeImage=false gives text-only output.", schema({ includeImage: Type.Optional(Type.Boolean()) })],
@@ -173,7 +192,7 @@ export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[
     ["browser_recording_stop", "Stop browser recording", "Stop the selected tab's recording and return its local evidence artifact.", schema({})],
   ] as const;
 
-  return definitions.map(([name, label, description, parameters]) => {
+  return definitions.filter(([name]) => !bot || !BROWSER_BOT_OMITTED_TOOLS.has(name)).map(([name, label, description, parameters]) => {
     const tool: AgentTool = {
       name, label, description, parameters,
       execute: async (callId, raw, callSignal) => {
@@ -209,6 +228,7 @@ export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[
             return result;
           };
           const file = browserLocalFileRequest(name, args);
+          if (file && bot) throw new Error(BOT_LOCAL_FILE_REFUSED);
           if (file) {
             if (name === "browser_navigate" && !tab) throw new Error("No current browser tab is available. Call browser_open first.");
             if (explicitId && args.reuseExistingTab === false) throw new Error("tabId cannot be combined with reuseExistingTab=false.");

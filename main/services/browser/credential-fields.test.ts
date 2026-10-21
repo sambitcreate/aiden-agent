@@ -12,6 +12,12 @@ import {
   sensitiveFieldIds,
   type CdpDomNode,
 } from "./credential-fields.js";
+import {
+  BROWSER_OPAQUE_TYPING_REFUSED,
+  BROWSER_SENSITIVE_FIELD_SOURCE,
+  BROWSER_SENSITIVE_TYPING_REFUSED,
+  browserTypingGuardSource,
+} from "./credential-boundary.js";
 
 let nextId = 1;
 function element(localName: string, attributes: Record<string, string> = {}, children: CdpDomNode[] = [], extra: Partial<CdpDomNode> = {}): CdpDomNode {
@@ -127,6 +133,44 @@ test("Chromium: boxes match where fields are drawn, hidden ones are skipped, and
     assert.equal(crossSite.opaqueFrames, 1);
     // The cross-site frame's field is not readable from the page's process.
     assert.equal(crossSite.sensitive.length, 4);
+  } finally {
+    await browser?.close();
+    server.close();
+  }
+});
+
+test("Chromium: the in-page typing guard follows focus through shadow roots and frames", { timeout: 30_000 }, async () => {
+  const server = createServer((request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    const port = (server.address() as AddressInfo).port;
+    if (request.url?.startsWith("/card")) return void response.end('<input id="card" autocomplete="billing cc-number"><input id="plain">');
+    if (request.url?.startsWith("/remote")) return void response.end('<input id="remote">');
+    response.end(`<input id="pw" type="password"><input id="name" autocomplete="name"><div id="host"></div>
+      <iframe id="same" src="/card"></iframe><iframe id="cross" src="http://localhost:${port}/remote"></iframe>
+      <script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<input id="otp" autocomplete="one-time-code">';</script>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let browser: Browser | undefined;
+  try {
+    browser = await playwright.chromium.launch({ headless: true, args: ["--site-per-process"], ignoreDefaultArgs: ["--disable-site-isolation-trials"] });
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+    await page.frameLocator("#same").locator("#card").waitFor();
+    await page.frameLocator("#cross").locator("#remote").waitFor();
+    const guard = (element: string) => page.evaluate(`(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource(element)}return "ok";})()`).catch((error: Error) => error.message);
+    await page.focus("#name");
+    assert.equal(await guard("null"), "ok");
+    assert.match(await guard('document.getElementById("pw")'), new RegExp(BROWSER_SENSITIVE_TYPING_REFUSED.slice(0, 30)));
+    await page.focus("#pw");
+    assert.match(await guard("null"), /password, one-time code or card/u);
+    await page.locator("#host").locator("#otp").focus();
+    assert.match(await guard("null"), /password, one-time code or card/u);
+    await page.frameLocator("#same").locator("#card").focus();
+    assert.match(await guard("null"), /password, one-time code or card/u);
+    await page.frameLocator("#same").locator("#plain").focus();
+    assert.equal(await guard("null"), "ok");
+    await page.frameLocator("#cross").locator("#remote").focus();
+    assert.ok((await guard("null")).includes(BROWSER_OPAQUE_TYPING_REFUSED));
   } finally {
     await browser?.close();
     server.close();

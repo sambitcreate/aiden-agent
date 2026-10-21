@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BrowserImage, BrowserSnapshot, BrowserTab } from "../../../renderer/shared/browser.js";
 import {
+  assertBoundarySelector,
   BROWSER_IMAGE_OMITTED,
+  browserKeyInsertsText,
   maskBrowserSnapshotImage,
   scrubBrowserSnapshot,
   type BoundaryViewport,
@@ -181,4 +183,22 @@ test("scrubbing drops a sensitive field's value, value text and rendered text, a
   assert.deepEqual(code.name, { value: "Code" }, "the field keeps its label");
   assert.deepEqual(code.properties?.map(({ name }) => name), ["focused"]);
   assert.deepEqual(scrubbed.elements.map(({ text }) => text), ["Password", "", "Email"]);
+});
+
+test("only keys that put text into a field count as typing", () => {
+  for (const [key, modifiers] of [["a", []], ["7", []], ["Control+v", []], ["v", ["Meta"]], ["V", ["Control"]], ["Insert", ["Shift"]]] as const) {
+    assert.equal(browserKeyInsertsText(key, modifiers), true, `${key} ${modifiers.join("+")}`);
+  }
+  for (const [key, modifiers] of [["Enter", []], ["Tab", []], ["Backspace", []], ["ArrowDown", []], ["a", ["Shift"]], ["Control+a", []], ["c", ["Meta"]], ["Escape", []]] as const) {
+    assert.equal(browserKeyInsertsText(key, modifiers), false, `${key} ${modifiers.join("+")}`);
+  }
+});
+
+test("a Bot can't find a field by what is typed in it", () => {
+  for (const selector of ['input[value^="a"]', "input[ VALUE$='1']", "[*|value]", 'internal:attr=[value="x"]', "xpath=//input[@value='hunter2']", "input[v\\61lue]"]) {
+    assert.throws(() => assertBoundarySelector(selector), /what is typed/u, selector);
+  }
+  for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip"]) {
+    assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
+  }
 });

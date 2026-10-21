@@ -201,3 +201,42 @@ export function scrubBrowserSnapshot(snapshot: BrowserSnapshot, sensitive: Reado
       : { accessibilityTree: scrubAccessibility(snapshot.accessibilityTree, sensitive) }),
   };
 }
+
+export const BROWSER_SENSITIVE_TYPING_REFUSED =
+  "A Bot can't type into a password, one-time code or card field. Hand this step to the person.";
+export const BROWSER_OPAQUE_TYPING_REFUSED =
+  "A Bot can't type into a field inside this frame, because Aiden can't check what kind of field it is. Hand this step to the person.";
+export const BROWSER_VALUE_SELECTOR_REFUSED =
+  "A Bot can't find fields by what is typed in them. Use a role, label or text locator.";
+
+/**
+ * In-page helpers, run in Aiden's isolated world: the same field rule as
+ * `isSensitiveField`, and the element that really has focus (through shadow
+ * roots and same-origin frames). A focused frame Aiden can't enter is opaque.
+ */
+export const BROWSER_SENSITIVE_FIELD_SOURCE = `const __aidenSensitive=(e)=>{if(!e||e.nodeType!==1)return false;const n=String(e.localName||"").toLowerCase();if(n==="input"&&String(e.getAttribute("type")||"").trim().toLowerCase()==="password")return true;const scope=new Set(["shipping","billing","home","work","mobile","fax","pager","webauthn"]);return String(e.getAttribute("autocomplete")||"").toLowerCase().split(/\\s+/).filter(t=>t&&!t.startsWith("section-")&&!scope.has(t)).some(t=>t==="current-password"||t==="new-password"||t==="one-time-code"||t.startsWith("cc-"));};const __aidenFocused=()=>{let e=document.activeElement;for(let i=0;i<32&&e;i+=1){if(e.shadowRoot&&e.shadowRoot.activeElement){e=e.shadowRoot.activeElement;continue;}const n=String(e.localName||"").toLowerCase();if(n==="iframe"||n==="frame"||n==="object"||n==="embed"||n==="fencedframe"){let d=null;try{d=e.contentDocument;}catch{d=null;}if(!d)return{element:e,opaque:true};const inner=d.activeElement;if(!inner||inner===d.body||inner===d.documentElement)return{element:e,opaque:false};e=inner;continue;}break;}return{element:e,opaque:false};};`;
+
+/** A guard (for an isolated-world script) that refuses typing into `element` or whatever has focus. */
+export function browserTypingGuardSource(element: string): string {
+  return `{const __target=${element};const __focus=__aidenFocused();if(__aidenSensitive(__target)||__aidenSensitive(__focus.element))throw new Error(${JSON.stringify(BROWSER_SENSITIVE_TYPING_REFUSED)});if(__focus.opaque)throw new Error(${JSON.stringify(BROWSER_OPAQUE_TYPING_REFUSED)});}`;
+}
+
+/** Attribute tests on `value` (or escapes that could spell one) would let a selector read a field. */
+const VALUE_PROBE = /\[\s*(?:[\w*-]*\|)?value\b|@value\b|\\/iu;
+
+export function assertBoundarySelector(selector: string | undefined): void {
+  if (selector !== undefined && VALUE_PROBE.test(selector)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
+}
+
+/**
+ * Whether a `browser_press` key would put text into the focused field: one
+ * character with no modifier, or a paste chord.
+ */
+export function browserKeyInsertsText(key: string, modifiers: readonly string[] = []): boolean {
+  const parts = key.split("+");
+  const last = parts.pop() ?? "";
+  const names = new Set([...parts, ...modifiers].map((name) => name.toLowerCase()));
+  if (names.size === 0) return [...last].length === 1;
+  const paste = (names.has("control") || names.has("ctrl") || names.has("meta") || names.has("command")) && last.toLowerCase() === "v";
+  return paste || (names.has("shift") && last === "Insert");
+}

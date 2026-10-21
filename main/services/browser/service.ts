@@ -33,6 +33,7 @@ import type {
   BrowserState,
   BrowserTab,
   BrowserLinkOpening,
+  BrowserHoldReason,
 } from "../../../renderer/shared/browser.js";
 import {
   BUILT_IN_BROWSER_PROFILES,
@@ -67,6 +68,20 @@ import { playwrightInjectedSource } from "./playwright-source.generated.js";
 import { browserImportSources, importBrowserCookies } from "./import.js";
 import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReservation, type PreparedBrowserFile } from "./files.js";
 import type { BrowserApprovalTarget } from "./approval.js";
+import { botBrowserPartition, botBrowserProfileId, botIdOfBrowserProfile, isBotBrowserProfileId } from "./bot-profile.js";
+import { botIdForBrowserWorkspace, browserWorkspacesOfBot, forgetBotBrowserWorkspace } from "./bot-workspaces.js";
+import {
+  assertBoundarySelector,
+  BROWSER_IMAGE_MASKED_NOTE,
+  BROWSER_SENSITIVE_FIELD_SOURCE,
+  BROWSER_SENSITIVE_TYPING_REFUSED,
+  browserKeyInsertsText,
+  browserTypingGuardSource,
+  maskBrowserSnapshotImage,
+  scrubBrowserSnapshot,
+  type BoundaryViewport,
+} from "./credential-boundary.js";
+import { sensitiveFieldIds } from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
 import { writeFileAtomic } from "../durable-fs.js";
@@ -80,7 +95,24 @@ type CommandContext = {
   supportsImages?: boolean;
   preparedFile?: PreparedBrowserFile;
   beforeEffect?: () => void;
+  /**
+   * A Bot's own browser port (main only): no page scripts, recording or local
+   * files, masked snapshots and no typing into secret fields.
+   */
+  credentialBoundary?: true;
 };
+/** The person is using a Bot's tab: the Bot can't read or drive it until it is released. */
+export interface BrowserHold {
+  holdId: string;
+  reason: BrowserHoldReason;
+}
+export const BROWSER_HELD_TAB_REFUSED = "The person is using this tab. Wait for them to finish.";
+const BROWSER_BOUNDARY_REFUSED = "A Bot's browser can't run page scripts, record, or open local files.";
+/** Actions a Bot's browser port never runs. */
+const BOUNDARY_REFUSED_ACTIONS: ReadonlySet<string> = new Set([
+  "evaluate", "record_start", "record_stop", "open_file", "annotate", "annotation_preview", "annotation_reset",
+  "annotation_submit", "screenshot", "devtools",
+]);
 interface WorkspaceBrowser {
   state: BrowserState;
   owner?: RendererDocumentOwner;
@@ -127,6 +159,7 @@ interface LiveTab {
   lastCursor?: { x: number; y: number };
   previewNavigation?: BrowserFileReservation;
   initialLoad?: Promise<void>;
+  hold?: BrowserHold;
 }
 
 const ACTIONS_AGENT = new Set([
@@ -293,6 +326,83 @@ export class BrowserService {
     workspace.owner = owner;
     workspace.removeOwner = owner.onInvalidated(() => this.closeForWebContents(owner.id));
   }
+  /** Whether a live application document shows this workspace's browser. */
+  hasOwner(workspaceId: string): boolean {
+    const owner = this.workspaces.get(workspaceId)?.owner;
+    return Boolean(owner && !owner.isDestroyed());
+  }
+  /**
+   * Move a Bot's browser to the application document now showing that Bot,
+   * keeping its tabs. Each tab is hidden until the new document presents it.
+   */
+  transferOwner(workspaceId: string, owner: RendererDocumentOwner): void {
+    if (!botIdForBrowserWorkspace(workspaceId)) throw new Error("Only a Bot's browser can move between windows.");
+    const workspace = this.workspace(workspaceId);
+    if (owner.isDestroyed()) throw new Error("The browser's application document is no longer active.");
+    if (workspace.owner?.documentId === owner.documentId && workspace.owner.id === owner.id) return;
+    workspace.removeOwner?.();
+    workspace.removeOwner = undefined;
+    workspace.owner = undefined;
+    const tabs = [...this.tabs.values()].filter((tab) => tab.state.workspaceId === workspaceId && !tab.closing);
+    for (const tab of tabs) this.detach(tab);
+    this.attachOwner(workspaceId, owner);
+    for (const tab of tabs) this.hide(tab);
+    this.emit(workspaceId);
+  }
+  /**
+   * Hold a Bot's tab for the person (a sign-in or hand-off card, or a
+   * takeover). Whatever the Bot had queued or approved on it stops.
+   */
+  hold(workspaceId: string, tabId: string, hold: BrowserHold): void {
+    if (!botIdForBrowserWorkspace(workspaceId)) throw new Error("Only a Bot's tab can be held for the person.");
+    if (!hold || typeof hold.holdId !== "string" || !hold.holdId || !["sign_in", "handoff", "takeover"].includes(hold.reason))
+      throw new Error("Invalid browser hold.");
+    const tab = this.tab(workspaceId, tabId);
+    tab.hold = { holdId: hold.holdId, reason: hold.reason };
+    tab.state.heldForPerson = { reason: hold.reason };
+    tab.queue.interrupt();
+    this.emit(workspaceId);
+  }
+  /** Release a hold. Anything the Bot had approved before it is stale. Unknown holds are ignored. */
+  release(workspaceId: string, holdId: string): void {
+    for (const tab of this.tabs.values()) {
+      if (tab.state.workspaceId !== workspaceId || tab.hold?.holdId !== holdId) continue;
+      tab.hold = undefined;
+      delete tab.state.heldForPerson;
+      tab.queue.interrupt();
+      this.emit(workspaceId);
+    }
+  }
+  /**
+   * Delete a Bot's browser data: close its tabs (in its managed workspace and
+   * anywhere else its profile is open), then clear the partition's storage,
+   * cache and HTTP auth. Idempotent, and works after a restart with no tabs.
+   */
+  async clearBotProfile(botId: string, managedWorkspaceId: string): Promise<void> {
+    const profileId = botBrowserProfileId(botId);
+    this.deletingProfiles.add(profileId);
+    try {
+      for (const workspaceId of new Set([managedWorkspaceId, ...browserWorkspacesOfBot(botId)]))
+        if (this.workspaces.has(workspaceId)) this.closeForWorkspace(workspaceId);
+      for (const tab of [...this.tabs.values()]) if (tab.state.profileId === profileId) this.close(tab);
+      const partition = botBrowserPartition(botId);
+      const botSession = this.sessions.get(partition) ?? session.fromPartition(partition);
+      await botSession.clearStorageData();
+      await botSession.clearCache();
+      await botSession.clearAuthCache();
+      await botSession.cookies.flushStore();
+      forgetBotBrowserWorkspace(botId);
+    } finally {
+      this.deletingProfiles.delete(profileId);
+    }
+  }
+  /** Close a Bot's tabs and forget its workspace, keeping its sign-ins (the Bot runtime let go of it). */
+  closeBotTabs(botId: string): void {
+    const profileId = botBrowserProfileId(botId);
+    for (const workspaceId of browserWorkspacesOfBot(botId))
+      if (this.workspaces.has(workspaceId)) this.closeForWorkspace(workspaceId);
+    for (const tab of [...this.tabs.values()]) if (tab.state.profileId === profileId) this.close(tab);
+  }
   linkOpening(): BrowserLinkOpening {
     this.load();
     return this.defaults.linkOpening;
@@ -418,11 +528,19 @@ export class BrowserService {
     return profile;
   }
   private browserSession(profileId: string): Session {
-    const profile = this.profile(profileId);
-    const partition = browserPartition(
-      profile.kind === "incognito" ? `${profile.id}:${this.incognitoGeneration}` : profile.id,
-      profile.kind === "incognito",
-    );
+    let partition: string;
+    const botId = botIdOfBrowserProfile(profileId);
+    if (botId !== undefined) {
+      // A Bot's own profile is outside the person's profile list.
+      if (this.deletingProfiles.has(profileId)) throw new Error("This Bot's browser is being deleted.");
+      partition = botBrowserPartition(botId);
+    } else {
+      const profile = this.profile(profileId);
+      partition = browserPartition(
+        profile.kind === "incognito" ? `${profile.id}:${this.incognitoGeneration}` : profile.id,
+        profile.kind === "incognito",
+      );
+    }
     let browserSession = this.sessions.get(partition);
     if (!browserSession) {
       browserSession = session.fromPartition(partition);
@@ -854,6 +972,10 @@ export class BrowserService {
     this.mainWindow(workspaceId);
     if (workspace.state.tabs.length >= BROWSER_MAX_TABS)
       throw new Error(`Close a browser tab before opening more than ${BROWSER_MAX_TABS}.`);
+    // A Bot's tabs always use its own profile; no other workspace may open it.
+    const botId = botIdForBrowserWorkspace(workspaceId);
+    if (botId !== undefined) profileId = botBrowserProfileId(botId);
+    else if (isBotBrowserProfileId(profileId)) throw new Error("This browser profile belongs to a Bot.");
     const normalized = browserUrl(url);
     const browserSession = this.browserSession(profileId);
     const view = new WebContentsView({
@@ -1023,8 +1145,9 @@ export class BrowserService {
       }
       this.emit(tab.state.workspaceId);
     }
+    // A Bot's profile (or one being deleted) is not in the person's list.
     if (
-      this.profile(tab.state.profileId).kind === "incognito" &&
+      this.profiles.find((profile) => profile.id === tab.state.profileId)?.kind === "incognito" &&
       ![...this.tabs.values()].some((t) => t.state.profileId === tab.state.profileId)
     ) {
       const partition = browserPartition(
@@ -1297,6 +1420,7 @@ export class BrowserService {
     signal?: AbortSignal,
     includeAllElements = false,
     preservedSelectors: BrowserStylePreview[] = [],
+    credentialBoundary = false,
   ): Promise<BrowserSnapshot> {
     const generation = ++tab.referenceGeneration;
     const data = await this.evaluate(
@@ -1306,7 +1430,7 @@ export class BrowserService {
       const all=[]; const walk=root=>{ for(const e of root.querySelectorAll("*")){ if((${includeAllElements ? "!e.matches('html,body,script,style,link,meta')" : "e.matches('a[href],button,input,textarea,select,[role],[tabindex]')"})&&visible(e)) all.push(e); if(e.shadowRoot) walk(e.shadowRoot); if(all.length>=200) break; } }; walk(document);
       globalThis.__aidenElements = all.slice(0,200);
       const preserved=${JSON.stringify(preservedSelectors.map(({ ref, selector }) => ({ ref, selector })))}.map(input=>({...input,element:globalThis.__aidenPlaywright.querySelector(globalThis.__aidenPlaywright.parseSelector(input.selector),document,false)}));
-      const elements=globalThis.__aidenElements.map((e,i)=> { const r=e.getBoundingClientRect(); const original=preserved.find(input=>input.element===e);const selector=original?.selector??globalThis.__aidenPlaywright.generateSelectorSimple(e,{}); const attrs={}; for(const name of ['aria-label','placeholder','type','name','href','data-testid']) if(e.hasAttribute(name)) attrs[name]=e.getAttribute(name).slice(0,500); if(${includeAllElements}) {const style=getComputedStyle(e);for(const name of ['font-family','font-size','font-weight','line-height','color','background-color','opacity','border-radius','border-color','border-width','border-style','width','height','padding','margin','gap'])attrs['style:'+name]=style.getPropertyValue(name);} return {ref:original?.ref??${JSON.stringify(String(generation))}+'-'+i,tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||undefined,text:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||'').slice(0,500),selector,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},attributes:attrs}; });
+      const elements=globalThis.__aidenElements.map((e,i)=> { const r=e.getBoundingClientRect(); const original=preserved.find(input=>input.element===e);const selector=original?.selector??globalThis.__aidenPlaywright.generateSelectorSimple(e,{}); const attrs={}; for(const name of ['aria-label','placeholder','type','name','autocomplete','href','data-testid']) if(e.hasAttribute(name)) attrs[name]=e.getAttribute(name).slice(0,500); if(${includeAllElements}) {const style=getComputedStyle(e);for(const name of ['font-family','font-size','font-weight','line-height','color','background-color','opacity','border-radius','border-color','border-width','border-style','width','height','padding','margin','gap'])attrs['style:'+name]=style.getPropertyValue(name);} return {ref:original?.ref??${JSON.stringify(String(generation))}+'-'+i,tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||undefined,text:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||'').slice(0,500),selector,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},attributes:attrs}; });
       return {text:(document.body?.innerText||'').slice(0,20000),elements,width:innerWidth,height:innerHeight};
     })()`,
       signal,
@@ -1326,14 +1450,63 @@ export class BrowserService {
     };
     snapshot.tab.viewport.width = data.width;
     snapshot.tab.viewport.height = data.height;
-    if (includeImage) snapshot.image = await this.capture(tab, false, undefined, signal);
+    let sensitive = new Set<number>();
+    if (includeImage && credentialBoundary) {
+      const masked = await this.maskedCapture(tab, signal);
+      sensitive = new Set(masked.sensitive);
+      if ("image" in masked) {
+        snapshot.image = masked.image;
+        if (masked.masked > 0) snapshot.imageNote = BROWSER_IMAGE_MASKED_NOTE;
+      } else snapshot.imageNote = masked.omitted;
+    } else if (includeImage) snapshot.image = await this.capture(tab, false, undefined, signal);
     const accessibilityTree = await this.send(tab, "Accessibility.getFullAXTree", {}, signal);
     Object.assign(snapshot, {
       accessibilityTree: { nodes: accessibilityTree.nodes?.slice(0, 1_000) },
       networkEntries: clone(tab.network),
       actionTimeline: clone(tab.timeline),
     });
-    return browserRedactPreviewUrls(snapshot);
+    if (!credentialBoundary) return browserRedactPreviewUrls(snapshot);
+    // Fields read after the accessibility tree cover any that appeared during capture.
+    try {
+      for (const id of await sensitiveFieldIds(this.cdpPort(tab, signal))) sensitive.add(id);
+    } finally {
+      await this.send(tab, "DOM.disable", {}, signal).catch(() => {});
+    }
+    return browserRedactPreviewUrls(scrubBrowserSnapshot(snapshot, sensitive));
+  }
+  private cdpPort(tab: LiveTab, signal?: AbortSignal) {
+    return { send: (method: string, params?: Record<string, unknown>) => this.send(tab, method, params ?? {}, signal) };
+  }
+  /** A capture with every password, code and card field painted over, or why there is none. */
+  private async maskedCapture(tab: LiveTab, signal?: AbortSignal) {
+    return maskBrowserSnapshotImage({
+      cdp: this.cdpPort(tab, signal),
+      viewport: async (): Promise<BoundaryViewport> => {
+        const measured = await this.evaluate(
+          tab,
+          "({width:innerWidth,height:innerHeight,scale:globalThis.visualViewport?visualViewport.scale:1,scrollX,scrollY})",
+          signal,
+          true,
+        );
+        return {
+          width: Number(measured?.width), height: Number(measured?.height), scale: Number(measured?.scale),
+          scrollX: Number(measured?.scrollX), scrollY: Number(measured?.scrollY),
+        };
+      },
+      documentRevision: () => `${tab.navigationSequence}:${tab.committedNavigation}`,
+      capture: () => this.capture(tab, false, undefined, signal),
+      decode: (image) => {
+        const decoded = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+        const size = decoded.getSize();
+        return { width: size.width, height: size.height, data: decoded.toBitmap() };
+      },
+      encode: (bitmap) => {
+        const painted = nativeImage.createFromBitmap(Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength), {
+          width: bitmap.width, height: bitmap.height,
+        });
+        return { data: painted.toPNG().toString("base64"), mimeType: "image/png", width: bitmap.width, height: bitmap.height };
+      },
+    });
   }
   private target(
     tab: LiveTab,
@@ -1866,10 +2039,30 @@ export class BrowserService {
     browserAbort(context.signal);
     if (!command || typeof command !== "object" || typeof command.action !== "string")
       throw new Error("Invalid browser command.");
-    if (!(await configStore.getWorkspace(workspaceId)))
+    // A Bot's managed workspace is admitted once main registered it; it is
+    // never one of the person's configured workspaces.
+    const botWorkspace = botIdForBrowserWorkspace(workspaceId) !== undefined;
+    if (!botWorkspace && !(await configStore.getWorkspace(workspaceId)))
       throw new Error("This workspace no longer exists.");
+    if (context.credentialBoundary) {
+      if (!botWorkspace || context.source !== "agent") throw new Error("This browser port belongs to a Bot.");
+      if (BOUNDARY_REFUSED_ACTIONS.has(command.action)) throw new Error(BROWSER_BOUNDARY_REFUSED);
+      const fields = command as { selector?: unknown; locator?: unknown };
+      for (const selector of [fields.selector, fields.locator])
+        if (typeof selector === "string") assertBoundarySelector(selector);
+    } else if (botWorkspace && context.source === "agent") {
+      throw new Error("This browser belongs to a Bot.");
+    }
     browserAbort(context.signal);
-    if (context.owner) this.attachOwner(workspaceId, context.owner);
+    if (context.owner && botWorkspace) {
+      // A Bot's browser follows the window the person uses it from. Another
+      // window's panel layout (a stale hide) never pulls it back.
+      const current = this.workspaces.get(workspaceId)?.owner;
+      const owned = current && !current.isDestroyed();
+      const same = owned && current.id === context.owner.id && current.documentId === context.owner.documentId;
+      if (owned && !same && command.action === "present") return { state: this.getState(workspaceId) };
+      this.transferOwner(workspaceId, context.owner);
+    } else if (context.owner) this.attachOwner(workspaceId, context.owner);
     const workspace = this.workspace(workspaceId);
     this.mainWindow(workspaceId);
     if (context.source === "agent") {
@@ -2043,6 +2236,9 @@ export class BrowserService {
         result.importSources = await browserImportSources();
         break;
       case "import_cookies":
+        // The person's cookies never move into a Bot's browser.
+        if (isBotBrowserProfileId(command.profileId))
+          throw new Error("A Bot's browser keeps its own sign-ins. Sign in from its Browser tab instead.");
         result.importResult = await importBrowserCookies(
           command.sourceId,
           this.browserSession(command.profileId),
@@ -2071,6 +2267,9 @@ export class BrowserService {
         const tab = this.tab(workspaceId, command.tabId);
         const wc = tab.view.webContents;
         result.tabId = tab.state.id;
+        // While the person uses a held tab the agent can't read or drive it,
+        // snapshots included; it may still open and use other tabs.
+        if (context.source === "agent" && tab.hold) throw new Error(BROWSER_HELD_TAB_REFUSED);
         // Panel cleanup can cancel an already inactive picker. Hiding browser
         // chrome must not interrupt automation or invalidate pending approval.
         if (command.action === "annotate" && !command.enabled && !tab.picking) break;
@@ -2217,6 +2416,8 @@ export class BrowserService {
                   command.includeImage !== false && context.supportsImages !== false,
                   signal,
                   context.source === "user" && input.includeAllElements === true,
+                  [],
+                  context.credentialBoundary === true,
                 );
                 break;
               case "click": {
@@ -2286,10 +2487,13 @@ export class BrowserService {
                 }
                 check();
                 const target = this.target(tab, command);
+                // A Bot never types into a secret field, whether named or focused.
+                const guard = context.credentialBoundary ? `${BROWSER_SENSITIVE_FIELD_SOURCE}if(__aidenSensitive(e))throw new Error(${JSON.stringify(BROWSER_SENSITIVE_TYPING_REFUSED)});` : "";
+                const focusedGuard = context.credentialBoundary ? browserTypingGuardSource("e") : "";
                 context.beforeEffect?.();
                 await this.evaluate(
                   tab,
-                  `(()=>{const e=${target};if(!e)throw new Error('Input not found');if(!globalThis.__aidenPlaywright.elementState(e,'editable').matches)throw new Error('Target is not editable or is read-only');e.focus();${command.clear ? "if('select' in e)e.select();else {const range=document.createRange();range.selectNodeContents(e);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}" : ""}})()`,
+                  `(()=>{const e=${target};if(!e)throw new Error('Input not found');${guard}if(!globalThis.__aidenPlaywright.elementState(e,'editable').matches)throw new Error('Target is not editable or is read-only');e.focus();${focusedGuard}${command.clear ? "if('select' in e)e.select();else {const range=document.createRange();range.selectNodeContents(e);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}" : ""}})()`,
                   signal,
                   true,
                 );
@@ -2301,6 +2505,10 @@ export class BrowserService {
                 break;
               }
               case "press":
+                if (context.credentialBoundary && browserKeyInsertsText(text(command.key, "keyboard key", 100), command.modifiers ?? [])) {
+                  await this.evaluate(tab, `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}})()`, signal, true);
+                  check();
+                }
                 await this.press(tab, command.key, command.modifiers, signal, check, context.beforeEffect);
                 break;
               case "scroll": {
