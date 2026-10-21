@@ -51,6 +51,8 @@ export const BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES = Object.freeze({
   provider_mismatch: "This Bot chat's AI connection no longer matches its access settings.",
   capability_changed:
     "This Bot's available capabilities changed. Start again after reviewing access.",
+  model_changed:
+    "This Bot's AI model or its connection changed. Choose the Bot's model again in its settings.",
   managed_home_changed: "This Bot's managed folder changed. Restart Aiden to verify it safely.",
 } as const);
 
@@ -202,6 +204,14 @@ export interface BotRuntimeAuthorityDependencies {
 
 function fail(classification: BotRuntimeAuthorityFailure): never {
   throw new BotRuntimeAuthorityError(classification);
+}
+
+/** Drift of the Bot-owned provider/model gets its own, actionable classification. */
+function bindingDriftClassification(error: unknown): BotRuntimeAuthorityFailure {
+  return error instanceof BotCapabilityBindingDriftError &&
+    error.issues.some(({ group }) => group === "provider" || group === "model")
+    ? "model_changed"
+    : "capability_changed";
 }
 
 function freezeDeep<T>(value: T): T {
@@ -575,7 +585,7 @@ export class BotRuntimeAuthorityResolver {
           error instanceof BotCapabilityBindingDriftError ||
           error instanceof BotCapabilityValidationError
         ) {
-          fail("capability_changed");
+          fail(bindingDriftClassification(error));
         }
         throw error;
       }
@@ -637,8 +647,8 @@ export class BotRuntimeAuthorityResolver {
                 snapshot: currentSnapshot,
                 skillsEnabled,
               });
-            } catch {
-              fail("capability_changed");
+            } catch (error) {
+              fail(bindingDriftClassification(error));
             }
             try {
               lease!.assertCurrent();

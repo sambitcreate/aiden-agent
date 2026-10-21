@@ -36,6 +36,7 @@ import {
   cloneBoundBotCustomSelection,
   parseBoundBotProviderModel,
   parseBoundBotCustomSelection,
+  refreshBoundBotProviderModel,
   type BoundBotProviderModel,
   type BoundBotCustomSelection,
 } from "./bot-capability-bindings.js";
@@ -1672,6 +1673,69 @@ export class BotCapabilityStateEditor {
       chat: cloneChatPolicy(chat),
       ...(effectiveCustom ? { effectiveCustom: cloneBotCustomSelection(effectiveCustom) } : {}),
     };
+  }
+
+  /**
+   * Repair model bindings whose provider connection, model identity,
+   * availability and image capability all still match the current catalog but
+   * whose model fingerprint is stale. Public ids are identity-stable, so the
+   * selection and every chat reduction keep naming the same model; only the
+   * private fingerprints move. Authority is unchanged, so the policy epoch is
+   * kept and no lease is fenced. Returns false when nothing needed repair.
+   */
+  refreshStaleModelBindings(input: {
+    botId: string;
+    snapshot: BotCapabilityCatalogSnapshot;
+  }): boolean {
+    const policy = this.policy(input.botId);
+    const primary = storedBotModelAuthority(policy);
+    const refreshedPrimary = primary
+      ? refreshBoundBotProviderModel(primary.binding, input.snapshot)
+      : undefined;
+    const refreshedVision = policy.visionModel
+      ? refreshBoundBotProviderModel(policy.visionModel.binding, input.snapshot)
+      : undefined;
+    if (!refreshedPrimary && !refreshedVision) return false;
+    const refreshed = (
+      authority: StoredBotModelAuthority,
+      binding: BoundBotProviderModel | undefined,
+    ): StoredBotModelAuthority =>
+      binding
+        ? { selection: { ...authority.selection }, binding: cloneBoundBotProviderModel(binding) }
+        : cloneStoredBotModelAuthority(authority);
+    const common: StoredBotPolicyBase = {
+      botId: policy.botId,
+      authorityStatus: policy.authorityStatus,
+      accessMode: undefined as never,
+      catalogRevision: policy.catalogRevision,
+      policyEpoch: policy.policyEpoch,
+      ...this.issueRevision("policy"),
+      createdAt: policy.createdAt,
+      updatedAt: Math.max(policy.updatedAt, this.timestamp()),
+      ...(policy.visionModel
+        ? { visionModel: refreshed(policy.visionModel, refreshedVision) }
+        : {}),
+    } as StoredBotPolicyBase;
+    this.state.policies[this.state.policies.indexOf(policy)] =
+      policy.accessMode === "custom"
+        ? {
+            ...common,
+            accessMode: "custom",
+            custom: cloneBotCustomSelection(policy.custom),
+            binding: {
+              ...cloneBoundBotCustomSelection(policy.binding),
+              ...(refreshedPrimary
+                ? { provider: cloneBoundBotProviderModel(refreshedPrimary) }
+                : {}),
+            },
+          }
+        : {
+            ...common,
+            accessMode: "full",
+            webSearchEnabled: policy.webSearchEnabled === true,
+            ...(policy.model ? { model: refreshed(policy.model, refreshedPrimary) } : {}),
+          };
+    return true;
   }
 
   /** Fail closed on exact binding/catalog drift before the resolver assembles tools. */

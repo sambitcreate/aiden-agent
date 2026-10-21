@@ -20,8 +20,10 @@ import {
 } from "./bot-capability-store-core.js";
 import {
   bindBotCustomSelection,
+  assertBoundBotProviderModelCurrent,
   BotCapabilityBindingDriftError,
   createBotCapabilityOpaqueIdMint,
+  withBotCapabilityTombstones,
 } from "./bot-capability-bindings.js";
 import {
   buildBotCapabilityCatalogSnapshot,
@@ -976,4 +978,164 @@ test("create compensation refuses committed identity and cannot remove another B
   await assert.rejects(store.getBotPolicy("bot:first"), BotCapabilityUnavailableError);
   assert.equal((await store.getBotPolicy("bot:second")).botId, "bot:second");
   await assert.rejects(store.getChatPolicy("chat:first"), BotCapabilityUnavailableError);
+});
+
+/**
+ * The same catalog as `inventory()` except for the first model's fingerprint,
+ * as a Bot bound before descriptive metadata stopped feeding that fingerprint.
+ */
+function staleModelSnapshot() {
+  const stale = inventory();
+  stale.providers[0]!.models[0]!.modelFingerprint = digest("model-with-old-context-window");
+  return snapshotFor(stale);
+}
+
+function firstModelSelection(source: ReturnType<typeof snapshotFor>): BotCustomSelection {
+  const provider = source.resources.providers[0]!;
+  return {
+    providerId: provider.option.id,
+    modelId: provider.models.find(({ sourceId }) => sourceId === "private-model")!.option.id,
+    fileScopeIds: [source.catalog.fileScopes.find(({ kind }) => kind === "bot_home")!.id],
+    shellEnabled: false,
+    connectionIds: [],
+    skillIds: [],
+    otherCapabilityIds: [],
+  };
+}
+
+async function createStaleFullBot(store: ReturnType<typeof storeAt>["store"], botId: string) {
+  const stale = staleModelSnapshot();
+  const chosen = firstModelSelection(stale);
+  const view = await store.createBotPolicy({
+    botId,
+    catalog: stale.catalog,
+    access: {
+      accessMode: "full",
+      catalogRevision: stale.catalog.revision,
+      confirmedForeground: true,
+      providerId: chosen.providerId,
+      modelId: chosen.modelId,
+    },
+    modelBinding: bindBotCustomSelection({
+      selection: chosen,
+      catalogRevision: stale.catalog.revision,
+      snapshot: stale,
+    }).provider,
+  });
+  return { stale, chosen, view };
+}
+
+test("a stale model fingerprint is repaired at admission without widening or fencing authority", async (t) => {
+  const root = await temporaryRoot(t);
+  const first = storeAt(root);
+  await first.store.initialize();
+  await first.store.acknowledgeNotice("device:a", acknowledgement());
+  const { stale, chosen, view } = await createStaleFullBot(first.store, "bot:chief");
+  const reduced = await first.store.createChatPolicy({
+    chatId: "chat:reduced",
+    botId: "bot:chief",
+    expectedBotPolicyRevision: view.revision,
+    catalog: stale.catalog,
+    custom: chosen,
+  });
+  // Public ids are identity-stable; only the private model fingerprint moved.
+  const current = firstModelSelection(snapshot);
+  assert.deepEqual(current, chosen);
+  assert.throws(
+    () => assertBoundBotProviderModelCurrent(
+      bindBotCustomSelection({ selection: chosen, catalogRevision: stale.catalog.revision, snapshot: stale }).provider,
+      snapshot,
+    ),
+    BotCapabilityBindingDriftError,
+  );
+
+  const admission = await first.store.admit({
+    audienceId: "device:a",
+    botId: "bot:chief",
+    chatId: reduced.chatId,
+    snapshot,
+  });
+  admission.lease.assertCurrent();
+  assert.equal(`epoch:${admission.policy.policyEpoch}`, view.policyEpoch);
+  assert.equal(admission.modelAuthority?.binding.sourceModelId, "private-model");
+  assert.equal(admission.effectiveCustom?.modelId, current.modelId);
+  admission.lease.release();
+
+  const restarted = storeAt(root);
+  await restarted.store.initialize();
+  assert.deepEqual((await restarted.store.getBotModelAuthority("bot:chief"))?.selection, {
+    providerId: current.providerId,
+    modelId: current.modelId,
+  });
+  const chatAfter = await restarted.store.getChatPolicy(reduced.chatId);
+  if (chatAfter.mode !== "custom") assert.fail("expected the Custom chat reduction to survive");
+  assert.equal(chatAfter.custom.modelId, current.modelId);
+  const again = await restarted.store.admit({
+    audienceId: "device:a",
+    botId: "bot:chief",
+    chatId: reduced.chatId,
+    snapshot,
+  });
+  again.lease.release();
+});
+
+test("model binding repair never covers a changed connection, image capability, or missing model", async (t) => {
+  const root = await temporaryRoot(t);
+  const { store } = storeAt(root);
+  await store.initialize();
+  await store.acknowledgeNotice("device:a", acknowledgement());
+  const { chosen } = await createStaleFullBot(store, "bot:chief");
+
+  const reconnected = inventory();
+  reconnected.providers[0]!.connectionFingerprint = digest("provider-other-account");
+  const lostImages = inventory();
+  lostImages.providers[0]!.models[0]!.supportsImages = true;
+  const removed = inventory();
+  removed.providers[0]!.models.shift();
+  for (const source of [reconnected, lostImages, removed]) {
+    await assert.rejects(
+      store.admit({ audienceId: "device:a", botId: "bot:chief", snapshot: snapshotFor(source) }),
+      BotCapabilityBindingDriftError,
+    );
+  }
+  assert.deepEqual((await store.getBotModelAuthority("bot:chief"))?.selection, {
+    providerId: chosen.providerId,
+    modelId: chosen.modelId,
+  });
+});
+
+test("a Custom Bot's stale model fingerprint is repaired under its retained public ids", async (t) => {
+  const root = await temporaryRoot(t);
+  const { store } = storeAt(root);
+  await store.initialize();
+  await store.acknowledgeNotice("device:a", acknowledgement());
+  const stale = staleModelSnapshot();
+  const custom = firstModelSelection(stale);
+  const staleBinding = bindBotCustomSelection({
+    selection: custom,
+    catalogRevision: stale.catalog.revision,
+    snapshot: stale,
+  });
+  await store.createBotPolicy({
+    botId: "bot:custom",
+    catalog: stale.catalog,
+    access: { accessMode: "custom", catalogRevision: stale.catalog.revision, custom },
+    binding: staleBinding,
+  });
+  // Production runtime snapshots retain the Bot's binding as tombstones.
+  const runtimeSnapshot = withBotCapabilityTombstones(snapshot, [staleBinding]);
+
+  const admission = await store.admit({
+    audienceId: "device:a",
+    botId: "bot:custom",
+    snapshot: runtimeSnapshot,
+  });
+  admission.lease.release();
+  const repaired = await store.getBotBinding("bot:custom");
+  assert.equal(repaired?.provider.modelOption.id, custom.modelId);
+  assert.equal(
+    repaired?.provider.modelExactFingerprint,
+    snapshot.resources.providers[0]!.models.find(({ sourceId }) => sourceId === "private-model")!
+      .exactFingerprint,
+  );
 });

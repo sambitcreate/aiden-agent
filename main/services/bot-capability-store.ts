@@ -44,6 +44,7 @@ import {
   boundBotProviderModelFingerprint,
   parseBoundBotProviderModel,
   parseBoundBotCustomSelection,
+  refreshBoundBotProviderModel,
   type BoundBotCustomSelection,
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
@@ -589,8 +590,17 @@ export class BotCapabilityStore {
   }): Promise<BotCapabilityAdmission> {
     this.requireInitialized();
     return this.serialized(async () => {
-      const state = await this.persistence.load();
-      const editor = this.editor(state);
+      let state = await this.persistence.load();
+      let editor = this.editor(state);
+      editor.assertBotMayAct(input);
+      if (input.snapshot && this.hasStaleModelBinding(editor, input.botId, input.snapshot)) {
+        const snapshot = input.snapshot;
+        await this.persistence.update((draft) =>
+          this.editor(draft).refreshStaleModelBindings({ botId: input.botId, snapshot }),
+        );
+        state = await this.persistence.load();
+        editor = this.editor(state);
+      }
       const authority = editor.assertBotMayAct(input);
       const modelAuthority = editor.getBotModelAuthority(input.botId);
       const visionModelAuthority = editor.getBotVisionModelAuthority(input.botId);
@@ -625,6 +635,18 @@ export class BotCapabilityStore {
         lease,
       };
     });
+  }
+
+  private hasStaleModelBinding(
+    editor: BotCapabilityStateEditor,
+    botId: string,
+    snapshot: BotCapabilityCatalogSnapshot,
+  ): boolean {
+    return [editor.getBotModelAuthority(botId), editor.getBotVisionModelAuthority(botId)].some(
+      (authority) =>
+        authority !== undefined &&
+        refreshBoundBotProviderModel(authority.binding, snapshot) !== undefined,
+    );
   }
 
   /** Delete/global/inventory owners use this immediate process fence. */

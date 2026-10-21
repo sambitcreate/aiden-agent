@@ -5,7 +5,9 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { BotCustomSelection } from "../../renderer/shared/bot-capabilities.js";
 import {
   bindBotCustomSelection,
+  BotCapabilityBindingDriftError,
   withBotCapabilityTombstones,
+  type BotCapabilityDriftGroup,
   type BoundBotCustomSelection,
 } from "./bot-capability-bindings.js";
 import {
@@ -367,6 +369,7 @@ function fixture(input: {
   let homeRevalidations = 0;
   let policyReadHook: (() => Promise<void>) | undefined;
   let admissionError: Error | undefined;
+  let revalidationError: Error | undefined;
   let snapshotHook: (() => void) | undefined;
   const lease: BotCapabilityAuthorityLease = {
     audienceId: "device-a",
@@ -429,7 +432,10 @@ function fixture(input: {
             : { mode: "custom" as const, custom: currentChatPolicy.custom }),
         };
       },
-      async assertAuthorityBindingsCurrent() { return undefined; },
+      async assertAuthorityBindingsCurrent() {
+        if (revalidationError) throw revalidationError;
+        return undefined;
+      },
     },
     catalog: {
       async snapshotForRuntime(input) {
@@ -463,6 +469,12 @@ function fixture(input: {
     },
     setPolicyReadHook(value: () => Promise<void>) { policyReadHook = value; },
     requireNotice() { admissionError = new BotCapabilityNoticeRequiredError(); },
+    driftAtAdmission(group: BotCapabilityDriftGroup) {
+      admissionError = new BotCapabilityBindingDriftError([{ group, reason: "changed_or_removed" }]);
+    },
+    driftBeforeEffect(group: BotCapabilityDriftGroup) {
+      revalidationError = new BotCapabilityBindingDriftError([{ group, reason: "changed_or_removed" }]);
+    },
     invalidateInventory() { inventoryLeases.invalidate("settings"); },
     setSnapshotHook(value: () => void) { snapshotHook = value; },
     get activeInventoryLeases() { return inventoryLeases.activeCount(); },
@@ -761,6 +773,34 @@ test("Custom binding drift fails closed before an authority can be assembled", a
     app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
     "capability_changed",
   );
+});
+
+test("a changed Bot model or AI connection asks for the model to be chosen again", async () => {
+  for (const group of ["model", "provider"] as const) {
+    const app = fixture();
+    app.driftAtAdmission(group);
+    await expectFailure(
+      app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
+      "model_changed",
+    );
+  }
+  const app = fixture();
+  app.driftAtAdmission("skill");
+  await expectFailure(
+    app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
+    "capability_changed",
+  );
+});
+
+test("model drift found before an effect keeps its specific classification", async () => {
+  const app = fixture();
+  const admitted = await app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
+  app.driftBeforeEffect("model");
+  await expectFailure(admitted.revalidateBeforeEffect(), "model_changed");
 });
 
 test("active narrowing and archive fail closed before the next effect", async () => {
