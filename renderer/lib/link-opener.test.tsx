@@ -333,3 +333,36 @@ test("chat links to local files: HTML previews in Aiden, other files and folders
   assert.deepEqual(opened, ["thermostat/style.css", "thermostat"]);
   assert.equal(sent(calls).length, 1);
 });
+
+test("right-click on a chat file link offers the Aiden browser, the system browser, Files and Copy path", async () => {
+  const calls = ipc("ask", { "browser:open-file-external": () => undefined });
+  const opened: string[] = [];
+  render(
+    <LinkOpenerProvider workspaceId="ws-1" workspaceFolder="/Users/me/prompt-lab" onOpenWorkspaceFile={(path) => opened.push(path)}>
+      <Surface />
+      <a href="file:///Users/me/prompt-lab/thermostat/index.html">index.html</a>
+      <a href="thermostat/style.css">style.css</a>
+    </LinkOpenerProvider>,
+  );
+  await flush();
+
+  fireEvent.contextMenu(screen.getByText("index.html"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Open in system browser" }));
+  await flush();
+  fireEvent.contextMenu(screen.getByText("index.html"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Open in Aiden browser" }));
+  await flush();
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:open-file-external", args: ["ws-1", "thermostat/index.html"] },
+    { channel: "browser:command", args: ["ws-1", { action: "open_file", path: "/Users/me/prompt-lab/thermostat/index.html" }] },
+  ]);
+
+  // Non-HTML files open in Files; the system browser is offered only for documents it can show.
+  fireEvent.contextMenu(screen.getByText("style.css"));
+  await screen.findByRole("menuitem", { name: "Copy path" });
+  assert.equal(screen.queryByRole("menuitem", { name: "Open in system browser" }), null);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open in Files" }));
+  await flush();
+  assert.deepEqual(opened, ["thermostat/style.css"]);
+  assert.equal(sent(calls).length, 2);
+});

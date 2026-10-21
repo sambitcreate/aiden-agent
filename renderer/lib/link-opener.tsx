@@ -21,7 +21,30 @@ interface LinkOpener {
 }
 
 const NO_MODIFIERS = { metaKey: false, ctrlKey: false };
+type FileRoute = Extract<LinkRoute, { kind: "file" }>;
+const copy = (text: string, done: string, failed: string) =>
+  void navigator.clipboard.writeText(text).then(
+    () => toast.success(done),
+    () => toast.error(failed),
+  );
 const message = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
+
+function previewFile(target: string, path: string): void {
+  void browserApi.command(target, { action: "open_file", path }).catch((error: unknown) =>
+    toast.error(message(error, "Couldn't open this file.")),
+  );
+}
+
+/** A workspace HTML or PDF file handed to the system's default browser or app. */
+function openFileExternally(route: FileRoute, target: string): void {
+  if (route.workspacePath === null) {
+    toast.error("Aiden can only open files inside this workspace.");
+    return;
+  }
+  void browserApi.openFileExternal(target, route.workspacePath).catch((error: unknown) =>
+    toast.error(message(error, "Couldn't open this file.")),
+  );
+}
 
 function openExternal(url: string): void {
   void browserApi.openExternal(url).catch((error: unknown) => toast.error(message(error, "Couldn't open this link.")));
@@ -87,7 +110,10 @@ export function useBrowserSurfaceBlocker(active: boolean): void {
 }
 
 type Pending = { url: string; workspaceId: string | null; remember: boolean; inApp: boolean };
-type Menu = { url: string; x: number; y: number; web: boolean; workspaceId: string | null };
+type Menu = { x: number; y: number; workspaceId: string | null } & (
+  | { kind: "link"; url: string; web: boolean }
+  | { kind: "file"; route: FileRoute }
+);
 
 export function LinkOpenerProvider({
   workspaceId,
@@ -157,6 +183,12 @@ export function LinkOpenerProvider({
     });
   }, []);
 
+  const openInFiles = React.useCallback((route: FileRoute, target: string) => {
+    if (route.workspacePath === null || target !== state.current.workspaceId)
+      toast.error("Aiden can only open files inside this workspace.");
+    else state.current.onOpenWorkspaceFile?.(route.workspacePath);
+  }, []);
+
   const perform = React.useCallback(
     (route: LinkRoute, target: string | null) => {
       if (route.kind === "external") openExternal(route.url);
@@ -165,16 +197,11 @@ export function LinkOpenerProvider({
       else if (route.kind === "browser" && target) openInBrowser(target, route.url);
       else if (route.kind === "file" && target) {
         // HTML and PDF preview in the Aiden browser; other files and folders open in Files.
-        if (route.preview)
-          void browserApi.command(target, { action: "open_file", path: route.path }).catch((error: unknown) =>
-            toast.error(message(error, "Couldn't open this file.")),
-          );
-        else if (route.workspacePath === null || target !== state.current.workspaceId)
-          toast.error("Aiden can only open files inside this workspace.");
-        else state.current.onOpenWorkspaceFile?.(route.workspacePath);
+        if (route.preview) previewFile(target, route.path);
+        else openInFiles(route, target);
       }
     },
-    [openInBrowser],
+    [openInBrowser, openInFiles],
   );
 
   const route = React.useCallback((href: string, options: OpenLinkOptions = {}) => {
@@ -238,10 +265,15 @@ export function LinkOpenerProvider({
       const href = anchor.getAttribute("href") ?? "";
       const forceExternal = anchor.dataset.linkTarget === "external";
       const { resolved, target } = route(href, { forceExternal });
-      if (!resolved || resolved.kind === "file") return;
+      if (!resolved) return;
       event.preventDefault();
       lastAnchor.current = anchor;
+      if (resolved.kind === "file") {
+        setMenu({ kind: "file", route: resolved, x: event.clientX, y: event.clientY, workspaceId: target });
+        return;
+      }
       setMenu({
+        kind: "link",
         url: resolved.url,
         x: event.clientX,
         y: event.clientY,
@@ -321,26 +353,45 @@ export function LinkOpenerProvider({
           <span aria-hidden="true" style={{ position: "fixed", left: menu?.x ?? 0, top: menu?.y ?? 0, width: 0, height: 0 }} />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          {menu?.web ? (
-            <DropdownMenuItem
-              disabled={!menu.workspaceId}
-              onSelect={() => menu.workspaceId && openInBrowser(menu.workspaceId, menu.url)}
-            >
-              Open in Aiden browser
-            </DropdownMenuItem>
+          {menu?.kind === "file" ? (
+            <>
+              {menu.route.preview ? (
+                <DropdownMenuItem onSelect={() => menu.workspaceId && previewFile(menu.workspaceId, menu.route.path)}>
+                  Open in Aiden browser
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onSelect={() => menu.workspaceId && openInFiles(menu.route, menu.workspaceId)}>
+                  Open in Files
+                </DropdownMenuItem>
+              )}
+              {menu.route.preview ? (
+                <DropdownMenuItem
+                  disabled={menu.route.workspacePath === null}
+                  onSelect={() => menu.workspaceId && openFileExternally(menu.route, menu.workspaceId)}
+                >
+                  {/\.pdf$/i.test(menu.route.path) ? "Open in default app" : "Open in system browser"}
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onSelect={() => copy(menu.route.path, "Path copied.", "Couldn't copy the path.")}>
+                Copy path
+              </DropdownMenuItem>
+            </>
+          ) : menu ? (
+            <>
+              {menu.web ? (
+                <DropdownMenuItem
+                  disabled={!menu.workspaceId}
+                  onSelect={() => menu.workspaceId && openInBrowser(menu.workspaceId, menu.url)}
+                >
+                  Open in Aiden browser
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onSelect={() => openExternal(menu.url)}>Open in system browser</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => copy(menu.url, "Link copied.", "Couldn't copy the link.")}>
+                Copy link
+              </DropdownMenuItem>
+            </>
           ) : null}
-          <DropdownMenuItem onSelect={() => menu && openExternal(menu.url)}>Open in system browser</DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() =>
-              menu &&
-              void navigator.clipboard.writeText(menu.url).then(
-                () => toast.success("Link copied."),
-                () => toast.error("Couldn't copy the link."),
-              )
-            }
-          >
-            Copy link
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </LinkOpenerContext.Provider>
