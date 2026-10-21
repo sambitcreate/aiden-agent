@@ -10,7 +10,9 @@
 //   rather than opening another.
 // - The tab is held for the person (`sign_in` or `handoff`) under the card's
 //   `waitId`: the Bot can't read or drive it until the card settles or is
-//   withdrawn, which releases it.
+//   withdrawn, which releases it. A card asked again under its `waitId` is
+//   the same card and keeps its tab. A tab two waiting cards opened (both
+//   pages the same) stays held until neither waits.
 // - The window whose Open was pressed shows it; without one (an Open from a
 //   phone), the window already showing the Bot's browser, else the focused or
 //   most recent main window. With no window at all it opens nothing.
@@ -65,42 +67,74 @@ interface HeldTab {
   tabId: string;
 }
 
+/** The tabs one waiting card opened. */
+interface CardTabs {
+  botId: string;
+  waitId: string;
+  hold: "handoff" | "sign_in";
+  tabs: HeldTab[];
+}
+
 function heldKey(botId: string, waitId: string): string {
   return `${botId}\u0000${waitId}`;
 }
 
 export function createBotBrowserHandoffOpener(deps: BotBrowserHandoffDeps): BotBrowserHandoffOpener {
   /** The tabs each waiting card holds. */
-  const held = new Map<string, HeldTab[]>();
+  const held = new Map<string, CardTabs>();
+
+  /** Another waiting card of `botId` that opened `tab` too. */
+  const otherHolder = (botId: string, waitId: string, tab: HeldTab): CardTabs | undefined =>
+    [...held.values()].find(
+      (card) =>
+        card.botId === botId &&
+        card.waitId !== waitId &&
+        card.tabs.some((each) => each.workspaceId === tab.workspaceId && each.tabId === tab.tabId),
+    );
 
   const release = (botId: string, waitId: string): void => {
     const key = heldKey(botId, waitId);
-    const tabs = held.get(key);
-    if (tabs === undefined) return;
+    const card = held.get(key);
+    if (card === undefined) return;
     held.delete(key);
+    // The browser keeps one hold per tab: a tab another waiting card opened
+    // passes to that card, so the release below leaves it held.
+    const handedOver = card.tabs.flatMap((tab) => {
+      const next = otherHolder(botId, waitId, tab);
+      return next === undefined ? [] : [{ tab, next }];
+    });
     void deps
       .service()
       .then((service) => {
-        for (const workspaceId of new Set(tabs.map((tab) => tab.workspaceId))) service.release(workspaceId, waitId);
+        for (const { tab, next } of handedOver) service.hold(tab.workspaceId, tab.tabId, { holdId: next.waitId, reason: next.hold });
+        for (const workspaceId of new Set(card.tabs.map((tab) => tab.workspaceId))) service.release(workspaceId, waitId);
       })
       .catch((error: unknown) => deps.onReleaseError?.(error));
   };
 
-  // A settled or withdrawn card gives its tabs back to the Bot.
-  deps.handoffs.onSettled((prompt) => release(prompt.botId, prompt.waitId));
+  // A settled or withdrawn card gives its tabs back to the Bot. One asked
+  // again under the same `waitId` (its stale invocation withdrawn) is the
+  // same card and keeps them: `request` registers it right after withdrawing
+  // the old one, so it waits again by the time this runs.
+  deps.handoffs.onSettled((prompt) => {
+    queueMicrotask(() => {
+      if (deps.handoffs.get(prompt.botId, prompt.waitId) === undefined) release(prompt.botId, prompt.waitId);
+    });
+  });
 
   /** The tab this card already opened in `workspaceId`, brought forward; `undefined` when the person closed it. */
   async function reopen(service: BotBrowserHandoffService, key: string, workspaceId: string): Promise<string | undefined> {
-    for (const tab of held.get(key) ?? []) {
+    for (const tab of held.get(key)?.tabs ?? []) {
       if (tab.workspaceId !== workspaceId) continue;
       try {
         await service.command(workspaceId, { action: "select", tabId: tab.tabId }, { source: "user" });
         return tab.tabId;
       } catch {
         // Closed since: forget it, and open the page again below.
-        const rest = (held.get(key) ?? []).filter((each) => each !== tab);
-        if (rest.length > 0) held.set(key, rest);
-        else held.delete(key);
+        const card = held.get(key);
+        if (card === undefined) continue;
+        card.tabs = card.tabs.filter((each) => each !== tab);
+        if (card.tabs.length === 0) held.delete(key);
       }
     }
     return undefined;
@@ -124,8 +158,8 @@ export function createBotBrowserHandoffOpener(deps: BotBrowserHandoffDeps): BotB
     }
     if (tabId === undefined) return false;
     service.hold(workspaceId, tabId, { holdId: waitId, reason: hold });
-    const tabs = (held.get(key) ?? []).filter((tab) => !(tab.workspaceId === workspaceId && tab.tabId === tabId));
-    held.set(key, [...tabs, { workspaceId, tabId }]);
+    const tabs = (held.get(key)?.tabs ?? []).filter((tab) => !(tab.workspaceId === workspaceId && tab.tabId === tabId));
+    held.set(key, { botId, waitId, hold, tabs: [...tabs, { workspaceId, tabId }] });
     // The card may have settled while the tab opened: nothing would release it then.
     if (deps.handoffs.get(botId, waitId) === undefined) release(botId, waitId);
     return true;
