@@ -76,3 +76,46 @@ test("the real clone dialog waits for folder approval and sends only explicit en
   } finally { cleanup(); client.clear(); }
   }
 });
+
+test("Stop or unmount during folder selection never starts a later clone", async () => {
+  for (const cancel of ["stop", "unmount"] as const) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const host: PeerHostView = { id: "studio", name: "Studio", enabled: true, state: "connected", features: ["workspace-clone-v1"], capabilities: ["workspace:manage", "workspace:browse"] };
+    const status: PeerHostStatus = { hostId: host.id, generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false };
+    client.setQueryData(hostQueryKeys.list(), [host]); client.setQueryData(hostQueryKeys.statuses(), [status]);
+    let selectionStarted = false;
+    let releaseSelection!: (value: unknown) => void;
+    let cloneCalls = 0;
+    let cancelCalls = 0;
+    let created = 0;
+    const selection = new Promise(resolve => { releaseSelection = resolve; });
+    installBotTestIpc({
+      "settings:get": () => null, "shortcut:get": () => null, "app:renderer-ready": () => null,
+      "remote:peerHostStatuses": () => [status], "workspaces:peerClonePreview": () => source,
+      "workspaces:peerCloneCancel": () => { cancelCalls++; return false; },
+      "workspaces:peerClone": () => { cloneCalls++; return { ok: true, value: { id: "cloned", name: "Widget" } }; },
+      "remote:peerCall": (_host: unknown, raw: unknown) => {
+        const operation = (raw as { operation: string }).operation;
+        if (operation === "roots") return { ok: true, value: { roots: [{ id: "root", label: "Projects", location: "loc_root" }] } };
+        if (operation === "children") return { ok: true, value: { rootId: "root", label: "Projects", breadcrumbs: [{ label: "Projects", location: "loc_root" }], entries: [] } };
+        if (operation === "selectFolder") { selectionStarted = true; return selection; }
+        throw new Error("Unexpected operation");
+      },
+    });
+    const mounted = render(<QueryClientProvider client={client}><TooltipProvider><CommandSystemProvider><PeerProjectCloneDialog workspaceId="local" onClose={() => {}} onCreated={() => { created++; }} /></CommandSystemProvider></TooltipProvider></QueryClientProvider>);
+    try {
+      await waitFor(() => { assert.equal(screen.getByRole("button", { name: "Projects" }).textContent?.includes("Projects"), true); });
+      fireEvent.click(screen.getByRole("button", { name: "Projects" }));
+      await waitFor(() => { assert.equal((screen.getByRole("button", { name: "Clone project" }) as HTMLButtonElement).disabled, false); });
+      fireEvent.click(screen.getByRole("button", { name: "Clone project" }));
+      await waitFor(() => assert.equal(selectionStarted, true));
+      if (cancel === "stop") fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      else mounted.unmount();
+      await act(async () => { releaseSelection({ ok: true, value: { selection: `sel_${"a".repeat(43)}`, displayName: "Projects" } }); });
+      assert.equal(cancelCalls, 1);
+      assert.equal(cloneCalls, 0, cancel);
+      assert.equal(created, 0);
+      if (cancel === "stop") assert.match(screen.getByRole("alert").textContent ?? "", /transfer stopped/);
+    } finally { cleanup(); client.clear(); }
+  }
+});

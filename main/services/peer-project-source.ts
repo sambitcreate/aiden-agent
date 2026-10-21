@@ -1,4 +1,4 @@
-import { capturePeerProjectRoot, readPeerProjectFile } from "./peer-project-file-io.js";
+import { capturePeerProjectRoot, assertPeerProjectRoot, readPeerProjectFile } from "./peer-project-file-io.js";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -27,11 +27,14 @@ export function createPeerProjectSource(options: { getWorkspace(id: string): Pro
   const inspect = async (id: string) => {
     const workspace = await options.getWorkspace(id);
     if (!workspace?.folderPath) throw new Error("Choose a project with a repository folder.");
-    const folder = await fs.realpath(workspace.folderPath);
+    const root = await capturePeerProjectRoot(workspace.folderPath);
+    const folder = root.path;
     let remote: string | undefined;
     try {
       if (await fs.realpath((await command(folder, ["rev-parse", "--show-toplevel"])).trim()) !== folder) throw new Error("nested");
+      await assertPeerProjectRoot(root);
       remote = primaryRemoteUrl(await command(folder, ["remote", "-v"]));
+      await assertPeerProjectRoot(root);
     } catch { throw new Error("Choose a project at its Git repository root."); }
     const parsed = parseCloneUrl(remote);
     if (!parsed.ok) throw new Error("This project needs a credential-free HTTPS or SSH Git remote.");
@@ -39,21 +42,24 @@ export function createPeerProjectSource(options: { getWorkspace(id: string): Pro
     for (const name of (await fs.readdir(folder)).filter(isPeerProjectEnvironmentFile).sort()) {
       const stat = await fs.lstat(path.join(folder, name));
       if (!stat.isFile() || stat.nlink !== 1 || stat.size > PEER_PROJECT_FILE_MAX_BYTES) continue;
-      try { await command(folder, ["check-ignore", "-q", "--", name]); } catch { continue; }
+      try { await command(folder, ["check-ignore", "-q", "--", name]); }
+      catch { await assertPeerProjectRoot(root); continue; }
+      await assertPeerProjectRoot(root);
       if (files.length < PEER_PROJECT_FILES_MAX_COUNT) files.push({ name, bytes: stat.size });
     }
-    return { folder, source: { name: workspace.name, url: parsed.url, repositoryName: parsed.repoName, files } };
+    await assertPeerProjectRoot(root);
+    return { root, folder, source: { name: workspace.name, url: parsed.url, repositoryName: parsed.repoName, files } };
   };
   return {
     async preview(id: string): Promise<PeerProjectSource> { return (await inspect(id)).source; },
     async read(id: string, selected: unknown): Promise<{ source: PeerProjectSource; files: PeerProjectFile[] }> {
       if (!Array.isArray(selected) || selected.length > PEER_PROJECT_FILES_MAX_COUNT || selected.some(name => !isPeerProjectEnvironmentFile(name)) || new Set(selected).size !== selected.length) throw new Error("Choose valid environment files to copy.");
-      const { folder, source } = await inspect(id);
+      const { root, folder, source } = await inspect(id);
       if (selected.some(name => !source.files.some(file => file.name === name))) throw new Error("The environment file list changed. Open the transfer again.");
-      const root = await capturePeerProjectRoot(folder);
       const files: PeerProjectFile[] = [];
       let total = 0;
       for (const name of selected as string[]) {
+        await assertPeerProjectRoot(root);
         const stat = await fs.lstat(path.join(folder, name), { bigint: true });
         if (!stat.isFile() || stat.nlink !== 1n || stat.size > BigInt(PEER_PROJECT_FILE_MAX_BYTES)) throw new Error("An environment file changed or is too large.");
         const buffer = await readPeerProjectFile(root, name, { device: String(stat.dev), inode: String(stat.ino) });
@@ -63,6 +69,7 @@ export function createPeerProjectSource(options: { getWorkspace(id: string): Pro
         if (content.includes("\0")) throw new Error("Only UTF-8 environment text files can be copied.");
         files.push({ name, content });
       }
+      await assertPeerProjectRoot(root);
       return { source, files };
     },
   };

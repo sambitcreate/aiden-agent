@@ -1,4 +1,5 @@
-import { capturePeerProjectRoot, createPeerProjectFile } from "./peer-project-file-io.js";
+import type { ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
+import { capturePeerProjectRoot, assertPeerProjectRoot, createPeerProjectFile } from "./peer-project-file-io.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { parsePeerProjectClone, PEER_PROJECT_CLONE_TIMEOUT_MS, type PeerProjectCloneRequest } from "../../renderer/shared/peer-project-clone.js";
@@ -337,11 +338,15 @@ export class AidenRemoteWorkspaceService {
             try {
               const remote = parseCloneUrl(parsed.url);
               if (!remote.ok) throw new AidenRemoteServiceError("invalid_request", "The repository remote is invalid.", 400);
-              const repository = await this.options.clone({ url: remote.url, destination: path.join(selection.canonicalPath, remote.repoName) }, {
+              const destination = path.join(selection.canonicalPath, remote.repoName);
+              let child: ManagedWorktreeRootIdentity | undefined;
+              const repository = await this.options.clone({ url: remote.url, destination }, {
                 cloneId: randomUUID(), signal: controller.signal, onProgress: () => undefined,
                 beforePublish: async staged => {
-                  await current();
                   const root = await capturePeerProjectRoot(staged);
+                  child = { ...root, path: destination };
+                  await current();
+                  await assertPeerProjectRoot(root);
                   for (const file of parsed.files) {
                     controller.signal.throwIfAborted();
                     await createPeerProjectFile(root, file.name, file.content, controller.signal);
@@ -349,6 +354,13 @@ export class AidenRemoteWorkspaceService {
                   await current();
                 },
                 beforeRegister: async () => { await current(); },
+                registration: {
+                  assertCurrent: async identity => {
+                    await current();
+                    if (!child || identity.canonicalPath !== child.path || identity.filesystemDevice !== child.device || identity.filesystemInode !== child.inode) throw new Error("The cloned project folder changed before registration.");
+                    await assertPeerProjectRoot(child);
+                  },
+                },
               });
               if (!repository.ok) throw new AidenRemoteServiceError("invalid_request", repository.code === "cancelled" ? "Project clone was stopped. Check the host project list before trying again." : repository.code === "register-failed" ? "The repository was cloned, but it could not be registered. Check the destination computer before retrying." : repository.reason, 400);
               workspace = repository.workspace;

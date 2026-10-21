@@ -7,7 +7,20 @@ import {
 } from "./managed-worktree-file-io.js";
 import { isPeerProjectEnvironmentFile, PEER_PROJECT_FILE_MAX_BYTES } from "../../renderer/shared/peer-project-clone.js";
 
-export { captureManagedWorktreeRootIdentity as capturePeerProjectRoot };
+/** The caller admits one real directory. Later checks must keep this exact identity. */
+export async function capturePeerProjectRoot(value: string): Promise<ManagedWorktreeRootIdentity> {
+  const expected = process.platform === "darwin"
+    ? path.resolve(value).replace(/^\/(tmp|var|etc)(?=\/|$)/u, "/private/$1")
+    : path.resolve(value);
+  const root = await captureManagedWorktreeRootIdentity(expected);
+  if (root.path !== expected) throw new Error("The project folder changed or is a link.");
+  return root;
+}
+
+export async function assertPeerProjectRoot(root: ManagedWorktreeRootIdentity): Promise<void> {
+  const current = await capturePeerProjectRoot(root.path);
+  if (current.device !== root.device || current.inode !== root.inode) throw new Error("The project folder changed.");
+}
 
 /** Linux has procfs descriptor paths; macOS uses the packaged openat helper. */
 async function pinnedLinuxRoot(root: ManagedWorktreeRootIdentity): Promise<fs.FileHandle> {

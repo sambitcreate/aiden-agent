@@ -54,3 +54,29 @@ test("cloning requires the repository root and a credential-free remote", async 
   workspace.folderPath = path.join(folder, "nested");
   await assert.rejects(source.preview("workspace"), /repository root/);
 });
+
+
+for (const replacement of ["symlink", "directory"] as const) {
+  test(`source admission rejects a ${replacement} root replacement after Git eligibility checks`, async t => {
+    const { folder, workspace } = await fixture(t);
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-outside-source-")));
+    t.after(async () => { await fs.rm(`${folder}-moved`, { recursive: true, force: true }); await fs.rm(outside, { recursive: true, force: true }); });
+    await fs.writeFile(path.join(folder, ".env"), "APPROVED=1");
+    await fs.writeFile(path.join(outside, ".env"), "OTHER=private");
+    let swapped = false;
+    const source = createPeerProjectSource({ getWorkspace: async () => workspace, git: async (cwd, args) => {
+      const result = git(cwd, ...args);
+      if (!swapped && args[0] === "check-ignore") {
+        swapped = true;
+        await fs.rename(folder, `${folder}-moved`);
+        if (replacement === "symlink") await fs.symlink(outside, folder);
+        else await fs.rename(outside, folder);
+      }
+      return result;
+    } });
+    await assert.rejects(source.read("workspace", [".env"]), /folder changed/);
+    assert.equal(swapped, true);
+    assert.equal(await fs.readFile(path.join(folder, ".env"), "utf8"), "OTHER=private");
+    assert.equal(await fs.readFile(path.join(`${folder}-moved`, ".env"), "utf8"), "APPROVED=1");
+  });
+}

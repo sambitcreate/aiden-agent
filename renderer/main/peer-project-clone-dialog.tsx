@@ -41,7 +41,15 @@ export function PeerProjectCloneDialog({ workspaceId, onClose, onCreated }: Peer
     return () => { next.dispose(); };
   // The selected host's identity owns every folder handle.
   }, [host?.id]);
-  React.useEffect(() => () => { if (request.current) void workspacesApi.cancelPeerClone(request.current); }, []);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      stopRequested.current = true;
+      if (request.current) void workspacesApi.cancelPeerClone(request.current);
+    };
+  }, []);
   const bound = adapter?.hostId === host?.id && Boolean(host);
   const roots = useQuery({ queryKey: ["peer-project-clone-roots", host?.id], queryFn: async () => { await adapter!.ready(); return hostResultValue(await adapter!.roots()); }, enabled: bound });
   const location = place?.location.location;
@@ -60,17 +68,26 @@ export function PeerProjectCloneDialog({ workspaceId, onClose, onCreated }: Peer
     stopRequested.current = false;
     try {
       const selection = await adapter.selectFolder(place.location.location);
+      if (!mounted.current || request.current !== cloneId || stopRequested.current) {
+        if (mounted.current) setError("Project transfer stopped.");
+        return;
+      }
       const result = await workspacesApi.peerClone({ cloneId, hostId: host.id, workspaceId, selection: selection.selection, files: [...selected] });
       if (!result.ok) throw new Error(result.error.code === "outcome_unknown" ? "The connection changed before the clone was confirmed. Check the paired computer's project list before trying again." : result.error.message);
       const workspace = result.value as { id: string; name: string };
+      if (!mounted.current || request.current !== cloneId) return;
       if (stopRequested.current) {
         setError(`The project finished before cancellation. It is available in the ${host.name} sidebar.`);
       } else {
         onCreated(host.id, workspace);
         onClose();
       }
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "The project could not be cloned."); }
-    finally { request.current = null; setBusy(false); }
+    } catch (failure) {
+      if (mounted.current && request.current === cloneId) setError(failure instanceof Error ? failure.message : "The project could not be cloned.");
+    } finally {
+      if (request.current === cloneId) request.current = null;
+      if (mounted.current) setBusy(false);
+    }
   };
   return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }} title="Add project to another machine" description="Clone the repository on a paired computer. That computer uses its own Git credentials. Local edits and unpushed commits stay here." confirmLabel={busy ? "Cloning project…" : "Clone project"} confirmDisabled={busy || !source.data || !host || !place || total > PEER_PROJECT_FILES_MAX_BYTES} busy={busy} onConfirm={submit} size="large">
     <div className="flex flex-col gap-4">
