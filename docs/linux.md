@@ -131,8 +131,9 @@ unlock or configure the keyring and restart Aiden to restore Bot access.
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with
-Apple silicon, so on Linux the Settings → Bot computers page and the Bot
-profile's Computer section do not appear, and no Lume code runs. Global dictation remains available when the desktop can register its
+Apple silicon, so on Linux the Settings → Bot computers page, the Bot
+profile's Computer section, the Bot panel's Computer tab and the onboarding
+tour's Bot computers tile do not appear, and no Lume code runs. Global dictation remains available when the desktop can register its
 shortcut, but the transcript is copied to the clipboard instead of using the
 macOS Accessibility auto-paste transaction. To use hold-to-dictate, choose Hold
 in Settings → Voice and assign a shortcut in your desktop’s Global Shortcuts
