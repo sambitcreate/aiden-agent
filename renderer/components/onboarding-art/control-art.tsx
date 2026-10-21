@@ -209,15 +209,6 @@ export function BotsArt() {
   );
 }
 
-const SCHEDULED_TASKS = [
-  { name: "58%", cadence: "Every day at 9:00 AM", on: true },
-  { name: "46%", cadence: "Weekdays at 5:00 PM", on: false },
-  { name: "64%", cadence: "Every hour", on: true },
-  { name: "52%", cadence: "Every 30 minutes", on: true },
-  { name: "40%", cadence: "Every Monday at 10:00 AM", on: false },
-] as const;
-
-/** The scheduled-tasks list with one task open on its access and actions. */
 /**
  * A Bot's Computer tab: the status line and Take over above its own macOS
  * screen, with the Bot's avatar resting where it last clicked.
@@ -264,6 +255,15 @@ export function BotComputersArt() {
   );
 }
 
+const SCHEDULED_TASKS = [
+  { name: "58%", cadence: "Every day at 9:00 AM", on: true },
+  { name: "46%", cadence: "Weekdays at 5:00 PM", on: false },
+  { name: "64%", cadence: "Every hour", on: true },
+  { name: "52%", cadence: "Every 30 minutes", on: true },
+  { name: "40%", cadence: "Every Monday at 10:00 AM", on: false },
+] as const;
+
+/** The scheduled-tasks list with one task open on its access and actions. */
 export function ScheduledAutomationsArt() {
   const [first, ...rest] = SCHEDULED_TASKS;
   return (
