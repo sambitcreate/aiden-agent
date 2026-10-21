@@ -16,8 +16,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - Input: `BotClassifiableAction` for one of four surfaces.
   - `computer_use`: built from the Computer Use approval descriptor in `bot-computer-use-approval.ts`. It never carries typed text or a field value.
   - `browser`: fed by `bot-runtime/bot-browser-approval.ts` (P6) from an isolated-world probe of the targeted element; see `.memory/bot-browser.md`. `browserSendKey` makes Enter (Control/Command-Enter on mail hosts) on an editable message composer or a messaging host `communicate`; search boxes, Shift-Enter and unknown boxes are not.
-  - `computer`: fed by `bot-runtime/bot-computer-approval.ts` (P10, VNC lane): `{surface:"computer", action, intent}` only (no app, window title or element in that lane). `key` chords that do more than type a character become action `press`, so their intent reads like a click's (Return to send = communicate); printable chords and `type` stay typing (locked classes only). Typed text never reaches it. The call's `summary` (the intent) is what a rule-made card quotes (`BotLiveApproval.summary`, used when there is no baseline approval). Corpus rows `co-vnc-*` carry only the intent.
-  - `mcp`: `describeMcpAction`, for granted mutating tools only.
+  - `computer`: fed by `bot-runtime/bot-computer-approval.ts` (P10, VNC lane): `{surface:"computer", action, intent}` only (no app, window title or element in that lane). `key` chords that do more than edit text at the caret become action `press`, so their intent reads like a click's (Return to send = communicate); printable chords, plain Backspace/Delete (no modifier but Shift; `botComputerChordEditsText`) and `type` stay typing (locked classes only), so "Delete the extra letter" is not the delete rule (2026-10-21, H1). On the guest driver lane those keys also keep the focused field. Typed text never reaches it. The call's `summary` (the intent) is what a rule-made card quotes (`BotLiveApproval.summary`, used when there is no baseline approval). Corpus rows `co-vnc-*` carry only the intent.
+  - `mcp`: `describeMcpAction`, for granted mutating tools only. Read-only tools (server `readOnlyHint: true` without `destructiveHint: true`) are not classified, custom rules included. `destructiveHint: false` ("additive") drops the delete class from the name verbs, title and description, so a server that lies avoids the delete rule; the locked classes still read the name and summary, and custom rules still match. Documented in `docs/bot-rules.md`.
 - Strong signals:
   - credentials: a secure text role on the element or the focused field; `secureFieldInCapture` while typing; `type=password`; autocomplete `current-password`, `new-password` or `one-time-code`.
   - money: `cc-*` autocomplete, or a payment host (form action, or the URL while typing).
@@ -33,7 +33,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - Oracle: `fixtures/actions.json` (158 rows, 14 of them P6's browser send-key rows; password, one-time-code and card rows on all four surfaces). The test reports precision and recall per class. Locked classes must have zero misses and precision ≥ 0.9; the others need ≥ 0.85.
 
 ## Store (`store.ts`, singleton `store-main.ts`)
-- File: `<userData>/bots/<dir>/rules.json`, `{version:1, revision, behaviors, custom}`, parsed strictly. A missing or invalid file reads as the defaults at revision 0. An unreadable file throws, and enforcement then fails closed with "This Bot's rules couldn't be read…".
+- File: `<userData>/bots/<dir>/rules.json`, `{version:1, revision, behaviors, custom}`, parsed strictly. A missing file reads as the defaults at revision 0.
+- Fail closed (2026-10-21, H1): a file that doesn't parse exactly makes `rules()` throw `BotRulesUnreadableError`, so enforcement refuses every classifiable call with "This Bot's rules couldn't be read…" (the defaults can be looser than what the person set). `get()` returns the defaults with `unreadable: true` (optional field on `BotRulesView`, desktop IPC only); the editor shows a red alert ("<Bot>’s saved rules couldn’t be read, so <Bot> won’t take any step its rules check. Change a rule below to start again from these defaults."), and `update(…, 0, change)` applies to the defaults and replaces the file. The prompt still gets the defaults (`promptRules`). A file that can't be read at all (EISDIR, EACCES) throws from every method, as before.
 - `update(botId, revision, change)`:
   - Serialized per Bot. It writes only for a Bot the Bot store knows (`knownBot` uses `!= null`).
   - `writeJsonAtomic` with mode 0600 and a `beforePublish` re-check.
@@ -61,7 +62,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - Memos must be JSON values:
   - The approval memo always writes `kind` and `rule` (null when no rule made it).
   - Memos written before rules have neither field and read as approvals: only `kind === "handoff"` changes the summary.
-- Live projection: the last `aiden.handoff-result` entry for a toolCallId becomes the `handoff_result` row (`handoff:<toolCallId>`), placed after that call's tool result.
+- Live projection: the last `aiden.handoff-result` entry for a call becomes the `handoff_result` row (`handoff:<toolCallId>`, or `handoff:<toolCallId>:<entry id>` when a provider reused the id in a later turn), placed after that call's tool result.
 
 ## Prompt
 - `renderBotRulesSection(name, rules)` adds a `<bot_rules>` block to the `aiden-authority` section (index 2 of `systemSections`).
@@ -86,6 +87,9 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - `npm run test:bot-rules`: the services tests in the runtime-subagents lane; handler, editor and shared tests in renderer-other.
 - Rule cases extend `bot-tool-assembly.test.ts`, `bot-extension.test.ts`, `computer-use-tool.test.ts`, `bot-delete.test.ts`, `live-projection.test.ts`, `bot-memory.test.ts`, `bot-profile.test.tsx` and `onboarding-bots-step.test.tsx`.
 - Testing Library gotcha: never `assert.equal(domNode, null)` inside `waitFor`. Node's assert builds a Myers diff of the inspected node, which blocks the event loop for minutes. Use `assert.ok(!query…)`.
+
+## Docs
+- `docs/bot-rules.md` (2026-10-21, H1): the rules, what they check and don't, MCP annotations taken at their word, rule hand-off cards, the file and its fail-closed read.
 
 ## Not yet
 - Phones show no rules. A read-only list needs a Bot-detail field (Remote revision 37+).
