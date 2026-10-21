@@ -138,6 +138,7 @@ function harness(options: { bots?: string[] } = {}) {
     store,
     service: scheduler,
     botExists: async (botId) => bots.has(botId),
+    isPaused: async (botId) => (await session.state(botId)).kind === "paused",
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
@@ -450,6 +451,27 @@ test("Run now starts one run of the Bot's own routine and refuses another Bot's"
   );
   const [run] = await h.store.runs(routine.id);
   assert.deepEqual([run?.id, run?.result], [runId, "success"]);
+});
+
+test("Run now on a paused Bot is refused, and records no skip for the next unpause to report", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Daily digest",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Digest.",
+  });
+  h.session.states.set("bot-chef", { kind: "paused", since: 1_000, by: "mac" });
+  await assert.rejects(h.routines.runNow({ botId: "bot-chef", routineId: routine.id }), /paused\. Resume it/u);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(await h.store.runs(routine.id), [], "nothing ran and nothing was recorded");
+  assert.deepEqual(h.session.sends, []);
+  assert.deepEqual(await countSkippedWhilePaused(h.store, "bot-chef", 0), []);
+
+  h.session.states.delete("bot-chef");
+  const { runId } = await h.routines.runNow({ botId: "bot-chef", routineId: routine.id });
+  await waitForRun(h, routine.id, runId);
+  assert.equal(h.session.sends.length, 1, "once resumed, Run now runs it");
 });
 
 async function waitForRun(h: ReturnType<typeof harness>, taskId: string, runId: string) {

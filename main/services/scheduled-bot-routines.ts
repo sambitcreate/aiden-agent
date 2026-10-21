@@ -471,6 +471,8 @@ export interface BotRoutineServiceDependencies {
     runNow(id: string, options?: { runId?: string; expectedUpdatedAt?: number }): Promise<ScheduledRun>;
   };
   botExists(botId: string): Promise<boolean>;
+  /** Whether the person paused the Bot; throws when that can't be read, so Run now refuses. */
+  isPaused?(botId: string): Promise<boolean>;
   defaultTimezone(): string;
   notifyChanged(payload: { botId: string; routineId: string; removed?: boolean }): void;
   /** A routine was deleted: forget what belonged to it alone (its notes). */
@@ -626,11 +628,13 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
     /**
      * Start one manual run of the Bot's own routine and return its run id at
      * once. The run itself reports like any routine run (its turn, notifications
-     * and run record); it is skipped while the Bot is paused.
+     * and run record). A paused Bot refuses it: the person's own Run now is
+     * never recorded as a fire the pause skipped.
      */
     async runNow(input: BotRoutineRunNowInput): Promise<{ runId: string }> {
       await requireBot(input.botId);
       const existing = await owned(input.botId, input.routineId);
+      if (await dependencies.isPaused?.(input.botId)) throw new Error("This Bot is paused. Resume it to continue.");
       // Checked here: the scheduler checks it only once the run is under way,
       // after this call has already answered with a run id.
       if (input.expectedUpdatedAt !== undefined && existing.updatedAt !== input.expectedUpdatedAt) {
