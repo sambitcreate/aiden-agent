@@ -39,7 +39,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §4.1 (package P1: the h
   - `bots:answerHandoff({botId, waitId, outcome, note?})` returns `{answered}` and throws "That answer doesn’t match the card." on an invalid answer.
   - `bots:openHandoff({botId, waitId})` returns `{opened}`. It requires `rendererDocumentOwner`, and the handler is generic over the event type.
   - The pure open table is in `bot-handoff-open.ts`:
-    - From the Mac: a link opens in the Bot's browser (once P6 adds the `botBrowser` opener), else in the system browser.
+    - From the Mac: a link opens in the Bot's browser (P6's `botBrowser` opener, only for a Bot with the Browser capability), held for the person until the card settles, else in the system browser.
     - From a phone: the Bot's chat comes forward.
     - A sign-in opens only in the Bot's own browser or computer, never the system browser.
 - Chat (`bot-chat-pane.tsx`, `renderer/components/bots/handoff-card.tsx`):
