@@ -48,7 +48,7 @@ import {
 } from "./computer-schema.js";
 import {
   BotComputerKeyError,
-  botComputerChordIsPrintable,
+  botComputerChordEditsText,
   botComputerChordStrokes,
   botComputerModifierKeysyms,
   botComputerTextStrokes,
@@ -545,12 +545,12 @@ export function createBotComputerTool(
           return `${verb} ${botComputerElementLine(index, element)}.${noop ? " Nothing seemed to change; capture to check." : ""}`;
         };
 
-        /** A screen action ends the element numbers; focus stays only while the Bot types into it. */
+        /** A screen action ends the element numbers; focus stays only while the Bot types into it or erases what it typed. */
         const settleDriverFacts = (screenAction: BotComputerAction, keys: string | undefined) => {
           const facts = deps.state.driverFacts(botId);
           if (!facts) return;
           const keepsFocus =
-            screenAction === "type" || screenAction === "scroll" || (screenAction === "key" && keys !== undefined && botComputerChordIsPrintable(keys));
+            screenAction === "type" || screenAction === "scroll" || (screenAction === "key" && keys !== undefined && botComputerChordEditsText(keys));
           deps.state.setDriverFacts(botId, { ...facts, elements: undefined, ...(keepsFocus ? {} : { focused: undefined }) });
         };
 

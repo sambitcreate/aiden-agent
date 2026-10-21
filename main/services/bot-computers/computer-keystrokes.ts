@@ -74,12 +74,37 @@ export function botComputerChordStrokes(chord: string): BotComputerKeyStroke[] {
   }
 }
 
-/** Whether a chord types a character (no modifier but Shift), for the rules classifier. */
-export function botComputerChordIsPrintable(chord: string): boolean {
+/** The keys that erase a character at the caret: Backspace (Delete on a Mac) and forward Delete. */
+const ERASE_KEYS = new Set(["backspace", "delete", "del", "forwarddelete"]);
+
+/** What a chord with no modifier but Shift does at the caret: types a character, erases one, or neither. */
+function caretEdit(chord: string): "types" | "erases" | undefined {
   try {
     const parsed = parseComputerUseKeyChord(chord);
-    return [...parsed.key].length === 1 && parsed.modifiers.every((modifier) => modifier === "shift");
+    if (!parsed.modifiers.every((modifier) => modifier === "shift")) return undefined;
+    if ([...parsed.key].length === 1) return "types";
+    return ERASE_KEYS.has(parsed.key) ? "erases" : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/**
+ * Whether a chord only edits text at the caret, with no modifier but Shift:
+ * it types a character, or erases one with Backspace or Delete. Any other
+ * chord presses something (Return sends; with Command, Delete is Finder's
+ * Move to Trash). For keeping the focused field, and with
+ * `botComputerChordErases` for the rules classifier.
+ */
+export function botComputerChordEditsText(chord: string): boolean {
+  return caretEdit(chord) !== undefined;
+}
+
+/**
+ * Whether a chord is a plain Backspace or Delete (Shift aside). In a text
+ * field it erases a character; anywhere else it can delete what is selected,
+ * such as a message in Mail or an event in Calendar.
+ */
+export function botComputerChordErases(chord: string): boolean {
+  return caretEdit(chord) === "erases";
 }

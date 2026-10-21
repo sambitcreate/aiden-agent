@@ -17,7 +17,9 @@ import { createBotMemoryReview } from "../bot-memory/review.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { createBotPauseStore, type BotPauseRecord, type BotPauseStore } from "../bot-pause-store.js";
+import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
+import { runBotPauseSteps } from "./bot-pause-steps.js";
 import { createBotQuestions } from "./bot-questions.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -27,6 +29,7 @@ import {
   type BotSessionServiceDeps,
   type BotSessionState,
 } from "./bot-session-service.js";
+import { suggestConnectionCandidate } from "./bot-tool-candidates.js";
 import { botDirectoryName } from "./harness-host.js";
 import { createBotLiveProjection, projectBotTranscript } from "./live-projection.js";
 import { countingTool, fakeMemoryAuthority, recordingDeps } from "./test-support/fixtures.js";
@@ -117,6 +120,82 @@ test("pausing while a reply streams leaves it interrupted under the pause and ru
     assert.deepEqual(await service.state(BOT), pausedAt(submissionId));
   } finally {
     await service.shutdown();
+  }
+});
+
+test("a pause whose session can't reopen still stops the Bot's other work and tells every window it is paused", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const published: BotSessionState[] = [];
+  const reports: unknown[] = [];
+  const order: string[] = [];
+  let opens = 0;
+  const reopenFailure = new Error("the session could not reopen");
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    onStateChange: (_botId, state) => published.push(state),
+    onReport: (_botId, error) => reports.push(error),
+    // The first open runs the reply; the reopen after the pause closes it fails once.
+    onSessionOpen: () => {
+      opens += 1;
+      if (opens === 2) throw reopenFailure;
+    },
+    afterPaused: () => void order.push("afterPaused"),
+  });
+  try {
+    await streaming(service, fauxModels);
+    assert.deepEqual(await service.pause(BOT, "mac"), pausedAt(), "the pause answers, with no turn it could read back");
+    assert.deepEqual(order, ["afterPaused"], "the Bot's computer and legacy chats are still stopped");
+    assert.deepEqual(published[published.length - 1], pausedAt(), "every window hears the Bot is paused");
+    assert.ok(reports.includes(reopenFailure), "the failure is reported");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(fauxModels.calls(), 1, "nothing runs");
+    assert.deepEqual(await service.state(BOT), pausedAt(), "the Bot stays paused");
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a connect card the Bot is suggesting as it pauses never wedges it: the pause, the next message and quit all finish", async () => {
+  let started!: () => void;
+  const began = new Promise<void>((resolve) => (started = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const suggest = suggestConnectionCandidate(BOT, {
+    isConnected: async () => {
+      started();
+      await gate;
+      return false;
+    },
+    isDismissed: async () => false,
+  });
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(SUGGEST_CONNECTION_TOOL_NAME, { pluginId: "gmail", reason: "To read your mail." })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("never"),
+    fauxAssistantMessage("Hello again."),
+  ]);
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    extension: recordingDeps({ tools: [{ tool: suggest.tool, replay: "unsafe", bind: suggest.bind! }] }),
+    suspendTimeoutMs: 300,
+  });
+  const within = <T>(work: Promise<T>, what: string) =>
+    Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error(`${what} never finished`)), 5_000)),
+    ]);
+  try {
+    await service.send(BOT, { text: "check my mail", requestId: "desk-1" });
+    await began;
+    const pausing = service.pause(BOT, "mac");
+    // The pause is closing the Bot's session while the tool still works on its card.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    assert.equal((await within(pausing, "the pause")).kind, "paused");
+    assert.equal(fauxModels.calls(), 1, "nothing ran under the pause");
+    await within(service.unpause(BOT), "the unpause");
+    await within(service.send(BOT, { text: "hello?", requestId: "desk-2" }), "the next message");
+  } finally {
+    await within(service.shutdown(), "quit");
   }
 });
 
@@ -618,11 +697,77 @@ function runLegacyGeneration(host: Awaited<ReturnType<typeof legacyChatHost>>, s
   return { entry, effects: () => effects, settled: () => !host.active.has(streamId), end: settle };
 }
 
+test("a pause answers without waiting for the Bot's computer to stop, which begins only once the run has stopped", async () => {
+  let runStopped = false;
+  const tool = countingTool(
+    "run_command",
+    (_params, signal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            runStopped = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      }),
+  );
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "build" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("never"),
+  ]);
+  const order: string[] = [];
+  const reports: unknown[] = [];
+  let computerStopped!: () => void;
+  const gracefulStop = new Promise<void>((resolve) => (computerStopped = resolve));
+  const broken = new Error("the legacy chats could not be read");
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    extension: recordingDeps({ tools: [{ tool, replay: "unsafe" }] }),
+    // As the desktop wires it (`afterBotPaused` in bot-session-main.ts): legacy chats, then the computer.
+    afterPaused: runBotPauseSteps(
+      [
+        {
+          run: () => {
+            order.push("legacy chats");
+            throw broken;
+          },
+        },
+        {
+          background: true,
+          run: async () => {
+            order.push(runStopped ? "computer stopping after the run" : "computer stopping DURING the run");
+            await gracefulStop;
+            order.push("computer stopped");
+          },
+        },
+      ],
+      (_botId, error) => reports.push(error),
+    ),
+  });
+  try {
+    await service.send(BOT, { text: "build it", requestId: "desk-1" });
+    await waitFor(() => tool.executions.length === 1, { what: "the tool to start" });
+    const paused = await Promise.race([
+      service.pause(BOT, "mac"),
+      new Promise<"waited">((resolve) => setTimeout(() => resolve("waited"), 5_000)),
+    ]);
+    assert.notEqual(paused, "waited", "the pause answered while the computer was still stopping");
+    assert.deepEqual(order, ["legacy chats", "computer stopping after the run"]);
+    assert.deepEqual(reports, [broken], "a step that fails is reported, and the next one still runs");
+    computerStopped();
+    await waitFor(() => order.includes("computer stopped"), { what: "the computer to stop" });
+  } finally {
+    computerStopped();
+    await service.shutdown();
+  }
+});
+
 test("pausing stops the Bot's legacy chat streams and tools and waits for them, leaving other chats running", async () => {
   const host = await legacyChatHost();
   const chatsByBot: Record<string, string[]> = { [BOT]: ["bot-chat", "bot-older-chat"], "bot:b": ["other-bot-chat"] };
   const service = await serviceFor(tempProfile(), createFauxModels(), {
-    // As the desktop wires it (`botPauseEffects` in bot-session-main.ts).
+    // The legacy-chat step of `afterBotPaused` in bot-session-main.ts.
     afterPaused: (botId) =>
       stopBotLegacyChatWork(botId, {
         chatIds: async (id) => chatsByBot[id] ?? [],

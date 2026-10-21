@@ -143,6 +143,29 @@ function ruleActionText(rule: BotRule): string {
   return bounded(normalizeBotHandoffAction(botRuleLabel(rule)), BOT_HANDOFF_ACTION_MAX_CHARS);
 }
 
+/** Computer Use and Bot computer actions whose summary can carry what is typed. */
+const TYPING_ACTIONS: Readonly<Record<"computer_use" | "computer", ReadonlySet<string>>> = {
+  computer_use: new Set(["type", "set_value"]),
+  // A Bot computer `key` that edits text (a character, or Backspace in a field) is typing; any other chord reads "press".
+  computer: new Set(["type", "key"]),
+};
+
+/**
+ * What a locked (password-or-code, money) rule's card and Done say the Bot was
+ * about to do: never the text it was typing, the keys it was pressing, or its
+ * own words for typing them (the browser already leaves typed text out of its
+ * summary). Other actions keep their summary.
+ */
+function lockedRuleSummary(action: BotClassifiableAction, summary: string): string {
+  if (action.surface !== "computer_use" && action.surface !== "computer") return summary;
+  const where = action.app?.trim() ? ` in ${action.app.trim()}` : "";
+  if (action.surface === "computer_use" && action.action === "key") return `press keys${where}`;
+  if (!TYPING_ACTIONS[action.surface].has(action.action)) return summary;
+  const element = action.element ?? (action.surface === "computer_use" ? action.focusedElement : undefined);
+  const label = element?.label?.replace(/\s+/gu, " ").trim();
+  return `type into ${label ? `the “${label}” field` : "the focused field"}${where}`;
+}
+
 /** The card's reason. The step's summary quotes the screen or page, so it loses control and direction marks too. */
 function ruleWhyText(label: string, botName: string, summary: string): string {
   const why = `Your rule “${label}” hands this to you. ${botName} was about to: ${summary}`;
@@ -253,7 +276,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const label = botRuleLabel(rule);
         const ruleRef = { id: rule.id, label };
         const unattended = turns.some((turn) => turn.routine || turn.telegram);
-        const callSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
+        const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
+        const callSummary = rule.locked ? lockedRuleSummary(action, ownSummary) : ownSummary;
         if (ruled === "ask") {
           // Never with remembered scopes: a rule-made ask is answered each time.
           if (baseline !== undefined) {

@@ -110,6 +110,12 @@ export interface BotRulesView {
   botId: string;
   revision: number;
   rules: BotRule[];
+  /**
+   * The saved rules file doesn't parse. `rules` are then the defaults a
+   * change starts again from, and the Bot doesn't run a call its rules would
+   * check until one is saved.
+   */
+  unreadable?: true;
 }
 
 export type BotRuleChange =

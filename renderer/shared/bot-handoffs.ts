@@ -9,6 +9,7 @@
 // the person to sign in to one site in the Bot's own browser or computer.
 
 import { isBoundedBotText } from "./bot-capabilities.js";
+import { BOT_LOCKED_RULES } from "./bot-rules.js";
 
 export const BOT_HANDOFF_TOOL_NAME = "hand_off";
 export const BOT_SIGN_IN_TOOL_NAME = "sign_in";
@@ -61,6 +62,22 @@ export interface BotHandoffAnswer {
   note?: string;
 }
 
+/** The locked rules that hand a password, a code or account security to the person. */
+const CREDENTIAL_RULE_IDS: ReadonlySet<string> = new Set(
+  BOT_LOCKED_RULES.filter((rule) => rule.actionClass === "credentials").map((rule) => rule.id),
+);
+
+/**
+ * Whether an answer to this card may carry a note. A note is the person's
+ * words to the Bot: it reaches the model with the answer. A card a
+ * password-or-code rule opened takes none, so a password or code typed as a
+ * note can never reach the Bot; it is answered on the card itself. (A sign-in
+ * may still carry a note with Skip; no composer sends one with it.)
+ */
+export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule">): boolean {
+  return handoff.rule === undefined || !CREDENTIAL_RULE_IDS.has(handoff.rule.id);
+}
+
 /**
  * The person's answer as the transcript keeps it: the `details` of a settled
  * `hand_off` / `sign_in` tool result, or the data of an
@@ -87,24 +104,34 @@ function boundedText(value: unknown, maximum: number): value is string {
 }
 
 /**
- * Control characters but tab, newline, vertical tab, form feed and carriage
- * return (whitespace, handled where the text is laid out), DEL, C1 controls,
- * and the marks that embed, override or isolate text direction.
+ * - Control characters but tab, newline, vertical tab, form feed and carriage
+ *   return (whitespace, handled where the text is laid out), DEL and C1 controls.
+ * - The marks that embed, override or isolate text direction.
+ * - Characters that draw nothing: the soft hyphen, zero-width space, word
+ *   joiner, invisible operators, BOM, the Mongolian vowel separator, the
+ *   deprecated format characters and the interlinear annotation marks.
+ *
+ * The zero-width joiner and non-joiner stay: emoji sequences and scripts such
+ * as Persian are shaped with them.
  */
 // eslint-disable-next-line no-control-regex -- these are exactly the characters it removes
-const CARD_CONTROL_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+const CARD_CONTROL_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/gu;
+/** The line and paragraph separators break a line wherever they are drawn. */
+const UNICODE_LINE_BREAKS = /[\u2028\u2029]/gu;
 
 /**
  * Text the Bot wrote for a card, without the characters that could make it
- * read differently from what it says (a reversed host, a hidden line).
+ * read differently from what it says (a reversed host, a hidden character),
+ * and with Unicode line breaks as plain newlines, so every surface lays them
+ * out the same way.
  */
 export function withoutBotHandoffControls(text: string): string {
-  return text.replace(CARD_CONTROL_CHARACTERS, "");
+  return text.replace(CARD_CONTROL_CHARACTERS, "").replace(UNICODE_LINE_BREAKS, "\n");
 }
 
 /** Collapses whitespace and drops trailing full stops, so "Done" texts never read "code.." */
 export function normalizeBotHandoffAction(text: string): string {
-  return withoutBotHandoffControls(text.replace(/\s+/gu, " ")).trim().replace(/[.。]+$/u, "").trimEnd();
+  return withoutBotHandoffControls(text).replace(/\s+/gu, " ").trim().replace(/[.。]+$/u, "").trimEnd();
 }
 
 /**

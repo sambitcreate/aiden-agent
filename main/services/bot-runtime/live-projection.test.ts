@@ -910,6 +910,82 @@ test("a rule hand-off's answer reads right after the call it stopped; the last a
   );
 });
 
+test("a provider that reuses a call id in every turn still gives each hand-off answer its own row, in its own turn", () => {
+  const rule = { id: "default.purchase", label: "Make a purchase or booking" };
+  const ask = (id: number, text: string) => ({
+    id,
+    kind: "pi.user",
+    model: [{ role: "user", content: [{ type: "text", text }], timestamp: 1_000 * id }],
+  });
+  const calling = (id: number, name: string) => ({
+    id,
+    kind: "pi.assistant",
+    model: [{
+      role: "assistant",
+      stopReason: "toolUse",
+      timestamp: 1_000 * id,
+      content: [{ type: "toolCall", id: "call_0", name, arguments: { action: "Pay" } }],
+    }],
+  });
+  const settled = (id: number, toolName: string, isError: boolean, details?: unknown) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: isError ? [{ severity: "error", code: "blocked", message: "blocked" }] : [] },
+    model: [{
+      role: "toolResult",
+      toolCallId: "call_0",
+      toolName,
+      isError,
+      details,
+      content: [{ type: "text", text: "…" }],
+      timestamp: 1_000 * id,
+    }],
+  });
+  const ruleAnswer = (id: number, outcome: string, note: string) => ({
+    id,
+    kind: "aiden.handoff-result",
+    data: { kind: "action", outcome, action: rule.label, note, toolCallId: "call_0", rule },
+  });
+  const entries = projectBotTranscript([
+    ask(1, "Pay the invoice"),
+    calling(2, "hand_off"),
+    settled(3, "hand_off", false, { kind: "action", outcome: "done", action: "Pay the invoice", note: "Invoice paid" }),
+    ask(4, "Pay the rent"),
+    calling(5, "hand_off"),
+    settled(6, "hand_off", false, { kind: "action", outcome: "skipped", action: "Pay the rent", note: "Rent later" }),
+    ask(7, "Book the table"),
+    calling(8, "computer_use"),
+    ruleAnswer(9, "done", "Table booked"),
+    settled(10, "computer_use", true),
+    ask(11, "Book the flight"),
+    calling(12, "computer_use"),
+    ruleAnswer(13, "skipped", "Flight later"),
+    settled(14, "computer_use", true),
+  ] as never);
+  const handoffRows = entries.filter((entry) => entry.type === "handoff_result");
+  assert.deepEqual(
+    handoffRows.map((entry) => (entry.type === "handoff_result" ? `${entry.outcome} (${entry.note})` : "")),
+    ["done (Invoice paid)", "skipped (Rent later)", "done (Table booked)", "skipped (Flight later)"],
+    "every turn shows its own answer, once",
+  );
+  assert.equal(new Set(handoffRows.map((entry) => entry.id)).size, 4, "no two rows share an id");
+  assert.equal(handoffRows[0]!.id, "handoff:call_0", "the first answer keeps the id every client already has");
+  // Each answer sits in its own turn: right after the person's ask (or the call it stopped) of that turn.
+  const order = entries.flatMap((entry) =>
+    entry.type === "user" ? [entry.text] : entry.type === "handoff_result" ? [entry.note ?? ""] : [],
+  );
+  assert.deepEqual(order, [
+    "Pay the invoice",
+    "Invoice paid",
+    "Pay the rent",
+    "Rent later",
+    "Book the table",
+    "Table booked",
+    "Book the flight",
+    "Flight later",
+  ]);
+});
+
 test("Stop pressed while a slow tool runs ends the chat with the person's stopped line", async () => {
   const reader = countingTool(
     "read_file",

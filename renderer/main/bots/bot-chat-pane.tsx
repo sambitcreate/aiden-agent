@@ -11,7 +11,7 @@ import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
-import { HandoffCard, handoffSignInComposerText } from "../../components/bots/handoff-card";
+import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
@@ -36,6 +36,7 @@ import {
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import {
   BOT_HANDOFF_NOTE_MAX_CHARS,
+  botHandoffTakesNote,
   type BotHandoffOutcome,
   type BotPendingHandoff,
 } from "../../shared/bot-handoffs";
@@ -687,7 +688,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
-  const handoffActions = useBotHandoffActions(botId);
+  const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
@@ -797,6 +798,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   const question = snapshot.question;
   const handoff = snapshot.handoff ?? null;
   const signInWaits = handoff?.kind === "sign_in";
+  // A sign-in or a password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
+  const noteRefused = signInWaits || (handoff !== null && !botHandoffTakesNote(handoff));
   const chatActivity = resolveBotChatActivity(current.chatActivity);
   // While the reply's visible words stream, the words are the signal (§5.2). The
   // partial text can outlast narration into a tool call, so a running step keeps the line.
@@ -913,8 +916,9 @@ export function BotChatPane({ botId }: { botId: string }) {
    * the draft in the composer, which shows the error's message.
    */
   const answerHandoffWithNote = async (pending: BotPendingHandoff, text: string, attachments: Attachment[]) => {
-    // Never a note for a sign-in: whatever is typed here reaches the Bot.
+    // Never a note for a sign-in or a password-or-code card: whatever is typed here reaches the Bot.
     if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name, pending));
+    if (!botHandoffTakesNote(pending)) throw new Error(handoffNoNoteComposerText(current.name));
     if (attachments.length > 0) {
       throw new Error(
         attachments.some((attachment) => attachment.kind === "image")
@@ -1084,8 +1088,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       ) : (
         <Composer
           key={`bot:${current.id}`}
-          // A sign-in is answered on its card: a password typed here would reach the Bot.
-          ready={!signInWaits && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
+          ready={!noteRefused && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
             state?.kind === "unavailable"
               ? BOT_UNAVAILABLE_LABEL
@@ -1093,11 +1097,13 @@ export function BotChatPane({ botId }: { botId: string }) {
                 ? botPausedText(current.name)
                 : signInWaits
                   ? handoffSignInComposerText(current.name, handoff ?? undefined)
-                  : undefined
+                  : noteRefused
+                    ? handoffNoNoteComposerText(current.name)
+                    : undefined
           }
           hasMessages={snapshot.entries.length > 0}
           chatId={`bot:${current.id}`}
-          placeholder={handoff && !signInWaits ? "Add a note and send to mark it done" : `Ask ${current.name}`}
+          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${current.name}`}
           onSend={(text, attachments) =>
             handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments)
           }

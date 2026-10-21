@@ -13,9 +13,11 @@
 import {
   BOT_HANDOFF_RESULT_ENTRY_KIND,
   botHandoffAnswerOf,
+  botHandoffTakesNote,
   type BotHandoffAnswer,
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
+import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { BotRuleHandoffRecord, BotRuleHandoffRequest, BotRuleHandoffRowTarget } from "./bot-extension.js";
 
 export interface BotHandoffRequest extends BotPendingHandoff {
@@ -42,24 +44,41 @@ export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRe
   };
 }
 
+/** Whether `entry` is the model's answer that made the call `toolCallId`. */
+function issuesCall(entry: EntryRecord, toolCallId: string): boolean {
+  const message = entry.model?.[0];
+  return (
+    entry.kind === "pi.assistant" &&
+    message?.role === "assistant" &&
+    message.content.some((part) => part.type === "toolCall" && part.id === toolCallId)
+  );
+}
+
 /**
  * The transcript row for a settled rule hand-off, an `aiden.handoff-result`
  * entry, written into `conversation`: the stopped call's own, as the extension
  * hands it over (appended, never submitted, so the row can't start the Bot).
  * Written once per tool call: a crash after the row and before the call's
  * block makes the extension apply the same answer again, and that second call
- * finds the row and writes nothing. Returns whether it wrote.
+ * finds the row and writes nothing. Only rows since the answer that made the
+ * call count, so a provider that reuses a call id in every turn still gets
+ * each turn's answer. Returns whether it wrote.
  */
 export async function recordRuleHandoffEntry(
   conversation: BotRuleHandoffRowTarget,
   record: BotRuleHandoffRecord,
 ): Promise<boolean> {
   const { botId: _botId, ...details } = record;
-  const recorded = (await conversation.entries()).some(
-    (entry) =>
-      entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND &&
-      (entry.data as { toolCallId?: unknown } | null)?.toolCallId === record.toolCallId,
-  );
+  const entries = await conversation.entries();
+  let madeAt = entries.length - 1;
+  while (madeAt >= 0 && !issuesCall(entries[madeAt]!, record.toolCallId)) madeAt -= 1;
+  const recorded = entries
+    .slice(madeAt + 1)
+    .some(
+      (entry) =>
+        entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND &&
+        (entry.data as { toolCallId?: unknown } | null)?.toolCallId === record.toolCallId,
+    );
   if (recorded) return false;
   await conversation.append(BOT_HANDOFF_RESULT_ENTRY_KIND, { ...details, rule: { ...details.rule } });
   return true;
@@ -70,7 +89,9 @@ export async function recordRuleHandoffEntry(
  * - `not_waiting`: nothing waits under that `waitId` for that Bot (answered
  *   elsewhere, withdrawn, or never asked).
  * - `invalid`: the card waits, but the value is not exactly
- *   `{ outcome: "done" | "skipped", note? }`. The card keeps waiting.
+ *   `{ outcome: "done" | "skipped", note? }`, or carries a note the card
+ *   takes none of (a password-or-code rule's card: `botHandoffTakesNote`).
+ *   The card keeps waiting.
  */
 export type BotHandoffAnswerOutcome = "answered" | "not_waiting" | "invalid";
 
@@ -158,6 +179,8 @@ export function createBotHandoffs(): BotHandoffs {
       if (!entry || entry.prompt.botId !== botId) return "not_waiting";
       const answer = botHandoffAnswerOf(value);
       if (!answer) return "invalid";
+      // A password or code typed as a note would reach the Bot with the answer.
+      if (answer.note !== undefined && !botHandoffTakesNote(entry.prompt)) return "invalid";
       entry.settle(answer);
       return "answered";
     },

@@ -13,7 +13,7 @@ import { useBotHandoffActions } from "./use-bot-handoff-actions";
 
 export function BotPanelHandoff({ botId, name, avatar }: { botId: string; name: string; avatar: BotAvatarValue }) {
   const handoff = useBotLive(botId).snapshot?.handoff ?? null;
-  const actions = useBotHandoffActions(botId);
+  const actions = useBotHandoffActions(botId, handoff?.waitId);
   if (!handoff) return null;
   return (
     <div className="shrink-0 px-3 pt-3">

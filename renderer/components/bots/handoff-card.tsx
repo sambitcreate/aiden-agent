@@ -2,7 +2,8 @@
 // 2FA code for your bank." with the reason, an optional Open for the page that
 // helps, Skip and Done. The shared Bot notice card, elevated like an approval,
 // with the Bot's own face in the tile; no coloured borders. The composer stays
-// below it: typing there answers Done with a note.
+// below it: typing there answers Done with a note, which the Bot reads, so the
+// card says so. A card a password-or-code rule opened takes no note at all.
 //
 // A sign-in (plan §5.2) is the same card asking the person to sign in to one
 // site for the Bot: "Sign in to github.com for Ada", with Open sign-in (the
@@ -20,7 +21,7 @@ import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
 import type { BotAvatar as BotAvatarValue } from "../../shared/bots";
-import type { BotHandoffOutcome, BotPendingHandoff } from "../../shared/bot-handoffs";
+import { botHandoffTakesNote, type BotHandoffOutcome, type BotPendingHandoff } from "../../shared/bot-handoffs";
 
 /** The page Open goes to, as the card names it ("bank.example"). */
 function linkHost(url: string): string | undefined {
@@ -60,6 +61,14 @@ function signInHost(handoff: ShownHandoff): string {
 export function handoffSignInComposerText(name: string, handoff?: Pick<ShownHandoff, "kind" | "target">): string {
   const open = handoff ? handoffSignInOpenLabel(name, handoff) : "Open sign-in";
   return `Sign in for ${name} with ${open} above, then choose I’m signed in.`;
+}
+
+/**
+ * What the composer says while a password-or-code card waits: it is answered
+ * on the card, never with a note, so the code can't reach the Bot.
+ */
+export function handoffNoNoteComposerText(name: string): string {
+  return `Enter it yourself, then choose Done above. This card takes no note, so a password or code never reaches ${name}.`;
 }
 
 /** The card's title: whose turn it is, or what to sign in to and for whom. */
@@ -196,6 +205,9 @@ export function HandoffCard({
       {handoff.why ? <p className="whitespace-pre-line">{handoff.why}</p> : null}
       {handoff.rule ? <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p> : null}
       {host ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
+      {!signIn && botHandoffTakesNote(handoff) ? (
+        <p className="mt-1 text-tertiary">{`${name} reads any note you send. Enter passwords, codes and card numbers on the page, never in the chat.`}</p>
+      ) : null}
       {signIn && !elsewhere ? (
         <p className="mt-1 text-tertiary">
           {onComputer(handoff)

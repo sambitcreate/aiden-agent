@@ -9,7 +9,7 @@ import {
   defaultBotRules,
   type BotRule,
 } from "../../../renderer/shared/bot-rules.js";
-import { BotRulesUnavailableError, createBotRuleStore } from "./store.js";
+import { BotRulesUnavailableError, BotRulesUnreadableError, createBotRuleStore } from "./store.js";
 
 const BOT = "bot:1";
 // `botDirectoryName("bot:1")`: the colon is written as its UTF-8 byte.
@@ -119,7 +119,7 @@ test("a tampered file can't remove or weaken a locked rule", async () => {
   assert.equal(byId(view.rules, "default.purchase")?.behavior, "ask");
 });
 
-test("only an exactly valid file is read; anything else reads as the defaults", async () => {
+test("a file that doesn't parse exactly fails closed: calls can't read it, and the editor's next change starts again from the defaults", async () => {
   const p = profile();
   const valid = { version: 1, revision: 3, behaviors: { delete: "hand_off" }, custom: [] };
   const id = "custom.0b8a3f5e-2c11-4d5f-9b7a-0123456789ab";
@@ -138,16 +138,33 @@ test("only an exactly valid file is read; anything else reads as the defaults", 
     { ...valid, custom: [{ id, text: "  book a flight", behavior: "ask" }] },
   ];
   for (const variant of variants) {
+    const label = JSON.stringify(variant);
     handWrite(p.file, typeof variant === "string" ? variant : JSON.stringify(variant));
+    // The defaults are looser than a rule the person set to Hand off, so the Bot's calls never read them in its place.
+    await assert.rejects(p.store.rules(BOT), BotRulesUnreadableError, label);
     const view = await p.store.get(BOT);
-    assert.equal(view.revision, 0, JSON.stringify(variant));
+    assert.equal(view.unreadable, true, label);
+    assert.equal(view.revision, 0, label);
     assert.deepEqual(view.rules, defaultBotRules());
   }
+
+  // A refused change still says the file is unreadable; a saved one replaces it, and the Bot reads its rules again.
+  const refused = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "locked.money", behavior: "ask" });
+  assert.equal(refused.ok ? undefined : refused.reason, "locked");
+  assert.equal(refused.view.unreadable, true);
+  const saved = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "default.purchase", behavior: "hand_off" });
+  assert.equal(saved.ok, true);
+  assert.equal(saved.view.unreadable, undefined);
+  assert.equal(saved.view.revision, 1);
+  assert.equal(byId(await p.store.rules(BOT), "default.purchase")?.behavior, "hand_off");
+  assert.equal(byId(await p.store.rules(BOT), "default.delete")?.behavior, "ask", "the lost file's settings are not guessed at");
+
   handWrite(p.file, JSON.stringify({ ...valid, custom: [{ id, text: "book a flight", behavior: "ask" }] }));
   const view = await p.store.get(BOT);
+  assert.equal(view.unreadable, undefined);
   assert.equal(view.revision, 3);
   assert.equal(byId(view.rules, "default.delete")?.behavior, "hand_off");
-  assert.equal(byId(view.rules, id)?.text, "book a flight");
+  assert.equal(byId(await p.store.rules(BOT), id)?.text, "book a flight");
 });
 
 test("an unreadable rules file throws instead of reading as the defaults", async () => {

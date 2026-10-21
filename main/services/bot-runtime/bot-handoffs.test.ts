@@ -68,6 +68,31 @@ test("an answer that is not Done or Skip keeps the card waiting", async () => {
   assert.deepEqual(await asked, { outcome: "skipped" });
 });
 
+test("a password-or-code card takes no note: whatever is typed with the answer would reach the Bot", async () => {
+  const handoffs = createBotHandoffs();
+  const credentials = handoffs.request(
+    request({
+      action: "Enter a password or 2FA code, or change account security",
+      source: "rule",
+      rule: { id: "locked.credentials", label: "Enter a password or 2FA code, or change account security" },
+    }),
+  );
+  const waitId = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c";
+  for (const outcome of ["done", "skipped"] as const) {
+    assert.equal(handoffs.answer("bot:ada", waitId, { outcome, note: "481 516" }), "invalid", outcome);
+  }
+  assert.equal(handoffs.pending().length, 1, "the card still waits for Done or Skip");
+  assert.equal(handoffs.answer("bot:ada", waitId, { outcome: "done" }), "answered");
+  assert.deepEqual(await credentials, { outcome: "done" });
+
+  // A note still goes with any other card, a money rule's included.
+  const payment = handoffs.request(
+    request({ source: "rule", rule: { id: "locked.money", label: "Move money or enter card details" }, action: "Move money or enter card details" }),
+  );
+  assert.equal(handoffs.answer("bot:ada", waitId, { outcome: "done", note: "Paid, reference 4471." }), "answered");
+  assert.deepEqual(await payment, { outcome: "done", note: "Paid, reference 4471." });
+});
+
 test("Stop withdraws the card: the wait rejects with the abort reason and a late answer records nothing", async () => {
   const handoffs = createBotHandoffs();
   const settled = recordSettled(handoffs);

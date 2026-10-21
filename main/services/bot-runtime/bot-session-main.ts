@@ -25,7 +25,6 @@
 // its summary.
 
 import * as path from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
@@ -55,6 +54,7 @@ import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
+import { runBotPauseSteps } from "./bot-pause-steps.js";
 import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
@@ -128,14 +128,6 @@ async function loadBot(botId: string): Promise<BotDefinition> {
   return bot;
 }
 
-async function connectCards(botId: string): Promise<ConnectCardEntry[]> {
-  const conversation = await (await botSessionRuntime()).conversation(botId);
-  const view = await conversation.context(BACKGROUND_CONTEXT);
-  return view.entries
-    .filter((entry) => entry.kind === BOT_CONNECT_CARD_ENTRY_KIND)
-    .map((entry) => entry.data as unknown as ConnectCardEntry);
-}
-
 /** Whether the Bot's resolved model takes images; false while it has none. */
 async function imageInput(botId: string): Promise<boolean> {
   const cached = resolvedModels.get(botId);
@@ -153,14 +145,6 @@ const toolSources = createBotToolSources({
   imageInput,
   admit,
   dismissals,
-  appendConnectCard: async (botId, card) => {
-    const conversation = await (await botSessionRuntime()).conversation(botId);
-    await conversation.submit(
-      { type: "write", entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { ...card } } },
-      BACKGROUND_CONTEXT,
-    );
-  },
-  connectCards,
   botName: async (botId) => (await botStore.get(botId))?.name,
 });
 
@@ -228,8 +212,6 @@ const memoryReview = createBotMemoryReview({
 const compactionSteering = createBotCompactionSteering({
   memory,
   admit: admitMemoryWork,
-  // Appended, not submitted: a flush that ends as the Bot pauses must not restart its closed turn.
-  appendEntry: async (botId, kind, data) => (await botSessionRuntime()).appendEntry(botId, kind, { ...data }),
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
 });
 
@@ -354,21 +336,19 @@ async function stopLegacyChatWork(botId: string): Promise<void> {
  * step here for anything that keeps going on its own, such as the Bot's
  * computer.
  */
-const botPauseEffects: ReadonlyArray<(botId: string) => void | Promise<void>> = [
-  stopLegacyChatWork,
-  // The Bot's computer stops at once; a start still waiting for a slot gives up.
-  async (botId) => (await import("../bot-computers/bot-computers-main.js")).pauseBotComputer(botId),
-];
-
-async function afterBotPaused(botId: string): Promise<void> {
-  for (const effect of botPauseEffects) {
-    try {
-      await effect(botId);
-    } catch (error) {
-      logger.warn("bots", `Bot ${botId} pause step failed.`, error);
-    }
-  }
-}
+const afterBotPaused = runBotPauseSteps(
+  [
+    { run: stopLegacyChatWork },
+    // The Bot's computer starts stopping now, after its run, and a start still
+    // waiting for a slot gives up. A graceful stop can take half a minute, so
+    // the pause answers without waiting for it.
+    {
+      background: true,
+      run: async (botId) => (await import("../bot-computers/bot-computers-main.js")).pauseBotComputer(botId),
+    },
+  ],
+  (botId, error) => logger.warn("bots", `Bot ${botId} pause step failed.`, error),
+);
 
 /**
  * Unpause: background memory review picks up again, and when routines fired

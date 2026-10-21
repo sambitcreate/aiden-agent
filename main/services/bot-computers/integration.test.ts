@@ -253,7 +253,7 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set(bots),
     pauses: createBotPauseStore({ root: () => path.join(profile, "bot-service"), now: () => 1_000 }),
-    // As `botPauseEffects`: the Bot's computer stops at once.
+    // The stop `afterBotPaused` starts in the background (bot-session-main.ts), awaited here so the VM can be checked as the pause answers.
     afterPaused: (botId) => host.stop(botId, { reason: "pause" }),
     // As the `deleteEffects` in bot-session-main.ts: the computer goes before the Bot's data.
     deleteEffects: [(botId) => host.deleteForBot(botId), async (botId) => void bots.delete(botId)],

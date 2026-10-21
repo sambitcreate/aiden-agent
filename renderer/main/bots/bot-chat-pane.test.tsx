@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
+import { BotPanelHandoff } from "./bot-panel-handoff";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
@@ -1144,6 +1145,75 @@ test("typing while a hand-off waits answers it Done with that note, never as a q
   await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
 });
 
+test("a note sent while Open is on its way keeps the card's buttons waiting for the note, so Done can't answer twice", async () => {
+  const errors = captureErrorToasts();
+  try {
+    let opened: (value: { opened: string }) => void = () => undefined;
+    let answered: (value: { answered: boolean }) => void = () => undefined;
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:openHandoff": () => new Promise((resolve) => (opened = resolve)),
+      "bots:answerHandoff": () => new Promise((resolve) => (answered = resolve)),
+    });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    const done = () => within(card).getByRole("button", { name: "Done" }) as HTMLButtonElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
+    await waitFor(() => assert.equal(done().disabled, true));
+    const box = screen.getByPlaceholderText("Add a note and send to mark it done");
+    fireEvent.change(box, { target: { value: "Entered it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+
+    await act(async () => opened({ opened: "external" }));
+    assert.equal(done().disabled, true, "the note is still on its way");
+    fireEvent.click(done());
+    await act(async () => answered({ answered: true }));
+    await waitFor(() => assert.equal(done().disabled, false));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Entered it." }]);
+    assert.deepEqual(errors.shown, [], "no 'already answered' for an answer the person sent once");
+  } finally {
+    errors.restore();
+  }
+});
+
+test("the floating panel's copy of the card waits for a note sent from the composer, so its Done can't answer twice", async () => {
+  const errors = captureErrorToasts();
+  try {
+    let opened: (value: { opened: string }) => void = () => undefined;
+    let answered: (value: { answered: boolean }) => void = () => undefined;
+    const calls = installBotTestIpc({
+      "bots:get": () => botFixture(),
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:openHandoff": () => new Promise((resolve) => (opened = resolve)),
+      "bots:answerHandoff": () => new Promise((resolve) => (answered = resolve)),
+    });
+    // The panel floating over a narrow chat carries the card's buttons; the composer stays below.
+    await mountWithBotRouter(<BotChatRoute botId="bot-1" />, {
+      initialPath: "/bots/bot-1/chat",
+      sidebar: <BotPanelHandoff botId="bot-1" name="Planner" avatar={botFixture().avatar} />,
+    });
+    await waitFor(() => assert.equal(screen.getAllByRole("group", { name: "Planner needs you" }).length, 2));
+    // The panel's copy carries the title and buttons, not the card's reason.
+    const panel = screen.getAllByRole("group", { name: "Planner needs you" }).find((group) => !within(group).queryByText(BANK_HANDOFF.why))!;
+    const done = () => within(panel).getByRole("button", { name: "Done" }) as HTMLButtonElement;
+    fireEvent.click(within(panel).getByRole("button", { name: "Open bank.example" }));
+    await waitFor(() => assert.equal(done().disabled, true));
+    fireEvent.change(screen.getByPlaceholderText("Add a note and send to mark it done"), { target: { value: "Entered it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+
+    await act(async () => opened({ opened: "external" }));
+    assert.equal(done().disabled, true, "the note from the composer is still on its way");
+    fireEvent.click(done());
+    await act(async () => answered({ answered: true }));
+    await waitFor(() => assert.equal(done().disabled, false));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Entered it." }]);
+    assert.deepEqual(errors.shown, []);
+  } finally {
+    errors.restore();
+  }
+});
+
 test("a note the card could not take stays in the composer", async () => {
   const errors = captureErrorToasts();
   try {
@@ -1160,6 +1230,56 @@ test("a note the card could not take stays in the composer", async () => {
   } finally {
     errors.restore();
   }
+});
+
+const CREDENTIALS_HANDOFF = {
+  botId: "bot-1",
+  waitId: "wait-c",
+  toolCallId: "tool-c",
+  kind: "action" as const,
+  action: "Enter a password or 2FA code, or change account security",
+  why: "Planner was about to type into the bank's code field.",
+  source: "rule" as const,
+  rule: { id: "locked.credentials", label: "Enter a password or 2FA code, or change account security" },
+};
+
+test("a card that takes a note says the Bot reads it, so a password, code or card number stays out of the chat", async () => {
+  // A money rule's card takes a note too (a payment reference), so it names card numbers.
+  const payment = { ...CREDENTIALS_HANDOFF, waitId: "wait-m", rule: { id: "locked.money", label: "Move money or enter card details" } };
+  for (const handoff of [BANK_HANDOFF, payment]) {
+    await mountChat({ "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff }) });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    assert.ok(
+      within(card).getByText("Planner reads any note you send. Enter passwords, codes and card numbers on the page, never in the chat."),
+      handoff.waitId,
+    );
+    cleanup();
+  }
+});
+
+test("a password-or-code card takes no note: the composer points to the card, and Done answers it without one", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: CREDENTIALS_HANDOFF }),
+    "bots:answerHandoff": () => ({ answered: true }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(
+    screen.getByText("Enter it yourself, then choose Done above. This card takes no note, so a password or code never reaches Planner.", {
+      selector: "[role=status]",
+    }),
+    "the composer says where to answer",
+  );
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  assert.equal(within(card).queryByText(/reads any note you send/u), null, "no note to warn about");
+  const box = screen.getByRole("textbox");
+  fireEvent.change(box, { target: { value: "481516" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(handoffAnswers(calls).length, 0, "the code typed in the chat is never sent");
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-c", outcome: "done" }]));
 });
 
 test("a photo sent while a hand-off waits is refused and kept with the note, and the card stays unanswered", async () => {
