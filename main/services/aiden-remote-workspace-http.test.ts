@@ -183,3 +183,45 @@ test("HTTP client completes approved-folder selection and revision-checked works
     await fs.rm(temporary, { recursive: true, force: true });
   }
 });
+
+test("project cloning is desktop-only, requires folder browsing, and cancels with its HTTP request", async t => {
+  let type: "mac" | "iphone" = "iphone";
+  let browse = true;
+  let calls = 0;
+  let captured: AbortSignal | undefined;
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  const handler = createAidenRemoteRequestHandler({
+    instanceId: "instance", displayName: () => "Host", appVersion: "test", connectionMode: () => "lan", now: Date.now, log: () => undefined,
+    pairing: { exchange: async () => { throw new Error("not used"); } },
+    devices: { acquireDeviceAuthorization: () => () => undefined, authenticate: async () => ({ id: "device", type, revoked: false, capabilities: new Set(["workspace:manage" as const, ...(browse ? ["workspace:browse" as const] : [])]) }) },
+    workspaces: {
+      supportsClone: true, list: async () => ({ workspaces: [] }), get: async () => { throw new Error("not used"); }, update: async () => { throw new Error("not used"); }, remove: async () => undefined,
+      create: async (_device, _key, _input, signal) => {
+        calls++; captured = signal; opened();
+        await new Promise<void>(resolve => { if (signal?.aborted) resolve(); else signal?.addEventListener("abort", () => resolve(), { once: true }); });
+        throw new Error("cancelled");
+      },
+    },
+  });
+  const server = createServer(handler);
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const endpoint = `http://127.0.0.1:${address.port}/api/aiden/v1/workspaces`;
+  const options = { method: "POST", headers: { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "idempotency-key": "clone-http-request", "content-type": "application/json" }, body: JSON.stringify({ mode: "clone", selection: `sel_${"a".repeat(43)}`, url: "https://example.invalid/widget.git", files: [] }) };
+  assert.equal((await fetch(endpoint, options)).status, 403);
+  assert.equal(calls, 0);
+  type = "mac"; browse = false;
+  assert.equal((await fetch(endpoint, options)).status, 403);
+  assert.equal(calls, 0);
+  browse = true;
+  const controller = new AbortController();
+  const cloning = fetch(endpoint, { ...options, signal: controller.signal }).catch(() => undefined);
+  await ready; controller.abort(); await cloning;
+  await new Promise(resolve => setImmediate(resolve));
+  // The server observes socket closure asynchronously.
+  if (!captured?.aborted) await new Promise<void>(resolve => captured!.addEventListener("abort", () => resolve(), { once: true }));
+  assert.equal(captured?.aborted, true);
+  assert.equal(calls, 1);
+});

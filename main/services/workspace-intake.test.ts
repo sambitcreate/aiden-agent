@@ -1,3 +1,4 @@
+import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -682,4 +683,73 @@ test("clone progress lines and failures are parsed into short user-facing result
     ),
     "fatal: unable to access 'https://***@host.example/x.git/' from ~/projects",
   );
+});
+
+
+test("remote clone publishes optional environment files privately before registration and replays without another clone", async t => {
+  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-clone-bare-"));
+  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const bare = await bareRepository(repositoryRoot);
+  const fixture_ = await fixture(t, { runClone: createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] }) });
+  let consumed = 0;
+  let revalidated = 0;
+  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const snapshots: unknown[] = [];
+  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, persistIdempotency: async snapshot => { snapshots.push(snapshot); }, browser: {
+    consumeSelection: async () => { consumed++; return claim; }, revalidateConsumedSelection: async () => { revalidated++; return claim; },
+  } });
+  const input = { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "KEY=synthetic-private" }] };
+  const result = await remote.create("device", "clone-idempotent-key", input);
+  const destination = path.join(fixture_.home, "widget");
+  assert.equal(await fs.readFile(path.join(destination, ".env.local"), "utf8"), "KEY=synthetic-private");
+  assert.equal((await fs.stat(path.join(destination, ".env.local"))).mode & 0o777, 0o600);
+  assert.equal(fixture_.workspaces.length, 1);
+  assert.equal(JSON.stringify(result).includes(fixture_.home), false);
+  assert.equal(JSON.stringify(result).includes("synthetic-private"), false);
+  assert.equal(JSON.stringify(snapshots).includes("synthetic-private"), false);
+  assert.deepEqual(await remote.create("device", "clone-idempotent-key", input), result);
+  assert.equal(fixture_.cloneRequests.length, 1);
+  assert.equal(consumed, 1);
+  assert.ok(revalidated >= 3);
+});
+
+test("a cloned symlink cannot receive transferred environment secrets and failure removes only private staging", async t => {
+  const fixture_ = await fixture(t, { runClone: async request => {
+    await fs.mkdir(request.destination);
+    await fs.symlink("/tmp/never-write-environment", path.join(request.destination, ".env"));
+    return { ok: true };
+  } });
+  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
+  await assert.rejects(remote.create("device", "clone-fails-safely", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env", content: "KEY=synthetic" }] }), /could not be cloned/);
+  assert.deepEqual(await fs.readdir(fixture_.home), []);
+  assert.equal(fixture_.workspaces.length, 0);
+});
+
+test("cancellation before publishing discards the clone rather than registering it", async t => {
+  const fixture_ = await fixture(t, { runClone: async request => { await fs.mkdir(request.destination); return { ok: true }; } });
+  const controller = new AbortController();
+  const result = await fixture_.service.clone({ url: FIXTURE_URL }, { ...cloneOptions([], controller.signal), beforePublish: async () => { controller.abort(); } });
+  assert.equal(result.ok, false);
+  assert.equal(!result.ok && result.code, "cancelled");
+  assert.equal(fixture_.workspaces.length, 0);
+  assert.deepEqual(await fs.readdir(fixture_.home), []);
+});
+
+
+test("revoking an approved root during clone prevents environment writes and registration", async t => {
+  let approved = true;
+  const fixture_ = await fixture(t, { runClone: async request => {
+    await fs.mkdir(request.destination);
+    approved = false;
+    return { ok: true };
+  } });
+  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: {
+    consumeSelection: async () => claim,
+    revalidateConsumedSelection: async () => { if (!approved) throw new Error("policy changed"); return claim; },
+  } });
+  await assert.rejects(remote.create("device", "clone-root-policy-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env", content: "KEY=synthetic" }] }), /could not be cloned/);
+  assert.equal(fixture_.workspaces.length, 0);
+  assert.deepEqual(await fs.readdir(fixture_.home), []);
 });

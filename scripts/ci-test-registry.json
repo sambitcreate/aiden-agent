@@ -328,7 +328,12 @@
         "main/services/workspace-artifacts/store.test.ts",
         "main/services/workspace-artifacts/tool.test.ts",
         "main/handlers/workspace-artifacts.test.ts",
-        "main/services/workspace-artifacts/runner.test.ts"
+        "main/services/workspace-artifacts/runner.test.ts",
+        "main/services/peer-project-source.test.ts",
+        "main/services/peer-project-file-io.test.ts",
+        "main/handlers/peer-project-clone.test.ts",
+        "renderer/shared/peer-project-clone.test.ts",
+        "renderer/main/peer-project-clone-dialog.test.tsx"
       ],
       "preserved": [
         "browser",

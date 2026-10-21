@@ -468,7 +468,7 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
 
   const clone = async (
     input: CloneRequestInput,
-    options: { cloneId: string; signal: AbortSignal; onProgress(progress: WorkspaceCloneProgress): void },
+    options: { cloneId: string; signal: AbortSignal; onProgress(progress: WorkspaceCloneProgress): void; beforePublish?(stagedRepository: string): Promise<void>; beforeRegister?(): Promise<void> },
   ): Promise<WorkspaceCloneResult<Workspace>> => {
     const parsed = parseCloneUrl(input.url);
     if (!parsed.ok) return fail("invalid-url", parsed.reason);
@@ -532,11 +532,14 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
           const classified = classifyCloneFailure(outcome.stderrTail);
           return fail(classified.code, classified.reason, detail ? { detail } : {});
         }
+        await options.beforePublish?.(path.join(staging, CLONE_STAGING_REPO));
+        if (options.signal.aborted) return fail("cancelled", "Clone cancelled.");
         const published = await publishClone(staging, destination);
         if (published) return published;
       } finally {
         await removeStaging(staging, token);
       }
+      await options.beforeRegister?.();
       const registered = await register(destination);
       if (!registered.ok) {
         return fail(

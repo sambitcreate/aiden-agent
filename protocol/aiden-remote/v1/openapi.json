@@ -8021,6 +8021,54 @@
               }
             },
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode",
+              "selection",
+              "url",
+              "files"
+            ],
+            "properties": {
+              "mode": {
+                "const": "clone"
+              },
+              "selection": {
+                "type": "string",
+                "pattern": "^sel_[A-Za-z0-9_-]{43}$"
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "files": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "content"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 80,
+                      "pattern": "^\\.(?:env|dev\\.vars)(?:\\.[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 131072
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false,
+            "description": "Desktop-only, requires workspace:manage and workspace:browse. Clones into a new repository-name child of the selected approved folder. Optional ignored root-level environment text files are at most 128 KiB each and 512 KiB total. Request cancellation stops the clone before publication when possible; a lost reply must be reconciled before a fresh request."
           }
         ]
       },

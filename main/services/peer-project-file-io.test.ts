@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import * as fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import { capturePeerProjectRoot, createPeerProjectFile, readPeerProjectFile } from "./peer-project-file-io.js";
+
+test("environment transfer pins the root and leaf identities, refuses overwrites, and creates private files", async t => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-env-io-")));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const rootPath = path.join(directory, "project");
+  const outside = path.join(directory, "outside");
+  await fs.mkdir(rootPath); await fs.mkdir(outside);
+  const root = await capturePeerProjectRoot(rootPath);
+  const signal = new AbortController().signal;
+  await createPeerProjectFile(root, ".env", "A=private", signal);
+  assert.equal((await fs.stat(path.join(rootPath, ".env"))).mode & 0o777, 0o600);
+  const stat = await fs.stat(path.join(rootPath, ".env"), { bigint: true });
+  const file = { device: String(stat.dev), inode: String(stat.ino) };
+  assert.equal((await readPeerProjectFile(root, ".env", file)).toString(), "A=private");
+  await assert.rejects(createPeerProjectFile(root, ".env", "overwritten", signal));
+  await fs.rename(path.join(rootPath, ".env"), path.join(rootPath, ".env.original"));
+  await fs.writeFile(path.join(outside, "kept"), "outside");
+  await fs.symlink(path.join(outside, "kept"), path.join(rootPath, ".env"));
+  await assert.rejects(readPeerProjectFile(root, ".env", file));
+  await fs.rename(rootPath, `${rootPath}-moved`);
+  await fs.symlink(outside, rootPath);
+  await assert.rejects(createPeerProjectFile(root, ".env.new", "private", signal));
+  assert.deepEqual(await fs.readdir(outside), ["kept"]);
+});

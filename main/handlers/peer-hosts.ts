@@ -1,3 +1,6 @@
+import { registerPeerProjectCloneHandlers } from "./peer-project-clone.js";
+import { createPeerProjectSource } from "../services/peer-project-source.js";
+import { configStore } from "../services/config-store.js";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import { registerPeerIntentHandlers } from "./peer-intents.js";
 import { getPeerIntentStore } from "../services/peer-intent-store-main.js";
@@ -11,6 +14,16 @@ import { registerPeerHostLiveHandlers } from "./peer-host-live.js";
 import { registerPeerPairingHandlers } from "./peer-pairing.js";
 
 export function registerPeerHostHandlers(): void {
+  registerPeerProjectCloneHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: event => {
+      const owner = rendererDocumentOwner(event, () => new Error("Project transfer requires an active application document."));
+      return { key: `${owner.id}:${owner.documentId}`, isDestroyed: owner.isDestroyed, onInvalidated: owner.onInvalidated };
+    },
+    source: createPeerProjectSource({ getWorkspace: id => configStore.getWorkspace(id) }),
+    hosts: () => getPeerHostRegistry().list(),
+    manager: getPeerHostManager,
+  });
   registerPeerIntentHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     active: event => {
