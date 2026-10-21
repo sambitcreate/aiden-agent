@@ -17,6 +17,7 @@ import { createBotMemoryReview } from "../bot-memory/review.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { createBotPauseStore, type BotPauseRecord, type BotPauseStore } from "../bot-pause-store.js";
+import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { createBotQuestions } from "./bot-questions.js";
 import {
@@ -27,6 +28,7 @@ import {
   type BotSessionServiceDeps,
   type BotSessionState,
 } from "./bot-session-service.js";
+import { suggestConnectionCandidate } from "./bot-tool-candidates.js";
 import { botDirectoryName } from "./harness-host.js";
 import { createBotLiveProjection, projectBotTranscript } from "./live-projection.js";
 import { countingTool, fakeMemoryAuthority, recordingDeps } from "./test-support/fixtures.js";
@@ -148,6 +150,51 @@ test("a pause whose session can't reopen still stops the Bot's other work and te
     assert.deepEqual(await service.state(BOT), pausedAt(), "the Bot stays paused");
   } finally {
     await service.shutdown();
+  }
+});
+
+test("a connect card the Bot is suggesting as it pauses never wedges it: the pause, the next message and quit all finish", async () => {
+  let started!: () => void;
+  const began = new Promise<void>((resolve) => (started = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const suggest = suggestConnectionCandidate(BOT, {
+    isConnected: async () => {
+      started();
+      await gate;
+      return false;
+    },
+    isDismissed: async () => false,
+  });
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(SUGGEST_CONNECTION_TOOL_NAME, { pluginId: "gmail", reason: "To read your mail." })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("never"),
+    fauxAssistantMessage("Hello again."),
+  ]);
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    extension: recordingDeps({ tools: [{ tool: suggest.tool, replay: "unsafe", bind: suggest.bind! }] }),
+    suspendTimeoutMs: 300,
+  });
+  const within = <T>(work: Promise<T>, what: string) =>
+    Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error(`${what} never finished`)), 5_000)),
+    ]);
+  try {
+    await service.send(BOT, { text: "check my mail", requestId: "desk-1" });
+    await began;
+    const pausing = service.pause(BOT, "mac");
+    // The pause is closing the Bot's session while the tool still works on its card.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    assert.equal((await within(pausing, "the pause")).kind, "paused");
+    assert.equal(fauxModels.calls(), 1, "nothing ran under the pause");
+    await within(service.unpause(BOT), "the unpause");
+    await within(service.send(BOT, { text: "hello?", requestId: "desk-2" }), "the next message");
+  } finally {
+    await within(service.shutdown(), "quit");
   }
 });
 

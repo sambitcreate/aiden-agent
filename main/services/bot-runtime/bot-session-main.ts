@@ -25,7 +25,6 @@
 // its summary.
 
 import * as path from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
@@ -128,14 +127,6 @@ async function loadBot(botId: string): Promise<BotDefinition> {
   return bot;
 }
 
-async function connectCards(botId: string): Promise<ConnectCardEntry[]> {
-  const conversation = await (await botSessionRuntime()).conversation(botId);
-  const view = await conversation.context(BACKGROUND_CONTEXT);
-  return view.entries
-    .filter((entry) => entry.kind === BOT_CONNECT_CARD_ENTRY_KIND)
-    .map((entry) => entry.data as unknown as ConnectCardEntry);
-}
-
 /** Whether the Bot's resolved model takes images; false while it has none. */
 async function imageInput(botId: string): Promise<boolean> {
   const cached = resolvedModels.get(botId);
@@ -153,14 +144,6 @@ const toolSources = createBotToolSources({
   imageInput,
   admit,
   dismissals,
-  appendConnectCard: async (botId, card) => {
-    const conversation = await (await botSessionRuntime()).conversation(botId);
-    await conversation.submit(
-      { type: "write", entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { ...card } } },
-      BACKGROUND_CONTEXT,
-    );
-  },
-  connectCards,
   botName: async (botId) => (await botStore.get(botId))?.name,
 });
 
@@ -228,8 +211,6 @@ const memoryReview = createBotMemoryReview({
 const compactionSteering = createBotCompactionSteering({
   memory,
   admit: admitMemoryWork,
-  // Appended, not submitted: a flush that ends as the Bot pauses must not restart its closed turn.
-  appendEntry: async (botId, kind, data) => (await botSessionRuntime()).appendEntry(botId, kind, { ...data }),
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
 });
 

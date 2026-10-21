@@ -70,7 +70,8 @@ export async function recordRuleHandoffEntry(
 ): Promise<boolean> {
   const { botId: _botId, ...details } = record;
   const entries = await conversation.entries();
-  const madeAt = entries.findLastIndex((entry) => issuesCall(entry, record.toolCallId));
+  let madeAt = entries.length - 1;
+  while (madeAt >= 0 && !issuesCall(entries[madeAt]!, record.toolCallId)) madeAt -= 1;
   const recorded = entries
     .slice(madeAt + 1)
     .some(

@@ -64,9 +64,6 @@ async function harnessFor(
       lease: authority.lease,
     }),
     reserveTokens: settings.compaction.reserveTokens,
-    appendEntry: async (_botId, kind, data) => {
-      await conversation!.submit({ type: "write", entry: { kind, data: { ...data } } }, ctx);
-    },
   });
   const steering: typeof steer = (botId, compaction, offer, context) => {
     extra.onCompact?.(compaction);

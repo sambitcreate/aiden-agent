@@ -18,14 +18,12 @@
 // builds; it never decides what a Bot may use.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
-import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { createSuggestConnectionTool, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
+import { isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
@@ -56,11 +54,11 @@ import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } 
 import {
   routineNotesCandidate,
   routinesCandidate,
-  routineTaskIdOfRun,
+  routineTaskIdOfCall,
   shareImageCandidate,
+  suggestConnectionCandidate,
   visionCandidate,
 } from "./bot-tool-candidates.js";
-import type { BotToolCall } from "./tool-adapter.js";
 import { botComputerUseApproval } from "./bot-computer-use-approval.js";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 import { botQuestions } from "./bot-questions-main.js";
@@ -87,8 +85,6 @@ export interface BotToolSourceDeps {
   /** A fresh admission, used by tools that revalidate during their own effect. */
   admit(botId: string): Promise<BotAdmission>;
   dismissals: Pick<BotConnectionDismissalStore, "isDismissed">;
-  appendConnectCard(botId: string, card: ConnectCardEntry): Promise<void>;
-  connectCards(botId: string): Promise<ConnectCardEntry[]>;
   /** The Bot's name, for what its browser tells the person. */
   botName?(botId: string): Promise<string | undefined>;
 }
@@ -151,26 +147,6 @@ const lazyRoutineNotes = {
   delete: async (botId: string, taskId: string, key: unknown) =>
     (await routineServices()).botRoutineNotes.delete(botId, taskId, key),
 };
-
-/** The routine task id of the run making `call`, from the Bot's live session. */
-async function routineTaskIdOfCall(botId: string, call: BotToolCall): Promise<string | undefined> {
-  const { botSessionRuntime } = await import("./bot-session-main.js");
-  const runtime = await botSessionRuntime();
-  const conversation = await runtime.conversation(botId);
-  return routineTaskIdOfRun(await call.entries(), {
-    runningSubmissionId: async () => {
-      const state = await runtime.state(botId);
-      return state.kind === "running" ? state.submissionId : undefined;
-    },
-    submissionIdOf: async (requestId) => {
-      const submission = await conversation.commit(
-        (tx) => tx.submissionByRequest(conversation.id, requestId),
-        BACKGROUND_CONTEXT,
-      );
-      return submission === undefined ? undefined : String(submission.id);
-    },
-  });
-}
 
 function once<T>(load: () => Promise<T>): () => Promise<T> {
   let value: Promise<T> | undefined;
@@ -445,19 +421,13 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Both are always installed; ingress (`botIngressAllowsTool`) keeps
       // `routines` off routine and Telegram runs and `routine_notes` on routine runs only.
       tools.push(routinesCandidate(botId, botRoutineToolDependencies));
-      tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: (call) => routineTaskIdOfCall(botId, call) }));
-      tools.push({
-        tool: createSuggestConnectionTool(botId, {
+      tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      tools.push(
+        suggestConnectionCandidate(botId, {
           isConnected,
           isDismissed: (id, pluginId) => deps.dismissals.isDismissed(id, pluginId),
-          appendConnectCard: (id, card) => deps.appendConnectCard(id, card),
-          hasPendingCard: async (id, pluginId) => {
-            const matching = (await deps.connectCards(id)).filter((card) => card.pluginId === pluginId);
-            return matching[matching.length - 1]?.status === "pending";
-          },
         }),
-        replay: "unsafe",
-      });
+      );
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
       tools.push(botHandoffCandidate(botId, botHandoffs));
