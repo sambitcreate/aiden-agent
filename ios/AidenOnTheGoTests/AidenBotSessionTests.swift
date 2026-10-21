@@ -3283,23 +3283,27 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
     }
 
     func testAMessageCutOffByLeavingAndThenRefusedForAStateReasonKeepsItsKey() async throws {
-        let transport = FakeBotSessionTransport()
-        let model = await loaded(transport, try session(.idle))
-        transport.holdSend = true
-        let sending = Task { await model.send("Plan my week.") }
-        try await waitUntil({ transport.isHoldingSend }, what: "the request")
-        sending.cancel() // leaving the chat cuts the request off; it may have arrived
-        _ = await sending.value
-        transport.holdSend = false
+        // On the next connection the Bot needs a model, or the person paused it
+        // (revision 37): the message says it couldn't be sent, without asking the Mac.
+        for refusal: AidenBotSessionStateKind in [.needsModel, .paused] {
+            let transport = FakeBotSessionTransport()
+            let model = await loaded(transport, try session(.idle))
+            transport.holdSend = true
+            let sending = Task { await model.send("Plan my week.") }
+            try await waitUntil({ transport.isHoldingSend }, what: "the request")
+            sending.cancel() // leaving the chat cuts the request off; it may have arrived
+            _ = await sending.value
+            transport.holdSend = false
 
-        // On the next connection the Bot needs a model: the message says it couldn't be sent.
-        _ = await model.apply(event(seq: 5, .snapshot(try session(.needsModel, seq: 5))))
-        try await waitUntil({ model.outgoing.first.map { model.look(of: $0) } == .failed }, what: "the failure")
-        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
-        let retried = await model.retrySend(try XCTUnwrap(model.outgoing.first).id)
-        XCTAssertTrue(retried)
-        XCTAssertEqual(transport.sendKeys.count, 2)
-        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "Try again replays the key the cut-off request used")
+            _ = await model.apply(event(seq: 5, .snapshot(try session(refusal, seq: 5))))
+            try await waitUntil({ model.outgoing.first.map { model.look(of: $0) } == .failed }, what: "the failure")
+            XCTAssertEqual(transport.sendKeys.count, 1, "\(refusal): nothing goes out while the Bot can't take it")
+            _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+            let retried = await model.retrySend(try XCTUnwrap(model.outgoing.first).id)
+            XCTAssertTrue(retried)
+            XCTAssertEqual(transport.sendKeys.count, 2)
+            XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "\(refusal): Try again replays the key the cut-off request used")
+        }
     }
 
     func testARefusedMessageRetriesOnANewKeyOnceTheBotIsFixed() async throws {

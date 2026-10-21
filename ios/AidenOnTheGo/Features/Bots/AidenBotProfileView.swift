@@ -746,7 +746,6 @@ struct AidenBotProfileView: View {
         }
     }
 
-    @MainActor
     /// Pauses or resumes this Bot on the Mac, then re-reads it so the page
     /// shows what the Mac now says. A change that may have arrived keeps its key.
     @MainActor
@@ -782,6 +781,7 @@ struct AidenBotProfileView: View {
         }
     }
 
+    @MainActor
     private func deleteBot() async {
         guard canDelete, let detail else { return }
         isDeleting = true

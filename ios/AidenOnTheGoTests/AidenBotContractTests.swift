@@ -2168,8 +2168,12 @@ final class AidenBotContractTests: XCTestCase {
         // A holder's session survives the cache round trip with its card.
         let roundTripped = try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONEncoder().encode(handoffs.session))
         XCTAssertEqual(roundTripped, handoffs.session)
-        let summary = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONEncoder().encode(handoffs.pausedSummary))
+        // The Bot cache writes dates as ISO 8601 strings, as the Mac sends them.
+        let cacheEncoder = JSONEncoder()
+        cacheEncoder.dateEncodingStrategy = .iso8601
+        let summary = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: cacheEncoder.encode(handoffs.pausedSummary))
         XCTAssertTrue(summary.paused)
+        XCTAssertEqual(summary.sessionState, .paused)
     }
 
     /// Hand-offs fail closed like the Mac's own parser.
@@ -2180,6 +2184,10 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card))
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.filter { $0.key != "why" && $0.key != "open" }), "why and open are optional")
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.merging(["kind": "sign_in"]) { $1 }))
+        // The Mac stores a page as its WHATWG `href`, which keeps characters
+        // such as `[`, `]` and `|` unescaped; the phone shows that card too.
+        let jiraPage = "https://jira.example.com/browse?filter[status]=open&q=a|b"
+        XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.merging(["open": ["url": jiraPage]]) { $1 }), "a page as the Mac stores it")
         let refused: [(String, [String: Any])] = [
             ("an unknown key", card.merging(["origin": "https://bank.example.com"]) { $1 }),
             ("an unknown kind", card.merging(["kind": "approve"]) { $1 }),

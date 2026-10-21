@@ -574,11 +574,14 @@ enum AidenBotHandoffWire {
 
     /// An https page with a host and no user name or password, with nothing
     /// around it, at most 2,048 characters: what the Mac's own parser accepts.
+    /// The Mac stores a page as its WHATWG `href`, which keeps characters
+    /// RFC 3986 does not allow (`[`, `]`, `|`, `^` in a path or query), so the
+    /// parse encodes them instead of refusing the card.
     static func isOpenURL(_ value: String) -> Bool {
         guard !value.isEmpty,
               value.unicodeScalars.count <= maxURLLength,
               value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
-              let components = URLComponents(string: value),
+              let components = URLComponents(string: value, encodingInvalidCharacters: true),
               components.scheme?.lowercased() == "https",
               let host = components.host, !host.isEmpty,
               components.user == nil, components.password == nil else {

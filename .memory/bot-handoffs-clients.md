@@ -51,6 +51,12 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
 - Notifications (G24): `AidenScheduledRunNotifier.notifyBotHandoff` posts one alert per waitId when the app isn't active.
 - `scripts/check-ios-shipping-target.test.mjs` allowlists the new Swift file.
 - Tests: `AidenBotContractTests`, `AidenBotSessionTests`, `AidenRemoteClientTests`, `AidenChatTests` and `AidenBotHomeProfileTests` (fixture `botHandoffs` via `AidenRemoteContractFixture.swift`). They can only run on macOS CI or the owner's Mac.
+- Completeness check (same day):
+  - `AidenBotHandoffWire.isOpenURL` and the card's Open parse with `encodingInvalidCharacters: true` (iOS 17+). The Mac stores a page as its WHATWG `href`, which keeps `[`, `]`, `|` and `^` unescaped; plain `URLComponents(string:)` refuses those, and the phone would refuse the whole session.
+  - The outbox's pre-send check uses `canSend`, so a paused Bot takes nothing (as on Android) and a cut-off request keeps its key.
+  - Profile `setPaused` and `deleteBot` each carry one `@MainActor`.
+  - The cache round trip of a paused summary encodes dates as ISO 8601, as `AidenBotCache` does.
+  - `AidenBotSessionModel.pause()` (optimistic) has tests but no production caller: Pause is offered on the profile only, as on Android. The desktop chat's ••• menu also has it.
 
 ## Android
 - Protocol: `protocol/AidenRemoteProtocol.kt` has `BOT_HANDOFFS` (negotiable and phone-known; `PHONE_BOT_HANDOFFS`) and the `BOT_PAUSED` and `HANDOFF_EXPIRED` codes. `botHandoffs` is a fixture Bot root whose `pausedDetail.instructions` is allowed.

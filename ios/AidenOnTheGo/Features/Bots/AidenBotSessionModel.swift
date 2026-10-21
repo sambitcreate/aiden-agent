@@ -1631,7 +1631,9 @@ final class AidenBotSessionModel {
 
     private func deliver(_ key: UUID) async {
         guard let index = outbox.firstIndex(where: { $0.key == key }) else { return }
-        if needsModel || state == .unavailable {
+        // A paused Bot (revision 37) takes nothing either, as on Android: the
+        // message waits as "Couldn't send · Try again".
+        if !canSend {
             // A frozen request may have reached the Mac: Try again replays its key.
             outbox[index].status = .failed
             outbox[index].keepsKey = outbox[index].request != nil

@@ -91,7 +91,7 @@ struct AidenBotHandoffCard: View {
     /// decoder refuses anything else, so this is checked once more for safety.
     private var openURLValue: URL? {
         guard let value = handoff.open?.url, AidenBotHandoffWire.isOpenURL(value) else { return nil }
-        return URL(string: value)
+        return URL(string: value, encodingInvalidCharacters: true)
     }
 
     /// "Open bank.example.com", or "Open" when the host can't be shown.

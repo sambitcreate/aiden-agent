@@ -220,7 +220,9 @@ class AidenBotHandoffsContractTest {
             "https://bank.example.com/verify",
             "HTTPS://bank.example.com",
             "https://bank.example.com:8443/verify?step=2#code",
-            "https://[2001:db8::1]/sign-in"
+            "https://[2001:db8::1]/sign-in",
+            // The Mac stores a page as its WHATWG href, which keeps `[`, `]` and `|` unescaped.
+            "https://jira.example.com/browse?filter[status]=open&q=a|b"
         )) assertTrue(url, AidenBotHandoffWire.isOpenUrl(url))
         for (url in listOf(
             "",
