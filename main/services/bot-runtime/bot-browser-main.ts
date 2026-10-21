@@ -3,10 +3,11 @@
 // panel's request for its browser, hand-off links opened in it, and the hold
 // each such tab keeps until its card settles (blueprint G13, G14).
 
-import { registerBotBrowserWorkspace, browserWorkspacesOfBot } from "../browser/bot-workspaces.js";
+import { registerBotBrowserWorkspace } from "../browser/bot-workspaces.js";
 import { currentMainWindow } from "../bot-connection-setup.js";
 import { logger } from "../../platform.js";
 import { windowDocumentOwner, type RendererDocumentOwner } from "../renderer-document-owner.js";
+import { createBotBrowserHandoffOpener } from "./bot-browser-handoff.js";
 import { createBotBrowser } from "./bot-browser-tools.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 
@@ -58,51 +59,15 @@ async function hasBrowserAccess(botId: string): Promise<boolean> {
   }
 }
 
-let releasing = false;
-
-/** A settled or withdrawn card gives its tabs back to the Bot. */
-function releaseHoldsOnSettle(): void {
-  if (releasing) return;
-  releasing = true;
-  botHandoffs.onSettled((prompt) => {
-    const workspaces = browserWorkspacesOfBot(prompt.botId);
-    if (workspaces.length === 0) return;
-    void browserService()
-      .then((service) => {
-        for (const workspaceId of workspaces) service.release(workspaceId, prompt.waitId);
-      })
-      .catch((error: unknown) => logger.warn("bots", "Could not release a Bot browser tab.", error));
-  });
-}
-
 /**
  * Open a hand-off link in a new tab of the Bot's browser, shown to the
- * person and held for them until the card settles. `owner` is the document
- * that asked (the card's Open); without one, the current main window. False
- * when the Bot has no browser to open it in (an action card then opens the
- * system browser).
+ * person and held for them until the card settles (`bot-browser-handoff.ts`).
  */
-export async function openInBotBrowser(
-  botId: string,
-  waitId: string,
-  url: string,
-  hold: "handoff" | "sign_in",
-  owner?: RendererDocumentOwner,
-): Promise<boolean> {
-  releaseHoldsOnSettle();
-  // An action's link opens in the Bot's browser only for a Bot that browses
-  // (its cart, its sign-ins); otherwise the person's own browser is better.
-  if (hold === "handoff" && !(await hasBrowserAccess(botId))) return false;
-  const workspaceId = await botBrowserWorkspace(botId);
-  if (workspaceId === null) return false;
-  const service = await browserService();
-  const document = owner ?? (service.hasOwner(workspaceId) ? undefined : mintBotBrowserOwner());
-  if (!document && !service.hasOwner(workspaceId)) return false;
-  if (document) service.transferOwner(workspaceId, document);
-  const result = await service.command(workspaceId, { action: "create", url, show: true }, { source: "user" });
-  if (!result.tabId) return false;
-  service.hold(workspaceId, result.tabId, { holdId: waitId, reason: hold });
-  // The card may have settled while the tab opened: nothing would release it then.
-  if (botHandoffs.get(botId, waitId) === undefined) service.release(workspaceId, waitId);
-  return true;
-}
+export const openInBotBrowser = createBotBrowserHandoffOpener({
+  service: browserService,
+  handoffs: botHandoffs,
+  workspace: botBrowserWorkspace,
+  hasBrowserAccess,
+  mintOwner: mintBotBrowserOwner,
+  onReleaseError: (error) => logger.warn("bots", "Could not release a Bot browser tab.", error),
+});
