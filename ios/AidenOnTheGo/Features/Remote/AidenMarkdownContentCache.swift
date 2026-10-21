@@ -423,8 +423,9 @@ enum AidenMarkdownChunkSpacing {
 ///   a tick.
 /// - A link whose destination is still arriving (`[label](https://exa`)
 ///   shows as its label.
-/// - Inline code, `**strong**`, `*emphasis*` and `~~strike~~` left open in
-///   the last paragraph are closed, or dropped when nothing follows them yet.
+/// - Inline code, `**strong**`, `*emphasis*` and `~~strike~~` left open on
+///   the last line are closed, or dropped when nothing follows them yet.
+///   Earlier lines are finished, so their markers are drawn as written.
 ///
 /// Only the last paragraph is examined, and nothing inside an open fenced
 /// code block changes (CommonMark already draws it as code). `_` emphasis is
@@ -507,6 +508,9 @@ enum AidenStreamingMarkdownTail {
         while index < text.count {
             let character = text[index]
             if character == "\n" {
+                // Repair only the last line: an unbalanced marker on a
+                // finished line is literal text and must stay as written.
+                open.removeAll()
                 lineStart = true
                 index += 1
                 continue

@@ -4365,8 +4365,36 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testDoneRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
-        try await assertTerminalRevealsBufferedText(type: "done", payload: #"{"messageId":"reply"}"#, state: .done)
+    func testDoneKeepsRevealingBufferedTextInsteadOfDumpingIt() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        let words = (0..<60).map { "word\($0)" }.joined(separator: " ")
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"\#(words)"}"#)
+        )
+        try await waitUntil { ticks.pending == 1 }
+        let readsBeforeTerminal = fixture.chatReads
+        let held = expectation(description: "done transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "done", #"{"messageId":"reply"}"#, terminal: true)
+        )
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertEqual(model.streamState, .done)
+        XCTAssertEqual(fixture.chatReads, readsBeforeTerminal + 1, "done reads the transcript without waiting for the reveal")
+        XCTAssertEqual(model.liveText, "", "done does not dump the buffered text in one frame")
+        // While the transcript is read, ticks drain what is left, faster.
+        var revealTicks = 0
+        while model.liveText != words {
+            try await waitUntil { ticks.pending == 1 }
+            ticks.releaseAll()
+            revealTicks += 1
+            XCTAssertLessThan(revealTicks, 20, "the end of a reply drains within a few ticks")
+        }
+        XCTAssertGreaterThan(revealTicks, 1)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
     }
 
     @MainActor

@@ -29,6 +29,10 @@ enum AidenStreamingRevealGate {
     /// drains over roughly `drainTicks` ticks (about a quarter second).
     static let drainTicks = 8
 
+    /// After the run is done, a tick shows at least 1/`finishingDrainTicks`
+    /// of what is left, so the end lands within a transcript read.
+    static let finishingDrainTicks = 3
+
     /// The slowest reveal: about 90 characters a second at 30 ticks a second.
     static let minimumCharactersPerTick = 3
 
@@ -42,10 +46,15 @@ enum AidenStreamingRevealGate {
     /// How many characters of a `backlog`-character buffer one tick shows
     /// before rounding up to a word boundary. Unpaced (Reduce Motion), a
     /// tick shows the whole backlog.
-    static func characterBudget(forBacklog backlog: Int, paced: Bool = true) -> Int {
+    static func characterBudget(
+        forBacklog backlog: Int,
+        paced: Bool = true,
+        finishing: Bool = false
+    ) -> Int {
         guard backlog > 0 else { return 0 }
         guard paced else { return backlog }
-        let share = (backlog + drainTicks - 1) / drainTicks
+        let ticks = finishing ? finishingDrainTicks : drainTicks
+        let share = (backlog + ticks - 1) / ticks
         let catchUp = backlog - maximumBacklogCharacters
         return min(backlog, max(minimumCharactersPerTick, share, catchUp))
     }
@@ -53,14 +62,16 @@ enum AidenStreamingRevealGate {
     /// Splits `pending` into the text to show now and the text to keep
     /// buffered. `heldPreviousTick` is whether the previous tick returned a
     /// non-empty `held`. With `paced` false (Reduce Motion) a tick shows
-    /// everything up to the last whitespace.
+    /// everything up to the last whitespace. `finishing` (the run is done)
+    /// drains faster.
     static func cut(
         _ pending: String,
         heldPreviousTick: Bool,
-        paced: Bool = true
+        paced: Bool = true,
+        finishing: Bool = false
     ) -> (shown: String, held: String) {
         guard !pending.isEmpty else { return ("", "") }
-        let budget = characterBudget(forBacklog: pending.count, paced: paced)
+        let budget = characterBudget(forBacklog: pending.count, paced: paced, finishing: finishing)
         // Whole words covering at least the budget.
         let budgetEnd = pending.index(pending.startIndex, offsetBy: budget - 1)
         if let wordEnd = pending[budgetEnd...].firstIndex(where: \.isWhitespace) {

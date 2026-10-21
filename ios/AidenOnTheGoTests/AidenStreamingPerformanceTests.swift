@@ -479,6 +479,18 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         XCTAssertEqual(tail("Nested **bold *ita"), "Nested **bold *ita***")
     }
 
+    func testStreamingTailRepairsOnlyTheLastLine() {
+        XCTAssertEqual(tail("- 2*3\n- next **bo"), "- 2*3\n- next **bo**")
+    }
+
+    func testFinishingRevealDrainsFasterThanStreaming() {
+        let words = (0..<100).map { "word\($0) " }.joined()
+        let streaming = AidenStreamingRevealGate.cut(words, heldPreviousTick: false)
+        let finishing = AidenStreamingRevealGate.cut(words, heldPreviousTick: false, finishing: true)
+        XCTAssertGreaterThan(finishing.shown.count, streaming.shown.count)
+        XCTAssertFalse(finishing.held.isEmpty, "still paced, not dumped")
+    }
+
     func testStreamingTailHidesAnOpenerWithNothingAfterIt() {
         XCTAssertEqual(tail("Hello **"), "Hello ")
         XCTAssertEqual(tail("Run `"), "Run ")
@@ -493,6 +505,9 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             "Escaped \\*star",
             "A [link](https://example.com) here",
             "`code with ** inside`",
+            // A finished line's unbalanced marker is literal, not open.
+            "- 2*3\n- next item",
+            "Cost: 5 `units\nand more",
         ] {
             XCTAssertEqual(tail(text), text, text)
         }

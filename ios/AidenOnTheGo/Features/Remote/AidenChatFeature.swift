@@ -1360,6 +1360,9 @@ final class AidenChatViewModel {
     /// Whether reveal ticks pace a burst out. Off under Reduce Motion, where
     /// each tick shows every whole word received.
     @ObservationIgnored private var pacesStreamingReveal = true
+    /// The run is done: drain the remaining backlog in a few ticks while the
+    /// settled transcript is read.
+    @ObservationIgnored private var finishesStreamingReveal = false
     @ObservationIgnored private var pendingStreamingRevealTask: Task<Void, Never>?
     @ObservationIgnored private let streamingRevealTick: @Sendable () async throws -> Void
     /// Generations whose image this phone watched being generated; their
@@ -1647,6 +1650,7 @@ final class AidenChatViewModel {
         cancelPendingStreamingReveal()
         pendingLiveText = ""
         heldStreamingFragmentLastTick = false
+        finishesStreamingReveal = false
         receivedLiveTextUTF8Count = text.utf8.count
         liveText = text
     }
@@ -1682,12 +1686,22 @@ final class AidenChatViewModel {
         let (shown, held) = AidenStreamingRevealGate.cut(
             pendingLiveText,
             heldPreviousTick: heldStreamingFragmentLastTick,
-            paced: pacesStreamingReveal
+            paced: pacesStreamingReveal,
+            finishing: finishesStreamingReveal
         )
         pendingLiveText = held
         heldStreamingFragmentLastTick = !held.isEmpty
         if !shown.isEmpty { liveText += shown }
         if heldStreamingFragmentLastTick { scheduleStreamingReveal() }
+    }
+
+    /// Keeps revealing what is buffered, faster, without a final dump.
+    private func finishStreamingReveal() {
+        guard !pendingLiveText.isEmpty else { return }
+        finishesStreamingReveal = true
+        // A held fragment is final now; nothing more will complete it.
+        heldStreamingFragmentLastTick = true
+        scheduleStreamingReveal()
     }
 
     func setPacesStreamingReveal(_ paces: Bool) {
@@ -1712,6 +1726,13 @@ final class AidenChatViewModel {
         if isStreaming || !liveText.isEmpty { return true }
         guard activeStreamID != nil || foreignRunIsLive else { return false }
         return !reasoning.isEmpty || !tools.isEmpty || activityTimeline != nil
+    }
+    /// The live reply has not been replaced by the settled one yet. Its
+    /// placeholders, visual cards and streaming Markdown stay as they are
+    /// until then, so nothing shrinks between the run ending and the
+    /// settled transcript arriving.
+    var isLiveReplyUnsettled: Bool {
+        isStreaming || activeStreamID != nil || foreignRunIsLive
     }
     var canSend: Bool {
         guard !isReadOnlyPresentation, !isRemoved, pendingSend == nil, sendRecoveryError == nil else { return false }
@@ -4252,7 +4273,12 @@ final class AidenChatViewModel {
               event.shouldApply else { return }
         // Text received before any other event is shown before it lands, so
         // tools, approvals and terminal states never overtake the reply.
-        if event.type != .textDelta, event.type != .heartbeat {
+        // `done` drains faster instead: the settled reply replaces the live
+        // one with the whole text, so dumping the backlog would only make the
+        // end of the reply jump.
+        if event.type == .done {
+            finishStreamingReveal()
+        } else if event.type != .textDelta, event.type != .heartbeat {
             flushPendingStreamingContent()
         }
         if event.type == .questionRequired {
@@ -7722,7 +7748,7 @@ private struct AidenLiveResponseView: View {
     }
 
     private var visualizingLabel: String? {
-        guard model.isStreaming else { return nil }
+        guard model.isLiveReplyUnsettled else { return nil }
         return AidenAgentActivityPresentation.visualizingLabel(model.activityTimeline)
     }
 
@@ -7789,7 +7815,8 @@ private struct AidenLiveResponseView: View {
         visibleText: String,
         visibleActivitySteps: [AidenAgentStep]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // The settled message's spacing, so rows don't shift when it settles.
+        VStack(alignment: .leading, spacing: 10) {
             if model.isStreaming && model.isWaitingForNetwork {
                 HStack(spacing: 8) {
                     Image(systemName: "wifi.slash")
@@ -7851,7 +7878,7 @@ private struct AidenLiveResponseView: View {
             }
 
             if let chronologicalRows {
-                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isStreaming)
+                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isLiveReplyUnsettled)
                     .contextMenu {
                         if !visibleText.isEmpty {
                             Button {
@@ -7870,7 +7897,7 @@ private struct AidenLiveResponseView: View {
                     }
             }
 
-            if model.isStreaming {
+            if model.isLiveReplyUnsettled {
                 ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
                     AidenImageGenerationPlaceholderView(item: item)
                         .transition(.opacity)
@@ -7903,7 +7930,7 @@ private struct AidenLiveResponseView: View {
             }
 
             if chronologicalRows == nil && !visibleText.isEmpty {
-                AidenMarkdownView(content: visibleText, isStreaming: model.isStreaming)
+                AidenMarkdownView(content: visibleText, isStreaming: model.isLiveReplyUnsettled)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
                         if presentationStyle == .botMessages {
