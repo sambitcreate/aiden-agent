@@ -197,7 +197,7 @@ test("only keys that put text into a field count as typing", () => {
 });
 
 test("a Bot can't find a field by what is typed in it", () => {
-  for (const selector of ['input[value^="a"]', "input[ VALUE$='1']", "[*|value]", 'internal:attr=[value="x"]', "xpath=//input[@value='hunter2']", "input[v\\61lue]"]) {
+  for (const selector of ['input[value^="a"]', "input[ VALUE$='1']", "[*|value]", 'internal:attr=[value="x"]', "xpath=//input[@value='hunter2']", "xpath=//input[starts-with(attribute::value,'h')]", "xpath=//input[@ value='h']", "input[v\\61lue]"]) {
     assert.throws(() => assertBoundarySelector(selector), /what is typed/u, selector);
   }
   for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip"]) {

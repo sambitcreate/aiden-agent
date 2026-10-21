@@ -17,6 +17,7 @@ import {
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import type { BrowserCommandContext, BrowserFieldProbe } from "../browser/service.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
+import { BROWSER_VALUE_SELECTOR_REFUSED } from "../browser/credential-boundary.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
 import {
@@ -63,6 +64,7 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
   const page = { document: 1, control: 0 };
   let owner: RendererDocumentOwner | undefined = options.owned === false ? undefined : WINDOW;
   let probe: BrowserFieldProbe | undefined = COMPOSER;
+  let probes = 0;
   const commands: Array<{ command: BrowserCommand; context: BrowserCommandContext }> = [];
   const transfers: RendererDocumentOwner[] = [];
   const closed: string[] = [];
@@ -90,7 +92,10 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
       owner = next;
       transfers.push(next);
     },
-    probeAgentTarget: async () => probe,
+    probeAgentTarget: async () => {
+      probes += 1;
+      return probe;
+    },
     closeBotTabs: (botId) => void closed.push(botId),
   };
   const browser = createBotBrowser({
@@ -99,6 +104,7 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
   });
   return {
     browser, service, tabs, page, commands, transfers, closed,
+    probes: () => probes,
     setProbe(next: BrowserFieldProbe | undefined) {
       probe = next;
     },
@@ -221,6 +227,21 @@ test("a tab the person is using refuses the Bot before anything is asked", async
     fake.browser.approvalFor(BOT, "browser_click", { callId: "c", args: { locator: "text=Send" }, signal: undefined }),
     /The person is using this tab\. Wait for them to finish\./u,
   );
+});
+
+test("a selector that tests what a field holds is refused before anything reads the page", async () => {
+  const fake = fakeBrowser();
+  await fake.browser.candidates(BOT, TURN);
+  for (const args of [
+    { selector: "input[value^='h']", text: "x" },
+    { locator: "xpath=//input[starts-with(attribute::value,'h')]" },
+  ]) {
+    await assert.rejects(
+      fake.browser.approvalFor(BOT, "browser_click", { callId: "v", args, signal: undefined }),
+      new RegExp(BROWSER_VALUE_SELECTOR_REFUSED.replace(/[.]/gu, "\\.")),
+    );
+  }
+  assert.equal(fake.probes(), 0, "the page never evaluated the selector");
 });
 
 test("the card shows what the Bot will type, except into a password, code or card field or a field it couldn't read", async () => {

@@ -19,7 +19,7 @@ import {
   type BrowserApprovalTarget,
   type BrowserToolApproval,
 } from "../browser/approval.js";
-import { BROWSER_HELD_TAB_REFUSED } from "../browser/credential-boundary.js";
+import { assertBoundarySelector, BROWSER_HELD_TAB_REFUSED } from "../browser/credential-boundary.js";
 import type { BrowserFieldProbe, BrowserProbeTarget } from "../browser/service.js";
 import { classifyBotAction, type BotClassifiableAction } from "../bot-rules/classify.js";
 import { LOCKED_CLASSES } from "../bot-rules/words.js";
@@ -118,7 +118,8 @@ function probeTarget(toolName: AskingTool, args: Record<string, unknown>): Brows
 /**
  * The live approval of a Bot browser call. Calls that don't ask need no
  * approval and aren't classified. Throws (and so blocks the call) when there
- * is no tab, the person holds it, or the page can't be identified.
+ * is no tab, the person holds it, the page can't be identified, or a selector
+ * tests what a field holds.
  */
 export async function botBrowserApproval(
   toolName: string,
@@ -128,6 +129,10 @@ export async function botBrowserApproval(
   if (!BOT_BROWSER_ASKING_TOOLS.has(toolName)) return { approval: null };
   const tool = toolName as AskingTool;
   const args = record(call.args);
+  // A selector that tests `value` is refused before the probe runs it in the
+  // page, so its match can't say anything about what a field holds.
+  assertBoundarySelector(stringField(args, "locator"));
+  assertBoundarySelector(stringField(args, "selector"));
   const tabId = stringField(args, "tabId") ?? port.currentTabId();
   if (tabId === undefined) throw new Error("No current browser tab is available. Call browser_open first.");
   if (port.heldReason(tabId) !== undefined) throw new Error(BROWSER_HELD_TAB_REFUSED);

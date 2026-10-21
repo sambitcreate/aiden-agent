@@ -120,35 +120,46 @@ void app.whenReady().then(async () => {
   };
 
   // 2. Password, one-time code and card fields are painted over; their values never leave main.
+  /** The login page as the Bot's snapshot shows it: the colour over each field, and any secret in the result. */
+  const loginAsSeen = (login: BrowserSnapshot) => {
+    assert.ok(login.image, `login image: ${login.imageNote}`);
+    const decoded = nativeImage.createFromBuffer(Buffer.from(login.image.data, "base64"));
+    const size = decoded.getSize();
+    const bitmap = decoded.toBitmap();
+    const scale = size.width / login.tab.viewport.width;
+    const pixel = (x: number, y: number) => {
+      const offset = (Math.round(y * scale) * size.width + Math.round(x * scale)) * 4;
+      // BGRA
+      return [bitmap[offset + 2], bitmap[offset + 1], bitmap[offset]];
+    };
+    const serialized = JSON.stringify(login);
+    return {
+      note: login.imageNote,
+      password: pixel(140, 42),
+      otp: pixel(140, 122),
+      card: pixel(140, 202),
+      control: pixel(140, 322),
+      leaked: ["hunter2-secret", "481516", "4242424242424242"].filter((secret) => serialized.includes(secret)),
+    };
+  };
   await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
-  const login = await snapshot(botTab);
-  assert.ok(login.image, `login image: ${login.imageNote}`);
-  const decoded = nativeImage.createFromBuffer(Buffer.from(login.image.data, "base64"));
-  const size = decoded.getSize();
-  const bitmap = decoded.toBitmap();
-  const scale = size.width / login.tab.viewport.width;
-  const pixel = (x: number, y: number) => {
-    const offset = (Math.round(y * scale) * size.width + Math.round(x * scale)) * 4;
-    // BGRA
-    return [bitmap[offset + 2], bitmap[offset + 1], bitmap[offset]];
+  const masking = loginAsSeen(await snapshot(botTab));
+  const outcome = (run: Promise<unknown>) => run.then(() => "ran", (error: Error) => error.message);
+  const typing = await outcome(agent({ action: "type", tabId: botTab, selector: "#password", text: "guess" }));
+  const noteTyping = await outcome(agent({ action: "type", tabId: botTab, selector: "#note", text: "fine" }));
+  // A key press into a focused password field is typing too; a non-printing key is not.
+  await agent({ action: "click", tabId: botTab, selector: "#password" });
+  const pressing = await outcome(agent({ action: "press", tabId: botTab, key: "x" }));
+  const navigationKey = await outcome(agent({ action: "press", tabId: botTab, key: "Tab" }));
+  // Main refuses what could read a field or leave the page, whatever the tools offer.
+  const refused = {
+    evaluate: await outcome(agent({ action: "evaluate", tabId: botTab, expression: "document.querySelector('#password').value" })),
+    record: await outcome(agent({ action: "record_start", tabId: botTab })),
+    openFile: await outcome(agent({ action: "open_file", path: path.join(root, "result.json") })),
+    valueSelector: await outcome(agent({ action: "click", tabId: botTab, selector: "input[value^='hunter']" })),
+    // An agent command on a Bot's browser without the boundary (a workspace chat's tools).
+    unbounded: await outcome(browser.command(BOT_WORKSPACE, { action: "snapshot", tabId: botTab }, { source: "agent", supportsImages: true })),
   };
-  const serialized = JSON.stringify(login);
-  const masking = {
-    note: login.imageNote,
-    password: pixel(140, 42),
-    otp: pixel(140, 122),
-    card: pixel(140, 202),
-    control: pixel(140, 322),
-    leaked: ["hunter2-secret", "481516", "4242424242424242"].filter((secret) => serialized.includes(secret)),
-  };
-  const typing = await agent({ action: "type", tabId: botTab, selector: "#password", text: "guess" }).then(
-    () => "typed",
-    (error: Error) => error.message,
-  );
-  const noteTyping = await agent({ action: "type", tabId: botTab, selector: "#note", text: "fine" }).then(
-    () => "typed",
-    (error: Error) => error.message,
-  );
 
   // 3. A visible cross-site frame can't be inspected for fields: the image is dropped, with a note.
   await navigate(BOT_WORKSPACE, botTab, `${origin}/framed`);
@@ -159,13 +170,15 @@ void app.whenReady().then(async () => {
     leaked: JSON.stringify(framed).includes("frame-secret"),
   };
 
-  // 4. A tab the person holds refuses the Bot until it is released.
+  // 4. A tab the person holds (signing in) refuses the Bot until it is released;
+  // after that the Bot sees it again, still masked.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
   browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-1", reason: "sign_in" });
   const heldState = browser.getState(BOT_WORKSPACE).tabs.find((tab) => tab.id === botTab)?.heldForPerson;
   const held = await snapshot(botTab).then(() => "read", (error: Error) => error.message);
   const personMayUse = await user(BOT_WORKSPACE, { action: "snapshot", tabId: botTab }).then(() => true, () => false);
   browser.release(BOT_WORKSPACE, "wait-1");
-  const released = await snapshot(botTab).then(() => "read", (error: Error) => error.message);
+  const afterRelease = await snapshot(botTab).then(loginAsSeen, (error: Error) => error.message);
 
   // 5. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
   await browser.clearBotProfile(BOT, BOT_WORKSPACE);
@@ -181,12 +194,14 @@ void app.whenReady().then(async () => {
     JSON.stringify(
       {
         electron: process.versions.electron, platform: process.platform,
-        isolation, masking, typing, noteTyping, frame,
-        hold: { heldState, held, personMayUse, released },
+        isolation, masking, typing, noteTyping, pressing, navigationKey, refused, frame,
+        hold: { heldState, held, personMayUse, afterRelease },
         cleared,
         expected: {
           heldRefusal: boundary.BROWSER_HELD_TAB_REFUSED,
           typingRefusal: boundary.BROWSER_SENSITIVE_TYPING_REFUSED,
+          actionRefusal: boundary.BROWSER_BOUNDARY_ACTION_REFUSED,
+          valueSelectorRefusal: boundary.BROWSER_VALUE_SELECTOR_REFUSED,
           frameNote: boundary.BROWSER_IMAGE_OMITTED.frame,
           maskedNote: boundary.BROWSER_IMAGE_MASKED_NOTE,
         },

@@ -82,18 +82,30 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.masking.control).toEqual(RED);
   expect(result.masking.leaked).toEqual([]);
   expect(result.typing).toBe(result.expected.typingRefusal);
-  expect(result.noteTyping).toBe("typed");
+  expect(result.noteTyping).toBe("ran");
+  expect(result.pressing).toBe(result.expected.typingRefusal);
+  expect(result.navigationKey).toBe("ran");
+  expect(result.refused).toEqual({
+    evaluate: result.expected.actionRefusal,
+    record: result.expected.actionRefusal,
+    openFile: result.expected.actionRefusal,
+    valueSelector: result.expected.valueSelectorRefusal,
+    unbounded: "This browser belongs to a Bot.",
+  });
 
   // A cross-site frame can't be checked for fields: no image, and a note saying why.
   expect(result.frame).toEqual({ image: false, note: result.expected.frameNote, leaked: false });
 
-  // A held tab refuses the Bot, not the person, until it is released.
-  expect(result.hold).toEqual({
-    heldState: { reason: "sign_in" },
-    held: result.expected.heldRefusal,
-    personMayUse: true,
-    released: "read",
-  });
+  // A held tab refuses the Bot, not the person, until it is released; then the
+  // Bot sees it again with the same fields covered.
+  expect(result.hold.heldState).toEqual({ reason: "sign_in" });
+  expect(result.hold.held).toBe(result.expected.heldRefusal);
+  expect(result.hold.personMayUse).toBe(true);
+  const afterRelease = result.hold.afterRelease;
+  expect(typeof afterRelease, String(afterRelease)).toBe("object");
+  for (const field of ["password", "otp", "card"]) expect(painted(afterRelease[field]), `${field} after release`).toBe(true);
+  expect(afterRelease.control).toEqual(RED);
+  expect(afterRelease.leaked).toEqual([]);
 
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
   expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });

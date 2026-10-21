@@ -202,6 +202,8 @@ export function scrubBrowserSnapshot(snapshot: BrowserSnapshot, sensitive: Reado
   };
 }
 
+/** A Bot's browser never runs these: page scripts, recording, local files, annotation, screenshot capture, DevTools. */
+export const BROWSER_BOUNDARY_ACTION_REFUSED = "A Bot's browser can't run page scripts, record, or open local files.";
 /** The agent's answer on a tab the person holds (a sign-in or hand-off card, or a takeover), snapshots included. */
 export const BROWSER_HELD_TAB_REFUSED = "The person is using this tab. Wait for them to finish.";
 export const BROWSER_SENSITIVE_TYPING_REFUSED =
@@ -236,8 +238,12 @@ export function boundaryRefusalOf(error: unknown): unknown {
   return error;
 }
 
-/** Attribute tests on `value` (or escapes that could spell one) would let a selector read a field. */
-const VALUE_PROBE = /\[\s*(?:[\w*-]*\|)?value\b|@value\b|\\/iu;
+/**
+ * Attribute tests on `value` would let a selector read a field: a CSS or
+ * Playwright attribute selector, an XPath `@value` or `attribute::value`, or
+ * an escape that could spell one.
+ */
+const VALUE_PROBE = /\[\s*(?:[\w*-]*\|)?value\b|@\s*value\b|attribute\s*::\s*value\b|\\/iu;
 
 export function assertBoundarySelector(selector: string | undefined): void {
   if (selector !== undefined && VALUE_PROBE.test(selector)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);

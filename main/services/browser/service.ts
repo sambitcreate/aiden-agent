@@ -73,6 +73,7 @@ import { botIdForBrowserWorkspace, browserWorkspacesOfBot, forgetBotBrowserWorks
 import {
   assertBoundarySelector,
   boundaryRefusalOf,
+  BROWSER_BOUNDARY_ACTION_REFUSED,
   BROWSER_HELD_TAB_REFUSED,
   BROWSER_IMAGE_MASKED_NOTE,
   BROWSER_SENSITIVE_FIELD_SOURCE,
@@ -129,7 +130,6 @@ export interface BrowserHold {
   holdId: string;
   reason: BrowserHoldReason;
 }
-const BROWSER_BOUNDARY_REFUSED = "A Bot's browser can't run page scripts, record, or open local files.";
 /** Actions a Bot's browser port never runs. */
 const BOUNDARY_REFUSED_ACTIONS: ReadonlySet<string> = new Set([
   "evaluate", "record_start", "record_stop", "open_file", "annotate", "annotation_preview", "annotation_reset",
@@ -2120,7 +2120,7 @@ export class BrowserService {
       throw new Error("This workspace no longer exists.");
     if (context.credentialBoundary) {
       if (!botWorkspace || context.source !== "agent") throw new Error("This browser port belongs to a Bot.");
-      if (BOUNDARY_REFUSED_ACTIONS.has(command.action)) throw new Error(BROWSER_BOUNDARY_REFUSED);
+      if (BOUNDARY_REFUSED_ACTIONS.has(command.action)) throw new Error(BROWSER_BOUNDARY_ACTION_REFUSED);
       const fields = command as { selector?: unknown; locator?: unknown };
       for (const selector of [fields.selector, fields.locator])
         if (typeof selector === "string") assertBoundarySelector(selector);
