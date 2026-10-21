@@ -519,6 +519,12 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             // A span never continues into a new heading or list item.
             "# Heading with `literal\nUse `code`",
             "- literal `marker\n- Use `code`",
+            // But it does continue through a quote or a line that only looks
+            // like a list item (`2.` cannot interrupt a paragraph).
+            "> *foo\n> bar*",
+            "> **foo\n> bar**",
+            "> `foo\n> bar`",
+            "*foo\n2. bar*",
         ] {
             XCTAssertEqual(tail(text), text, text)
         }

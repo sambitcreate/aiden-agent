@@ -639,9 +639,16 @@ enum AidenStreamingMarkdownTail {
 
     /// Whether the newline at `newline` ends a block: the line before it (from
     /// `lineStart`) is a heading, or the line after it starts a heading, list
-    /// item or block quote. Inline spans never continue across it.
+    /// item or block quote. Inline spans never continue across it. A quoted
+    /// line after a quoted line continues the quote, and an ordered item
+    /// numbered other than 1 interrupts only another list item.
     private static func isBlockBoundary(_ text: [Character], lineStart: Int, newline: Int) -> Bool {
-        startsHeading(text, at: lineStart) || startsBlock(text, at: newline + 1)
+        let next = newline + 1
+        if startsHeading(text, at: lineStart) || startsHeading(text, at: next) { return true }
+        if startsQuote(text, at: next) { return !startsQuote(text, at: lineStart) }
+        if startsBullet(text, at: next) { return true }
+        guard let number = orderedListNumber(text, at: next) else { return false }
+        return number == 1 || startsBullet(text, at: lineStart) || orderedListNumber(text, at: lineStart) != nil
     }
 
     /// The position after up to three leading spaces, or nil when the line is
@@ -663,15 +670,26 @@ enum AidenStreamingMarkdownTail {
         return (1...6).contains(run) && isSpaceOrLineEnd(text, at: position + run)
     }
 
-    /// A heading, a bullet or ordered list item, or a block quote.
-    private static func startsBlock(_ text: [Character], at start: Int) -> Bool {
+    private static func startsQuote(_ text: [Character], at start: Int) -> Bool {
         guard let position = contentStart(text, at: start), position < text.count else { return false }
-        if startsHeading(text, at: start) || text[position] == ">" { return true }
-        if "-*+".contains(text[position]) { return isSpaceOrLineEnd(text, at: position + 1) }
+        return text[position] == ">"
+    }
+
+    /// A `-`, `*` or `+` bullet list item.
+    private static func startsBullet(_ text: [Character], at start: Int) -> Bool {
+        guard let position = contentStart(text, at: start), position < text.count,
+              "-*+".contains(text[position]) else { return false }
+        return isSpaceOrLineEnd(text, at: position + 1)
+    }
+
+    /// The number of an ordered list item (`2.` or `2)`), or nil.
+    private static func orderedListNumber(_ text: [Character], at start: Int) -> Int? {
+        guard let position = contentStart(text, at: start) else { return nil }
         var end = position
         while end < text.count, end - position < 9, text[end].isASCII, text[end].isNumber { end += 1 }
-        guard end > position, end < text.count, text[end] == "." || text[end] == ")" else { return false }
-        return isSpaceOrLineEnd(text, at: end + 1)
+        guard end > position, end < text.count, text[end] == "." || text[end] == ")",
+              isSpaceOrLineEnd(text, at: end + 1) else { return nil }
+        return Int(String(text[position..<end]))
     }
 
     private static func runLength(of character: Character, in text: [Character], from start: Int) -> Int {
