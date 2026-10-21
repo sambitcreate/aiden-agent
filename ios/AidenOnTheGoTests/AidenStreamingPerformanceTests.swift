@@ -530,6 +530,9 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             "> # Heading with `literal\n> Use `code`",
             "> - literal `marker\n> - Use `code`",
             "> `old\n> # Use `code`",
+            // Omitted nested-quote markers may resume within one paragraph.
+            "> > *foo\n> bar\n> > baz*",
+            "> > `foo\n> bar\n> > [label](url`",
         ] {
             XCTAssertEqual(tail(text), text, text)
         }

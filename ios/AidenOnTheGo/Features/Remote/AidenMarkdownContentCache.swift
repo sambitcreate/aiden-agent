@@ -511,12 +511,15 @@ enum AidenStreamingMarkdownTail {
         var index = 0
         var lineStart = true
         var currentLineStart = 0
+        var deepestQuote = 0
         while index < text.count {
             let character = text[index]
             if character == "\n" {
                 // Spans may close on a later line of the same block, so `open`
                 // carries over, but never into a new heading or list item.
-                if isBlockBoundary(text, lineStart: currentLineStart, newline: index) { open.removeAll() }
+                if isBlockBoundary(text, lineStart: currentLineStart, newline: index, deepestQuote: &deepestQuote) {
+                    open.removeAll()
+                }
                 lineStart = true
                 index += 1
                 currentLineStart = index
@@ -615,9 +618,12 @@ enum AidenStreamingMarkdownTail {
         var openRun: Int?
         var position = 0
         var lineStart = 0
+        var deepestQuote = 0
         while position < index {
             if text[position] == "\n" {
-                if isBlockBoundary(text, lineStart: lineStart, newline: position) { openRun = nil }
+                if isBlockBoundary(text, lineStart: lineStart, newline: position, deepestQuote: &deepestQuote) {
+                    openRun = nil
+                }
                 position += 1
                 lineStart = position
                 continue
@@ -640,19 +646,32 @@ enum AidenStreamingMarkdownTail {
     /// Whether the newline at `newline` ends a block, so inline spans never
     /// continue across it. Quote markers are looked through: the line before
     /// (from `lineStart`) being a heading, or the line after starting a
-    /// heading, list item or deeper quote, ends the block. An ordered item
-    /// numbered other than 1 interrupts only another list item, and a line
-    /// with fewer quote markers that starts no block continues the quoted
-    /// paragraph lazily.
-    private static func isBlockBoundary(_ text: [Character], lineStart: Int, newline: Int) -> Bool {
+    /// heading, list item or quote deeper than any in the block so far, ends
+    /// the block. An ordered item numbered other than 1 interrupts only
+    /// another list item, and a line with fewer quote markers that starts no
+    /// block continues the quoted paragraph lazily (its markers may resume).
+    /// `deepestQuote` carries the block's deepest quote between calls.
+    private static func isBlockBoundary(
+        _ text: [Character],
+        lineStart: Int,
+        newline: Int,
+        deepestQuote: inout Int
+    ) -> Bool {
         let previous = quoteContent(text, at: lineStart)
         let next = quoteContent(text, at: newline + 1)
-        if next.depth > previous.depth { return true }
-        if startsHeading(text, at: previous.start) || startsHeading(text, at: next.start) { return true }
-        if startsBullet(text, at: next.start) { return true }
-        guard let number = orderedListNumber(text, at: next.start) else { return false }
-        return number == 1 || startsBullet(text, at: previous.start) ||
-            orderedListNumber(text, at: previous.start) != nil
+        deepestQuote = max(deepestQuote, previous.depth)
+        let boundary: Bool
+        if next.depth > deepestQuote || startsHeading(text, at: previous.start) ||
+            startsHeading(text, at: next.start) || startsBullet(text, at: next.start) {
+            boundary = true
+        } else if let number = orderedListNumber(text, at: next.start) {
+            boundary = number == 1 || startsBullet(text, at: previous.start) ||
+                orderedListNumber(text, at: previous.start) != nil
+        } else {
+            boundary = false
+        }
+        if boundary { deepestQuote = 0 }
+        return boundary
     }
 
     /// How many block quote markers open the line at `start`, and where the
