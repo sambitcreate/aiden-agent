@@ -1398,13 +1398,9 @@ test("runtime metadata stays offline and only models.dev data is packaged", asyn
     packageJson.scripts?.["release:update-model-capabilities"],
     "npm run models:refresh",
   );
+  // The release build's step order is checked by calling it in
+  // scripts/run-macos-distribution.test.mjs.
   assert.match(packageJson.scripts?.dist ?? "", /run-macos-distribution/u);
-  const distributionRunner = await readFile(
-    new URL("../../scripts/run-macos-distribution.mjs", import.meta.url),
-    "utf8",
-  );
-  assert.match(distributionRunner, /npm\("release:update-model-capabilities"\)/u);
-  assert.doesNotMatch(distributionRunner, /release:update-model-snapshots/u);
 
   const capabilityUpdater = await readFile(
     new URL("../../scripts/update-model-capabilities.mjs", import.meta.url),

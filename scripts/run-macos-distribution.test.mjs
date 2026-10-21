@@ -117,6 +117,19 @@ test("development and release packaging vendor pinned helpers and Generative UI 
   assert.equal(events.at(-1), "electron-builder --mac --config.directories.output=/stage");
 });
 
+test("a release build refreshes model capabilities before building and never runs the retired snapshot step", async () => {
+  const scripts = [];
+  await buildMacDistribution("/stage", {
+    npm: async (script) => scripts.push(script),
+    run: async () => {},
+  });
+  const refresh = scripts.indexOf("release:update-model-capabilities");
+  assert.ok(refresh >= 0, "the release refreshes the packaged models.dev snapshot");
+  assert.ok(refresh < scripts.indexOf("build"), "the refresh runs before the app is built");
+  assert.ok(refresh < scripts.indexOf("package:model-catalog"), "the refresh runs before the catalog is packaged");
+  assert.equal(scripts.includes("release:update-model-snapshots"), false);
+});
+
 test("a failing Lume vendor step stops the build before anything is packaged", async () => {
   const events = [];
   await assert.rejects(
