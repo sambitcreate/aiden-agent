@@ -423,12 +423,13 @@ enum AidenMarkdownChunkSpacing {
 ///   a tick.
 /// - A link whose destination is still arriving (`[label](https://exa`)
 ///   shows as its label.
-/// - Inline code, `**strong**`, `*emphasis*` and `~~strike~~` left open on
-///   the last line are closed, or dropped when nothing follows them yet.
-///   Earlier lines are finished, so their markers are drawn as written.
+/// - Inline code, `**strong**`, `*emphasis*` and `~~strike~~` opened on the
+///   line being written are closed, or dropped when nothing follows them
+///   yet. Spans may still close across lines; an opener left unmatched on a
+///   finished line is literal and drawn as written.
 ///
 /// Only the last paragraph is examined, and nothing inside an open fenced
-/// code block changes (CommonMark already draws it as code). `_` emphasis is
+/// code block, an indented code line or an inline code span changes (CommonMark already draws it as code). `_` emphasis is
 /// left alone because intraword underscores (`snake_case`) are not emphasis.
 /// The settled reply is always drawn from the real text.
 enum AidenStreamingMarkdownTail {
@@ -453,6 +454,9 @@ enum AidenStreamingMarkdownTail {
             if line.allSatisfy({ $0 == " " || $0 == "\t" }) { paragraphStart = index + 1 }
         }
         guard openFence == nil else { return tail }
+        // Four spaces or a tab may start an indented code block (or continue
+        // a list item); its text is literal, so leave it as written.
+        if let last = lines.last, last.hasPrefix("    ") || last.hasPrefix("\t") { return tail }
 
         var lineCount = lines.count
         if let last = lines.last, isLoneBlockMarker(last) {
@@ -508,9 +512,7 @@ enum AidenStreamingMarkdownTail {
         while index < text.count {
             let character = text[index]
             if character == "\n" {
-                // Repair only the last line: an unbalanced marker on a
-                // finished line is literal text and must stay as written.
-                open.removeAll()
+                // Spans may close on a later line, so `open` carries over.
                 lineStart = true
                 index += 1
                 continue
@@ -560,8 +562,13 @@ enum AidenStreamingMarkdownTail {
             }
             if character != " " && character != "\t" { lineStart = false }
         }
+        // Only the line being written is repaired. An opener left unmatched on
+        // a finished line is literal text and stays as written; openers are
+        // stacked in order, so those are the ones left once the last line's
+        // are handled.
+        let lastLineStart = (text.lastIndex(of: "\n") ?? -1) + 1
         var closers = ""
-        while let entry = open.popLast() {
+        while let entry = open.popLast(), entry.offset >= lastLineStart {
             let marker = entry.marker
             let offset = entry.offset
             let rest = text[(offset + marker.text.count)...]
@@ -597,6 +604,27 @@ enum AidenStreamingMarkdownTail {
         }
     }
 
+    /// Whether `index` falls inside an inline code span (open or closed). A
+    /// span opens and closes with backtick runs of equal length.
+    private static func isInsideCodeSpan(_ text: [Character], at index: Int) -> Bool {
+        var openRun: Int?
+        var position = 0
+        while position < index {
+            guard text[position] == "`" else {
+                position += 1
+                continue
+            }
+            let run = runLength(of: "`", in: text, from: position)
+            if openRun == nil {
+                openRun = run
+            } else if openRun == run {
+                openRun = nil
+            }
+            position += run
+        }
+        return openRun != nil
+    }
+
     private static func runLength(of character: Character, in text: [Character], from start: Int) -> Int {
         var end = start
         while end < text.count, text[end] == character { end += 1 }
@@ -611,8 +639,7 @@ enum AidenStreamingMarkdownTail {
               let close = text[open...].firstIndex(of: "]"),
               close + 1 < text.count, text[close + 1] == "(",
               !text[(close + 1)...].contains(")") else { return nil }
-        let ticksBefore = text[..<open].filter { $0 == "`" }.count
-        guard ticksBefore % 2 == 0 else { return nil }
+        guard !isInsideCodeSpan(text, at: open) else { return nil }
         if open > 0, text[open - 1] == "!" { return (open - 1, "") }
         return (open, String(text[(open + 1)..<close]))
     }

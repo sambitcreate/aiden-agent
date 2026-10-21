@@ -508,6 +508,14 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             // A finished line's unbalanced marker is literal, not open.
             "- 2*3\n- next item",
             "Cost: 5 `units\nand more",
+            // Spans that close on a later line of the paragraph.
+            "**foo\nbar**",
+            "*foo\nbar*",
+            "`foo\nbar`",
+            // Literal code: indented code lines and double-backtick spans.
+            "    [label](url",
+            "    **code",
+            "``[label](url``",
         ] {
             XCTAssertEqual(tail(text), text, text)
         }
