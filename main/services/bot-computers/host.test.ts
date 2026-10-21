@@ -455,3 +455,11 @@ test("an unsupported Mac reports why and never runs Lume", async () => {
     { support: () => ({ ok: false, reason: "host_os" }) },
   );
 });
+
+test("deleting a Bot on a Mac that never set up computers leaves no trace and runs no Lume", async () => {
+  await withHost(async (context) => {
+    await context.host.deleteForBot("ada");
+    assert.equal(existsSync(context.root), false, "no Bot-computer folder appears in userData");
+    assert.equal(context.calls().length, 0);
+  });
+});

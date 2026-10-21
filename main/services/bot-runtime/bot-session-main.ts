@@ -354,7 +354,11 @@ async function stopLegacyChatWork(botId: string): Promise<void> {
  * step here for anything that keeps going on its own, such as the Bot's
  * computer.
  */
-const botPauseEffects: ReadonlyArray<(botId: string) => void | Promise<void>> = [stopLegacyChatWork];
+const botPauseEffects: ReadonlyArray<(botId: string) => void | Promise<void>> = [
+  stopLegacyChatWork,
+  // The Bot's computer stops at once; a start still waiting for a slot gives up.
+  async (botId) => (await import("../bot-computers/bot-computers-main.js")).pauseBotComputer(botId),
+];
 
 async function afterBotPaused(botId: string): Promise<void> {
   for (const effect of botPauseEffects) {
@@ -535,6 +539,8 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
       (botId) => botRules.forgetBot(botId),
+      // Its computer stops and its VM is deleted before its home (the shared folder) goes.
+      async (botId) => (await import("../bot-computers/bot-computers-main.js")).deleteBotComputer(botId),
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
       eraseBotData,

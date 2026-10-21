@@ -809,10 +809,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     async deleteForBot(botId) {
       await stopComputer(botId, "quit").catch((error: unknown) => log("Stopping a deleted Bot's computer did not finish.", error));
       const record = (await store.read()).computers[botId];
+      // A clone that never reached the store can still exist, so the derived name is tried too.
       await deleteVm(record?.vmName ?? botComputerVmName(botId));
-      await store.update((draft) => {
-        delete draft.computers[botId];
-      });
+      // Deleting a Bot that never had a computer must not create Aiden's Bot-computer folder.
+      if (record) {
+        await store.update((draft) => {
+          delete draft.computers[botId];
+        });
+      }
       runtimes.get(botId)?.cancelIdle?.();
       runtimes.delete(botId);
       stale.delete(botId);

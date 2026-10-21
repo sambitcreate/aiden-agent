@@ -47,6 +47,8 @@ import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerLocalRunIpc } from "./local-runs-main.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
+import { registerBotComputerHandlers } from "./bot-computers.js";
+import { botComputerHandlerDependencies } from "../services/bot-computers/bot-computers-main.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
@@ -113,6 +115,8 @@ export function registerHandlers(): void {
   registerScheduledTaskHandlers();
   // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
   if (hostPlatformCapabilities().bots) registerBotRoutineHandlers();
+  // Bot computers are macOS VMs; only Apple silicon offers them, so Linux registers nothing.
+  if (hostPlatformCapabilities().botComputers) registerBotComputerHandlers(botComputerHandlerDependencies());
   registerAssistantHandlers();
   registerShortcutHandlers();
   registerTelegramHandlers();
