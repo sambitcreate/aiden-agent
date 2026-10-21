@@ -1,6 +1,6 @@
 # Instant UI and optimistic updates
 
-Status: In progress (2026-10-21). Companion to [Cache-first loading states](cache-first-loading-states-plan.md), which owns the read side (saved data first, shaped skeletons, settled empty states). This plan owns the write side and the navigation side: every user action shows its result on the next frame, and the server action starts whenever it starts.
+Status: Implemented (2026-10-21); the deferred items are listed below. Companion to [Cache-first loading states](cache-first-loading-states-plan.md), which owns the read side (saved data first, shaped skeletons, settled empty states). This plan owns the write side and the navigation side: every user action shows its result on the next frame, and the server action starts whenever it starts.
 
 ## Product rule
 
@@ -61,10 +61,26 @@ Each item names the file as of the audit; the implementation sections below reco
 | A-8 | Connection banner | Shown for CONNECTING too | Banner only for OFFLINE; connecting is the top-bar dot |
 | A-9 | Bots home offline with no cache | Skeleton forever | Offline-empty state |
 
+## What landed (2026-10-21)
+
+Desktop: D1–D12 as written. `bot-chat-pane.tsx` keeps one `requestId` per submission (`unsettledSend` after an uncertain failure, one id per failed row on Try again), shows a "Sending…" echo until the projected entry or queued row with the same text arrives (`settleBotPendingSends`, or 4 s after main confirmed the send), hides a paused card the moment Resume or Dismiss is pressed and restores it if main still reports the pause, and shows a stale view with a red "Try again" callout instead of a skeleton when a resubscribe fails. `use-bot-live.ts` remembers the last eight Bots' snapshots (`stale: true` until the fresh one lands; `reload` keeps the view; `forgetBotLiveView` on delete). `bot-identity.ts` writes the patched Bot into `bot(id)` and every Bots list before the IPC, rolls back on error and retries once on a revision conflict. Create, preset start, delete, routines and Advanced write the answer into the TanStack cache and only then invalidate; `bots:createFromPreset` returns before the self-intro is sent. `useBot` seeds from the cached list and `/bots` redirects from a list cached within five minutes.
+
+iOS: I-1, I-3 (draft only), I-4, I-5, I-6, I-7, I-9, I-10, I-11. `AidenInstallation.serverFeatures` keeps the last `/server` tokens (empty for pairings saved before) and `AidenRemoteCoordinator.knownServerFeatures` serves them until this connection answers; `AidenBotHostFeature.isAdvertised(_:coordinator:)` and the Bots home route read it. Steer/Queue clears the draft as the input leaves and restores it on rejection or an unconfirmed send unless the person typed since; rename shows the new title as a `localTitleOverride` in the list, Recents and the open chat; delete removes the Recents row at once; both roll back on failure.
+
+Android: A-1, A-3, A-4, A-5, A-6, A-9. `AidenChatViewModel.activeClient()` follows the coordinator's current client for the chat's pairing (a Retry used to leave the open chat unable to load or send) and rereads the transcript when the pairing gets a new client; `AidenRemoteCoordinator.knownServerFeatures()` / `supportsBotDurableSession()` read the pairing's saved features; the routine Switch shows the flip until the Mac answers; a deep link to a chat saved on the device opens before the connection is up; `aidenBotsHomeContentState(isOffline:)` settles an offline first open.
+
+Deferred from this pass, with the reason:
+
+- I-2 and A-2 (send while connecting, flushed on connect): the send path owns a durable `PendingSend` with retry semantics on both phones; queuing before a client exists needs its own design so an offline send can never double-deliver.
+- I-3 and A-3 pending bubble: Steer/Queue clears the draft at once, but the queued bubble still comes from the Mac's next projection (`submissionId` is a Bot-only tag today).
+- I-8 (stub chat + transcript skeleton for a cold Recents open) stays on the cache-first plan.
+- A-7 and A-8: the New chat FAB needs the chat list to be loaded (creating a chat needs the Mac anyway), and the connecting banner is already the quiet raised row from PR #374 with no top-bar indicator to replace it.
+- Desktop workspace chats were already optimistic (`chat-message-queue`); nothing changed there.
+
 ## Out of scope for this pass
 
 Desktop read snapshots that survive a relaunch (cache-first plan D1, D3), the model catalog disk caches on both phones, Files/Git caches (I7, A5), and the paired-Mac remote Bot open on old hosts. These stay on the cache-first plan.
 
 ## Tests
 
-Behavioral only, extending the existing suites: desktop `bot-panel.test.tsx`, `bot-sidebar.test.tsx`, `bot-profile.test.tsx`, `bot-routines.test.tsx`, `use-bot-live` tests; iOS `AidenChatTests`, `AidenBotSessionTests`, `AidenBotHomeProfileTests`, `AidenScheduledTaskTests`, `AidenRemoteClientTests`; Android `AidenChatTest`, `AidenRemoteCoordinatorClientTest`, `AidenInstallationStoreTest`, `AidenBotHomeBehaviorTest`.
+Behavioral only, extending the existing suites. Desktop: `bot-chat-pane.test.tsx` (echo settles, failed send keeps its id, Resume failure replays the same id, Try again hides the card and mints one id), `bot-panel.test.tsx` (remembered view stale→fresh, reload keeps the view), `bot-create-flow.test.tsx` (navigates before the intro and list reread), `bot-routines.test.tsx`, `bot-profile.test.tsx` (optimistic rename and rollback, Profile from the list without a skeleton), `bots-home.test.tsx`, `bot-delete-dialog.test.tsx`, `bot-starter.test.ts` (deferred intro). iOS: `AidenRemoteClientTests.testInstallationKeepsTheLastServerFeaturesForGatesWhileConnecting`. Android: `AidenChatTest.chatKeepsLoadingWithThePairingsRefreshedClient`, `AidenRemoteCoordinatorClientTest.botDurableSessionGateReadsThePairingsSavedFeaturesUntilServerAnswers`, `AidenProductShellTest.testBotsHomeContentStates`. The toggle and draft flows on the phones are view-state changes exercised by hand on the next TestFlight and Android build.
