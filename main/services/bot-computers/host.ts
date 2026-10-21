@@ -596,6 +596,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       } finally {
         entry.state = "stopped";
         entry.stopping = undefined;
+        // What the Bot was doing ended with the run.
+        activity.set(botId, undefined);
         if (entry.lastUsedAt !== undefined) {
           const lastUsedAt = entry.lastUsedAt;
           await store
@@ -854,6 +856,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           baseVersion: image.version,
         },
       };
+    },
+
+    async baseReady() {
+      return deps.support().ok && ready(await store.read());
     },
 
     async computer(botId) {

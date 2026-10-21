@@ -74,6 +74,23 @@ test("a search step shows its query; a connection step names the app and shows n
   assert.deepEqual(botStepDescriptor("read_file", "not an object"), { kind: "reading", label: "Read 1 file" });
 });
 
+test("a step in the Bot's own computer shows its intent, never the text it types", () => {
+  assert.deepEqual(botStepDescriptor("computer", { action: "click", coordinate: [10, 20], intent: "Click Place order" }), {
+    kind: "app",
+    label: "Used its computer",
+    detail: "Click Place order",
+    app: "its computer",
+  });
+  const typed = botStepDescriptor("computer", { action: "type", text: "hunter2 my password", intent: "Type the search terms" });
+  assert.equal(typed.detail, "Type the search terms");
+  assert.doesNotMatch(JSON.stringify(typed), /hunter2/u);
+  assert.deepEqual(botStepDescriptor("computer", { action: "capture" }), { kind: "app", label: "Used its computer", app: "its computer" });
+  assert.deepEqual(
+    botStepDescriptor("computer_shell", { command: "brew install ffmpeg", description: "Install ffmpeg" }),
+    { kind: "command", label: "Ran a command", detail: "Install ffmpeg" },
+  );
+});
+
 test("an argument of thousands of spaces is cut without stalling the main process", () => {
   const started = performance.now();
   const padded = botStepDescriptor("web_search", { query: `tofu${" ".repeat(15_990)}alpha beta gamma delta epsilon` }).detail ?? "";

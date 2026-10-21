@@ -67,6 +67,12 @@ export const BOT_BROWSER_SNAPSHOT_IMAGES_KEPT = 3;
 /** What an older screenshot leaves in a request, so the Bot knows to look again. */
 export const BOT_OLDER_SCREENSHOT_NOTE = "An older screenshot was left out of this request. Take a new snapshot to see the page now.";
 
+/** How many captures of the Bot's own computer a request carries, newest first (G23). */
+export const BOT_COMPUTER_CAPTURE_IMAGES_KEPT = 3;
+
+/** What an older capture of the Bot's computer leaves in a request. */
+export const BOT_OLDER_COMPUTER_CAPTURE_NOTE = "An older screenshot was left out of this request. Take a new capture to see the screen now.";
+
 /**
  * The request keeps the images of only the newest `keep` results of
  * `toolName`; each older image becomes a short note, so a long browsing
@@ -74,7 +80,12 @@ export const BOT_OLDER_SCREENSHOT_NOTE = "An older screenshot was left out of th
  * stored transcript keeps every image. Returns `messages` itself when nothing
  * changes.
  */
-export function withNewestToolImages(messages: readonly Message[], toolName: string, keep: number): readonly Message[] {
+export function withNewestToolImages(
+  messages: readonly Message[],
+  toolName: string,
+  keep: number,
+  note: string = BOT_OLDER_SCREENSHOT_NOTE,
+): readonly Message[] {
   const withImages: number[] = [];
   messages.forEach((message, index) => {
     if (message.role === "toolResult" && message.toolName === toolName && message.content.some((part) => part.type === "image")) {
@@ -87,7 +98,7 @@ export function withNewestToolImages(messages: readonly Message[], toolName: str
   return messages.map((message, index) => {
     if (!older.has(index) || message.role !== "toolResult") return message;
     const content = message.content.map((part): TextContent | ImageContent =>
-      part.type === "image" ? { type: "text", text: BOT_OLDER_SCREENSHOT_NOTE } : part,
+      part.type === "image" ? { type: "text", text: note } : part,
     );
     return { ...message, content };
   });

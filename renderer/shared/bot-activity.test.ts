@@ -23,6 +23,8 @@ const SPEC_TOOL_PHASES: ReadonlyArray<[string, string]> = [
   ["web_search", "searching"],
   ["computer_use", "computer"],
   ["form_fill", "computer"],
+  ["computer", "app"],
+  ["computer_shell", "command"],
   ["inspect_image", "photo"],
   ["subagent", "helper"],
   ["bot_memory", "remembering"],
@@ -57,6 +59,16 @@ test("a connection tool is Using {app}, named from the connection, and bounded",
   // Not a minted connection tool name: no app.
   assert.equal(botToolApp("web_search"), undefined);
   assert.equal(botToolApp("Notion__search"), undefined);
+});
+
+test("the Bot's own computer reads as Using its computer, never as the person's Mac", () => {
+  const app = botToolApp("computer");
+  assert.equal(app, "its computer");
+  assert.equal(botActivityDisplay(botToolPhase("computer", app), "follows", app).word, "Using its computer");
+  assert.equal(botStepPhrase("app", 1, app), "Used its computer");
+  assert.equal(botStepInfinitive("app", app), "use its computer");
+  assert.equal(botActivityDisplay(botToolPhase("computer_use"), "follows").word, "Using your Mac");
+  assert.equal(botActivityDisplay(botToolPhase("computer_shell"), "follows").word, "Running a command");
 });
 
 test("when tools run in parallel, the most recently started one wins", () => {

@@ -89,6 +89,11 @@ export interface BotLiveApproval {
    * (the Bot browser's page): the card's Open. An https page only.
    */
   open?: { url: string };
+  /**
+   * What a rule-made card says the call does when there is no baseline
+   * approval to quote (the Bot computer's stated intent).
+   */
+  summary?: string;
 }
 
 export interface BotToolSources {
@@ -248,7 +253,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const label = botRuleLabel(rule);
         const ruleRef = { id: rule.id, label };
         const unattended = turns.some((turn) => turn.routine || turn.telegram);
-        const callSummary = baseline?.summary ?? summarizeToolCall(toolName, call.args);
+        const callSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
         if (ruled === "ask") {
           // Never with remembered scopes: a rule-made ask is answered each time.
           if (baseline !== undefined) {

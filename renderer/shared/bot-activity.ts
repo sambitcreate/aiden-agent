@@ -82,6 +82,9 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
   ["web_search", "searching"],
   ["computer_use", "computer"],
   ["form_fill", "computer"],
+  // The Bot's own computer is not the person's Mac: it reads as an app.
+  ["computer", "app"],
+  ["computer_shell", "command"],
   ["inspect_image", "photo"],
   ["subagent", "helper"],
   ["bot_memory", "remembering"],
@@ -116,8 +119,13 @@ const MCP_AGENT_TOOL = /^([a-z0-9]+(?:_[a-z0-9]+)*)__[A-Za-z0-9_]+$/u;
 const MCP_PREFIX_COLLISION = /_[0-9a-f]{6}$/u;
 const MCP_PREFIX_DIGIT_LEAD = /^mcp_(?=[0-9])/u;
 
-/** The connection label of an MCP or Composio tool, or undefined for Aiden's own tools. */
+/** Aiden's own tools that read as using an app ("Using its computer"). */
+const TOOL_APPS: ReadonlyMap<string, string> = new Map<string, string>([["computer", "its computer"]]);
+
+/** The app label of a tool: the Bot's own computer, or an MCP or Composio tool's connection; else undefined. */
 export function botToolApp(toolName: string): string | undefined {
+  const fixed = TOOL_APPS.get(toolName);
+  if (fixed) return fixed;
   const prefix = MCP_AGENT_TOOL.exec(toolName)?.[1];
   if (!prefix) return undefined;
   const base = prefix.replace(MCP_PREFIX_COLLISION, "") || prefix;

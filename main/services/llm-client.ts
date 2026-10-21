@@ -710,7 +710,7 @@ function botWorkspacePromptAuthority(
 
 function botHasOrdinaryCapability(
   context: BotGenerationAuthorityContext,
-  kind: "web" | "browser" | "computer_use" | "schedules" | "subagents" | "tasks",
+  kind: "web" | "browser" | "computer_use" | "computer" | "schedules" | "subagents" | "tasks",
 ): boolean {
   return context.admission.authority.otherCapabilities.some((grant) => grant.kind === kind);
 }

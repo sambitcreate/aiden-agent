@@ -108,8 +108,8 @@ function harness(options: { width?: number; height?: number; screen?: ReturnType
     sleep: async () => undefined,
   };
   const tool = createBotComputerTool("ada", deps, { routine: options.routine === true });
-  const call = (args: Partial<BotComputerArgs> & { action: string }, signal?: AbortSignal) =>
-    tool.execute("call", args as BotComputerArgs, signal) as Promise<AgentToolResult<BotComputerResultDetails>>;
+  const call = (args: Record<string, unknown> & { action: string }, signal?: AbortSignal) =>
+    tool.execute("call", args as unknown as BotComputerArgs, signal) as Promise<AgentToolResult<BotComputerResultDetails>>;
   return {
     control,
     fake,
@@ -125,6 +125,10 @@ function harness(options: { width?: number; height?: number; screen?: ReturnType
       screenFailure = error;
     },
   };
+}
+
+function last<T>(values: readonly T[]): T | undefined {
+  return values[values.length - 1];
 }
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -168,8 +172,8 @@ test("coordinates are pixels of the newest capture, scaled to the framebuffer", 
     { kind: "pointer", x: 1280, y: 800, buttons: 1 },
     { kind: "pointer", x: 1280, y: 800, buttons: 0 },
   ]);
-  assert.deepEqual(h.pointers.at(-1), { x: 1280, y: 800, width: 2560, height: 1600 }, "the viewer draws the avatar there");
-  assert.equal(h.activity.at(-1), "Ada is using the computer: Click Place order");
+  assert.deepEqual(last(h.pointers), { x: 1280, y: 800, width: 2560, height: 1600 }, "the viewer draws the avatar there");
+  assert.equal(last(h.activity), "Ada is using the computer: Click Place order");
 
   h.fake.events.length = 0;
   await h.call({ action: "right_click", coordinate: [1280, 800], intent: "Open the context menu" });
@@ -187,8 +191,8 @@ test("coordinates are pixels of the newest capture, scaled to the framebuffer", 
   await h.call({ action: "drag", from_coordinate: [0, 0], to_coordinate: [100, 50], intent: "Drag the file to the folder" });
   const pressed = h.fake.events.filter((event) => event.kind === "pointer" && event.buttons === 1);
   assert.deepEqual(pressed[0], { kind: "pointer", x: 0, y: 0, buttons: 1 });
-  assert.deepEqual(pressed.at(-1), { kind: "pointer", x: 200, y: 100, buttons: 1 });
-  assert.deepEqual(h.fake.events.at(-1), { kind: "pointer", x: 200, y: 100, buttons: 0 }, "the drag ends released at its target");
+  assert.deepEqual(last(pressed), { kind: "pointer", x: 200, y: 100, buttons: 1 });
+  assert.deepEqual(last(h.fake.events), { kind: "pointer", x: 200, y: 100, buttons: 0 }, "the drag ends released at its target");
 });
 
 test("a capture is a JPEG at most 1280 px on its long side, at quality 70", async () => {
@@ -237,7 +241,7 @@ test("Take over interrupts the action, nothing stays held, and Give back returns
   h.control.takeOver("ada", "input");
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
-    h.fake.events.filter((event) => event.kind === "key").at(-1),
+    last(h.fake.events.filter((event) => event.kind === "key")),
     { kind: "key", keysym: XK_SHIFT, down: false },
     "Shift is released after the interruption",
   );

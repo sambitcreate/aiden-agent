@@ -25,6 +25,7 @@ import { BOT_HANDOFF_TOOL_NAME, BOT_SIGN_IN_TOOL_NAME } from "../../../renderer/
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 import { BROWSER_BOT_OMITTED_TOOLS, BROWSER_TOOL_NAMES, isBrowserToolName } from "../browser-tools.js";
 import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
+import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 
 export const WEB_SEARCH_TOOL = "web_search";
 export const SUBAGENT_TOOL = "subagent";
@@ -39,6 +40,8 @@ export interface BotToolFacts {
   readonly supportsImages: boolean;
   /** Bot folder, Full Mac and approved locations the file tools can reach. */
   readonly fileLocations: number;
+  /** The Bot has its own computer on a host with Bot computers (never on Linux). */
+  readonly hasComputer: boolean;
   /** Model-facing MCP tool name → its exact grant, joined against the current catalog. Throws on drift. */
   mcpTools(): Promise<ReadonlyMap<string, BotRuntimeMcpToolAuthority>>;
   /** Model-facing skill tool names, joined against the current catalog and registry. Throws on drift. */
@@ -122,6 +125,16 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
   if (isComputerUseCapabilityTool(name)) {
     return verdict(hasCapability(facts, "computer_use"), "Computer Use is off for this Bot.");
   }
+  if (name === BOT_COMPUTER_TOOL_NAME || name === BOT_COMPUTER_SHELL_TOOL_NAME) {
+    // Inside the Bot's own computer: allowed on routine and Telegram turns too (§8.7).
+    if (!hasCapability(facts, "computer")) return { allowed: false, reason: "The computer is off for this Bot." };
+    if (!facts.hasComputer) return { allowed: false, reason: "This Bot doesn't have a computer yet." };
+    // The screen is vision only; a model without image input gets the shell alone.
+    if (name === BOT_COMPUTER_TOOL_NAME && !facts.supportsImages) {
+      return { allowed: false, reason: "This Bot's model can't see images, so it can't use its computer's screen." };
+    }
+    return { allowed: true };
+  }
   if (name === SUBAGENT_TOOL) return verdict(hasCapability(facts, "subagents"), "Subagents are off for this Bot.");
   if (FILE_TOOLS.has(name)) return verdict(facts.fileLocations > 0, "File access is off for this Bot.");
   if (name === "run_command") return verdict(authority.shell.enabled, "The shell is off for this Bot.");
@@ -174,6 +187,8 @@ export async function botToolApprovalSummary(
   if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL) return undefined;
   // The browser asks through its live tab and page (`bot-browser-approval.ts`).
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
+  // Inside the Bot's own computer the baseline is allowed; rules read the intent (§8.7).
+  if (name === BOT_COMPUTER_TOOL_NAME || name === BOT_COMPUTER_SHELL_TOOL_NAME) return undefined;
   const grant = (await facts.mcpTools()).get(name);
   return grant?.effect === "mutating" ? summarizeToolCall(name, args) : undefined;
 }

@@ -40,6 +40,11 @@ export interface BotComputerGuestCommandResult {
 
 export interface BotComputerHost {
   status(): Promise<BotComputersStatus>;
+  /**
+   * Whether a base is set up, so Bots' computers can run: a store read with no
+   * disk walk. Stays true while Update base builds a new base beside it.
+   */
+  baseReady(): Promise<boolean>;
   computer(botId: string): Promise<BotComputerStatus | undefined>;
   setUp(): Promise<void>;
   cancelSetUp(): void;
