@@ -16,7 +16,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - Input: `BotClassifiableAction` for one of four surfaces.
   - `computer_use`: built from the Computer Use approval descriptor in `bot-computer-use-approval.ts`. It never carries typed text or a field value.
   - `browser`: fed by `bot-runtime/bot-browser-approval.ts` (P6) from an isolated-world probe of the targeted element; see `.memory/bot-browser.md`. `browserSendKey` makes Enter (Control/Command-Enter on mail hosts) on an editable message composer or a messaging host `communicate`; search boxes, Shift-Enter and unknown boxes are not.
-  - `computer`: shape only. Nothing feeds it until the Bot computer package lands.
+  - `computer`: fed by `bot-runtime/bot-computer-approval.ts` (P10, VNC lane): `{surface:"computer", action, intent}` only (no app, window title or element in that lane). `key` chords that do more than type a character become action `press`, so their intent reads like a click's (Return to send = communicate); printable chords and `type` stay typing (locked classes only). Typed text never reaches it. The call's `summary` (the intent) is what a rule-made card quotes (`BotLiveApproval.summary`, used when there is no baseline approval). Corpus rows `co-vnc-*` carry only the intent.
   - `mcp`: `describeMcpAction`, for granted mutating tools only.
 - Strong signals:
   - credentials: a secure text role on the element or the focused field; `secureFieldInCapture` while typing; `type=password`; autocomplete `current-password`, `new-password` or `one-time-code`.
@@ -89,5 +89,5 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 
 ## Not yet
 - Phones show no rules. A read-only list needs a Bot-detail field (Remote revision 37+).
-- The computer surface has no live descriptor until the Bot computer package lands (the browser one landed with P6).
+- The computer surface's VNC lane depends on the Bot's own stated intent (plan §8.7 known gap; the rules editor notes it where `AppCapabilities.botComputers`). The guest driver lane (P11) adds element roles and window titles. `computer_shell` is not classified.
 - The shell is outside rules by design. Under Full access, a shell command could edit `rules.json`; the locked rules still hold because they come from code.

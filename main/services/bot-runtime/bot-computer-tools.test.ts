@@ -90,8 +90,16 @@ test("the rules read a computer step's stated intent; looking and invalid calls 
   const typed = botComputerAction({ args: { action: "type", text: "hunter2", intent: "Type the password" } });
   assert.equal(JSON.stringify(typed).includes("hunter2"), false);
   // A chord that presses something reads like a click; one that types a letter is typing.
-  assert.equal(botComputerAction({ args: { action: "key", keys: "return", intent: "Send the message" } }).action?.action, "press");
-  assert.equal(botComputerAction({ args: { action: "key", keys: "shift+a", intent: "Type A" } }).action?.action, "key");
+  assert.deepEqual(botComputerAction({ args: { action: "key", keys: "return", intent: "Send the message" } }).action, {
+    surface: "computer",
+    action: "press",
+    intent: "Send the message",
+  });
+  assert.deepEqual(botComputerAction({ args: { action: "key", keys: "shift+a", intent: "Type A" } }).action, {
+    surface: "computer",
+    action: "key",
+    intent: "Type A",
+  });
   assert.deepEqual(botComputerAction({ args: { action: "capture" } }), { approval: null });
   assert.deepEqual(botComputerAction({ args: { action: "click", coordinate: [1, 2] } }), { approval: null });
   assert.deepEqual(botComputerAction({ args: { action: "format_disk", intent: "Erase it" } }), { approval: null });
