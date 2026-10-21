@@ -210,8 +210,29 @@ export function parsePublicKey(text: string): string {
   return `${match[1]} ${match[2]}`;
 }
 
-/** Pin the base's host key under the alias. Every clone presents the same key. */
+/**
+ * Pin a base's host key under the alias. Every clone presents its base's key,
+ * and a new base (Update base) is a fresh install with a key of its own, so
+ * the keys already pinned stay: the Bot computers made from an older base, and
+ * the working base while a newer one is built beside it, must stay reachable.
+ * Remove everything deletes the file.
+ */
 export async function writeKnownHost(paths: GuestSshPaths, hostPublicKey: string): Promise<void> {
-  const key = parsePublicKey(hostPublicKey);
-  await writeFileAtomic(paths.knownHosts, `${BOT_COMPUTER_HOST_KEY_ALIAS} ${key}\n`, { mode: 0o600, mkdirMode: 0o700 });
+  const prefix = `${BOT_COMPUTER_HOST_KEY_ALIAS} `;
+  const line = `${prefix}${parsePublicKey(hostPublicKey)}`;
+  let pinned: string[] = [];
+  try {
+    pinned = (await readFile(paths.knownHosts, "utf8")).split(/\r?\n/u).filter((entry) => {
+      if (!entry.startsWith(prefix)) return false;
+      try {
+        return `${prefix}${parsePublicKey(entry.slice(prefix.length))}` === entry;
+      } catch {
+        return false;
+      }
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const lines = pinned.includes(line) ? pinned : [...pinned, line];
+  await writeFileAtomic(paths.knownHosts, `${lines.join("\n")}\n`, { mode: 0o600, mkdirMode: 0o700 });
 }

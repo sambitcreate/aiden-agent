@@ -72,6 +72,8 @@ export function botComputers(): BotComputers {
     botComputerDir,
     botName,
     secrets: {
+      // Strict: an unreadable store fails the build rather than replacing the password.
+      get: (name) => secrets.getKeyStrict(name),
       set: (name, value) => secrets.setInternalKey(name, value, 256),
       deleteFamily: (prefix) => secrets.deleteKeyFamily(prefix),
     },

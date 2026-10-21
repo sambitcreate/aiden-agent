@@ -27,7 +27,9 @@ they ship.
 1. Open **Settings → Bot computers** and choose **Set up**. Before that choice
    the page states what happens: Aiden downloads macOS 26.6.2 (build 25G83)
    from Apple, about 20 GB (19,772,231,540 bytes), and builds a base computer
-   of about 50 GB. Nothing is downloaded until you choose Set up.
+   of about 50 GB. Nothing is downloaded until you choose Set up. Set up first
+   checks the Lume bundled with Aiden, so a missing or damaged helper is
+   reported before anything is downloaded.
 2. **Download.** The restore image comes from its pinned
    `updates.cdn-apple.com` URL (`main/services/bot-computers/release.ts`) with
    redirects refused. Progress shows in Settings with **Cancel**. Cancelling,
@@ -48,7 +50,9 @@ they ship.
 When an Aiden release pins a newer macOS image, Settings shows **Update base**.
 It downloads the new image and builds the new base beside the current one, then
 swaps them. Existing Bot computers keep working and show "Made from an older
-base" until you **Reset** them.
+base" until you **Reset** them: Aiden keeps trusting the SSH host key of every
+base it built, and every base gets the same guest password, so an update (even
+a failed one) never cuts Aiden off from a computer made earlier.
 
 If setup fails, Settings shows why and offers **Try again**; a download that
 stopped part-way continues where it left off. After a failed **Update base**,
@@ -99,8 +103,12 @@ Bot computer that was interrupted while it was being made is marked for
   computer off at once (a forced stop, like holding the power button) so quit
   stays within a few seconds.
 - **Startup** stops computers an earlier launch left running and marks
-  interrupted ones for Reset. A Mac that never chose Set up runs no Lume at
-  startup.
+  interrupted ones for Reset. It never stops a computer this launch is already
+  starting or using, or the base while Set up builds it. A Mac that never chose
+  Set up runs no Lume at startup.
+- **Shared starts:** when a Bot's tool call, a routine and the Computer tab all
+  need the same computer while it starts, they share one start. Closing the tab
+  gives up only the tab's wait; the start stops only when nobody needs it.
 - **Guests are macOS only.**
 
 ## Privacy and network
@@ -124,7 +132,8 @@ Bot computer that was interrupted while it was being made is marked for
   computer if the screen-sharing port also answers on any of the Mac's network
   addresses.
 - **SSH.** Aiden reaches the guest with its own key, kept in Aiden's data
-  folder, and the guest's pinned host key. Password login is turned off in the
+  folder, and the guest's pinned host key (one per base Aiden built; a Bot
+  computer presents the key of the base it was copied from). Password login is turned off in the
   guest, agent and X11 forwarding are off, and nothing from the person's
   `~/.ssh` is used. The guest's account password is random and kept in Aiden's
   encrypted secret store.
@@ -144,8 +153,8 @@ Bot computer that was interrupted while it was being made is marked for
 - **Delete Bot** stops and deletes its computer, then erases the Bot's files,
   including its `Computer` folder.
 - **Remove everything** in Settings → Bot computers asks first, then stops and
-  deletes every Bot computer, the base, the macOS download and any partial
-  download, Aiden's SSH key and pinned host key, the guest password, and the
+  deletes every Bot computer (including one an earlier launch left running),
+  the base, the macOS download and any partial download, Aiden's SSH key and pinned host key, the guest password, and the
   Bot-computer settings. Files in each Bot's `Computer` folder stay. To use Bot
   computers again, choose Set up, which downloads macOS again.
 

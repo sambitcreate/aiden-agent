@@ -12,6 +12,21 @@ import { BOT_COMPUTER_BASE_VM, botComputerVmName } from "./vm-names.js";
 
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
+/** Whether a process still runs. An exited fake VM nobody reaped (a zombie) has stopped. */
+function processRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    // /proc/<pid>/stat: "pid (comm) state …"
+    return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.startsWith("Z") !== true;
+  } catch {
+    return true;
+  }
+}
+
 const fake = path.resolve("tests/e2e/lume-fake.mjs");
 const restoreImage = Buffer.from("fake macOS restore image for host tests\n".repeat(64));
 const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789";
@@ -22,10 +37,19 @@ interface FakeConfig {
   limit?: number;
   vncHost?: string;
   stopDelayMs?: number;
+  hostKey?: string;
+}
+
+interface FakeVm {
+  status: string;
+  pid?: number;
+  ip?: string;
+  hostKey?: string;
 }
 
 interface LoggedCall {
   kind: string;
+  pid?: number;
   op?: string;
   args?: string[];
   env?: Record<string, string | undefined>;
@@ -45,6 +69,8 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
   const idle: { botId?: string; callback: () => void; ms: number; cancelled: boolean }[] = [];
   let clock = 1_000_000_000;
   const events = { ready: 0, removed: 0 };
+  /** A guest command that should fail, for example one step of provisioning. */
+  const ssh: { fails?: (args: readonly string[]) => boolean } = {};
   const runProcess = async (command: string, args: readonly string[], options: BoundedProcessOptions): Promise<BoundedProcessResult> => {
     const done = { exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false };
     if (command.endsWith("ssh-keygen")) {
@@ -54,6 +80,15 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       return done;
     }
     sshCalls.push({ args, stdin: options.stdin });
+    // As ssh with StrictHostKeyChecking=yes: the guest's own host key must be pinned under the alias.
+    const address = args[args.indexOf("--") + 1];
+    const guest = Object.values(fakeState().vms).find((vm) => vm.ip === address);
+    const knownHosts = path.join(root, "known_hosts");
+    const pinned = existsSync(knownHosts) ? readFileSync(knownHosts, "utf8").split("\n") : [];
+    if (guest?.hostKey && !pinned.includes(`aiden-bot-computer ${guest.hostKey}`)) {
+      return { ...done, exitCode: 255, stderr: "Host key verification failed.\n" };
+    }
+    if (ssh.fails?.(args)) return { ...done, exitCode: 1, stderr: "the guest step failed\n" };
     return { ...done, stdout: "guest says hi\n" };
   };
   // Restore images by URL; anything else gets the default pin's bytes.
@@ -65,6 +100,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     botComputerDir: async (botId) => path.join(dir, "bots", botId, "Computer"),
     botName: (botId) => botId.charAt(0).toUpperCase() + botId.slice(1),
     secrets: {
+      get: async (name) => secrets.get(name) ?? null,
       set: async (name, value) => void secrets.set(name, value),
       deleteFamily: async (prefix) => {
         for (const key of [...secrets.keys()]) if (key === prefix || key.startsWith(`${prefix}:`)) secrets.delete(key);
@@ -115,13 +151,13 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
           .filter(Boolean)
           .map((line) => JSON.parse(line) as LoggedCall)
       : [];
-  const fakeState = (): { vms: Record<string, { status: string; pid?: number }> } => {
+  function fakeState(): { vms: Record<string, FakeVm> } {
     try {
-      return JSON.parse(readFileSync(path.join(root, "vms", ".fake-state.json"), "utf8")) as { vms: Record<string, { status: string; pid?: number }> };
+      return JSON.parse(readFileSync(path.join(root, "vms", ".fake-state.json"), "utf8")) as { vms: Record<string, FakeVm> };
     } catch {
       return { vms: {} };
     }
-  };
+  }
   const vmRunning = (vmName: string) => {
     const pid = fakeState().vms[vmName]?.pid;
     if (!pid || fakeState().vms[vmName]?.status !== "running") return false;
@@ -140,6 +176,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     writeConfig,
     secrets,
     sshCalls,
+    ssh,
     fetches,
     idle,
     events,
@@ -147,6 +184,8 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     vmRunning,
     relaunch,
     serve: (url: string, bytes: Buffer) => void served.set(url, bytes),
+    /** The process playing a VM, while the fake Lume lists it. */
+    vmPid: (vmName: string) => fakeState().vms[vmName]?.pid,
     /** The VMs the fake Lume holds in Aiden's storage. */
     vmNames: () => Object.keys(fakeState().vms).sort(),
     advance: (ms: number) => {
@@ -155,13 +194,17 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     async cleanup() {
       await host.shutdown(5_000).catch(() => undefined);
       for (const other of relaunched) await other.shutdown(5_000).catch(() => undefined);
-      for (const vm of Object.values(fakeState().vms)) {
-        if (vm.pid) {
-          try {
-            process.kill(vm.pid, "SIGTERM");
-          } catch {
-            // Already gone.
-          }
+      // Every fake VM this test started, including one left running after its storage went.
+      const pids = new Set([
+        ...Object.values(fakeState().vms).map((vm) => vm.pid),
+        ...calls().filter((call) => call.kind === "vnc").map((call) => call.pid),
+      ]);
+      for (const pid of pids) {
+        if (!pid) continue;
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // Already gone.
         }
       }
     },
@@ -523,7 +566,7 @@ test("reconcile stops VMs an earlier launch left running and reports stale ones 
       lume: async () => ({ command: process.execPath, prefixArgs: [fake, "--fake-config", path.join(context.dir, "fake-config.json")] }),
       support: () => ({ ok: true }),
       botComputerDir: async (botId) => path.join(context.dir, "bots", botId, "Computer"),
-      secrets: { set: async () => undefined, deleteFamily: async () => undefined },
+      secrets: { get: async () => null, set: async () => undefined, deleteFamily: async () => undefined },
       resources: { freeDiskBytes: async () => 1e13, availableMemoryBytes: async () => 64 * 1024 ** 3 },
       vncExposed: async () => false,
       pollIntervalMs: 20,
@@ -758,5 +801,234 @@ test("deleting a Bot on a Mac that never set up computers leaves no trace and ru
     await context.host.deleteForBot("ada");
     assert.equal(existsSync(context.root), false, "no Bot-computer folder appears in userData");
     assert.equal(context.calls().length, 0);
+  });
+});
+
+const NEWER_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherInstallMakesItsOwnHostKeyForAidenTests987654";
+
+test("Update base keeps reaching the Bots' older computers and keeps their password, even when the update fails", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.give("ada");
+    const password = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+    assert.match(password ?? "", /^[A-Za-z0-9]{32}$/u);
+    await context.host.shutdown(5_000);
+
+    // A newer pinned image; a fresh macOS install makes its own SSH host key.
+    context.config.hostKey = NEWER_HOST_KEY;
+    context.writeConfig();
+    const host = context.relaunch({ image: newerPin(context) });
+    const guestCommand = { timeoutMs: 5_000, maxOutputBytes: 4_096 };
+
+    // The update fails after it pinned the new base's host key and changed its password.
+    context.ssh.fails = (args) => args.some((arg) => arg.includes("sshd -T"));
+    await assert.rejects(host.updateBase());
+    context.ssh.fails = undefined;
+    assert.equal(context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET), password, "Ada's computer's password is still known");
+    assert.equal((await host.runGuestCommand("ada", "true", guestCommand)).exitCode, 0, "Ada's computer still accepts Aiden's ssh");
+    await host.stop("ada", { reason: "person" });
+
+    await host.updateBase();
+    assert.equal((await host.status()).setup.kind, "ready");
+    assert.equal(context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET), password, "one password opens every Bot computer");
+    const ada = await host.computer("ada");
+    assert.equal(ada?.outdated, true);
+    assert.equal((await host.runGuestCommand("ada", "true", guestCommand)).exitCode, 0, "the outdated computer is still reachable");
+    await host.stop("ada", { reason: "person" });
+    // Reset moves Ada to the new base, which is reachable too.
+    await host.reset("ada");
+    assert.equal((await host.runGuestCommand("ada", "true", guestCommand)).exitCode, 0);
+  });
+});
+
+const NOT_VENDORED = "The pinned Lume helper has not been vendored. Run npm run bot-computers:vendor.";
+
+test("Set up checks the bundled Lume before it downloads anything", async () => {
+  await withHost(
+    async (context) => {
+      await assert.rejects(context.host.setUp(), (error: unknown) => error instanceof Error && error.message === NOT_VENDORED);
+      assert.deepEqual(context.fetches, [], "nothing of the 20 GB download is fetched for a Mac that can't build a base");
+      assert.deepEqual((await context.host.status()).setup, { kind: "failed", message: NOT_VENDORED, resumable: false });
+      // Nothing that would make later Bot deletes or startups run Lume is left behind.
+      assert.equal(existsSync(path.join(context.root, "vms")), false);
+    },
+    {
+      lume: async () => {
+        throw new BotComputerError("lume_failed", NOT_VENDORED);
+      },
+    },
+  );
+});
+
+test("deleting a Bot that never had a computer finishes even when Lume can't run; one with a computer keeps it to retry", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.give("ada");
+    await context.host.shutdown(5_000);
+    // A later launch where the bundled Lume fails its checks.
+    const broken = context.relaunch({
+      lume: async () => {
+        throw new BotComputerError("lume_failed", "The packaged computer helper is missing or invalid.");
+      },
+    });
+    await broken.deleteForBot("ben");
+    await assert.rejects(broken.deleteForBot("ada"));
+    assert.equal((await broken.computer("ada"))?.vmName, botComputerVmName("ada"), "Ada's record stays, so Delete Bot retries");
+
+    // Once Lume works again, the retry finishes.
+    const fixed = context.relaunch({});
+    await fixed.deleteForBot("ada");
+    assert.equal(await fixed.computer("ada"), undefined);
+    assert.deepEqual(context.vmNames(), [BOT_COMPUTER_BASE_VM]);
+  });
+});
+
+/** Hold the next start at its network-exposure check, after Lume reports the VM running. */
+function startGate() {
+  let hold: { reached(): void; release: Promise<void> } | undefined;
+  return {
+    vncExposed: async () => {
+      const current = hold;
+      hold = undefined;
+      if (current) {
+        current.reached();
+        await current.release;
+      }
+      return false;
+    },
+    arm() {
+      let reached!: () => void;
+      let release!: () => void;
+      const atGate = new Promise<void>((resolve) => (reached = resolve));
+      hold = { reached, release: new Promise<void>((resolve) => (release = resolve)) };
+      return { atGate, release };
+    },
+  };
+}
+
+test("the startup check never stops a computer that is starting, or the base being built", async () => {
+  const gate = startGate();
+  await withHost(
+    async (context) => {
+      // Reconcile runs while Set up boots the base to prepare it.
+      const building = gate.arm();
+      const setup = context.host.setUp();
+      await building.atGate;
+      await context.host.reconcile();
+      building.release();
+      await setup;
+      assert.equal((await context.host.status()).setup.kind, "ready");
+
+      // And while a Bot's computer is starting, for example one a routine needs at launch.
+      await context.host.give("ada");
+      const starting = gate.arm();
+      const start = context.host.ensureRunning("ada", { reason: "routine" });
+      await starting.atGate;
+      await context.host.reconcile();
+      starting.release();
+      await start;
+      assert.equal(context.vmRunning(botComputerVmName("ada")), true, "the computer the Bot was given is the one running");
+      assert.equal((await context.host.computer("ada"))?.state, "running");
+    },
+    { vncExposed: gate.vncExposed },
+  );
+});
+
+test("a start two callers share keeps going while either still wants it", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.updateSettings({ maxRunning: 1 });
+    for (const botId of ["ada", "ben"]) await context.host.give(botId);
+    await context.host.ensureRunning("ada", { reason: "tool" });
+
+    // The person opens Ben's Computer tab, then Ben's own tool call needs the computer too.
+    const viewer = new AbortController();
+    const fromViewer = context.host.ensureRunning("ben", { reason: "viewer", signal: viewer.signal }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const progress: string[] = [];
+    const fromTool = context.host.ensureRunning("ben", { reason: "tool", onProgress: (text) => progress.push(text) });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Closing the tab gives up the viewer's wait, not Ben's.
+    viewer.abort();
+    const viewerOutcome = await fromViewer;
+    assert.ok(viewerOutcome instanceof BotComputerError && viewerOutcome.code === "cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal((await context.host.computer("ben"))?.state, "waiting_for_slot");
+
+    await context.host.stop("ada", { reason: "person" });
+    const connection = await fromTool;
+    assert.equal(connection.vmName, botComputerVmName("ben"));
+    assert.ok(progress.includes("Starting Ben's computer…"), "the tool call hears the start it joined");
+
+    // When every caller gives up, so does the start.
+    await context.host.stop("ben", { reason: "person" });
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    const first = new AbortController();
+    const second = new AbortController();
+    const waits = [first, second].map((controller) =>
+      context.host.ensureRunning("ben", { reason: "tool", signal: controller.signal }).then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    first.abort();
+    second.abort();
+    for (const outcome of await Promise.all(waits)) assert.ok(outcome instanceof BotComputerError && outcome.code === "cancelled");
+    assert.equal((await context.host.computer("ben"))?.state, "stopped");
+    await context.host.stop("ada", { reason: "person" });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(context.vmRunning(botComputerVmName("ben")), false, "nobody wanted it, so it never started");
+  });
+});
+
+test("a caller that arrives while an abandoned start is still winding down gets a start of its own", async () => {
+  let memoryCheck: Promise<void> | undefined;
+  await withHost(
+    async (context) => {
+      await setUp(context);
+      await context.host.give("ada");
+      // The person's Computer tab starts Ada's computer; the memory check is slow.
+      let releaseCheck!: () => void;
+      memoryCheck = new Promise<void>((resolve) => (releaseCheck = resolve));
+      const viewer = new AbortController();
+      const fromViewer = context.host.ensureRunning("ada", { reason: "viewer", signal: viewer.signal }).catch((error: unknown) => error);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      // The tab closes, and Ada's tool call asks for the computer while that start is still ending.
+      viewer.abort();
+      const fromTool = context.host.ensureRunning("ada", { reason: "tool" });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      memoryCheck = undefined;
+      releaseCheck();
+      assert.ok((await fromViewer) instanceof BotComputerError);
+      assert.equal((await fromTool).vmName, botComputerVmName("ada"));
+      assert.equal(context.vmRunning(botComputerVmName("ada")), true);
+    },
+    {
+      resources: {
+        freeDiskBytes: async () => 1e13,
+        availableMemoryBytes: async () => {
+          await memoryCheck;
+          return 64 * 1024 ** 3;
+        },
+      },
+    },
+  );
+});
+
+test("Remove everything turns off a computer an earlier launch left running before it deletes its files", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.give("ada");
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    const pid = context.vmPid(botComputerVmName("ada"));
+    assert.ok(pid);
+    // A later launch removes everything before its startup check got to Ada's computer.
+    await context.relaunch({}).removeEverything();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(processRunning(pid), false, "no VM keeps running unseen once Aiden's storage is gone");
   });
 });

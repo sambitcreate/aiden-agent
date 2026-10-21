@@ -13,14 +13,17 @@
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit, vncHost and stopDelayMs of a JSON file named by a
+// keys log, stale, limit, vncHost, stopDelayMs and hostKey of a JSON file named by a
 // leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)";
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
 //   Virtualization VM-limit error (written to the --log-file, as the detached run does);
 //   an unattended `create` boots its VM, so it fails the same way, on stderr;
 // - AIDEN_FAKE_LUME_VNC_HOST: the host `get` reports in vncUrl (default 127.0.0.1);
-// - AIDEN_FAKE_LUME_STOP_DELAY_MS: how long `stop` takes before the VM is off (default 0).
+// - AIDEN_FAKE_LUME_STOP_DELAY_MS: how long `stop` takes before the VM is off (default 0);
+// - AIDEN_FAKE_LUME_HOST_KEY: the `ssh-ed25519 …` host key a fresh install gets
+//   (every macOS install makes its own; clones keep their source's). The VM's
+//   key is in the fake state, so host tests can check what ssh would trust.
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -42,6 +45,7 @@ if (args[0] === "--fake-config") {
     limit: "AIDEN_FAKE_LUME_LIMIT",
     vncHost: "AIDEN_FAKE_LUME_VNC_HOST",
     stopDelayMs: "AIDEN_FAKE_LUME_STOP_DELAY_MS",
+    hostKey: "AIDEN_FAKE_LUME_HOST_KEY",
   };
   for (const [key, name] of Object.entries(names)) {
     if (config[key] !== undefined && config[key] !== null) process.env[name] = String(config[key]);
@@ -56,6 +60,8 @@ const fail = (message, code = 1) => {
   process.stderr.write(`Error: ${message}\n`);
   process.exit(code);
 };
+
+const DEFAULT_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789";
 
 const VALUE_OPTIONS = new Set([
   "--storage",
@@ -172,12 +178,15 @@ async function vncChild(storage, name, port) {
   vm.pid = process.pid;
   vm.status = "running";
   writeState(storage, state);
+  log({ kind: "vnc", name, pid: process.pid, port: vm.port });
   const deadline = Date.now() + 10 * 60_000;
-  // Exit once stopped, deleted, or after ten minutes, so no test leaves it behind.
+  // Exit once stopped or replaced, or after ten minutes, so no test leaves it
+  // behind. Like a real detached VM, it keeps running if its storage is
+  // deleted underneath it (macOS keeps the open disk image alive).
   for (;;) {
     await sleep(200);
     if (Date.now() > deadline) break;
-    if (!existsSync(statePath(storage))) break;
+    if (!existsSync(statePath(storage))) continue;
     const current = readState(storage).vms[name];
     if (!current || current.pid !== process.pid || current.status !== "running") break;
   }
@@ -239,7 +248,13 @@ async function main() {
         process.exit(1);
       }
       const count = Object.keys(state.vms).length;
-      state.vms[name] = { status: "stopped", ip: `192.168.64.${10 + count}`, mac: `a6:4f:2c:9e:13:${String(10 + count)}` };
+      state.vms[name] = {
+        status: "stopped",
+        ip: `192.168.64.${10 + count}`,
+        mac: `a6:4f:2c:9e:13:${String(10 + count)}`,
+        // A fresh install makes its own SSH host key; clones keep their source's.
+        hostKey: process.env.AIDEN_FAKE_LUME_HOST_KEY ?? DEFAULT_HOST_KEY,
+      };
       mkdirSync(path.join(storage, name), { recursive: true });
       writeFileSync(path.join(storage, name, "disk.img"), "base");
       writeState(storage, state);
@@ -252,7 +267,12 @@ async function main() {
       if (isRunning(vm)) fail(`Virtual machine already running: ${source}`);
       if (state.vms[target]) fail(`Virtual machine already exists with name: ${target}`);
       const count = Object.keys(state.vms).length;
-      state.vms[target] = { status: "stopped", ip: `192.168.64.${10 + count}`, mac: `a6:4f:2c:9e:14:${String(10 + count)}` };
+      state.vms[target] = {
+        status: "stopped",
+        ip: `192.168.64.${10 + count}`,
+        mac: `a6:4f:2c:9e:14:${String(10 + count)}`,
+        hostKey: vm.hostKey,
+      };
       mkdirSync(path.join(storage, target), { recursive: true });
       writeFileSync(path.join(storage, target, "disk.img"), "clone");
       writeState(storage, state);
@@ -341,6 +361,8 @@ async function main() {
       if (!flags.has("--force")) fail("delete without --force would wait for confirmation", 73);
       const vm = state.vms[name];
       if (!vm) fail(`Virtual machine not found: ${name}`);
+      // A running VM holds its resize guard, so Lume refuses to delete it (and
+      // `delete` only stops a VM run by its own process, never a detached one).
       if (isRunning(vm)) fail(`Virtual machine already running: ${name}`);
       delete state.vms[name];
       rmSync(path.join(storage, name), { recursive: true, force: true });
@@ -354,7 +376,7 @@ async function main() {
       if (!vm) fail(`VM '${name}' not found`);
       if (!isRunning(vm)) fail(`VM '${name}' is not running`);
       if (command.join(" ") === "cat /etc/ssh/ssh_host_ed25519_key.pub") {
-        process.stdout.write("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789 root@guest\n");
+        process.stdout.write(`${vm.hostKey ?? DEFAULT_HOST_KEY} root@guest\n`);
       }
       return;
     }

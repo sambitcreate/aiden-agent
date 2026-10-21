@@ -46,6 +46,8 @@ import { vncReachableBeyondLoopback } from "./vnc-exposure.js";
 import { BOT_COMPUTER_BASE_VM, BOT_COMPUTER_STAGING_BASE_VM, botComputerVmName, isAidenVmName } from "./vm-names.js";
 
 export interface BotComputerSecrets {
+  /** The stored value, or null when there is none. Throws when the store can't be read. */
+  get(name: string): Promise<string | null>;
   set(name: string, value: string): Promise<void>;
   deleteFamily(prefix: string): Promise<void>;
 }
@@ -85,11 +87,22 @@ export interface BotComputerHostDependencies {
   log?(message: string, error?: unknown): void;
 }
 
+/**
+ * One start, shared by every caller that asked for the computer while it was
+ * starting (a Bot's tool call, a routine, the person's Computer tab). It is
+ * abandoned only when every caller has given up.
+ */
+interface SharedStart {
+  promise: Promise<BotComputerConnection>;
+  controller: AbortController;
+  callers: number;
+  progress: Set<(text: string) => void>;
+}
+
 interface Runtime {
   state: BotComputerRunState;
   connection?: BotComputerConnection;
-  starting?: Promise<BotComputerConnection>;
-  startAbort?: AbortController;
+  start?: SharedStart;
   stopping?: Promise<void>;
   cancelIdle?: () => void;
   lastUsedAt?: number;
@@ -224,9 +237,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const lumeEnv = () => lumeEnvironment(deps.env ?? process.env, dirs.home);
 
   async function lume(command: LumeCommand, timeoutMs: number, signal?: AbortSignal): Promise<LumeRunResult> {
+    // Verified first: Aiden's VM storage only appears once Lume can run, so a
+    // Mac whose helper is missing never makes later deletes or startups run it.
+    const resolved = await invocation();
     await mkdir(dirs.vms, { recursive: true, mode: 0o700 });
     await mkdir(dirs.home, { recursive: true, mode: 0o700 });
-    return runLume(await invocation(), command, { storage: dirs.vms, env: lumeEnv(), timeoutMs, signal });
+    return runLume(resolved, command, { storage: dirs.vms, env: lumeEnv(), timeoutMs, signal });
   }
 
   const failureKind = (result: LumeRunResult): LumeErrorKind =>
@@ -241,9 +257,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return result;
   }
 
-  /** Delete a VM; one Lume no longer has counts as deleted. */
+  /**
+   * Delete a VM; one Lume no longer has counts as deleted. A VM still running
+   * (one an earlier launch left on, or whose stop failed) is turned off first:
+   * Lume refuses to delete it, and Remove everything would otherwise delete
+   * its files underneath it and leave it running where nothing can see it.
+   */
   async function deleteVm(vmName: string): Promise<void> {
     if (!existsSync(dirs.vms)) return;
+    const info = await getVm(vmName).catch(() => undefined);
+    if (info?.state === "running") await stopVm(vmName, true);
     const result = await lume({ op: "delete", name: vmName }, 300_000);
     if (result.exitCode === 0 || failureKind(result) === "not_found") return;
     log(`lume delete failed: ${result.stderr.slice(-600)}`);
@@ -424,6 +447,65 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     wakeSlotWaiters();
   }
 
+  /**
+   * Wait on a shared start for one caller. Its own signal only ends its own
+   * wait; the start itself is abandoned once every caller has gone.
+   */
+  function joinStart(
+    start: SharedStart,
+    options: { signal?: AbortSignal; onProgress?(text: string): void },
+  ): Promise<BotComputerConnection> {
+    const { signal, onProgress } = options;
+    start.callers += 1;
+    if (onProgress) start.progress.add(onProgress);
+    return new Promise<BotComputerConnection>((resolve, reject) => {
+      let left = false;
+      const leave = () => {
+        if (left) return false;
+        left = true;
+        signal?.removeEventListener("abort", giveUp);
+        if (onProgress) start.progress.delete(onProgress);
+        start.callers -= 1;
+        return true;
+      };
+      const giveUp = () => {
+        if (!leave()) return;
+        if (start.callers <= 0) start.controller.abort();
+        reject(new BotComputerError("cancelled", "Starting the computer was cancelled."));
+      };
+      start.promise.then(
+        (connection) => {
+          if (leave()) resolve(connection);
+        },
+        (error: unknown) => {
+          if (leave()) reject(error);
+        },
+      );
+      if (signal?.aborted) giveUp();
+      else signal?.addEventListener("abort", giveUp, { once: true });
+    });
+  }
+
+  /**
+   * The VMs this launch is using right now: computers starting, running or
+   * stopping (Lume reports a starting VM as running before Aiden holds its
+   * connection), and the base while Set up or Update base builds it.
+   */
+  async function vmsInUse(): Promise<Set<string>> {
+    const names = new Set<string>();
+    if (setupTask || baseHoldsSlot) {
+      names.add(BOT_COMPUTER_BASE_VM);
+      names.add(BOT_COMPUTER_STAGING_BASE_VM);
+    }
+    const { computers } = await store.read();
+    for (const [botId, entry] of runtimes) {
+      if (entry.state === "stopped" && !entry.start && !entry.stopping) continue;
+      const vmName = entry.connection?.vmName ?? computers[botId]?.vmName;
+      if (vmName) names.add(vmName);
+    }
+    return names;
+  }
+
   function armIdle(botId: string, entry: Runtime, minutes: number): void {
     entry.cancelIdle?.();
     entry.cancelIdle = schedule(() => {
@@ -495,9 +577,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   async function stopComputer(botId: string, reason: BotComputerStopReason): Promise<void> {
     const entry = runtimes.get(botId);
     if (!entry) return;
-    if (entry.starting) {
-      entry.startAbort?.abort();
-      await entry.starting.catch(() => undefined);
+    if (entry.start) {
+      const start = entry.start;
+      start.controller.abort();
+      await start.promise.catch(() => undefined);
     }
     if (entry.stopping) return entry.stopping;
     if (entry.state !== "running") return;
@@ -588,7 +671,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return { vmName, baseBuild: state.setup.baseBuild ?? image.build, createdAt: now() };
   }
 
-  function provisionContext(vmName: string, ip: string, publicKey: string, signal: AbortSignal): ProvisionContext {
+  function provisionContext(
+    vmName: string,
+    ip: string,
+    publicKey: string,
+    guestPassword: string | undefined,
+    signal: AbortSignal,
+  ): ProvisionContext {
     const sshEnv = guestSshEnvironment(deps.env ?? process.env, dirs.home);
     return {
       signal,
@@ -607,13 +696,17 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (result.exitCode !== 0) throw new BotComputerError("start_failed", "The base computer didn't shut down.");
       },
       writeKnownHost: (line) => writeKnownHost(sshPaths, line),
-      newPassword: () => generateGuestPassword(),
+      // Every base gets the one stored password, so the computers made from an
+      // older base (and the working base, if this build fails) keep a known one.
+      newPassword: () => guestPassword ?? generateGuestPassword(),
       storePassword: (password) => deps.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, password),
     };
   }
 
   async function performSetup(mode: "setup" | "update", signal: AbortSignal): Promise<void> {
     const target = mode === "setup" ? BOT_COMPUTER_BASE_VM : BOT_COMPUTER_STAGING_BASE_VM;
+    // The bundled Lume is checked before a 20 GB download it would be needed for.
+    await invocation();
     // Booting the base needs a running computer's memory. Say so before a long
     // download; with Bot computers running, their memory is not free yet (an idle
     // one may stop for the base), so only the check before the install applies.
@@ -662,6 +755,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       signal,
     });
     await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
+    const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+    const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : undefined;
     await buildBaseVm({
       signal,
       deleteVm: () => deleteVm(target),
@@ -677,7 +772,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const { info } = await runAndWait(target, dirs.baseShared, "The base", signal, true);
         return { ip: info.ip };
       },
-      provisionContext: (ip) => provisionContext(target, ip, publicKey, signal),
+      provisionContext: (ip) => provisionContext(target, ip, publicKey, guestPassword, signal),
       stop: () => stopVm(target, true),
       removeIpsw: async () => {
         await downloader.remove();
@@ -868,8 +963,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     async deleteForBot(botId) {
       await stopComputer(botId, "quit").catch((error: unknown) => log("Stopping a deleted Bot's computer did not finish.", error));
       const record = (await store.read()).computers[botId];
-      // A clone that never reached the store can still exist, so the derived name is tried too.
-      await deleteVm(record?.vmName ?? botComputerVmName(botId));
+      if (record) await deleteVm(record.vmName);
+      else {
+        // A clone that never reached the store can still exist, so the derived
+        // name is tried too; that guess never holds up deleting a Bot that had
+        // no computer, even when Lume can't run.
+        await deleteVm(botComputerVmName(botId)).catch((error: unknown) =>
+          log("Deleting a VM no record names did not finish.", error),
+        );
+      }
       // Deleting a Bot that never had a computer must not create Aiden's Bot-computer folder.
       if (record) {
         await store.update((draft) => {
@@ -892,28 +994,43 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         throw new BotComputerError("stale", `${await possessive(botId)} computer didn't finish being made. Reset it in the Bot's profile.`);
       }
       const entry = runtime(botId);
-      if (entry.stopping) await entry.stopping;
-      if (entry.state === "running" && entry.connection) {
-        host.touch(botId);
-        return entry.connection;
+      for (;;) {
+        if (entry.stopping) await entry.stopping;
+        if (entry.state === "running" && entry.connection) {
+          host.touch(botId);
+          return entry.connection;
+        }
+        // A start every earlier caller gave up on is ending; this caller starts afresh once it has.
+        const ending = entry.start?.controller.signal.aborted ? entry.start : undefined;
+        if (!ending) break;
+        await ending.promise.catch(() => undefined);
       }
-      if (!entry.starting) {
+      if (!entry.start) {
         const controller = new AbortController();
-        entry.startAbort = controller;
-        const relay = () => controller.abort();
-        options.signal?.addEventListener("abort", relay, { once: true });
-        if (options.signal?.aborted) controller.abort();
-        entry.starting = startComputer(botId, record, entry, {
-          reason: options.reason,
-          signal: controller.signal,
-          onProgress: options.onProgress,
-        }).finally(() => {
-          options.signal?.removeEventListener("abort", relay);
-          entry.starting = undefined;
-          entry.startAbort = undefined;
-        });
+        const progress = new Set<(text: string) => void>();
+        const start: SharedStart = {
+          controller,
+          progress,
+          callers: 0,
+          promise: startComputer(botId, record, entry, {
+            reason: options.reason,
+            signal: controller.signal,
+            onProgress: (text) => {
+              for (const listener of [...progress]) {
+                try {
+                  listener(text);
+                } catch {
+                  // Progress is advisory.
+                }
+              }
+            },
+          }).finally(() => {
+            if (entry.start === start) entry.start = undefined;
+          }),
+        };
+        entry.start = start;
       }
-      return entry.starting;
+      return joinStart(entry.start, options);
     },
 
     stop(botId, options) {
@@ -966,8 +1083,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const byName = new Map(vms.map((info) => [info.name, info]));
       for (const info of vms) {
         if (!(isAidenVmName(info.name) || info.name === BOT_COMPUTER_STAGING_BASE_VM)) continue;
-        const ownedByRuntime = [...runtimes.values()].some((entry) => entry.connection?.vmName === info.name);
-        if (info.state === "running" && !ownedByRuntime) {
+        // Checked per VM, after the listing: a start or a base build may have begun meanwhile.
+        if ((await vmsInUse()).has(info.name)) continue;
+        if (info.state === "running") {
           // Left running by an earlier Aiden that quit or crashed.
           await stopVm(info.name, true).catch((error: unknown) => log("Stopping an orphaned VM did not finish.", error));
         }
