@@ -68,6 +68,8 @@ test("invisible characters never reach a card, and a Unicode line break is an or
   // Zero-width spaces, word joiners, BOMs and invisible operators draw nothing: "pay\u200Bpal.com" reads as "paypal.com".
   assert.equal(normalizeBotHandoffAction("Sign in to pay\u200Bpal\u2060.c\uFEFFom\uFEFF"), "Sign in to paypal.com");
   assert.equal(withoutBotHandoffControls("Enter\u2063 the\u180E code\u206A"), "Enter the code");
+  // A soft hyphen draws only where a line breaks: "bank\u00ADof\u00ADada.com" reads as one word.
+  assert.equal(normalizeBotHandoffAction("Sign in to bank\u00ADof\u00ADada.com"), "Sign in to bankofada.com");
   // U+2028 and U+2029 break lines wherever they are drawn: a card's reason shows the line break they are,
   // and a one-line title folds them like any other.
   assert.equal(

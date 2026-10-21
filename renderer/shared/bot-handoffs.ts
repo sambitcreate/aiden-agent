@@ -107,15 +107,15 @@ function boundedText(value: unknown, maximum: number): value is string {
  * - Control characters but tab, newline, vertical tab, form feed and carriage
  *   return (whitespace, handled where the text is laid out), DEL and C1 controls.
  * - The marks that embed, override or isolate text direction.
- * - Characters that draw nothing: the zero-width space, word joiner, invisible
- *   operators, BOM, the Mongolian vowel separator, the deprecated format
- *   characters and the interlinear annotation marks.
+ * - Characters that draw nothing: the soft hyphen, zero-width space, word
+ *   joiner, invisible operators, BOM, the Mongolian vowel separator, the
+ *   deprecated format characters and the interlinear annotation marks.
  *
  * The zero-width joiner and non-joiner stay: emoji sequences and scripts such
  * as Persian are shaped with them.
  */
 // eslint-disable-next-line no-control-regex -- these are exactly the characters it removes
-const CARD_CONTROL_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/gu;
+const CARD_CONTROL_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/gu;
 /** The line and paragraph separators break a line wherever they are drawn. */
 const UNICODE_LINE_BREAKS = /[\u2028\u2029]/gu;
 
