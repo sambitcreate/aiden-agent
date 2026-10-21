@@ -26,6 +26,7 @@ import {
   BOT_HANDOFF_WHY_MAX_CHARS,
   isBotHandoffOpenUrl,
   normalizeBotHandoffAction,
+  withoutBotHandoffControls,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { botRuleLabel, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import { classifyBotAction, type BotClassifiableAction } from "../bot-rules/classify.js";
@@ -137,8 +138,10 @@ function ruleActionText(rule: BotRule): string {
   return bounded(normalizeBotHandoffAction(botRuleLabel(rule)), BOT_HANDOFF_ACTION_MAX_CHARS);
 }
 
+/** The card's reason. The step's summary quotes the screen or page, so it loses control and direction marks too. */
 function ruleWhyText(label: string, botName: string, summary: string): string {
-  return bounded(`Your rule “${label}” hands this to you. ${botName} was about to: ${summary}`, BOT_HANDOFF_WHY_MAX_CHARS);
+  const why = `Your rule “${label}” hands this to you. ${botName} was about to: ${summary}`;
+  return bounded(withoutBotHandoffControls(why), BOT_HANDOFF_WHY_MAX_CHARS);
 }
 
 export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssembly {
