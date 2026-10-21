@@ -40,7 +40,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §4.1 (package P1: the h
   - The `hand_off` step's phase is "waiting", so it is never a recap step. Its label is "Handed you a step", via `botToolStepLabel`.
 - IPC (`main/handlers/bot-handoffs.ts`, strict parsers in `bot-params.ts`):
   - `bots:answerHandoff({botId, waitId, outcome, note?})` returns `{answered}` and throws "That answer doesn’t match the card." on an invalid answer.
-  - `use-bot-handoff-actions.ts` counts answers and Opens in flight, and `busy` holds while any is; a single boolean let a finished Open re-enable Done while a note's answer was still on its way, which then read "already answered". 2026-10-21, H1.
+  - `use-bot-handoff-actions.ts` counts answers and Opens in flight, and `busy` holds while any is; a single boolean let a finished Open re-enable Done while a note's answer was still on its way, which then read "already answered". 2026-10-21, H1. The count is module state keyed by Bot and card (`waitId`, the hook's second argument), so the chat's card and the floating panel's copy (`bot-panel-handoff.tsx`) share it: a note sent from the composer keeps the panel's Done waiting too, and a call that never ends can't hold the next card's buttons (H1 review).
   - `bots:openHandoff({botId, waitId})` returns `{opened}`. It requires `rendererDocumentOwner`, and the handler is generic over the event type.
   - The pure open table is in `bot-handoff-open.ts`:
     - From the Mac: a link opens in the Bot's browser (P6's `botBrowser` opener, only for a Bot with the Browser capability), held for the person until the card settles, else in the system browser.

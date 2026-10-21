@@ -688,7 +688,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
-  const handoffActions = useBotHandoffActions(botId);
+  const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;

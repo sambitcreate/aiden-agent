@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
+import { BotPanelHandoff } from "./bot-panel-handoff";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
@@ -1170,6 +1171,44 @@ test("a note sent while Open is on its way keeps the card's buttons waiting for 
     await waitFor(() => assert.equal(done().disabled, false));
     assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Entered it." }]);
     assert.deepEqual(errors.shown, [], "no 'already answered' for an answer the person sent once");
+  } finally {
+    errors.restore();
+  }
+});
+
+test("the floating panel's copy of the card waits for a note sent from the composer, so its Done can't answer twice", async () => {
+  const errors = captureErrorToasts();
+  try {
+    let opened: (value: { opened: string }) => void = () => undefined;
+    let answered: (value: { answered: boolean }) => void = () => undefined;
+    const calls = installBotTestIpc({
+      "bots:get": () => botFixture(),
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:openHandoff": () => new Promise((resolve) => (opened = resolve)),
+      "bots:answerHandoff": () => new Promise((resolve) => (answered = resolve)),
+    });
+    // The panel floating over a narrow chat carries the card's buttons; the composer stays below.
+    await mountWithBotRouter(<BotChatRoute botId="bot-1" />, {
+      initialPath: "/bots/bot-1/chat",
+      sidebar: <BotPanelHandoff botId="bot-1" name="Planner" avatar={botFixture().avatar} />,
+    });
+    await waitFor(() => assert.equal(screen.getAllByRole("group", { name: "Planner needs you" }).length, 2));
+    // The panel's copy carries the title and buttons, not the card's reason.
+    const panel = screen.getAllByRole("group", { name: "Planner needs you" }).find((group) => !within(group).queryByText(BANK_HANDOFF.why))!;
+    const done = () => within(panel).getByRole("button", { name: "Done" }) as HTMLButtonElement;
+    fireEvent.click(within(panel).getByRole("button", { name: "Open bank.example" }));
+    await waitFor(() => assert.equal(done().disabled, true));
+    fireEvent.change(screen.getByPlaceholderText("Add a note and send to mark it done"), { target: { value: "Entered it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+
+    await act(async () => opened({ opened: "external" }));
+    assert.equal(done().disabled, true, "the note from the composer is still on its way");
+    fireEvent.click(done());
+    await act(async () => answered({ answered: true }));
+    await waitFor(() => assert.equal(done().disabled, false));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Entered it." }]);
+    assert.deepEqual(errors.shown, []);
   } finally {
     errors.restore();
   }

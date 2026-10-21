@@ -24,22 +24,46 @@ export interface BotHandoffActions {
   open(pending: BotPendingHandoff): Promise<void>;
 }
 
-export function useBotHandoffActions(botId: string): BotHandoffActions {
+/**
+ * How many answers and Opens are on their way, per card, shared by every copy
+ * of that card's buttons (the chat's card and the floating panel's): one
+ * finishing leaves every copy waiting for the others, so a note sent from the
+ * composer keeps the panel's Done waiting too. Keyed by card, so a call that
+ * never ends can't hold the buttons of the Bot's next card.
+ */
+const inFlightByCard = new Map<string, number>();
+const inFlightListeners = new Set<() => void>();
+const cardKey = (botId: string, waitId: string) => `${botId}\u0000${waitId}`;
+
+function adjustInFlight(key: string, by: number): void {
+  const next = Math.max(0, (inFlightByCard.get(key) ?? 0) + by);
+  if (next === 0) inFlightByCard.delete(key);
+  else inFlightByCard.set(key, next);
+  for (const listener of inFlightListeners) listener();
+}
+
+function subscribeInFlight(listener: () => void): () => void {
+  inFlightListeners.add(listener);
+  return () => inFlightListeners.delete(listener);
+}
+
+/** `waitId`: the card the buttons are shown for now, if any. */
+export function useBotHandoffActions(botId: string, waitId: string | undefined): BotHandoffActions {
   const panel = useBotPanelActions();
-  // How many answers and Opens are on their way: one finishing leaves the buttons waiting for the others.
-  const [inFlight, setInFlight] = React.useState(0);
-  const begin = () => setInFlight((count) => count + 1);
-  const end = () => setInFlight((count) => Math.max(0, count - 1));
+  const inFlight = React.useSyncExternalStore(subscribeInFlight, () =>
+    waitId === undefined ? 0 : (inFlightByCard.get(cardKey(botId, waitId)) ?? 0),
+  );
 
   const send = async (pending: BotPendingHandoff, outcome: BotHandoffOutcome, note?: string): Promise<string | null> => {
-    begin();
+    const key = cardKey(botId, pending.waitId);
+    adjustInFlight(key, 1);
     try {
       const { answered } = await botsApi.answerHandoff(botId, pending.waitId, outcome, note);
       return answered ? null : "That card was already answered or closed.";
     } catch (error) {
       return userFacingErrorMessage(error, "Aiden couldn’t send that answer.");
     } finally {
-      end();
+      adjustInFlight(key, -1);
     }
   };
 
@@ -51,7 +75,8 @@ export function useBotHandoffActions(botId: string): BotHandoffActions {
   const open = async (pending: BotPendingHandoff) => {
     const signIn = pending.kind === "sign_in";
     const failed = signIn ? "Aiden couldn’t open the sign-in page." : "Aiden couldn’t open that page.";
-    begin();
+    const key = cardKey(botId, pending.waitId);
+    adjustInFlight(key, 1);
     try {
       const { opened } = await botsApi.openHandoff(botId, pending.waitId);
       if (opened === "none") toast.error(failed);
@@ -60,7 +85,7 @@ export function useBotHandoffActions(botId: string): BotHandoffActions {
     } catch (error) {
       toast.error(userFacingErrorMessage(error, failed));
     } finally {
-      end();
+      adjustInFlight(key, -1);
     }
   };
 
