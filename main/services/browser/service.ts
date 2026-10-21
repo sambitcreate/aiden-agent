@@ -76,6 +76,7 @@ import {
   BROWSER_BOUNDARY_ACTION_REFUSED,
   BROWSER_HELD_TAB_REFUSED,
   BROWSER_IMAGE_MASKED_NOTE,
+  BROWSER_RECALL_FIELD_FUNCTION,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
   browserKeyInsertsText,
@@ -84,7 +85,7 @@ import {
   scrubBrowserSnapshot,
   type BoundaryViewport,
 } from "./credential-boundary.js";
-import { sensitiveFieldIds } from "./credential-fields.js";
+import { scanSensitiveFields, SensitiveFieldMemory, sensitiveFieldIds } from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
 import { writeFileAtomic } from "../durable-fs.js";
@@ -130,6 +131,8 @@ export interface BrowserHold {
   holdId: string;
   reason: BrowserHoldReason;
 }
+/** How often a held tab's fields are read while the person uses it, at the least (milliseconds). */
+const HELD_FIELD_SCAN_MS = 500;
 /** Actions a Bot's browser port never runs. */
 const BOUNDARY_REFUSED_ACTIONS: ReadonlySet<string> = new Set([
   "evaluate", "record_start", "record_stop", "open_file", "annotate", "annotation_preview", "annotation_reset",
@@ -184,6 +187,10 @@ interface LiveTab {
   previewNavigation?: BrowserFileReservation;
   initialLoad?: Promise<void>;
   hold?: BrowserHold;
+  /** Fields this tab has shown as sensitive, so a "show password" toggle can't uncover one. */
+  sensitiveFields: SensitiveFieldMemory;
+  /** Reads the fields of a held tab while the person uses it (`watchHeldFields`). */
+  heldFieldWatch?: { timer?: ReturnType<typeof setTimeout> };
 }
 
 const ACTIONS_AGENT = new Set([
@@ -385,6 +392,7 @@ export class BrowserService {
     tab.hold = { holdId: hold.holdId, reason: hold.reason };
     tab.state.heldForPerson = { reason: hold.reason };
     tab.queue.interrupt();
+    this.watchHeldFields(tab);
     this.emit(workspaceId);
   }
   /** Release a hold. Anything the Bot had approved before it is stale. Unknown holds are ignored. */
@@ -393,6 +401,7 @@ export class BrowserService {
       if (tab.state.workspaceId !== workspaceId || tab.hold?.holdId !== holdId) continue;
       tab.hold = undefined;
       delete tab.state.heldForPerson;
+      this.unwatchHeldFields(tab);
       tab.queue.interrupt();
       this.emit(workspaceId);
     }
@@ -511,9 +520,11 @@ export class BrowserService {
       ? "raw.closest('button,a[href],input,select,textarea,summary,label,[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=radio],[role=switch],[role=option]')||raw"
       : "raw";
     try {
+      // A field that was a password field (a "show password" toggle) reads as one.
+      await this.recallSensitiveFields(tab, signal);
       const probe = await this.evaluate(
         tab,
-        `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}const raw=${pick};if(!raw||raw.nodeType!==1)return null;const e=${control};const u=globalThis.__aidenPlaywright.utils;const attr=n=>{const v=e.getAttribute(n);return v===null?undefined:v.slice(0,200);};const form=e.form||e.closest('form');let host;try{if(form)host=new URL(form.getAttribute('action')||location.href,location.href).hostname;}catch{host=undefined;}let name;try{name=String(u.getElementAccessibleNameText(e,false)||'').slice(0,300)||undefined;}catch{name=undefined;}return{tag:String(e.localName||''),type:attr('type'),autocomplete:attr('autocomplete'),role:u.getAriaRole(e)||(e.isContentEditable?'textbox':undefined),accessibleName:name,formActionHost:host};})()`,
+        `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}const raw=${pick};if(!raw||raw.nodeType!==1)return null;const e=${control};const u=globalThis.__aidenPlaywright.utils;const attr=n=>{const v=e.getAttribute(n);return v===null?undefined:v.slice(0,200);};const form=e.form||e.closest('form');let host;try{if(form)host=new URL(form.getAttribute('action')||location.href,location.href).hostname;}catch{host=undefined;}let name;try{name=String(u.getElementAccessibleNameText(e,false)||'').slice(0,300)||undefined;}catch{name=undefined;}return{tag:String(e.localName||''),type:__aidenSensitive(e)&&!__aidenSensitiveNow(e)?'password':attr('type'),autocomplete:attr('autocomplete'),role:u.getAriaRole(e)||(e.isContentEditable?'textbox':undefined),accessibleName:name,formActionHost:host};})()`,
         signal,
         true,
       );
@@ -1106,6 +1117,7 @@ export class BrowserService {
       crashTimes: [],
       navigationSequence: 0,
       committedNavigation: 0,
+      sensitiveFields: new SensitiveFieldMemory(),
     };
     this.tabs.set(state.id, tab);
     workspace.state.tabs.push(state);
@@ -1223,6 +1235,7 @@ export class BrowserService {
   private close(tab: LiveTab): void {
     if (tab.closing) return;
     tab.closing = true;
+    this.unwatchHeldFields(tab);
     this.finishPreviewNavigation(tab);
     browserFileService.releaseConsumer(tab.state.id);
     tab.queue.interrupt();
@@ -1560,8 +1573,10 @@ export class BrowserService {
     snapshot.tab.viewport.width = data.width;
     snapshot.tab.viewport.height = data.height;
     let sensitive = new Set<number>();
+    const processId = tab.view.webContents.getProcessId();
+    const remembered = tab.sensitiveFields.of(processId);
     if (includeImage && credentialBoundary) {
-      const masked = await this.maskedCapture(tab, signal);
+      const masked = await this.maskedCapture(tab, signal, remembered);
       sensitive = new Set(masked.sensitive);
       if ("image" in masked) {
         snapshot.image = masked.image;
@@ -1577,19 +1592,79 @@ export class BrowserService {
     if (!credentialBoundary) return browserRedactPreviewUrls(snapshot);
     // Fields read after the accessibility tree cover any that appeared during capture.
     try {
-      for (const id of await sensitiveFieldIds(this.cdpPort(tab, signal))) sensitive.add(id);
+      for (const id of await sensitiveFieldIds(this.cdpPort(tab, signal), remembered)) sensitive.add(id);
     } finally {
       await this.send(tab, "DOM.disable", {}, signal).catch(() => {});
     }
+    this.rememberSensitiveFields(tab, processId, sensitive);
     return browserRedactPreviewUrls(scrubBrowserSnapshot(snapshot, sensitive));
+  }
+  /** Remember fields read in renderer process `processId`, unless the tab has moved to another since. */
+  private rememberSensitiveFields(tab: LiveTab, processId: number, ids: Iterable<number>): void {
+    const wc = tab.view.webContents;
+    if (!wc.isDestroyed() && wc.getProcessId() === processId) tab.sensitiveFields.remember(processId, ids);
+  }
+  /**
+   * Read the page's sensitive fields into the tab's memory. With `mark`, a
+   * field only memory knows (a password field the page turned into plain
+   * text) is marked in Aiden's isolated world, so the typing guard and the
+   * field probe treat it as what it was.
+   */
+  private async recallSensitiveFields(tab: LiveTab, signal?: AbortSignal, mark = true): Promise<void> {
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed()) return;
+    const processId = wc.getProcessId();
+    try {
+      const scan = await scanSensitiveFields(this.cdpPort(tab, signal), tab.sensitiveFields.of(processId));
+      this.rememberSensitiveFields(tab, processId, scan.sensitive);
+      if (!mark || scan.recalled.length === 0) return;
+      await this.evaluate(tab, "0", signal, true);
+      const executionContextId = tab.contextId;
+      for (const backendNodeId of scan.recalled) {
+        // A field that left the page since has nothing to mark.
+        const resolved = await this.send(tab, "DOM.resolveNode", { backendNodeId, executionContextId, objectGroup: "aiden-recall" }, signal).catch(() => undefined);
+        const objectId = resolved?.object?.objectId;
+        if (typeof objectId === "string")
+          await this.send(tab, "Runtime.callFunctionOn", { objectId, functionDeclaration: BROWSER_RECALL_FIELD_FUNCTION, returnByValue: true }, signal);
+      }
+      await this.send(tab, "Runtime.releaseObjectGroup", { objectGroup: "aiden-recall" }, signal).catch(() => {});
+    } finally {
+      await this.send(tab, "DOM.disable", {}, signal).catch(() => {});
+    }
+  }
+  /**
+   * While the person holds a tab, read its fields every so often, so a field
+   * they turn into plain text ("show password") after it loaded stays covered
+   * once the Bot has the tab back. A slow read waits longer before the next.
+   */
+  private watchHeldFields(tab: LiveTab): void {
+    if (tab.heldFieldWatch) return;
+    const watch: NonNullable<LiveTab["heldFieldWatch"]> = {};
+    tab.heldFieldWatch = watch;
+    const read = async () => {
+      const started = Date.now();
+      await this.recallSensitiveFields(tab, undefined, false).catch(() => {});
+      if (tab.heldFieldWatch !== watch) return;
+      if (!tab.hold || tab.closing || tab.view.webContents.isDestroyed()) {
+        tab.heldFieldWatch = undefined;
+        return;
+      }
+      watch.timer = setTimeout(() => void read(), Math.max(HELD_FIELD_SCAN_MS, 20 * (Date.now() - started)));
+    };
+    void read();
+  }
+  private unwatchHeldFields(tab: LiveTab): void {
+    if (tab.heldFieldWatch?.timer) clearTimeout(tab.heldFieldWatch.timer);
+    tab.heldFieldWatch = undefined;
   }
   private cdpPort(tab: LiveTab, signal?: AbortSignal) {
     return { call: (method: string, params?: Record<string, unknown>) => this.send(tab, method, params ?? {}, signal) };
   }
   /** A capture with every password, code and card field painted over, or why there is none. */
-  private async maskedCapture(tab: LiveTab, signal?: AbortSignal) {
+  private async maskedCapture(tab: LiveTab, signal: AbortSignal | undefined, remembered: ReadonlySet<number>) {
     return maskBrowserSnapshotImage({
       cdp: this.cdpPort(tab, signal),
+      remembered,
       viewport: async (): Promise<BoundaryViewport> => {
         const measured = await this.evaluate(
           tab,
@@ -2597,6 +2672,10 @@ export class BrowserService {
                 }
                 check();
                 const target = this.target(tab, command);
+                if (context.credentialBoundary) {
+                  await this.recallSensitiveFields(tab, signal);
+                  check();
+                }
                 // A Bot never types into a secret field, whether named or focused.
                 const guard = context.credentialBoundary ? `${BROWSER_SENSITIVE_FIELD_SOURCE}if(__aidenSensitive(e))throw new Error(${JSON.stringify(BROWSER_SENSITIVE_TYPING_REFUSED)});` : "";
                 const focusedGuard = context.credentialBoundary ? browserTypingGuardSource("e") : "";
@@ -2618,6 +2697,8 @@ export class BrowserService {
               }
               case "press":
                 if (context.credentialBoundary && browserKeyInsertsText(text(command.key, "keyboard key", 100), command.modifiers ?? [])) {
+                  await this.recallSensitiveFields(tab, signal);
+                  check();
                   await this.evaluate(tab, `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}})()`, signal, true).catch(
                     (error: unknown) => {
                       throw boundaryRefusalOf(error);

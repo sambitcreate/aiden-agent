@@ -21,6 +21,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - Selectors: `assertBoundarySelector` refuses CSS/Playwright `[value…]` (checked as written and with CSS comments removed), any XPath attribute step that isn't one plain non-`value` name (`@*`, `attribute::*`, `@node()`, namespaced), and backslash escapes, in main and in `bot-browser-approval.ts` before the probe runs the selector. The Chromium oracle test in `credential-fields.test.ts` proves each refused form really distinguishes a value.
 - `scrubBrowserSnapshot` also replaces a sensitive element's text-engine selector (`internal:text="…"`, which Playwright generates for a textarea with content) with a structural one.
 - Held tabs: `Network.responseReceived` and `console-message` are not recorded while `tab.hold` is set, so a released tab's snapshot never replays the person's sign-in (e2e `heldTraces`).
+- Field memory (H3, 2026-10-21): `SensitiveFieldMemory` (`credential-fields.ts`) per `LiveTab` keeps backend node ids of fields any scan saw as sensitive, keyed by `wc.getProcessId()` (ids are unique and never reused within a renderer process; 512 ids x 4 processes, newest kept). `scanCredentialTree(root, remembered)` treats them as sensitive (`recalled` = sensitive only by memory). Fed by the snapshot scans, `recallSensitiveFields` before Bot type/press/probe (which marks recalled fields in the isolated world with `BROWSER_RECALL_FIELD_FUNCTION` -> `__aidenRecalledFields` WeakSet; `__aidenSensitive` = `__aidenSensitiveNow` || recalled; the probe reports a recalled field's `type` as `password`), and `watchHeldFields`: a held tab is read every max(500 ms, 20x the last read) until released or closed. Not remembered: a field turned to text before any read (within ~0.5 s of load on a held tab, or on a page the Bot never read). e2e step 5 "show password" in `bot-browser-native.ts`; the person's toggle there is page-timed (`/reveal?show=2000`) because a `source:"user"` click command on the held tab didn't toggle in Electron (not investigated: the person's real clicks are native input, not commands).
 - Typing guard: `browserTypingGuardSource` refuses a sensitive named target and a sensitive or opaque focused target (through shadow roots and same-origin frames); `browser_press` of a printable key (`browserKeyInsertsText`) runs the same guard. Page-world errors come back with the page stack; `boundaryRefusalOf` turns them into the bare sentence.
 - The probe role uses Playwright's `getAriaRole`, falling back to `textbox` for contenteditable.
 
@@ -60,7 +61,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - Contenteditable secrets in `innerText` are not scrubbed (only form fields are sensitive).
 - Ownership follows the last window that read the Bot's browser state.
 - (Fixed in P7) held tabs are listed with no URL or title; see Sign-in below.
-- Sensitivity is by `type`/`autocomplete` only: a "show password" toggle that turns a field into `type=text` without a credential `autocomplete` unmasks it.
+- (Fixed in H3) a "show password" toggle no longer unmasks a field the tab has seen as sensitive; see Field memory above.
 - `sign-in-origin.ts` is used by the `sign_in` tool (P7).
 - Real-site sign-in and visual masking in a real window are owner-Mac checks.
 

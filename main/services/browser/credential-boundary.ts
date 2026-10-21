@@ -34,6 +34,8 @@ export interface BoundaryViewport {
 
 export interface CredentialBoundaryPort {
   cdp: CdpPort;
+  /** Fields the tab has seen as sensitive (`SensitiveFieldMemory`): covered whatever they are now. */
+  remembered?: ReadonlySet<number>;
   viewport(): Promise<BoundaryViewport>;
   /** Changes whenever a navigation starts or commits, including a reload. */
   documentRevision(): string;
@@ -97,7 +99,7 @@ export async function maskBrowserSnapshotImage(port: CredentialBoundaryPort): Pr
   let before: SensitiveFieldBoxes;
   try {
     viewport = await port.viewport();
-    before = await sensitiveFieldBoxes(port.cdp, viewport);
+    before = await sensitiveFieldBoxes(port.cdp, viewport, port.remembered);
   } catch {
     return { omitted: BROWSER_IMAGE_OMITTED.unreadable, sensitive: new Set() };
   }
@@ -107,7 +109,7 @@ export async function maskBrowserSnapshotImage(port: CredentialBoundaryPort): Pr
   let after: SensitiveFieldBoxes;
   let afterViewport: BoundaryViewport;
   try {
-    after = await sensitiveFieldBoxes(port.cdp, viewport);
+    after = await sensitiveFieldBoxes(port.cdp, viewport, port.remembered);
     afterViewport = await port.viewport();
   } catch {
     return { omitted: BROWSER_IMAGE_OMITTED.unreadable, sensitive: new Set(before.sensitive) };
@@ -233,10 +235,19 @@ export const BROWSER_VALUE_SELECTOR_REFUSED =
 
 /**
  * In-page helpers, run in Aiden's isolated world: the same field rule as
- * `isSensitiveField`, and the element that really has focus (through shadow
- * roots and same-origin frames). A focused frame Aiden can't enter is opaque.
+ * `isSensitiveField` (`__aidenSensitiveNow`), which a field main recalled as
+ * sensitive (`BROWSER_RECALL_FIELD_FUNCTION`) also meets, and the element
+ * that really has focus (through shadow roots and same-origin frames). A
+ * focused frame Aiden can't enter is opaque.
  */
-export const BROWSER_SENSITIVE_FIELD_SOURCE = `const __aidenSensitive=(e)=>{if(!e||e.nodeType!==1)return false;const n=String(e.localName||"").toLowerCase();if(n==="input"&&String(e.getAttribute("type")||"").trim().toLowerCase()==="password")return true;const scope=new Set(["shipping","billing","home","work","mobile","fax","pager","webauthn"]);return String(e.getAttribute("autocomplete")||"").toLowerCase().split(/\\s+/).filter(t=>t&&!t.startsWith("section-")&&!scope.has(t)).some(t=>t==="current-password"||t==="new-password"||t==="one-time-code"||t.startsWith("cc-"));};const __aidenFocused=()=>{let e=document.activeElement;for(let i=0;i<32&&e;i+=1){if(e.shadowRoot&&e.shadowRoot.activeElement){e=e.shadowRoot.activeElement;continue;}const n=String(e.localName||"").toLowerCase();if(n==="iframe"||n==="frame"||n==="object"||n==="embed"||n==="fencedframe"){let d=null;try{d=e.contentDocument;}catch{d=null;}if(!d)return{element:e,opaque:true};const inner=d.activeElement;if(!inner||inner===d.body||inner===d.documentElement)return{element:e,opaque:false};e=inner;continue;}break;}return{element:e,opaque:false};};`;
+export const BROWSER_SENSITIVE_FIELD_SOURCE = `const __aidenSensitiveNow=(e)=>{if(!e||e.nodeType!==1)return false;const n=String(e.localName||"").toLowerCase();if(n==="input"&&String(e.getAttribute("type")||"").trim().toLowerCase()==="password")return true;const scope=new Set(["shipping","billing","home","work","mobile","fax","pager","webauthn"]);return String(e.getAttribute("autocomplete")||"").toLowerCase().split(/\\s+/).filter(t=>t&&!t.startsWith("section-")&&!scope.has(t)).some(t=>t==="current-password"||t==="new-password"||t==="one-time-code"||t.startsWith("cc-"));};const __aidenSensitive=(e)=>__aidenSensitiveNow(e)||Boolean(e&&globalThis.__aidenRecalledFields?.has(e));const __aidenFocused=()=>{let e=document.activeElement;for(let i=0;i<32&&e;i+=1){if(e.shadowRoot&&e.shadowRoot.activeElement){e=e.shadowRoot.activeElement;continue;}const n=String(e.localName||"").toLowerCase();if(n==="iframe"||n==="frame"||n==="object"||n==="embed"||n==="fencedframe"){let d=null;try{d=e.contentDocument;}catch{d=null;}if(!d)return{element:e,opaque:true};const inner=d.activeElement;if(!inner||inner===d.body||inner===d.documentElement)return{element:e,opaque:false};e=inner;continue;}break;}return{element:e,opaque:false};};`;
+
+/**
+ * Called on a field (`Runtime.callFunctionOn`, in Aiden's isolated world)
+ * that main remembers as sensitive though it no longer looks it, so the
+ * in-page helpers treat it as sensitive too.
+ */
+export const BROWSER_RECALL_FIELD_FUNCTION = "function(){(globalThis.__aidenRecalledFields??=new WeakSet()).add(this);}";
 
 /** A guard (for an isolated-world script) that refuses typing into `element` or whatever has focus. */
 export function browserTypingGuardSource(element: string): string {

@@ -8,6 +8,8 @@ import {
   isSensitiveField,
   quadsBounds,
   scanCredentialTree,
+  scanSensitiveFields,
+  SensitiveFieldMemory,
   sensitiveFieldBoxes,
   sensitiveFieldIds,
   type CdpDomNode,
@@ -15,6 +17,7 @@ import {
 import {
   assertBoundarySelector,
   BROWSER_OPAQUE_TYPING_REFUSED,
+  BROWSER_RECALL_FIELD_FUNCTION,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
   browserTypingGuardSource,
@@ -75,6 +78,26 @@ test("the walker finds fields in shadow roots and same-process frames, and repor
   const scan = scanCredentialTree(root);
   assert.deepEqual(scan.sensitive, [shadowPassword.backendNodeId, framed.backendNodeId, card.backendNodeId]);
   assert.deepEqual(scan.opaqueFrames, [remote.backendNodeId, embed.backendNodeId]);
+});
+
+test("a tab remembers the fields it saw per renderer process, newest kept", () => {
+  const memory = new SensitiveFieldMemory();
+  memory.remember(7, [41, 42]);
+  assert.deepEqual([...memory.of(7)], [41, 42]);
+  assert.equal(memory.of(8).size, 0, "another process's node ids are other nodes");
+  // A long-lived tab keeps a bounded memory: the latest fields stay, the oldest go.
+  memory.remember(7, Array.from({ length: 10_000 }, (_, index) => 1_000 + index));
+  assert.equal(memory.of(7).has(10_999), true);
+  assert.equal(memory.of(7).has(41), false);
+  assert.ok(memory.of(7).size < 10_000);
+  // Seen again, an old field counts as recent.
+  memory.remember(9, [5]);
+  for (let process = 10; process < 100; process += 1) {
+    memory.remember(process, [1]);
+    memory.remember(9, [5]);
+  }
+  assert.equal(memory.of(9).has(5), true);
+  assert.equal(memory.of(10).size, 0, "a process not seen for long is forgotten");
 });
 
 test("quads become one bounding box; degenerate quads are none", () => {
@@ -175,6 +198,49 @@ test("Chromium: the in-page typing guard follows focus through shadow roots and 
   } finally {
     await browser?.close();
     server.close();
+  }
+});
+
+test("Chromium: a password field the page turns into plain text stays sensitive once seen, and the typing guard still refuses it", { timeout: 30_000 }, async () => {
+  let browser: Browser | undefined;
+  try {
+    browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.setContent(`<input id="pw" type="password" value="hunter2" aria-label="Password">
+      <button id="show" onclick="const f=document.getElementById('pw');f.type=f.type==='password'?'text':'password'">Show</button>
+      <input id="name" aria-label="Name">`);
+    const session = await page.context().newCDPSession(page);
+    const cdp = { call: (method: string, params?: Record<string, unknown>) => session.send(method as never, params as never) as Promise<unknown> };
+    const memory = new SensitiveFieldMemory();
+    const seen = await scanSensitiveFields(cdp, memory.of(1));
+    assert.equal(seen.sensitive.length, 1);
+    memory.remember(1, seen.sensitive);
+
+    await page.click("#show");
+    assert.equal(await page.locator("#pw").getAttribute("type"), "text");
+    assert.deepEqual((await scanSensitiveFields(cdp)).sensitive, [], "by its attributes alone, the field is plain text now");
+    const recalled = await scanSensitiveFields(cdp, memory.of(1));
+    assert.deepEqual(recalled.sensitive, seen.sensitive, "remembered, it is still sensitive");
+    assert.deepEqual(recalled.recalled, seen.sensitive);
+    assert.deepEqual(await sensitiveFieldIds(cdp, memory.of(1)), seen.sensitive);
+    const boxes = await sensitiveFieldBoxes(cdp, { width: 1280, height: 720 }, memory.of(1));
+    assert.deepEqual(boxes.fields.map((field) => field.backendNodeId), seen.sensitive, "and its box is still painted over");
+
+    // In the page, the typing guard knows the field once main marks it.
+    const guard = (): Promise<string> =>
+      page.evaluate<string>(`(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource('document.getElementById("pw")')}return "ok";})()`).catch((error: Error) => error.message);
+    assert.equal(await guard(), "ok");
+    const resolved = (await cdp.call("DOM.resolveNode", { backendNodeId: recalled.recalled[0] })) as { object: { objectId: string } };
+    await cdp.call("Runtime.callFunctionOn", { objectId: resolved.object.objectId, functionDeclaration: BROWSER_RECALL_FIELD_FUNCTION });
+    assert.ok((await guard()).includes(BROWSER_SENSITIVE_TYPING_REFUSED));
+    await page.focus("#name");
+    assert.equal(
+      await page.evaluate<string>(`(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}return "ok";})()`),
+      "ok",
+      "other fields are untouched",
+    );
+  } finally {
+    await browser?.close();
   }
 });
 

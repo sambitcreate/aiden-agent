@@ -58,6 +58,13 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
       return html(`<p>Payment</p><iframe title="Pay" src="http://localhost:${port}/inner" style="width:300px;height:200px;border:0"></iframe>`);
     case "/inner":
       return html('<input type="password" value="frame-secret" aria-label="Frame password">');
+    case "/reveal":
+      // A "show password" toggle turns the field into plain text.
+      return html(`
+        <input id="secret" type="password" value="open-sesame-77" aria-label="Password" style="left:20px;top:20px;${FIELD}">
+        <button id="show" onclick="const f=document.getElementById('secret');f.type=f.type==='password'?'text':'password'" style="position:absolute;left:320px;top:20px;width:120px;height:44px">Show</button>
+        <div id="control" style="position:absolute;left:20px;top:100px;width:240px;height:44px;background:rgb(255,0,0)"></div>
+        <script>const after=Number(new URLSearchParams(location.search).get("show"));if(after>0)setTimeout(()=>document.getElementById("show").click(),after);</script>`);
     default:
       response.writeHead(404).end();
   }
@@ -198,8 +205,41 @@ void app.whenReady().then(async () => {
   const afterRelease = typeof released === "string" ? released : loginAsSeen(released);
   const heldTraces = typeof released === "string" ? null : JSON.stringify(released).includes("held-sign-in-code");
 
-  // 5. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
-  step("5 delete");
+  // 5. A field the page turns into plain text ("show password") stays covered,
+  // whether the Bot saw it as a password field first or the person showed it
+  // on a tab they held, on a page the Bot never saw.
+  step("5 show password");
+  const revealAsSeen = (shot: BrowserSnapshot) => {
+    assert.ok(shot.image, `reveal image: ${shot.imageNote}`);
+    const decoded = nativeImage.createFromBuffer(Buffer.from(shot.image.data, "base64"));
+    const size = decoded.getSize();
+    const bitmap = decoded.toBitmap();
+    const scale = size.width / shot.tab.viewport.width;
+    const pixel = (x: number, y: number) => {
+      const offset = (Math.round(y * scale) * size.width + Math.round(x * scale)) * 4;
+      return [bitmap[offset + 2], bitmap[offset + 1], bitmap[offset]];
+    };
+    return { field: pixel(140, 42), control: pixel(140, 122), leaked: JSON.stringify(shot).includes("open-sesame-77") };
+  };
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal`);
+  await snapshot(botTab);
+  await agent({ action: "click", tabId: botTab, selector: "#show" });
+  const shownByBot = revealAsSeen(await snapshot(botTab));
+  const typingShownByBot = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
+  browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-2", reason: "sign_in" });
+  // The person reads the page, then presses Show (the page shows the field after 2 s).
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal?show=2000`);
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
+  const shownType = (await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').type" })).value;
+  browser.release(BOT_WORKSPACE, "wait-2");
+  const shownByPerson = revealAsSeen(await snapshot(botTab));
+  const typingShownByPerson = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
+  // What an approval and the rules read about the field.
+  const probedType = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
+  const reveal = { shownByBot, typingShownByBot, shownByPerson, typingShownByPerson, shownType, probedType };
+
+  // 6. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
+  step("6 delete");
   await browser.clearBotProfile(BOT, BOT_WORKSPACE);
   const cleared = {
     botCookies: await cookieNames(botBrowserPartition(BOT)),
@@ -215,6 +255,7 @@ void app.whenReady().then(async () => {
         electron: process.versions.electron, platform: process.platform,
         isolation, masking, typing, noteTyping, pressing, navigationKey, refused, frame,
         hold: { heldState, held, personMayUse, afterRelease, heldTraces },
+        reveal,
         cleared,
         expected: {
           heldRefusal: boundary.BROWSER_HELD_TAB_REFUSED,
