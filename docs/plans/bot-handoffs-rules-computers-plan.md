@@ -1,6 +1,6 @@
 # Bots that hand work back: hand-offs, sign-in, rules, pause and Bot computers
 
-Status: Active (2026-10-21), being implemented in PR #559. The owner picked these five ideas from a study of Cua's `cua-bots-macos` sample. On 2026-10-20 the owner took the recommended option (a) for all nine decisions in [§10](#10-decisions-for-the-owner). Done so far: hand-offs, Pause, rules, the Remote contract (revision 37) with the iOS and Android clients, the Bot browser and `sign_in`; the Bot computers host is implemented and waits on owner-Mac acceptance. The viewer, the `computer` tool and computer sign-in are next.
+Status: Implemented in PR #559 (2026-10-21); owner-Mac acceptance pending. The owner picked these five ideas from a study of Cua's `cua-bots-macos` sample. On 2026-10-20 the owner took the recommended option (a) for all nine decisions in [§10](#10-decisions-for-the-owner). All five features are built: hand-offs, Pause, rules, the Remote contract (revision 37) with the iOS and Android clients, the Bot browser and `sign_in`, and Bot computers (host, viewer with Take over, the `computer` and `computer_shell` tools, and the guest driver lane with computer sign-in). Real-VM behaviour waits on the packaged acceptance on the owner's Mac (`npm run test:bot-computers:packaged`); the plan moves to `completed/` once it passes.
 
 ## 1. Goal
 
@@ -291,6 +291,7 @@ Cross-version decoding: a paused Bot's snapshot, frames, list and detail respons
   - **Guest driver lane** (second): run the pinned `cua-driver` inside the guest as a LaunchAgent in the logged-in session, and reach its MCP over an SSH-forwarded stdio channel. This plugs into `ComputerUseController` through a new `CuaDriverHostFactory` and a `Transport` over SSH (`computer-use/session.ts`). It gives the som/ax modes. It needs Accessibility and Screen Recording granted *inside the guest* once. The base-image setup walks the person through that in the live view, and clones inherit it.
 - **Shell in the computer:** `computer_shell({ command })` over SSH as `lume`, with a bounded output (reuse `bounded-shell-command.ts`) and a timeout. This lets the Bot install tools inside its own computer without touching the person's Mac.
 - **Files:** `<botHome>/Computer` is shared read-write at `/Volumes/My Shared Files` in the guest. That's the one way files move between the computer and the Bot's Files panel. Nothing else of the person's Mac is shared.
+- *Shipped (2026-10-21, PR #559):* both lanes. The VNC lane is the default. The guest driver lane uses Aiden's pinned cua-driver 0.36.0 (the same pin as Computer Use, not the 0.34.1 assumed here). Only its upstream-signed executable is copied into the base, and the guest checks its hash and signature. It is bridged with `cua-driver mcp --embedded --socket` over SSH rather than `nc -U`. The lane is used only after the base's grant probe passes, and only for `capture` with `app` and element clicks; screenshots, typing, keys, drags and scrolls stay on VNC.
 
 ### 8.7 Policy inside the Bot's computer
 
@@ -303,6 +304,8 @@ Cross-version decoding: a paused Bot's snapshot, frames, list and detail respons
 
 `sign_in` on a Bot that is using its computer shows **Open Ada's computer**. It opens the Computer tab in Take over mode with Safari at the origin. The person signs in and taps **I'm signed in**, and the session stays in the guest. Nothing goes into a vault, and the model never sees the password.
 
+*Shipped (2026-10-21, PR #559).* `sign_in` takes `where: "computer"` when the Bot has a computer and Bot computers are on. Open hands the computer to the person before anything opens, stops the guest driver, and runs `/usr/bin/open -b com.apple.Safari <origin>`. The computer is given back when the card settles or is withdrawn. Give-back-on-settle lives in the computer opener (`bot-runtime/bot-computer-handoff.ts`), not in a separate holds module. Known limit: stopping the guest driver is one sweep, so a program the Bot left running in the guest is not stopped by it ([docs/bot-computers.md](../bot-computers.md)).
+
 ### 8.9 Phones
 
 v1 shows the computer's state on Bot detail ("Ada's computer is running"). A live phone view reuses the simulator viewer pipeline (`simulators:mobile`) in a later revision.
@@ -311,7 +314,9 @@ v1 shows the computer's state on Bot detail ("Ada's computer is running"). A liv
 
 - `tests/e2e/lume-fake.mjs`: a fake `lume` CLI (like `agent-device-fake.mjs`) that records arguments and emulates `create`, `clone`, `run`, `get` and `delete`, including the stale and limit errors. Host tests cover pinning, the environment (telemetry off), storage isolation (the fake fails any call without Aiden's `--storage`, or for `clone` without both `--source-storage` and `--dest-storage`), lifecycle, the concurrency cap, idle stop, and delete idempotence.
 - RFB client tests against recorded frame fixtures.
+- `main/services/bot-computers/integration.test.ts` runs a real Bot session with the real host (driving the fake Lume, whose VM forwards its VNC listener to the fake RFB server), sessions, RFB screen, viewer, IPC handlers and the `computer` tool. It covers Give, a capture that boots the VM, a click that lands, Take over interrupting the call and Give back returning the note, Pause stopping the VM, and Delete Bot removing it.
 - Packaged acceptance script `scripts/bot-computers-packaged-acceptance.mjs` (owner Mac only, like `computer-use-packaged-acceptance.mjs`): create the base, clone, run, capture, click, take over, then delete.
+  - *Shipped (2026-10-21, PR #559):* `AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 npm run test:bot-computers:packaged`. The operator follows the prompts while the script plays the model: Set up, Give, a capture and a click, Take over and Give back, `computer_shell`, Pause, Delete Bot and Remove everything. It writes `build/bot-computers-acceptance-receipt.json`. Its pure core is tested in CI.
 
 ## 9. Remote contract revision 36
 

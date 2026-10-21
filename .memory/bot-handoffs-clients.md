@@ -67,6 +67,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
 - Client: `AidenRemoteClient.kt` adds `answerBotHandoff`, `openBotHandoffOnMac`, `pauseBot` and `unpauseBot` (DELETE). Each receipt's waitId must match.
 - Coordinator: `features/remote/AidenRemoteCoordinator.kt` has the top-level `aidenShouldRequestBotHandoffs` / `aidenRequestBotHandoffs` (JVM-testable against MockWebServer) and the private `negotiateBotHandoffs`, which runs after `negotiateProgressCapabilities`.
 - Controller: `features/bots/AidenBotSessionController.kt`.
+  - Since main's saved-features gate (#576), a durable Bot chat can open while the phone is still connecting, before `bot:handoffs` (or `bot:cards`, `bot:activity`) is granted. The host fixes a feed's audience when it subscribes. `aidenBotSessionFeedGrants(installation)` plus `reopenFeed()` handle this: the screen records the held grants when the controller is created, and reopens the feed once `/server` is published if the set changed. iOS needs the same fix (`AidenRemoteCoordinator` publishes `server` before `negotiateBotHandoffsIfNeeded`).
   - `AidenBotComposerMode` is MESSAGE, HANDOFF_NOTE, HELD_FOR_SIGN_IN or PAUSED.
   - It provides `answerHandoff`, `finishHandoffOnMac`, `unpause` and `onHandoffArrived`, which fires once per new waitId.
   - Its copy (`INTERRUPTED_ROW`, `PAUSED_ROW`, and the hand-off errors) stays as English constants for the JVM tests. The Compose strings are in `strings.xml`.

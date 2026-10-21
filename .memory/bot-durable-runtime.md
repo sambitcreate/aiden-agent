@@ -61,7 +61,7 @@ Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Spec: `docs/superpower
 - Routine runs cannot create routines. Routines are created from the Profile (`renderer/main/bots/bot-routines.tsx`, `bot-routine-editor.tsx`, `bots:routines:*`) or from chat through the Bot's schedule tool.
 
 ## Connections (Bots rework, Task 5.1 / 5.2)
-- Catalog entries come from `renderer/shared/plugin-catalog.ts`. `renderer/shared/bot-connections.ts` gives the icon, display name and setup entry point for a `pluginId`.
+- Catalog entries come from `renderer/shared/connector-catalog.ts` (`CONNECTOR_CATALOG` plus `COMPOSIO_APPS`; main's #568 removed `plugin-catalog.ts`). The `pluginId` naming below is still what the code uses. `renderer/shared/bot-connections.ts` gives the icon, display name and setup entry point for a `pluginId`.
 - In chat, the Bot-only `suggest_connection({ pluginId, reason })` tool appends a typed connect card. There is at most one pending card per plugin, and the tool is unavailable for connected plugins (`renderer/components/bots/connect-card.tsx`).
 - **Not now** persists per Bot and per `pluginId` in `main/services/bot-connection-dismissals.ts` (IPC `bots:connections:dismiss`). The Bot is not offered that plugin again.
 - Setup goes through `openConnectionSetup(pluginId)` in `main/services/bot-connection-setup.ts`, which broadcasts `bots:connections:setup` and opens `PresetSetupDialog` via `use-connection-setup.tsx`. Remote `POST /bots/{id}/connection-requests` (idempotent) calls the same function, so a phone's **Finish on your Mac** opens the Mac flow. Credentials stay on the Mac.
