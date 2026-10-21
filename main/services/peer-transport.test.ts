@@ -14,6 +14,7 @@ import {
   MAX_PEER_UPLOAD_BYTES,
   parsePeerErrorEnvelope,
   peerStatusError,
+  peerConnectionFailure,
 } from "./peer-transport.js";
 import { AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE } from "./aiden-remote-chats.js";
 import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
@@ -163,6 +164,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         return;
       }
       if (request.url === "/target") redirected++;
+      if (request.url?.endsWith("/never-answers")) return;
       if (request.url?.endsWith("/slow-open")) {
         // Headers wait until the test sends them.
         slowResponse = response;
@@ -243,6 +245,20 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
   };
   try {
     const client = new PeerTransport(trust);
+    await assert.rejects(client.json({ path: "/never-answers", timeoutMs: 50 }), (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.failure, "timeout");
+      return true;
+    });
+    const badDns = new PeerTransport({ ...trust, endpoint: "https://missing.example/api/aiden/v1" }, {
+      lookup: (_hostname, _options, callback) => callback(Object.assign(new Error("private endpoint text"), { code: "ENOTFOUND" }), "", 4),
+    });
+    await assert.rejects(badDns.json({ path: "/server" }), (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.failure, "dns");
+      assert.equal(error.message.includes("private"), false);
+      return true;
+    });
     assert.equal(
       (
         (await client.json({
@@ -566,4 +582,12 @@ test("a host's own explanation reaches this Mac, so a refused request says what 
     "Pair this device again to reconnect.",
     "a lost pairing keeps this Mac's own advice",
   );
+});
+
+
+test("transport diagnoses fixed OS codes without forwarding error text", () => {
+  for (const [code, expected] of [["ECONNREFUSED", "refused"], ["EAI_AGAIN", "dns"], ["ETIMEDOUT", "timeout"], ["EHOSTUNREACH", "network"], ["CERT_HAS_EXPIRED", "tls"], ["ECONNRESET", "unreachable"]]) {
+    assert.equal(peerConnectionFailure({ code, message: "credential=private" }), expected);
+  }
+  assert.equal(peerConnectionFailure(new Error("ECONNREFUSED private")), "unreachable");
 });
