@@ -963,9 +963,8 @@ test("independent child egress rollbacks are evaluated before Web Search readine
 });
 
 test("production OAuth transport observes bounded credentials before use or persistence", async () => {
-  const [mcp, oauth, clientCore, credentialCore] = await Promise.all([
+  const [mcp, clientCore, credentialCore] = await Promise.all([
     source("main/services/mcp.ts"),
-    source("main/services/mcp-oauth.ts"),
     source("main/services/subagents/subagent-mcp-client-core.ts"),
     source("main/services/subagents/subagent-mcp-credential-core.ts"),
   ]);
@@ -982,22 +981,6 @@ test("production OAuth transport observes bounded credentials before use or pers
     credentialCore,
     /observed\.has\(fingerprint\)[\s\S]{0,260}MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS[\s\S]{0,220}register\(createSubagentMcpOAuthTokenRedactor\(tokens\)\)/u,
   );
-
-  const tokensMethod = oauth.slice(
-    oauth.indexOf("async tokens():"),
-    oauth.indexOf("async saveTokens(", oauth.indexOf("async tokens():")),
-  );
-  assert.ok(tokensMethod.indexOf("this.observeTokens?.(tokens)") >= 0);
-  assert.ok(
-    tokensMethod.indexOf("this.observeTokens?.(tokens)") < tokensMethod.indexOf("return tokens"),
-  );
-  const saveTokensMethod = oauth.slice(
-    oauth.indexOf("async saveTokens("),
-    oauth.indexOf("async saveCodeVerifier(", oauth.indexOf("async saveTokens(")),
-  );
-  assert.ok(saveTokensMethod.indexOf("this.observeTokens?.(tokens)") >= 0);
-  assert.ok(
-    saveTokensMethod.indexOf("this.observeTokens?.(tokens)") <
-      saveTokensMethod.indexOf("await this.boundSession()"),
-  );
+  // The provider's observe-before-use/persist order is covered behaviorally in
+  // mcp-oauth-flow.test.ts ("a background provider shows tokens to its observer").
 });

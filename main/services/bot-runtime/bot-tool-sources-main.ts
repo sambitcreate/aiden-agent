@@ -127,12 +127,7 @@ export function isConnected(pluginId: string): Promise<boolean> {
         ),
       ),
     hasOAuthTokens: (server, preset) =>
-      hasOAuthTokens(
-        server.id,
-        server.url ?? preset.url,
-        server.authServerMetadataUrl,
-        server.oauthClientName,
-      ),
+      hasOAuthTokens({ ...server, url: server.url ?? preset.url }),
   });
 }
 

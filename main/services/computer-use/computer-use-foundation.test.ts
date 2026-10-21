@@ -194,11 +194,11 @@ function assertProcessRunning(pid: number): void {
 function pendingMcpResponseHandlers(session: CuaDriverSession): number {
   const client = (
     session as unknown as {
-      client: { _responseHandlers: Map<number, unknown> } | null;
+      client: { pending: Map<number, unknown> } | null;
     }
   ).client;
   assert.ok(client, "the ready Computer Use session should retain its MCP client");
-  return client._responseHandlers.size;
+  return client.pending.size;
 }
 
 async function killExactProcess(pid: number | undefined): Promise<void> {
@@ -636,11 +636,11 @@ test("inbound MCP framing accepts the exact 64 MiB contract boundary and poisons
   const messages: unknown[] = [];
   const errors: Error[] = [];
   let closeNotifications = 0;
-  transport.onmessage = (message) => messages.push(message);
-  transport.onerror = (error) => errors.push(error);
-  transport.onclose = () => {
+  transport.onMessage((message) => messages.push(message));
+  transport.onError((error) => errors.push(error));
+  transport.onClose(() => {
     closeNotifications += 1;
-  };
+  });
 
   try {
     await transport.start();

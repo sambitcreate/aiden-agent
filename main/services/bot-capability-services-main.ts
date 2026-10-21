@@ -27,8 +27,7 @@ import {
   resolveBotMcpInventory,
   type BotMcpInspectionFailureReport,
 } from "./bot-mcp-inventory.js";
-import { writeDiagnosticEvent } from "./diagnostic-journal.js";
-import { projectDiagnosticError } from "./diagnostics-contract.js";
+import { mcpDiagnostics } from "./mcp-failure-diagnostics.js";
 import {
   resolveBotCapabilitySkills,
   resolveBotRuntimeSkillBindings,
@@ -158,20 +157,10 @@ const botMcpScopeCache = createBotMcpScopeCache({
 });
 
 function reportBotMcpInspectionFailure(report: BotMcpInspectionFailureReport): void {
-  const projected = projectDiagnosticError(report.error);
-  writeDiagnosticEvent({
-    level: "warn",
-    area: "mcp",
-    event: "mcp-degraded",
-    outcome: report.kind === "timed_out" ? "timed-out" : "degraded",
-    code: projected.code,
-    fields: {
-      phase: "bot-inventory",
-      transport: report.server.transport,
-      keptLastGood: report.keptLastGood,
-      errorType: projected.errorType,
-      ...(projected.fingerprint ? { fingerprint: projected.fingerprint } : {}),
-    },
+  mcpDiagnostics.degraded(report.server, report.error, {
+    phase: "mcp-bot-inventory",
+    ...(report.kind === "timed_out" ? { outcome: "timed-out" as const } : {}),
+    extra: { keptLastGood: report.keptLastGood },
   });
 }
 
@@ -195,7 +184,11 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
           if (currentSignal.aborted) throw currentSignal.reason;
           return botMcpCredentialSignature(server, await opaqueKeyStore.load());
         },
-        inspectTools: inspectConfiguredMcpToolsForBotCatalog,
+        inspectTools: async (server, inspectSignal) => {
+          const tools = await inspectConfiguredMcpToolsForBotCatalog(server, inspectSignal);
+          mcpDiagnostics.recovered(server);
+          return tools;
+        },
         incarnations: capabilityIncarnations,
         scopeCache: botMcpScopeCache,
         reportFailure: reportBotMcpInspectionFailure,

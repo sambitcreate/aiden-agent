@@ -801,7 +801,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Bots"))
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Workspaces"))
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Aiden logo"))
-        XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("MCP"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("connectors"))
         XCTAssertTrue(AidenMobileOnboardingPhase.control.detail.contains("scheduled"))
     }
 

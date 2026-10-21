@@ -773,8 +773,9 @@ struct AidenBotsHomeView: View {
         )
         Task {
             await createFlow.submit(input, operations: operations, retrying: retrying) { created in
-                await load()
+                // The new Bot's chat opens from the create receipt; the list refreshes behind it.
                 openChat(for: AidenBotSummary(detail: created))
+                await load()
             }
         }
     }
@@ -783,7 +784,7 @@ struct AidenBotsHomeView: View {
     @MainActor
     private func openChat(for bot: AidenBotSummary) {
         guard !isCreatingConversation else { return }
-        if case .durableSession = AidenBotChatRoute.resolve(botID: bot.id, hostFeatures: coordinator.server?.features) {
+        if case .durableSession = AidenBotChatRoute.resolve(botID: bot.id, hostFeatures: coordinator.knownServerFeatures) {
             onOpenBotSession(bot)
             return
         }
@@ -829,8 +830,9 @@ struct AidenBotsHomeView: View {
             let result = try await coordinator.remoteClient(for: context).createBotFromPreset(request, idempotencyKey: key)
             guard coordinator.isCurrent(context) else { return }
             presetAttempt = nil
-            await load()
+            // Open now from the receipt; the list refreshes behind the chat.
             openChat(for: result.bot)
+            await load()
         } catch is CancellationError {
             return
         } catch {
@@ -898,7 +900,9 @@ struct AidenBotsHomeView: View {
             remoteSearchResults = nil
         }
         loadError = nil
-        isLoading = coordinator.connectionState == .connected
+        // Connecting is unsettled, not empty: with nothing saved it shows the
+        // skeleton until the Mac answers or the connection fails.
+        isLoading = coordinator.connectionState == .connected || coordinator.connectionState == .connecting
         let activation = await AidenBotCache.shared.activate(
             instanceId: installation.id,
             deviceId: installation.deviceId
@@ -924,7 +928,9 @@ struct AidenBotsHomeView: View {
 
         if coordinator.connectionState != .connected {
             loadError = snapshot == nil ? nil : "Offline — showing saved Bots"
-            isLoading = false
+            // Connecting with nothing saved stays unsettled (the skeleton, not
+            // "No saved Bots"); `loadID` reruns this once the Mac answers.
+            isLoading = coordinator.connectionState == .connecting && snapshot == nil
             return
         }
 

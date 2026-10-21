@@ -39,6 +39,7 @@ import {
   webSearchApi,
   workspacesApi,
 } from "./ipc";
+import type { BotDefinition } from "../shared/bots";
 import { isWindowActive } from "./window-activity";
 import { keepPullRequestWhilePaused, pausedPollInterval } from "./github-pause";
 import type {
@@ -308,11 +309,31 @@ export function useBots(includeArchived = false) {
   });
 }
 
+/** A Bot's definition. Starts from the cached Bots list when it holds the Bot, so opening one never waits on a read it can answer. */
 export function useBot(botId: string | undefined) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: queryKeys.bot(botId),
     queryFn: () => botsApi.get(botId!),
     enabled: Boolean(botId),
+    initialData: () => {
+      if (!botId) return undefined;
+      for (const [, list] of queryClient.getQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots })) {
+        const found = list?.find((bot) => bot.id === botId);
+        if (found) return found;
+      }
+      return undefined;
+    },
+    initialDataUpdatedAt: () => {
+      if (!botId) return undefined;
+      let newest: number | undefined;
+      for (const [key, list] of queryClient.getQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots })) {
+        if (!list?.some((bot) => bot.id === botId)) continue;
+        const at = queryClient.getQueryState(key)?.dataUpdatedAt;
+        if (at !== undefined && (newest === undefined || at > newest)) newest = at;
+      }
+      return newest;
+    },
   });
 }
 

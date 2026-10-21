@@ -57,6 +57,7 @@ export async function isBotConnectionReady(
   } catch {
     return false;
   }
+  if (preset.auth.kind === "none") return true;
   return preset.auth.kind === "apiKey"
     ? deps.hasPresetKey(server)
     : deps.hasOAuthTokens(server, preset);

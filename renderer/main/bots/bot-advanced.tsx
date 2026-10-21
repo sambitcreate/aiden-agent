@@ -499,14 +499,18 @@ export function BotAdvanced({
     }
     const update = buildBotAccessUpdate(rebased, latestCatalog);
     if (botAccessDiffers(update, state)) {
-      await botsApi.updateBotAccess({
+      // The answer is the saved view: it takes the access query now, and the
+      // catalog (an inventory rebuild) rereads in the background.
+      const saved = await botsApi.updateBotAccess({
         botId: bot.id,
         expectedRevision: state.access.revision,
         access: update,
       });
+      qc.setQueryData(queryKeys.botAccess(bot.id), saved);
+    } else {
+      qc.setQueryData(queryKeys.botAccess(bot.id), state);
     }
-    await qc.invalidateQueries({ queryKey: queryKeys.botAccess(bot.id) });
-    await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+    void qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
     setDraft(rebased);
     setBaseline(rebased);
   };

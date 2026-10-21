@@ -10,6 +10,8 @@ export interface McpStatus {
   authorized?: boolean;
   /** For OAuth servers: the stored sign-in was rejected and must be renewed. */
   needsSignIn?: boolean;
+  /** For OAuth servers: a browser sign-in is stored (usable or not), so it can be signed out. */
+  hasSession?: boolean;
 }
 
 export type McpLiveState = "connecting" | "connected" | "failed" | "closed";

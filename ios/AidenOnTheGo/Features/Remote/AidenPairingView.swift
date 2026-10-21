@@ -204,7 +204,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
         case .build:
             return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. Expand folders as needed and preview source before editing. When Bots are available on your paired desktop, use them as reusable helpers and tap the Aiden logo to switch.")
         case .extend:
-            return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and MCP connectors.")
+            return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and connectors.")
         case .control:
             return String(localized: "Approve actions, manage scheduled work, use voice, and follow private usage from your iPhone or iPad.")
         }

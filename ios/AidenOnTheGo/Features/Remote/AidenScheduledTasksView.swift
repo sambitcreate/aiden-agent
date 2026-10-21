@@ -119,6 +119,9 @@ final class AidenScheduledTasksModel {
     private(set) var hasCurrentMcpInventory = false
     private(set) var isLoading = false
     private(set) var isMutating = false
+    /// Pause and Resume flipped before the Mac answered, by task id. Rows read
+    /// `isEnabled(_:)`; the entry is dropped when the answer, or a failure, lands.
+    private(set) var pendingEnabled: [String: Bool] = [:]
     var presentedError: String?
     var outcomeMessage: String?
 
@@ -314,7 +317,7 @@ final class AidenScheduledTasksModel {
             currentMcpServers: hasCurrentMcpInventory ? mcpServers : nil
         ) == nil, !isMutating, isConnected else {
             if task?.usesLegacyInheritedMcpAccess == true, !hasCurrentMcpInventory {
-                presentedError = String(localized: "Refresh the enabled MCP server inventory before editing this legacy task.")
+                presentedError = String(localized: "Refresh the enabled connectors before editing this legacy task.")
             }
             return false
         }
@@ -360,7 +363,16 @@ final class AidenScheduledTasksModel {
         }
     }
 
+    /// Whether a task shows as Active: the flip the person just made, until the Mac answers, else the stored value.
+    func isEnabled(_ task: AidenScheduledTask) -> Bool {
+        pendingEnabled[task.id] ?? task.enabled
+    }
+
+    /// The row flips at once; a failed request puts it back (the reload after a failure restores the stored task).
     func pauseOrResume(_ task: AidenScheduledTask) async {
+        guard pendingEnabled[task.id] == nil else { return }
+        pendingEnabled[task.id] = !task.enabled
+        defer { pendingEnabled[task.id] = nil }
         await mutate(successEvent: .selection) {
             task.enabled
                 ? try await $0.pauseScheduledTask(id: task.id, revision: task.revision)
@@ -720,7 +732,7 @@ struct AidenScheduledTasksView: View {
                                             Text(task.name).font(.headline)
                                             if task.running { ProgressView().controlSize(.small) }
                                             Spacer()
-                                            Text(task.enabled ? "Active" : "Paused")
+                                            Text(model.isEnabled(task) ? "Active" : "Paused")
                                                 .font(.caption).foregroundStyle(.secondary)
                                         }
                                         Text(AidenScheduledTaskPresentation.cadence(schedule: task.schedule))
@@ -734,7 +746,7 @@ struct AidenScheduledTasksView: View {
                                 }
                                 .swipeActions(edge: .trailing) {
                                     if model.canManageSchedules {
-                                        Button(task.enabled ? "Pause" : "Resume") {
+                                        Button(model.isEnabled(task) ? "Pause" : "Resume") {
                                             Task { await model.pauseOrResume(task) }
                                         }
                                         .tint(.orange)
@@ -828,7 +840,7 @@ private struct AidenScheduledTaskDetailView: View {
                 .listRowBackground(Color.clear)
             } else if let task {
                 Section("Task") {
-                    LabeledContent("Status", value: task.running ? "Running" : (task.enabled ? "Active" : "Paused"))
+                    LabeledContent("Status", value: task.running ? "Running" : (model.isEnabled(task) ? "Active" : "Paused"))
                     LabeledContent(
                         "Schedule",
                         value: AidenScheduledTaskPresentation.cadence(schedule: task.schedule)
@@ -837,14 +849,14 @@ private struct AidenScheduledTaskDetailView: View {
                     LabeledContent("Mode", value: task.mode.title)
                     LabeledContent("Permission", value: task.permission.title)
                     if let mcpAccessSummary = task.mcpAccessSummary {
-                        LabeledContent("MCP Access", value: mcpAccessSummary)
+                        LabeledContent("Connectors", value: mcpAccessSummary)
                     }
                     if let prompt = task.prompt { Text(prompt).textSelection(.enabled) }
                 }
                 if model.canWriteSchedules {
                     Section("Actions") {
                         Button("Run Now", systemImage: "play.fill") { isConfirmingRun = true }
-                        Button(task.enabled ? "Pause" : "Resume", systemImage: task.enabled ? "pause" : "play") {
+                        Button(model.isEnabled(task) ? "Pause" : "Resume", systemImage: model.isEnabled(task) ? "pause" : "play") {
                             Task { await model.pauseOrResume(task) }
                         }
                         Button("Edit", systemImage: "pencil") { isEditing = true }
@@ -852,7 +864,7 @@ private struct AidenScheduledTaskDetailView: View {
                         Button("Delete", systemImage: "trash", role: .destructive) { isConfirmingDelete = true }
                         if task.usesLegacyInheritedMcpAccess, !model.hasCurrentMcpInventory {
                             Label(
-                                "Editing is unavailable until Aiden refreshes the enabled MCP server inventory.",
+                                "Editing is unavailable until Aiden refreshes the enabled connectors.",
                                 systemImage: "arrow.clockwise"
                             )
                             .font(.footnote)
@@ -890,9 +902,9 @@ private struct AidenScheduledTaskDetailView: View {
                 AidenScheduledTaskEditor(model: model, task: task) { isEditing = false }
             } else {
                 ContentUnavailableView(
-                    "MCP Inventory Required",
+                    "Connector List Required",
                     systemImage: "arrow.clockwise",
-                    description: Text("Refresh Scheduled Tasks before editing this legacy task so Aiden can freeze its exact MCP access.")
+                    description: Text("Refresh Scheduled Tasks before editing this legacy task so Aiden can freeze its exact connector access.")
                 )
                 .padding()
             }
@@ -1073,9 +1085,9 @@ private struct AidenScheduledTaskEditor: View {
                     if !model.mcpServers.isEmpty
                         || !draft.mcpServerIds.isEmpty
                         || task?.usesLegacyInheritedMcpAccess == true {
-                        Section("MCP Access") {
+                        Section("Connectors") {
                             if task?.usesLegacyInheritedMcpAccess == true {
-                                Text("This legacy task inherits every enabled MCP server. Saving freezes access to the exact enabled servers listed here.")
+                                Text("This legacy task inherits every enabled connector. Saving freezes access to the exact enabled connectors listed here.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -1107,7 +1119,7 @@ private struct AidenScheduledTaskEditor: View {
                                 }
                             }
                             if model.mcpServers.isEmpty {
-                                Text("No MCP servers are currently enabled. Saving freezes this task with no MCP access.")
+                                Text("No connectors are currently enabled. Saving freezes this task with no connector access.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -1199,7 +1211,7 @@ private struct AidenScheduledTaskEditor: View {
                             if draft.mode == .llm {
                                 LabeledContent("Provider", value: selectedProvider?.label ?? String(localized: "Default"))
                                 LabeledContent("Model", value: selectedModel?.label ?? String(localized: "Default"))
-                                LabeledContent("MCP Access") {
+                                LabeledContent("Connectors") {
                                     Text(draft.mcpAccessReviewSummary(currentMcpServers: model.mcpServers))
                                         .multilineTextAlignment(.trailing)
                                 }
@@ -1269,7 +1281,7 @@ private struct AidenScheduledSettingsView: View {
                             Toggle("Scheduled tasks enabled", isOn: $enabled)
                             Picker("Default mode", selection: $mode) { ForEach(AidenScheduledTaskMode.allCases, id: \.self) { Text($0.title).tag($0) } }
                             Picker("Default permission", selection: $permission) { ForEach(AidenScheduledTaskPermission.allCases, id: \.self) { Text($0.title).tag($0) } }
-                            Toggle("Enable MCP by default", isOn: $mcpEnabled)
+                            Toggle("Enable connectors by default", isOn: $mcpEnabled)
                             Toggle("Default notifications", isOn: $notify)
                             TextField("Default timezone", text: $timezone)
                         }

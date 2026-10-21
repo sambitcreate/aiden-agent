@@ -60,6 +60,31 @@ actor AidenChatDraftStore {
         try? fileManager.removeItem(at: url)
     }
 
+    /// Removes an admitted run input from the saved draft, if the saved draft
+    /// is still `original`, the draft the input was submitted from. Like
+    /// `settlePendingSend`, it accepts an older session: the Mac admitted the
+    /// text under this pairing, so the draft must not offer it again whichever
+    /// screen is current now. A draft saved since (text typed after the
+    /// composer cleared, even one starting the same way) is not touched, and
+    /// nothing is written when no draft is saved.
+    func consumeDraft(submitted: String, from original: String, session: Session) {
+        let url = fileURL(instanceId: session.instanceId, chatId: session.chatId)
+        guard let data = try? Data(contentsOf: url), data.count <= maximumDraftBytes,
+              let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
+              envelope.version == 1, envelope.instanceId == session.instanceId, envelope.chatId == session.chatId,
+              envelope.text == original else { return }
+        let remaining = AidenRunInputPresentation.consumedDraft(submitted: submitted, current: envelope.text)
+        guard remaining != envelope.text else { return }
+        if remaining.isEmpty {
+            try? fileManager.removeItem(at: url)
+            return
+        }
+        guard let next = try? JSONEncoder().encode(Envelope(
+            version: 1, instanceId: session.instanceId, chatId: session.chatId, text: remaining
+        )) else { return }
+        try? next.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
     private func attemptURL(_ session: Session) -> URL {
         instanceDirectory(instanceId: session.instanceId).appending(path: "\(digest(session.chatId)).attempt.json")
     }

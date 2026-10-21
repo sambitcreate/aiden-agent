@@ -82,17 +82,12 @@ test("parses the Gemini Live settings deep link", () => {
   });
 });
 
-test("Plugins navigation advertises MCP, connectors, and the plugin directory", () => {
+test("Connectors navigation is found by its name, MCP, and the apps it connects", () => {
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "mcp");
   assert.ok(destination);
-  assert.equal(destination.title, "Plugins");
-  assert.deepEqual(destination.keywords, [
-    "mcp",
-    "connections",
-    "protocol",
-    "plugins",
-    "connectors",
-  ]);
+  assert.equal(destination.title, "Connectors");
+  // The former names stay findable.
+  for (const keyword of ["mcp", "plugins", "integrations", "composio"]) assert.ok(destination.keywords.includes(keyword), keyword);
 });
 
 test("Web Search navigation advertises provider routing and privacy controls", () => {

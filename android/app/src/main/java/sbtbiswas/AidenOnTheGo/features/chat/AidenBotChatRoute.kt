@@ -48,7 +48,9 @@ fun AidenBotChatRoute(
     val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
     val client by coordinator.client.collectAsStateWithLifecycle()
     val palette = AidenTheme.palette
-    if (serverInfo?.supportsBotDurableSession == true) {
+    // Read while connecting too, from the pairing's saved features, so a durable-session Mac never
+    // shows the legacy spinner or creates a legacy chat before `/server` answers.
+    if (coordinator.supportsBotDurableSession(serverInfo)) {
         AidenBotSessionScreen(
             botId = botId,
             coordinator = coordinator,

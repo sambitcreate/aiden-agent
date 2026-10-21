@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpClient, type McpTransport } from "@earendil-works/pi-mcp";
+import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { connectMcpClient } from "./mcp-client.js";
+import { connectSdkServer } from "./mcp-test-support.js";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
 import {
   admitMcpServerDiscovery,
@@ -42,17 +44,14 @@ function toolServer(tools: string[], options: { beforeList?: () => Promise<void>
 }
 
 async function connectClient(server: Server, timeoutMs = 1_000) {
-  const client = new Client({ name: "discovery-test", version: "1" }, { capabilities: {} });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  await client.connect(clientTransport, mcpRequestDeadline(timeoutMs));
+  const client = new McpClient({ name: "discovery-test", version: "1" });
+  await connectMcpClient(client, await connectSdkServer(server), mcpRequestDeadline(timeoutMs));
   return client;
 }
 
 /** A transport peer that accepts messages and never answers `initialize`. */
 async function silentPeer() {
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  serverTransport.onmessage = () => undefined;
+  const { client: clientTransport, server: serverTransport } = createInMemoryTransportPair();
   await serverTransport.start();
   return { clientTransport, close: () => serverTransport.close() };
 }
@@ -70,12 +69,12 @@ test("a server that never answers initialize does not hold up the other servers'
     async ({ name }) => {
       if (name === "credential prompt") return new Promise<string[]>(() => undefined);
       if (name === "hung") {
-        const client = new Client({ name: "discovery-test", version: "1" }, { capabilities: {} });
-        await client.connect(hung.clientTransport, mcpRequestDeadline(50));
+        const client = new McpClient({ name: "discovery-test", version: "1" });
+        await connectMcpClient(client, hung.clientTransport, mcpRequestDeadline(50));
         return [];
       }
       const client = await connectClient(healthy.server);
-      return (await client.listTools(undefined, mcpRequestDeadline(1_000))).tools.map((tool) => tool.name);
+      return (await client.listTools(mcpRequestDeadline(1_000))).map((tool) => tool.name);
     },
     300,
   );
@@ -166,11 +165,11 @@ function gate() {
   return { open, opened };
 }
 
-/** Discovery through a real in-memory SDK server: connect, list, name tools `<server>_<tool>`. */
+/** Discovery through a real in-memory MCP server: connect, list, name tools `<server>_<tool>`. */
 async function discoverFrom(t: { after(fn: () => Promise<void>): void }, prefix: string, server: Server) {
   const client = await connectClient(server);
   t.after(async () => { await client.close(); await server.close(); });
-  const { tools } = await client.listTools(undefined, mcpRequestDeadline(5_000));
+  const tools = await client.listTools(mcpRequestDeadline(5_000));
   return { tools: tools.map(({ name }) => agentTool(`${prefix}_${name}`)) };
 }
 
@@ -260,14 +259,17 @@ test("a recent discovery failure is remembered for its connection generation onl
 });
 
 test("a connect stalled before initialize is bounded and its client closed", async () => {
-  // A transport whose start never completes, like an SSE stream that never sends `endpoint`.
+  // A transport whose start never completes.
   let closes = 0;
-  const stalled = {
+  const stalled: McpTransport = {
     start: () => new Promise<void>(() => undefined),
     send: async () => undefined,
     close: async () => { closes += 1; },
+    onMessage: () => () => undefined,
+    onError: () => () => undefined,
+    onClose: () => () => undefined,
   };
-  const client = new Client({ name: "discovery-test", version: "1" }, { capabilities: {} });
+  const client = new McpClient({ name: "discovery-test", version: "1" });
   const started = Date.now();
   await assert.rejects(
     connectMcpWithinDeadline(client.connect(stalled), async () => { await stalled.close(); }, { ms: 100 }),
@@ -279,7 +281,7 @@ test("a connect stalled before initialize is bounded and its client closed", asy
   const hung = await silentPeer();
   const cancelled = new AbortController();
   const attempt = connectMcpWithinDeadline(
-    new Client({ name: "discovery-test", version: "1" }).connect(hung.clientTransport),
+    new McpClient({ name: "discovery-test", version: "1" }).connect(hung.clientTransport),
     () => hung.close(),
     { ms: 60_000, signal: cancelled.signal },
   );

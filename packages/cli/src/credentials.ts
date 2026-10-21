@@ -26,12 +26,60 @@ export function fileCredentialCipher(agentDir: string) {
   };
 }
 
+function assertCurrent(isCurrent: (() => boolean) | undefined): void {
+  if (isCurrent && !isCurrent()) throw new Error("This credential changed while the operation was in progress.");
+}
+
+/** Writes to one credential file run one at a time in this process. */
+const writerQueues = new Map<string, Promise<unknown>>();
+const LEASE_WAIT_MS = 10_000;
+
+/**
+ * Run `operation` holding the cross-process writer lease. Writers in this
+ * process queue; a lease held by another process (a TUI next to `aiden
+ * serve`) is retried with bounded backoff before failing.
+ */
+export function withCredentialWriterLease<T>(lease: string, operation: () => Promise<T>, waitMs = LEASE_WAIT_MS): Promise<T> {
+  const run = async () => {
+    const deadline = Date.now() + waitMs;
+    let delay = 10;
+    let release: () => void;
+    for (;;) {
+      try { release = acquireLease(lease); break; }
+      catch (error) {
+        if (!(error instanceof Error && error.message.startsWith("Another Aiden process owns")) || Date.now() >= deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(delay, Math.max(1, deadline - Date.now()))));
+        delay = Math.min(delay * 2, 250);
+      }
+    }
+    try { return await operation(); } finally { release(); }
+  };
+  const previous = writerQueues.get(lease) ?? Promise.resolve();
+  const next = previous.then(run, run);
+  const settled = next.catch(() => undefined);
+  writerQueues.set(lease, settled);
+  void settled.then(() => { if (writerQueues.get(lease) === settled) writerQueues.delete(lease); });
+  return next;
+}
+
 export function insightCredentials(agentDir: string) {
-  const directory = join(agentDir, "credentials");
+  const directory = join(agentDir, "credentials"), lease = join(directory, "insights-writer");
   const store = new EncryptedPiCredentialStore({ filePath: () => join(directory, "insights.json"), cipher: fileCredentialCipher(agentDir) });
+  const valueOf = (credential: Awaited<ReturnType<typeof store.read>>) => credential?.type === "api_key" ? credential.key : undefined;
   return {
-    async read(source: string) { const value = await store.read(source); return value?.type === "api_key" ? value.key : undefined; },
-    async write(source: string, value: string) { const release = acquireLease(join(directory, "insights-writer")); try { await store.modify(source, async () => ({ type: "api_key", key: value })); } finally { release(); } },
-    async delete(source: string) { const release = acquireLease(join(directory, "insights-writer")); try { await store.delete(source); } finally { release(); } },
+    async read(source: string) { return valueOf(await store.read(source)); },
+    /** `isCurrent` is checked under the writer lease; a superseded writer changes nothing. */
+    write(source: string, value: string, isCurrent?: () => boolean) { return withCredentialWriterLease(lease, async () => { assertCurrent(isCurrent); await store.modify(source, async () => ({ type: "api_key", key: value })); }); },
+    /**
+     * Read-modify-write under the lease: `mutate` sees the stored value and
+     * returns the next one, or undefined to leave it unchanged.
+     */
+    update(source: string, mutate: (current: string | undefined) => string | undefined, isCurrent?: () => boolean) {
+      return withCredentialWriterLease(lease, async () => {
+        assertCurrent(isCurrent);
+        await store.modify(source, async (current) => { const next = mutate(valueOf(current)); return next === undefined ? undefined : { type: "api_key", key: next }; });
+      });
+    },
+    delete(source: string, isCurrent?: () => boolean) { return withCredentialWriterLease(lease, async () => { assertCurrent(isCurrent); await store.delete(source); }); },
   };
 }

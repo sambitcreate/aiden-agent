@@ -46,9 +46,28 @@ export const DIAGNOSTIC_ERROR_TYPES = [
   "Error",
   "EvalError",
   "InvalidStateError",
+  "McpAuthRequiredError",
+  "McpConnectionClosedError",
+  "McpError",
+  "McpFieldSecretMissingError",
+  "McpHttpError",
+  "McpOAuthAuthorizationRequiredError",
+  "McpOAuthCallbackError",
+  "McpOAuthCancelledError",
+  "McpOAuthCredentialStorageError",
+  "McpOAuthRefreshUnavailableError",
+  "McpOAuthSignInRequiredError",
+  "McpOAuthVerificationRejectedError",
+  "McpSessionExpiredError",
+  "McpStdioApprovalRequiredError",
+  "McpTimeoutError",
   "NetworkError",
   "NotAllowedError",
   "NotFoundError",
+  "OAuthError",
+  "OAuthInsecureEndpointError",
+  "OAuthIssuerMismatchError",
+  "OAuthRegistrationError",
   "RangeError",
   "ReferenceError",
   "SecurityError",
@@ -60,8 +79,8 @@ export const DIAGNOSTIC_ERROR_TYPES = [
   "UnknownError",
 ] as const;
 
-// Bot error classes are fixed, content-free names. Listing them keeps Bot
-// failures distinguishable in production logs instead of all "UnknownError".
+// Bot and MCP error classes are fixed, content-free names. Listing them keeps
+// those failures distinguishable in production logs instead of all "UnknownError".
 export type DiagnosticErrorType = (typeof DIAGNOSTIC_ERROR_TYPES)[number];
 
 export function normalizeDiagnosticErrorType(value: unknown): DiagnosticErrorType {

@@ -80,9 +80,11 @@ fun aidenBotsHomeContentState(
     totalBotCount: Int,
     hasQuery: Boolean,
     filteredBotCount: Int,
-    hasError: Boolean = false
+    hasError: Boolean = false,
+    /** The Mac is unreachable: with nothing saved there is nothing more to wait for. */
+    isOffline: Boolean = false
 ): AidenBotsHomeContentState {
-    if (!hasSnapshot && hasError) return AidenBotsHomeContentState.ERROR
+    if (!hasSnapshot && (hasError || isOffline)) return AidenBotsHomeContentState.ERROR
     if (!hasSnapshot) return AidenBotsHomeContentState.LOADING
     if (totalBotCount == 0) return AidenBotsHomeContentState.EMPTY
     if (hasQuery && filteredBotCount == 0) return AidenBotsHomeContentState.NO_RESULTS
@@ -344,7 +346,8 @@ private fun AidenBotsHomeContent(
         totalBotCount = allBots.size,
         hasQuery = searchQuery.isNotBlank(),
         filteredBotCount = rows.size,
-        hasError = errorMessage != null
+        hasError = errorMessage != null,
+        isOffline = connectionState == AidenConnectionState.OFFLINE
     )
 
     val presets by viewModel.presets.collectAsStateWithLifecycle()
@@ -363,7 +366,7 @@ private fun AidenBotsHomeContent(
     LaunchedEffect(createFlow) { createFlow.restore() }
 
     fun openChat(bot: AidenBotSummary) {
-        if (serverInfo?.supportsBotDurableSession == true) {
+        if (coordinator.supportsBotDurableSession(serverInfo)) {
             onNavigateToBotChat(bot.id)
             return
         }

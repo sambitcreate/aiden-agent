@@ -135,6 +135,7 @@ import {
 import {
   reconcileExternalMcpCredentialChanges,
   reconcilePendingMcpCredentialCleanup,
+  cleanupRetiredMcpServerCredentials,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
@@ -2188,6 +2189,11 @@ if (!ownsSingleInstanceLock) {
           "Could not reconcile an interrupted MCP credential cleanup.",
           error,
         );
+      }
+      try {
+        await cleanupRetiredMcpServerCredentials();
+      } catch (error) {
+        logger.error("mcp", "Could not remove credentials of retired SSE MCP servers.", error);
       }
       // Env and header values still written in config.json move into the keychain.
       await sealPlaintextMcpServerFields().catch((error: unknown) =>

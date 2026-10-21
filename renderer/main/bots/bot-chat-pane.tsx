@@ -17,7 +17,7 @@ import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
-import { Button, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
+import { Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
@@ -25,7 +25,14 @@ import type { Attachment } from "../../lib/types";
 import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
 import { queryKeys, useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
-import { BOT_FAILED_TURN_TEXT, botLastReplyAt, type BotPendingQuestion, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
+import {
+  BOT_FAILED_TURN_TEXT,
+  botLastReplyAt,
+  type BotLiveSnapshot,
+  type BotPendingQuestion,
+  type BotQueuedMessage,
+  type BotTranscriptEntry,
+} from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import {
   BOT_HANDOFF_NOTE_MAX_CHARS,
@@ -375,6 +382,63 @@ function BotQueuedBubble({
  * Chat transcript rows: bubbles, recaps, chips, cards. A paired host's Bot
  * chat leaves out the actions its host does not offer remotely.
  */
+/**
+ * A message the person just sent, shown at once while main accepts it. It is
+ * faded like a queued message and leaves when the projected entry (or the
+ * queued message) with the same words arrives, or when the send fails.
+ */
+function BotPendingSendBubble({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col items-end gap-1" data-bot-pending-send aria-busy="true">
+      <div className="max-w-full [&_.bg-control]:bg-[color-mix(in_srgb,var(--color-control)_55%,transparent)]">
+        <SafeMessageBubble role="user" content={text} showCopy={false} />
+      </div>
+      <span className="text-small text-tertiary">Sending…</span>
+    </div>
+  );
+}
+
+/** A send shown before main answers; `seen` names what was already on screen when it was made. */
+interface BotPendingSend {
+  requestId: string;
+  text: string;
+  /** Entry ids and queued submission ids present when the echo was made; a new one with the same text settles it. */
+  seen: ReadonlySet<string>;
+}
+
+/** The ids of everything a snapshot shows that a pending send could settle into. */
+function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of snapshot.entries) if (entry.type === "user") ids.add(entry.id);
+  for (const message of snapshot.queued ?? []) ids.add(`queued:${message.submissionId}`);
+  return ids;
+}
+
+/**
+ * Drops every pending send that the snapshot now shows: a user entry, or a
+ * queued message, with the same text that was not there when the echo was made.
+ */
+export function settleBotPendingSends(
+  pending: readonly BotPendingSend[],
+  snapshot: BotLiveSnapshot,
+): BotPendingSend[] {
+  if (pending.length === 0) return pending as BotPendingSend[];
+  const arrivals = [
+    ...snapshot.entries.flatMap((entry) => (entry.type === "user" ? [{ id: entry.id, text: entry.text }] : [])),
+    ...(snapshot.queued ?? []).map((message) => ({ id: `queued:${message.submissionId}`, text: message.text })),
+  ];
+  const taken = new Set<string>();
+  return pending.filter((send) => {
+    const match = arrivals.find((arrival) => !taken.has(arrival.id) && !send.seen.has(arrival.id) && arrival.text === send.text);
+    if (!match) return true;
+    taken.add(match.id);
+    return false;
+  });
+}
+
+/** How long an acknowledged send stays as an echo when its entry never shows (a hidden input, a routine). */
+const PENDING_SEND_SETTLE_MS = 4000;
+
 export function TranscriptEntries({
   name,
   entries,
@@ -409,7 +473,7 @@ export function TranscriptEntries({
   onDismissConnection?(pluginId: string): void;
   onOpenFile?(path: string): void;
   onReply(text: string): void;
-  onRetry(text: string): void;
+  onRetry(failedId: string, text: string): void;
   onOpenMemory?(): void;
   /** Run now on a routine skipped while paused; rejects when it didn't start. Absent where routines can't run. */
   onRunRoutine?(routineId: string): Promise<void>;
@@ -521,7 +585,7 @@ export function TranscriptEntries({
                 retryable={row.retryText !== null}
                 busy={retrying}
                 {...(row.errorMessage ? { errorMessage: row.errorMessage } : {})}
-                onRetry={() => row.retryText !== null && onRetry(row.retryText)}
+                onRetry={() => row.retryText !== null && onRetry(row.id, row.retryText)}
               />
             );
           case "memory_update":
@@ -568,7 +632,20 @@ export function BotChatPane({ botId }: { botId: string }) {
   const menuAction = useBotMenuActions(() => setDeleteOpen(true));
   const [retrying, setRetrying] = React.useState(false);
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
-  const [pausedBusy, setPausedBusy] = React.useState(false);
+  // The paused card leaves the moment Resume or Dismiss is clicked and comes
+  // back only if that request fails; `pausedRequestIds` keeps one request id
+  // per paused turn so a second click after a failure replays, never doubles.
+  const [hiddenPausedSubmission, setHiddenPausedSubmission] = React.useState<string | null>(null);
+  const pausedRequestIds = React.useRef(new Map<string, string>());
+  // Sends show at once as pending echoes, each under one request id. A send
+  // that failed keeps its id, so the same words sent again are deduplicated by
+  // main instead of delivered twice; Retry reuses one id per failed turn.
+  const [pendingSends, setPendingSends] = React.useState<readonly BotPendingSend[]>([]);
+  const unsettledSend = React.useRef<{ text: string; images: string; requestId: string } | null>(null);
+  const retryRequestIds = React.useRef(new Map<string, string>());
+  // Failed turns whose Retry was sent: main keeps the failed entry in the view, so the card
+  // stays hidden here once its retry left; a retry that fails to leave shows it again.
+  const [hiddenFailedTurns, setHiddenFailedTurns] = React.useState<ReadonlySet<string>>(() => new Set());
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
@@ -589,8 +666,21 @@ export function BotChatPane({ botId }: { botId: string }) {
     },
     [botId, markViewed, qc],
   );
+  React.useEffect(() => {
+    if (!snapshot) return;
+    setPendingSends((current) => {
+      const next = settleBotPendingSends(current, snapshot);
+      return next.length === current.length ? current : next;
+    });
+  }, [snapshot]);
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
+  React.useEffect(() => {
+    // The card hides for one paused turn; a new state (running, idle, or a later pause) clears that.
+    if (hiddenPausedSubmission && (state?.kind !== "interrupted" || state.submissionId !== hiddenPausedSubmission)) {
+      setHiddenPausedSubmission(null);
+    }
+  }, [hiddenPausedSubmission, state]);
 
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
@@ -645,6 +735,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         snapshot?.handoff?.waitId,
         snapshot?.activity?.phase,
         snapshot?.queued?.length ?? 0,
+        pendingSends.length,
         statusLayout,
       ]}
       showScrollToBottomButton
@@ -715,6 +806,17 @@ export function BotChatPane({ botId }: { botId: string }) {
     !snapshot.activity?.step;
   const statusActivity = snapshot.activity && !replyStreaming ? snapshot.activity : null;
 
+  /** Shows the echo now; drops it once its entry shows, or shortly after main accepted a send that shows nothing. */
+  const echoSend = (requestId: string, text: string) => {
+    const seen = snapshot ? botVisibleSendIds(snapshot) : new Set<string>();
+    setPendingSends((current) => [...current.filter((send) => send.requestId !== requestId), { requestId, text, seen }]);
+  };
+  const dropEcho = (requestId: string) =>
+    setPendingSends((current) => current.filter((send) => send.requestId !== requestId));
+  const settleEchoLater = (requestId: string) => {
+    setTimeout(() => dropEcho(requestId), PENDING_SEND_SETTLE_MS);
+  };
+
   const send = async (
     text: string,
     attachments: Attachment[],
@@ -728,41 +830,68 @@ export function BotChatPane({ botId }: { botId: string }) {
       return;
     }
     const body = `${text}${attachmentText(attachments)}`;
+    const imageIdentity = images.map((image) => `${image.mimeType}:${image.data.length}:${image.data.slice(0, 64)}`).join("|");
+    // The same words and photos sent again after a failure replay under the first request id.
+    const unsettled = unsettledSend.current;
+    const requestId =
+      unsettled && unsettled.text === body && unsettled.images === imageIdentity ? unsettled.requestId : crypto.randomUUID();
+    unsettledSend.current = null;
+    echoSend(requestId, body);
     try {
       await botsApi.send({
         botId: current.id,
         text: body,
-        requestId: crypto.randomUUID(),
+        requestId,
         ...(whenBusy ? { whenBusy } : {}),
         ...(images.length > 0 ? { attachments: images } : {}),
       });
+      settleEchoLater(requestId);
     } catch (error) {
+      dropEcho(requestId);
+      unsettledSend.current = { text: body, images: imageIdentity, requestId };
       toast.error(userFacingErrorMessage(error, `Aiden couldn’t send to ${current.name}.`));
       throw error;
     }
   };
 
-  const resume = async () => {
-    setPausedBusy(true);
-    try {
-      await botsApi.resume(current.id, crypto.randomUUID());
-    } catch (error) {
-      toast.error(userFacingErrorMessage(error, `Aiden couldn’t resume ${current.name}.`));
-    } finally {
-      setPausedBusy(false);
-    }
+  /** One request id per paused turn and action, so a retry after a failure replays instead of doubling. */
+  const pausedRequestId = (action: "resume" | "dismiss", submissionId: string) => {
+    const key = `${action}:${submissionId}`;
+    const existing = pausedRequestIds.current.get(key);
+    if (existing) return existing;
+    const minted = crypto.randomUUID();
+    pausedRequestIds.current.set(key, minted);
+    return minted;
   };
 
-  const dismiss = async () => {
-    setPausedBusy(true);
+  const paused = async (action: "resume" | "dismiss") => {
+    if (state?.kind !== "interrupted" || hiddenPausedSubmission) return;
+    const { submissionId } = state;
+    // The card leaves now; main's state event confirms it, and a failure brings it back.
+    setHiddenPausedSubmission(submissionId);
     try {
-      await botsApi.dismiss(current.id, crypto.randomUUID());
+      const after =
+        action === "resume"
+          ? await botsApi.resume(current.id, pausedRequestId(action, submissionId))
+          : await botsApi.dismiss(current.id, pausedRequestId(action, submissionId));
+      // Main answered, so the id is spent: main remembers its answer (even a refusal) per id,
+      // and the next click after, say, fixing access must be a new request. Only a thrown
+      // IPC error keeps the id for a replay.
+      pausedRequestIds.current.delete(`${action}:${submissionId}`);
+      // Main's answer is the state now: a turn still paused (for example, blocked) shows its card again.
+      if (after.kind === "interrupted") setHiddenPausedSubmission(null);
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, `Aiden couldn’t dismiss that for ${current.name}.`));
-    } finally {
-      setPausedBusy(false);
+      setHiddenPausedSubmission((hidden) => (hidden === submissionId ? null : hidden));
+      toast.error(
+        userFacingErrorMessage(
+          error,
+          action === "resume" ? `Aiden couldn’t resume ${current.name}.` : `Aiden couldn’t dismiss that for ${current.name}.`,
+        ),
+      );
     }
   };
+  const resume = () => paused("resume");
+  const dismiss = () => paused("dismiss");
 
   const answerQuestion = async (question: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
     setAnswering(true);
@@ -799,12 +928,30 @@ export function BotChatPane({ botId }: { botId: string }) {
     if (problem) throw new Error(problem);
   };
 
-  /** Retry: the same message as a NEW submission, with a new request id. */
-  const retry = async (text: string) => {
+  /**
+   * Retry: the same message as a NEW submission. Its request id is minted once
+   * per failed turn, so clicking Retry again after a failure replays, never doubles.
+   */
+  const retry = async (failedId: string, text: string) => {
+    if (retrying) return;
+    let requestId = retryRequestIds.current.get(failedId);
+    if (!requestId) {
+      requestId = crypto.randomUUID();
+      retryRequestIds.current.set(failedId, requestId);
+    }
     setRetrying(true);
+    setHiddenFailedTurns((hidden) => new Set(hidden).add(failedId));
+    echoSend(requestId, text);
     try {
-      await botsApi.send({ botId: current.id, text, requestId: crypto.randomUUID() });
+      await botsApi.send({ botId: current.id, text, requestId });
+      settleEchoLater(requestId);
     } catch (error) {
+      dropEcho(requestId);
+      setHiddenFailedTurns((hidden) => {
+        const next = new Set(hidden);
+        next.delete(failedId);
+        return next;
+      });
       toast.error(userFacingErrorMessage(error, `Aiden couldn’t send to ${current.name}.`));
     } finally {
       setRetrying(false);
@@ -980,10 +1127,20 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   return shell(
     <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6">
+      {live.failed && live.stale ? (
+        <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
+          <Text variant="small" color="red">
+            This is the last view of {current.name}’s chat; Aiden couldn’t read the latest.
+          </Text>
+          <Button size="small" variant="filled" onClick={live.reload}>
+            Try again
+          </Button>
+        </Callout>
+      ) : null}
       <MessageAttachmentPreviewProvider>
         <TranscriptEntries
           name={current.name}
-          entries={snapshot.entries}
+          entries={hiddenFailedTurns.size ? snapshot.entries.filter((entry) => !hiddenFailedTurns.has(entry.id)) : snapshot.entries}
           partial={snapshot.partial}
           running={running}
           level={chatActivity.level}
@@ -995,11 +1152,14 @@ export function BotChatPane({ botId }: { botId: string }) {
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
           onOpenFile={(path) => panel.show("files", { path, botId })}
           onReply={reply}
-          onRetry={(text) => void retry(text)}
+          onRetry={(failedId, text) => void retry(failedId, text)}
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
         />
+        {pendingSends.map((send) => (
+          <BotPendingSendBubble key={send.requestId} text={send.text} />
+        ))}
       </MessageAttachmentPreviewProvider>
       <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
       {statusActivity ? (
@@ -1011,11 +1171,11 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
-      {state?.kind === "interrupted" ? (
+      {state?.kind === "interrupted" && hiddenPausedSubmission !== state.submissionId ? (
         <BotInterruptedCard
           name={current.name}
           {...(state.blocked ? { blocked: state.blocked } : {})}
-          busy={pausedBusy}
+          busy={false}
           onResume={() => void resume()}
           onDismiss={() => void dismiss()}
           onReviewAccess={openAdvanced}

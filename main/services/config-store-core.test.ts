@@ -1922,6 +1922,28 @@ test("credential reconciliation reloads authoritative portable config from disk"
   assert.deepEqual(await h.store.listMcpServers(), [server]);
 });
 
+test("saved legacy SSE MCP servers are dropped on load without discarding the other servers", async (t) => {
+  const h = await harness(t, { workspaces: [], seeded: true, aidenDirMigratedAt: Date.now() });
+  const kept = { id: "kept", name: "Kept", transport: "http" as const, url: "https://tools.test/mcp", enabled: true };
+  await fs.mkdir(path.dirname(h.portableFile), { recursive: true });
+  await fs.writeFile(h.portableFile, JSON.stringify({
+    providers: [],
+    providerIdAliases: {},
+    mcpServers: [{ id: "legacy", name: "Legacy", transport: "sse", url: "https://legacy.test/sse", enabled: true }, kept],
+    skills: [],
+  }), "utf-8");
+
+  assert.deepEqual(await h.store.listMcpServers(), [kept]);
+  assert.deepEqual(await h.store.retiredMcpServerIds(), ["legacy"], "the dropped server's id is reported for credential cleanup");
+  const added = { id: "added", name: "Added", transport: "stdio" as const, command: "mcp-added", enabled: true };
+  await h.store.saveMcpServer(added);
+  const saved = await readJson<{ mcpServers: Array<{ id: string }> }>(h.portableFile);
+  assert.deepEqual(saved.mcpServers.map(({ id }) => id), ["kept", "added"]);
+  assert.deepEqual(await h.store.retiredMcpServerIds(), ["legacy"], "a write that dropped the entry keeps its id until cleanup");
+  h.store.forgetRetiredMcpServerIds(["legacy"]);
+  assert.deepEqual(await h.store.retiredMcpServerIds(), []);
+});
+
 test("duplicate portable MCP and skill IDs are rejected as ambiguous identities", async (t) => {
   const validMcp = {
     id: "duplicate",

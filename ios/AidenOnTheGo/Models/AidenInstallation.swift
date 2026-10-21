@@ -20,6 +20,11 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
     /// The Mac announced `bot-activity-v1` when it last answered `/server` (R21).
     /// With the persisted `bot:activity` grant it stands in until `/server` answers.
     var botActivityAnnounced: Bool
+    /// Every feature token the Mac advertised when it last answered `/server`.
+    /// Until the next answer, gates read these, so a durable-session Mac never
+    /// lands on a legacy path while this phone is still connecting. Empty for
+    /// a pairing that has not heard `/server` yet.
+    var serverFeatures: [String]
 
     var id: String { instanceId }
 
@@ -63,6 +68,7 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
         self.createdAt = createdAt
         self.lastConnectedAt = lastConnectedAt
         botActivityAnnounced = false
+        serverFeatures = []
     }
 
     init(from decoder: Decoder) throws {
@@ -108,6 +114,8 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
         lastConnectedAt = try values.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
         // Absent in pairings saved before revision 30.
         botActivityAnnounced = try values.decodeIfPresent(Bool.self, forKey: .botActivityAnnounced) ?? false
+        // Absent in pairings saved before the features were kept.
+        serverFeatures = try values.decodeIfPresent([String].self, forKey: .serverFeatures) ?? []
 
         try Self.requireIdentifier(instanceId, forKey: .instanceId, in: values)
         try Self.requireIdentifier(deviceId, forKey: .deviceId, in: values)
@@ -149,12 +157,14 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
         try values.encode(createdAt, forKey: .createdAt)
         try values.encodeIfPresent(lastConnectedAt, forKey: .lastConnectedAt)
         try values.encode(botActivityAnnounced, forKey: .botActivityAnnounced)
+        try values.encode(serverFeatures, forKey: .serverFeatures)
     }
 
     private enum CodingKeys: String, CodingKey {
         case instanceId, deviceId, name, endpoint, serverSpkiSha256, pairingTrust, credentialScope
         case capabilities, deviceCapabilities, serverCapabilities, createdAt, lastConnectedAt
         case botActivityAnnounced
+        case serverFeatures
     }
 
     private static func makeCredentialScope(instanceId: String, deviceId: String) -> String {
@@ -248,6 +258,7 @@ final class AidenInstallationStore {
             }
             installation.serverCapabilities = validatedServer.serverCapabilities
             installation.botActivityAnnounced = validatedServer.announcesBotActivity
+            installation.serverFeatures = validatedServer.features
         }
 
         // The scoped credential write must succeed before the installation is
@@ -303,6 +314,7 @@ final class AidenInstallationStore {
         }
         installations[index].serverCapabilities = server.serverCapabilities
         installations[index].botActivityAnnounced = server.announcesBotActivity
+        installations[index].serverFeatures = server.features
         installations[index].lastConnectedAt = connectedAt
         installations.sort(by: Self.sortInstallations)
         do {
@@ -346,6 +358,7 @@ final class AidenInstallationStore {
         installations[index].deviceCapabilities = capabilities
         installations[index].serverCapabilities = supported
         installations[index].botActivityAnnounced = server.announcesBotActivity
+        installations[index].serverFeatures = server.features
         installations[index].name = server.name
         installations[index].lastConnectedAt = connectedAt
         installations.sort(by: Self.sortInstallations)
