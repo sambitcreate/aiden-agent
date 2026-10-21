@@ -27,8 +27,11 @@ export interface FakeRfbPixelFormat {
 export interface FakeRfbServerOptions {
   width?: number;
   height?: number;
-  /** Set: VNC auth with this password. Unset: security None. */
-  password?: string;
+  /**
+   * Set: VNC auth with this password, or with what the function returns when a
+   * client connects (a computer run's password). Unset: security None.
+   */
+  password?: string | (() => string | undefined);
   version?: "3.3" | "3.7" | "3.8";
   name?: string;
   /** The pixel format ServerInit announces; default BGRX little-endian. */
@@ -80,7 +83,7 @@ export class FakeRfbServer {
   private readonly pendingIncremental = new Set<Socket>();
   /** Areas changed since a client's last update, sent with its next incremental request. */
   private readonly dirty = new Map<Socket, { x: number; y: number; width: number; height: number }[]>();
-  private readonly options: Required<Omit<FakeRfbServerOptions, "password">> & { password?: string };
+  private readonly options: Required<Omit<FakeRfbServerOptions, "password">> & Pick<FakeRfbServerOptions, "password">;
 
   constructor(options: FakeRfbServerOptions = {}) {
     this.options = {
@@ -193,7 +196,8 @@ export class FakeRfbServer {
     let stage: "version" | "security" | "auth" | "init" | "messages" = "version";
     const minor = this.options.version === "3.3" ? 3 : this.options.version === "3.7" ? 7 : 8;
     const challenge = randomBytes(16);
-    const securityType = this.options.password === undefined ? 1 : 2;
+    const password = typeof this.options.password === "function" ? this.options.password() : this.options.password;
+    const securityType = password === undefined ? 1 : 2;
     socket.write(`RFB 003.00${minor}\n`);
 
     const ok = () => {
@@ -253,7 +257,7 @@ export class FakeRfbServer {
           if (buffer.length < 16) return;
           const response = buffer.subarray(0, 16);
           buffer = buffer.subarray(16);
-          if (!response.equals(expectedResponse(this.options.password!, challenge))) {
+          if (!response.equals(expectedResponse(password!, challenge))) {
             refuse("Authentication failed");
             return;
           }

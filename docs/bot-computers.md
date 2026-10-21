@@ -221,6 +221,7 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   in `ps`, and that `~/.lume` is untouched.
 - A Set up interrupted mid-download resumes with a range request and ends with
   the pinned SHA-256; whether Apple's URL redirects.
+- `AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 npm run test:bot-computers:packaged` walks the packaged app from Set up through Take over, Pause, Delete Bot and Remove everything, and writes `build/bot-computers-acceptance-receipt.json`.
 
 ## How the Bot uses its computer
 
