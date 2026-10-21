@@ -109,6 +109,21 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   // The pages the person loaded and what they logged while holding the tab never reach the Bot.
   expect(result.hold.heldTraces).toBe(false);
 
+  // A "show password" toggle doesn't uncover the field: not after the Bot saw it
+  // as a password field, nor when the person showed it on a tab they held.
+  for (const who of ["shownByBot", "shownByPerson"] as const) {
+    const seen = result.reveal[who];
+    expect(painted(seen.field), `${who}: the field is still covered`).toBe(true);
+    expect(seen.control, `${who}: nothing else is`).toEqual(RED);
+    expect(seen.leaked, `${who}: the value stays out of the snapshot`).toBe(false);
+  }
+  expect(result.reveal.shownType, "the page did show the field as text").toBe("text");
+  expect(result.reveal.typingShownByBot).toBe(result.expected.typingRefusal);
+  expect(result.reveal.pressingShownByPerson, "a printable key into the focused field").toBe(result.expected.typingRefusal);
+  expect(result.reveal.typingShownByPerson).toBe(result.expected.typingRefusal);
+  expect(result.reveal.probedShownByBot, "approvals and rules still read a password field").toBe("password");
+  expect(result.reveal.probedType, "also after the person showed it").toBe("password");
+
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
   expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });
 });

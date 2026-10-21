@@ -200,3 +200,43 @@ test("Open again on the same card brings back the tab it opened; once the person
   await settled();
   assert.equal(browser.heldBy("tab-2"), undefined);
 });
+
+test("a card asked again under the same wait id keeps the tab the person is using, and Open brings it back", async () => {
+  const { browser, handoffs, open, ask } = setup({ owner: owner(1) });
+  ask("wait-1");
+  await open(BOT, "wait-1", "https://github.com", "sign_in");
+  // The same call asks again (a stale invocation is withdrawn): it is the same card.
+  const again = ask("wait-1");
+  await settled();
+  assert.deepEqual(browser.heldBy("tab-1"), { holdId: "wait-1", reason: "sign_in" }, "the person is still signing in there");
+  await open(BOT, "wait-1", "https://github.com", "sign_in");
+  assert.equal(browser.tabs.size, 1, "Open shows the tab the person was using");
+  assert.deepEqual(browser.created[browser.created.length - 1]?.command, { action: "select", tabId: "tab-1" });
+
+  handoffs.answer(BOT, "wait-1", { outcome: "done" });
+  await again.answer;
+  await settled();
+  assert.equal(browser.heldBy("tab-1"), undefined, "answered, the tab goes back to the Bot");
+});
+
+test("a tab two cards opened stays held until neither waits, whichever settles first", async () => {
+  for (const first of ["wait-1", "wait-2"] as const) {
+    const { browser, handoffs, open, ask } = setup({ owner: owner(1) });
+    const cards = { "wait-1": ask("wait-1", "action"), "wait-2": ask("wait-2", "action") };
+    await open(BOT, "wait-1", "https://shop.example.com/cart", "handoff");
+    // The second card's page is the same: `open_link` shows the tab the first opened.
+    await open(BOT, "wait-2", "https://shop.example.com/cart", "handoff");
+    assert.equal(browser.tabs.size, 1);
+    const second = first === "wait-1" ? "wait-2" : "wait-1";
+
+    handoffs.answer(BOT, first, { outcome: "done" });
+    await cards[first].answer;
+    await settled();
+    assert.deepEqual(browser.heldBy("tab-1"), { holdId: second, reason: "handoff" }, `${first} settled first: ${second} still waits`);
+
+    handoffs.answer(BOT, second, { outcome: "done" });
+    await cards[second].answer;
+    await settled();
+    assert.equal(browser.heldBy("tab-1"), undefined);
+  }
+});
