@@ -28,6 +28,8 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 - Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.
 - Treats the desktop host as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
 - Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
+- Bots ask you to sign in in their own browser; the model never sees your password.
+- Bot computers (Apple silicon): an opt-in macOS VM per Bot. See [docs/bot-computers.md](docs/bot-computers.md).
 
 ## Brand Commitments
 

@@ -1,6 +1,6 @@
 # Bots that hand work back: hand-offs, sign-in, rules, pause and Bot computers
 
-Status: Planned (2026-10-20). No implementation yet. The owner picked these five ideas from a study of Cua's `cua-bots-macos` sample. The decisions in [§10](#10-decisions-for-the-owner) need the owner's answers before the matching phase starts.
+Status: Active (2026-10-21), being implemented in PR #559. The owner picked these five ideas from a study of Cua's `cua-bots-macos` sample. On 2026-10-20 the owner took the recommended option (a) for all nine decisions in [§10](#10-decisions-for-the-owner). Done so far: hand-offs, Pause, rules, the Remote contract (revision 37) with the iOS and Android clients, the Bot browser and `sign_in`; the Bot computers host is implemented and waits on owner-Mac acceptance. The viewer, the `computer` tool and computer sign-in are next.
 
 ## 1. Goal
 
