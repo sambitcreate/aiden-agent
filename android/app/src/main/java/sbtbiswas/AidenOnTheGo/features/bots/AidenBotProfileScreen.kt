@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.HideImage
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.PauseCircle
+import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.SdStorage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -144,6 +146,14 @@ fun AidenBotProfileScreen(
     val photoPhase by avatarModel.phase.collectAsStateWithLifecycle()
     val photoError by avatarModel.errorMessage.collectAsStateWithLifecycle()
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
+    // Revision 37: Pause Bot / Resume Bot, one at a time, reusing a key whose outcome is unknown.
+    val pauseControl = remember(botId, client) { AidenBotPauseControl() }
+    var isChangingPause by remember(botId) { mutableStateOf(false) }
+    val canPause = aidenBotOffersPause(
+        serverInfo,
+        canWriteBots = coordinator.installationStore.activeInstallation?.canWriteBots == true,
+        bot = bot
+    )
 
     /**
      * A Bot for the page and every screen. [confirmed] is the Mac's answer, kept on disk; an
@@ -292,6 +302,46 @@ fun AidenBotProfileScreen(
                                     showAdvanced = true
                                 }
                             )
+                            if (canPause) {
+                                val paused = bot?.paused == true
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(if (paused) R.string.bot_menu_resume else R.string.bot_menu_pause)) },
+                                    leadingIcon = {
+                                        Icon(if (paused) Icons.Outlined.PlayCircle else Icons.Outlined.PauseCircle, contentDescription = null)
+                                    },
+                                    enabled = !isChangingPause,
+                                    onClick = {
+                                        showMenu = false
+                                        val cl = client
+                                        val current = bot
+                                        if (cl != null && current != null) {
+                                            val pairing = coordinator.activeInstanceId
+                                            isChangingPause = true
+                                            actionError = null
+                                            scope.launch {
+                                                try {
+                                                    val next = pauseControl.set(AidenRemoteBotPauseTransport(cl), current, pause = !paused)
+                                                    if (next != null && coordinator.holdsReadAuthority(cl, pairing)) {
+                                                        // Shown at once; the Mac's own Bot replaces it on the reread.
+                                                        bot = next
+                                                        onBotMutated()
+                                                        readAttempt += 1
+                                                    }
+                                                } catch (e: CancellationException) {
+                                                    throw e
+                                                } catch (_: Exception) {
+                                                    actionError = resources.getString(
+                                                        if (paused) R.string.bot_profile_resume_failed else R.string.bot_profile_pause_failed,
+                                                        current.name
+                                                    )
+                                                } finally {
+                                                    isChangingPause = false
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
                             if (canDelete) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.bot_delete_confirm), color = aidenBotErrorTextColor()) },

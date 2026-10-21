@@ -1633,6 +1633,72 @@ class AidenRemoteClient(
         }
     }
 
+    /**
+     * Revision 37 (`bot:handoffs`): answers the step the Bot handed back, Done or Skip. The key
+     * makes a retried answer replay the same receipt; `handoff_expired` means the card was
+     * already answered or closed.
+     */
+    suspend fun answerBotHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        idempotencyKey: UUID
+    ): AidenBotHandoffAnswerReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotHandoffWire.validateWaitId(waitId)
+        return executeRequest(
+            "/bots/$botId/handoffs/$waitId/answer",
+            method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotHandoffAnswerRequest.serializer(), request),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botHandoffAnswer")
+        ) { bytes ->
+            val receipt = decodeBotWire(AidenBotHandoffAnswerReceipt.serializer(), String(bytes, Charsets.UTF_8))
+            if (receipt.waitId != waitId) throw AidenRemoteClientException.InvalidResponse()
+            receipt
+        }
+    }
+
+    /** Revision 37: asks the Mac to bring a sign-in hand-off's browser forward, to finish it there. */
+    suspend fun openBotHandoffOnMac(botId: String, waitId: String, idempotencyKey: UUID): AidenBotHandoffOpenOnMacReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotHandoffWire.validateWaitId(waitId)
+        return executeRequest(
+            "/bots/$botId/handoffs/$waitId/open-on-mac",
+            method = "POST",
+            bodyJson = "{}",
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botHandoffOpenOnMac")
+        ) { bytes ->
+            val receipt = decodeBotWire(AidenBotHandoffOpenOnMacReceipt.serializer(), String(bytes, Charsets.UTF_8))
+            if (receipt.waitId != waitId) throw AidenRemoteClientException.InvalidResponse()
+            receipt
+        }
+    }
+
+    /** Revision 37: `POST /bots/{id}/pause` with `{}`. A paused Bot doesn't reply or run routines. */
+    suspend fun pauseBot(botId: String, idempotencyKey: UUID): AidenBotSessionStateView =
+        botSessionControl(botId, "pause", idempotencyKey)
+
+    /** Revision 37: lifts the pause with a body-less `DELETE /bots/{id}/pause`. */
+    suspend fun unpauseBot(botId: String, idempotencyKey: UUID): AidenBotSessionStateView {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        return executeRequest(
+            "/bots/$botId/pause",
+            method = "DELETE",
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botSessionResume")
+        ) { bytes ->
+            decodeBotWire(AidenBotSessionStateView.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
     private suspend fun botSessionControl(botId: String, action: String, idempotencyKey: UUID): AidenBotSessionStateView {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         return executeRequest(
