@@ -96,8 +96,11 @@ Bot computer that was interrupted while it was being made is marked for
 - **Stop when idle:** a running computer nobody has used for 5, 10 (default),
   15, 30 or 60 minutes stops. It never stops while the person is controlling it
   or a Bot action is running.
-- **Pause, delete and quit:** pausing a Bot stops its computer at once, and a
-  start that was still waiting gives up. Deleting a Bot stops and deletes its
+- **Pause, delete and quit:** pausing a Bot starts stopping its computer as
+  soon as its run has stopped, and a start that was still waiting gives up.
+  The pause answers without waiting for that stop, which shuts the guest down
+  gracefully and can take up to about 30 seconds; the computer reads Stopping
+  until it is off. Deleting a Bot stops and deletes its
   computer before its files are erased. Quitting Aiden turns every running
   computer off at once (a forced stop, like holding the power button) so quit
   stays within a few seconds.

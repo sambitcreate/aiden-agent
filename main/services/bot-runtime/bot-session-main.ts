@@ -54,6 +54,7 @@ import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
+import { runBotPauseSteps } from "./bot-pause-steps.js";
 import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
@@ -335,21 +336,19 @@ async function stopLegacyChatWork(botId: string): Promise<void> {
  * step here for anything that keeps going on its own, such as the Bot's
  * computer.
  */
-const botPauseEffects: ReadonlyArray<(botId: string) => void | Promise<void>> = [
-  stopLegacyChatWork,
-  // The Bot's computer stops at once; a start still waiting for a slot gives up.
-  async (botId) => (await import("../bot-computers/bot-computers-main.js")).pauseBotComputer(botId),
-];
-
-async function afterBotPaused(botId: string): Promise<void> {
-  for (const effect of botPauseEffects) {
-    try {
-      await effect(botId);
-    } catch (error) {
-      logger.warn("bots", `Bot ${botId} pause step failed.`, error);
-    }
-  }
-}
+const afterBotPaused = runBotPauseSteps(
+  [
+    { run: stopLegacyChatWork },
+    // The Bot's computer starts stopping now, after its run, and a start still
+    // waiting for a slot gives up. A graceful stop can take half a minute, so
+    // the pause answers without waiting for it.
+    {
+      background: true,
+      run: async (botId) => (await import("../bot-computers/bot-computers-main.js")).pauseBotComputer(botId),
+    },
+  ],
+  (botId, error) => logger.warn("bots", `Bot ${botId} pause step failed.`, error),
+);
 
 /**
  * Unpause: background memory review picks up again, and when routines fired

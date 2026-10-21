@@ -19,6 +19,7 @@ import { createBotMemoryStore } from "../bot-memory/store.js";
 import { createBotPauseStore, type BotPauseRecord, type BotPauseStore } from "../bot-pause-store.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
+import { runBotPauseSteps } from "./bot-pause-steps.js";
 import { createBotQuestions } from "./bot-questions.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -696,11 +697,77 @@ function runLegacyGeneration(host: Awaited<ReturnType<typeof legacyChatHost>>, s
   return { entry, effects: () => effects, settled: () => !host.active.has(streamId), end: settle };
 }
 
+test("a pause answers without waiting for the Bot's computer to stop, which begins only once the run has stopped", async () => {
+  let runStopped = false;
+  const tool = countingTool(
+    "run_command",
+    (_params, signal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            runStopped = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      }),
+  );
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "build" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("never"),
+  ]);
+  const order: string[] = [];
+  const reports: unknown[] = [];
+  let computerStopped!: () => void;
+  const gracefulStop = new Promise<void>((resolve) => (computerStopped = resolve));
+  const broken = new Error("the legacy chats could not be read");
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    extension: recordingDeps({ tools: [{ tool, replay: "unsafe" }] }),
+    // As the desktop wires it (`afterBotPaused` in bot-session-main.ts): legacy chats, then the computer.
+    afterPaused: runBotPauseSteps(
+      [
+        {
+          run: () => {
+            order.push("legacy chats");
+            throw broken;
+          },
+        },
+        {
+          background: true,
+          run: async () => {
+            order.push(runStopped ? "computer stopping after the run" : "computer stopping DURING the run");
+            await gracefulStop;
+            order.push("computer stopped");
+          },
+        },
+      ],
+      (_botId, error) => reports.push(error),
+    ),
+  });
+  try {
+    await service.send(BOT, { text: "build it", requestId: "desk-1" });
+    await waitFor(() => tool.executions.length === 1, { what: "the tool to start" });
+    const paused = await Promise.race([
+      service.pause(BOT, "mac"),
+      new Promise<"waited">((resolve) => setTimeout(() => resolve("waited"), 5_000)),
+    ]);
+    assert.notEqual(paused, "waited", "the pause answered while the computer was still stopping");
+    assert.deepEqual(order, ["legacy chats", "computer stopping after the run"]);
+    assert.deepEqual(reports, [broken], "a step that fails is reported, and the next one still runs");
+    computerStopped();
+    await waitFor(() => order.includes("computer stopped"), { what: "the computer to stop" });
+  } finally {
+    computerStopped();
+    await service.shutdown();
+  }
+});
+
 test("pausing stops the Bot's legacy chat streams and tools and waits for them, leaving other chats running", async () => {
   const host = await legacyChatHost();
   const chatsByBot: Record<string, string[]> = { [BOT]: ["bot-chat", "bot-older-chat"], "bot:b": ["other-bot-chat"] };
   const service = await serviceFor(tempProfile(), createFauxModels(), {
-    // As the desktop wires it (`botPauseEffects` in bot-session-main.ts).
+    // The legacy-chat step of `afterBotPaused` in bot-session-main.ts.
     afterPaused: (botId) =>
       stopBotLegacyChatWork(botId, {
         chatIds: async (id) => chatsByBot[id] ?? [],
