@@ -15,8 +15,10 @@ import {
   Monitor,
   Moon,
   MousePointer2,
+  MousePointerClick,
   OctagonAlert,
   PanelRightOpen,
+  PictureInPicture2,
   Play,
   Search,
   Send,
@@ -216,6 +218,52 @@ const SCHEDULED_TASKS = [
 ] as const;
 
 /** The scheduled-tasks list with one task open on its access and actions. */
+/**
+ * A Bot's Computer tab: the status line and Take over above its own macOS
+ * screen, with the Bot's avatar resting where it last clicked.
+ */
+export function BotComputersArt() {
+  return (
+    <ArtWindow className="oa-bc" style={{ left: 12, top: 10, width: 172, height: 250 }}>
+      <div className="oa-bc-bar oa-separator-bottom">
+        <span className="oa-bc-mark">
+          <AidenActivityMark mark="quad-shuffle" size={11} active={false} />
+        </span>
+        <Bar width={40} tone="soft" />
+        <span className="oa-grow" />
+        <ArtButton variant="ghost" icon={MousePointerClick} className="oa-anim-press" style={{ animationDelay: "1.2s" }}>
+          Take over
+        </ArtButton>
+        <ArtIcon icon={PictureInPicture2} />
+      </div>
+      <div className="oa-bc-screen">
+        <div className="oa-bc-menubar">
+          <Bar width={16} tone="ink" />
+          <Bar width={22} tone="soft" />
+          <Bar width={18} tone="soft" />
+        </div>
+        <div className="oa-bc-guest" style={{ left: 12, top: 20, width: 118 }}>
+          <div className="oa-bc-guest-head oa-separator-bottom">
+            <TrafficLights />
+            <Bar width={36} tone="soft" style={{ marginLeft: 4 }} />
+          </div>
+          <div className="oa-stack" style={{ gap: 4, padding: "6px 8px 7px" }}>
+            <Bar width="82%" />
+            <Bar width="66%" tone="soft" />
+            <Bar width="74%" tone="soft" className="oa-anim-type" style={{ animationDelay: "0.4s" }} />
+          </div>
+          <span className="oa-bc-target">
+            <Bar width={24} tone="ink" />
+          </span>
+        </div>
+        <span className="oa-bc-pointer oa-anim-float" style={{ left: 110, top: 66 }}>
+          <AvatarFace avatar={{ version: 1, shape: "squircle", color: "aqua" }} />
+        </span>
+      </div>
+    </ArtWindow>
+  );
+}
+
 export function ScheduledAutomationsArt() {
   const [first, ...rest] = SCHEDULED_TASKS;
   return (

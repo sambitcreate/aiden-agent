@@ -14,6 +14,7 @@ import type { Provider } from "../lib/types.js";
 import { BOT_AVATAR_COLORS } from "../shared/bots.js";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery.js";
 import { FEATURE_ART } from "./onboarding-art/feature-art.js";
+import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
 
 const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8");
 
@@ -368,6 +369,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "MCP Connectors",
     "Aiden Live",
     "Meet your Bots",
+    "Bot computers",
     "Scheduled Automations",
     "Voice & Dictation",
     "Command Palette",
@@ -383,6 +385,8 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
   assert.match(featurePresentation, /Each Bot keeps one chat, remembers what matters to you, and can check in on a schedule/u);
+  // Bot computers are opt-in: the tile points to Settings and promises no download before Set up.
+  assert.match(featurePresentation, /Set it up in Settings → Bot computers; nothing downloads until you choose Set up\./u);
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
@@ -406,20 +410,34 @@ test("every tour tile draws its own themed illustration without raster assets", 
   assert.equal(new Set(ids).size, ids.length);
   assert.deepEqual(new Set(Object.keys(FEATURE_ART)), new Set(ids), "every tile has art and no art is orphaned");
   assert.equal(galleryTiles.length, onboardingFeatures.length);
-  for (const group of ["create", "extend", "control"] as const) {
-    let previousTint: string | undefined;
-    for (const feature of onboardingFeatures.filter((item) => item.group === group)) {
-      const tile = tileMarkup(feature.id);
-      assert.match(tile, new RegExp(`<div aria-hidden="true" class="oa-art" data-onboarding-art="${feature.id}"`, "u"));
-      assert.doesNotMatch(
-        tile,
-        /<img\b|<picture\b|url\([^)]*\.(?:png|jpe?g|webp|gif|avif)\b|data:image\/(?!svg)/iu,
-        `${feature.id} must not load raster art`,
-      );
-      const tint = /--oa-tint:var\(--bot-avatar-([a-z]+)\)/u.exec(tile)?.[1];
-      assert.ok(tint && (BOT_AVATAR_COLORS as readonly string[]).includes(tint), `${feature.id} tint ${tint}`);
-      assert.notEqual(tint, previousTint, `${feature.id} repeats its neighbour's tint`);
-      previousTint = tint;
+  for (const feature of onboardingFeatures) {
+    const tile = tileMarkup(feature.id);
+    assert.match(tile, new RegExp(`<div aria-hidden="true" class="oa-art" data-onboarding-art="${feature.id}"`, "u"));
+    assert.doesNotMatch(
+      tile,
+      /<img\b|<picture\b|url\([^)]*\.(?:png|jpe?g|webp|gif|avif)\b|data:image\/(?!svg)/iu,
+      `${feature.id} must not load raster art`,
+    );
+  }
+  // Neighbouring tiles never share a tint, in the tour each platform really shows.
+  for (const [name, host] of [
+    ["Apple silicon Mac", hostPlatformCapabilities("darwin", "arm64")],
+    ["Intel Mac", hostPlatformCapabilities("darwin", "x64")],
+    ["Linux", hostPlatformCapabilities("linux", "x64")],
+  ] as const) {
+    const shown = visibleOnboardingFeatures(onboardingFeatures, host);
+    const markup = renderToStaticMarkup(<OnboardingFeatureGallery features={shown} platform="darwin" />);
+    const tiles = markup.match(/<article\b[\s\S]*?<\/article>/gu) ?? [];
+    assert.equal(tiles.length, shown.length, name);
+    for (const group of ["create", "extend", "control"] as const) {
+      let previousTint: string | undefined;
+      for (const feature of shown.filter((item) => item.group === group)) {
+        const tile = tiles.find((item) => item.includes(`data-onboarding-feature="${feature.id}"`));
+        const tint = tile ? /--oa-tint:var\(--bot-avatar-([a-z]+)\)/u.exec(tile)?.[1] : undefined;
+        assert.ok(tint && (BOT_AVATAR_COLORS as readonly string[]).includes(tint), `${name}: ${feature.id} tint ${tint}`);
+        assert.notEqual(tint, previousTint, `${name}: ${feature.id} repeats its neighbour's tint`);
+        previousTint = tint;
+      }
     }
   }
 });
@@ -496,17 +514,34 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
     { id: "commands", description: "Use Command-K to open commands." },
     { id: "computerUse", description: "Control the desktop." },
     { id: "bots", description: "Configure a Bot." },
+    { id: "botComputers", description: "Give a Bot a computer." },
   ];
-  const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false });
+  const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false, botComputers: false });
   assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
   assert.match(linux[0]!.description, /classifiers.*approve sending it; provider charges/u);
   assert.match(linux[0]!.description, /Enable local llama.cpp classification.*More options/u);
   assert.doesNotMatch(linux[0]!.description, /Apple/u);
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
-  const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true });
-  assert.equal(mac.length, 4);
+  const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true, botComputers: true });
+  assert.equal(mac.length, 5);
   assert.match(mac[0]!.description, /Apple models/u);
   assert.match(mac[0]!.description, /classifiers.*approve sending it; provider charges/u);
   assert.match(mac[0]!.description, /Enable local llama.cpp classification.*More options/u);
+});
+
+test("the Bot computers tile shows only where a Bot can have its own macOS computer", () => {
+  const tiles = (host: Parameters<typeof visibleOnboardingFeatures>[1]) =>
+    visibleOnboardingFeatures(onboardingFeatures, host).map(({ id }) => id);
+  const appleSilicon = tiles(hostPlatformCapabilities("darwin", "arm64"));
+  assert.ok(appleSilicon.includes("botComputers"));
+  assert.equal(appleSilicon.indexOf("botComputers"), appleSilicon.indexOf("bots") + 1, "it follows Meet your Bots");
+  for (const [name, host] of [
+    ["Intel Mac", hostPlatformCapabilities("darwin", "x64")],
+    ["Linux", hostPlatformCapabilities("linux", "arm64")],
+    ["a Mac with Bots turned off", { ...hostPlatformCapabilities("darwin", "arm64"), bots: false }],
+  ] as const) {
+    assert.equal(tiles(host).includes("botComputers"), false, name);
+  }
+  assert.ok(tiles(hostPlatformCapabilities("linux", "x64")).includes("bots"), "Linux still meets its Bots");
 });
