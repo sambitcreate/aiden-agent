@@ -226,6 +226,22 @@ test("Set up with too little disk says so before downloading", async () => {
   );
 });
 
+test("the free space Settings states before Set up is the space Set up checks for", async () => {
+  let free = 0;
+  await withHost(
+    async (context) => {
+      const { requirements } = await context.host.status();
+      assert.equal(requirements.downloadBytes, restoreImage.length);
+      free = requirements.setupFreeBytes - 1;
+      await assert.rejects(context.host.setUp(), (error: unknown) => error instanceof BotComputerError && error.code === "low_disk");
+      assert.equal(context.fetches.length, 0);
+      free = requirements.setupFreeBytes;
+      await setUp(context);
+    },
+    { resources: { freeDiskBytes: async () => free, availableMemoryBytes: async () => 64 * 1024 ** 3 } },
+  );
+});
+
 test("give, run, stop and delete a Bot's computer; delete is idempotent", async () => {
   await withHost(async (context) => {
     await setUp(context);

@@ -12,6 +12,9 @@ export const BOT_COMPUTER_RESTORE_IMAGE = Object.freeze({
   sha256: "885503b7f4b06609e9a512f2befd40f59730640a3f1233e3892d60affdd51c95",
 } as const);
 
+/** About how much disk a freshly installed macOS 26 base takes (assumed; confirm on the owner Mac). */
+export const BOT_COMPUTER_BASE_SIZE_BYTES = 50_000_000_000;
+
 /** The base is about 50 GB on disk; this adds headroom for clones and logs. */
 export const BOT_COMPUTER_BASE_DISK_RESERVE_BYTES = 60 * 1024 ** 3;
 

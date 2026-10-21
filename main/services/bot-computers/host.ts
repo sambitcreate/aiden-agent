@@ -17,6 +17,7 @@ import { buildBaseVm, generateGuestPassword, type ProvisionContext } from "./pro
 import {
   BOT_COMPUTER_RESTORE_IMAGE,
   BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
+  BOT_COMPUTER_BASE_SIZE_BYTES,
   BOT_COMPUTER_VM_MEMORY_BYTES,
 } from "./release.js";
 import { allocatedBytes, requireResources, systemResourceProbe, type BotComputerResourceProbe } from "./resources.js";
@@ -699,7 +700,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         computers: Object.entries(state.computers).map(([botId, record]) => computerStatus(botId, record, state)),
         requirements: {
           downloadBytes: image.bytes,
-          baseDiskBytes: BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
+          baseDiskBytes: BOT_COMPUTER_BASE_SIZE_BYTES,
+          setupFreeBytes: image.bytes + BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
           memoryPerComputerBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
           baseVersion: image.version,
         },

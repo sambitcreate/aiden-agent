@@ -39,8 +39,10 @@ export interface BotComputersSettings {
 export interface BotComputersRequirements {
   /** The pinned macOS restore image download. */
   downloadBytes: number;
-  /** Free disk the base computer needs beyond the download. */
+  /** About how much disk the finished base computer takes. */
   baseDiskBytes: number;
+  /** Free disk Set up checks for before it downloads: the download plus the base and headroom. */
+  setupFreeBytes: number;
   /** Free memory each running computer needs. */
   memoryPerComputerBytes: number;
   /** The macOS version the pinned base installs. */
@@ -202,6 +204,7 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
   const freeDiskBytes = count(input.freeDiskBytes);
   const downloadBytes = count(requirements.downloadBytes);
   const baseDiskBytes = count(requirements.baseDiskBytes);
+  const setupFreeBytes = count(requirements.setupFreeBytes);
   const memoryPerComputerBytes = count(requirements.memoryPerComputerBytes);
   const baseVersion = text(requirements.baseVersion, 32);
   if (
@@ -209,6 +212,7 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
     diskUsedBytes === undefined ||
     downloadBytes === undefined ||
     baseDiskBytes === undefined ||
+    setupFreeBytes === undefined ||
     memoryPerComputerBytes === undefined ||
     !baseVersion
   ) {
@@ -225,7 +229,7 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
     diskUsedBytes,
     ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
     computers,
-    requirements: { downloadBytes, baseDiskBytes, memoryPerComputerBytes, baseVersion },
+    requirements: { downloadBytes, baseDiskBytes, setupFreeBytes, memoryPerComputerBytes, baseVersion },
   };
 }
 

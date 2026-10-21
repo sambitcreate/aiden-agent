@@ -32,7 +32,7 @@ function fakeHost() {
       settings,
       diskUsedBytes: 0,
       computers: [...computers.values()],
-      requirements: { downloadBytes: 19_772_231_540, baseDiskBytes: 60 * 1024 ** 3, memoryPerComputerBytes: 8 * 1024 ** 3, baseVersion: "26.6.2" },
+      requirements: { downloadBytes: 19_772_231_540, baseDiskBytes: 50e9, setupFreeBytes: 84_196_731_252, memoryPerComputerBytes: 8 * 1024 ** 3, baseVersion: "26.6.2" },
     }),
     setUp: () =>
       new Promise<void>((resolve) => {
