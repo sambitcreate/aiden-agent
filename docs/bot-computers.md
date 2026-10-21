@@ -151,6 +151,13 @@ and it goes away when the computer is removed.
   Delete Bot or Remove everything is replacing or deleting the computer,
   nothing starts it: a call that was waiting starts the fresh copy once Reset
   is done, and finds no computer after the others.
+- **What you leave on the screen.** While you control the computer, the Bot
+  captures nothing. Once you give it back (or answer a sign-in card), the
+  Bot's next capture shows whatever is on the screen. Password fields show
+  only dots, but a one-time code, a recovery code or anything else left on
+  the screen in plain text is in that capture, and captures use the screen
+  even with element control on. Close or clear it before you give the
+  computer back.
 - **The screen never starts it.** In the tab, only Start or switching to
   Computer starts a stopped computer. The live screen connects only to a
   computer that is running at that moment, so a stop that lands just as the

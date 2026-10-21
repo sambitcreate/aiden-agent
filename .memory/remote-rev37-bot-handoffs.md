@@ -13,7 +13,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
 
 ## Negotiation
 - Capability `bot:handoffs` (`AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES`): an opt-in with no authority. It is last in the opt-in, negotiable and capability lists. Pairing never issues it; any device type may negotiate it.
-- No `/server` feature token, because the 32-token budget is full. The router lists it in `serverCapabilities` (Bot-aware devices only) while `botHandoffsWired`: `supportsHandoffs` plus `answerHandoff`, `openHandoffOnMac`, `pause` and `unpause`.
+- No `/server` feature token: shipped clients refuse more than 32, and since main's 004d2f9b a fully wired host already gives phones 30 (desktops 28). The router lists it in `serverCapabilities` (Bot-aware devices only) while `botHandoffsWired`: `supportsHandoffs` plus `answerHandoff`, `openHandoffOnMac`, `pause` and `unpause`.
 - `supportsHandoffs` on the session service = `handoffs` bridge and `openHandoffOnMac` both wired. The desktop wires `botHandoffs` and `openBotHandoffById(botId, waitId, "phone")`. The CLI wires neither, so a CLI host never offers it.
 - Negotiating it on an unwired host is `404 not_found`.
 

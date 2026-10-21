@@ -310,6 +310,8 @@ Cross-version decoding: a paused Bot's snapshot, frames, list and detail respons
 
 v1 shows the computer's state on Bot detail ("Ada's computer is running"). A live phone view reuses the simulator viewer pipeline (`simulators:mobile`) in a later revision.
 
+*Not built yet (2026-10-21, PR #559).* Phones show "Using its computer" through the existing activity phases while the Bot uses it, but Bot detail has no computer state, and the Remote contract has no field for one.
+
 ### 8.10 Tests and acceptance
 
 - `tests/e2e/lume-fake.mjs`: a fake `lume` CLI (like `agent-device-fake.mjs`) that records arguments and emulates `create`, `clone`, `run`, `get` and `delete`, including the stale and limit errors. Host tests cover pinning, the environment (telemetry off), storage isolation (the fake fails any call without Aiden's `--storage`, or for `clone` without both `--source-storage` and `--dest-storage`), lifecycle, the concurrency cap, idle stop, and delete idempotence.
@@ -322,7 +324,7 @@ v1 shows the computer's state on Bot detail ("Ada's computer is running"). A liv
 
 Claim 36 (the next after `main`'s 35) at merge time, and update the fixture, OpenAPI, iOS and Android together.
 
-**The `/server` feature budget is full.** `/server` already announces 32 feature tokens (30 in `aiden-remote-protocol.ts` plus the provider-create and TTS tokens), and shipped iOS clients reject more than 32 (`AidenRemoteClient.swift:226`). So revision 36 adds **no new feature token**. Instead:
+**The `/server` feature budget is full.** `/server` already announces 32 feature tokens (30 in `aiden-remote-protocol.ts` plus the provider-create and TTS tokens), and shipped iOS clients reject more than 32 (`AidenRemoteClient.swift:226`). So revision 36 adds **no new feature token**. (Since main's 004d2f9b, `/server` features are scoped per device type, and a fully wired host gives phones 30 tokens and desktops 28. Two spare tokens are still too few to spend here, so the capability route stays; it shipped as revision 37.) Instead:
 
 - add a negotiable device capability `bot:handoffs` (with `AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES`). New clients request it in **its own** `POST /device/capabilities` call, so an older host's 400 for an unknown capability only means "unsupported" and never blocks other grants;
 - for devices holding `bot:handoffs`:
