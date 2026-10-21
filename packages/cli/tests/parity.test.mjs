@@ -1282,14 +1282,17 @@ test("retired SSE entries in a legacy mcp.json migrate away with their credentia
   assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
 });
 
-// The delete failure comes from a read-only credentials directory, which root ignores.
-test("a retired SSE entry whose credentials could not be deleted stays until a later read deletes them", { skip: process.getuid?.() === 0 && "root bypasses directory permissions" }, async (t) => {
+test("a retired SSE entry whose credentials could not be deleted stays until a later read deletes them", async (t) => {
   const dir = temporary(t), inventory = retiredSseInventory();
   api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
   const credentials = await storeRetiredCredentials(dir, inventory);
-  const credentialDir = join(dir, "credentials");
-  chmodSync(credentialDir, 0o500);
-  t.after(() => { if (existsSync(credentialDir)) chmodSync(credentialDir, 0o700); });
+  // A directory where the credential file belongs makes the delete fail for
+  // every user, root included (directory permissions would not stop root).
+  const credentialFile = join(dir, "credentials", "insights.json"), held = `${credentialFile}.held`;
+  renameSync(credentialFile, held);
+  mkdirSync(credentialFile);
+  const restore = () => { if (existsSync(held)) { rmSync(credentialFile, { recursive: true, force: true }); renameSync(held, credentialFile); } };
+  t.after(restore);
   const { value, stderr } = await captureStderr(() => api.mcpCommand(dir, ["list"]));
   assert.deepEqual(value.map(({ id }) => id), ["local"], "the remaining servers still load");
   assert.match(stderr, /could not remove retired SSE MCP servers yet/u);
@@ -1298,7 +1301,7 @@ test("a retired SSE entry whose credentials could not be deleted stays until a l
   writeFileSync(join(dir, "other.json"), JSON.stringify({ id: "other", name: "Other", enabled: false, transport: "stdio", command: "example" }));
   await captureStderr(() => api.mcpCommand(dir, ["add", join(dir, "other.json")]));
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).filter(({ transport }) => transport === "sse"), inventory.sse);
-  chmodSync(credentialDir, 0o700);
+  restore();
   assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["local", "other"]);
   await assertRetiredCredentialsRemoved(credentials, inventory);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).map(({ id }) => id), ["local", "other"]);
