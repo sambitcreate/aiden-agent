@@ -7,6 +7,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
   - desktop: `AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION` in `main/services/aiden-remote-protocol.ts`, which `AIDEN_REMOTE_CONTRACT_REVISION` aliases;
   - the shared fixture: two `contractRevision` literals in `protocol/aiden-remote/v1/fixtures/contract.json` (top level and `hostHealth`).
 - Desktop tests compare against the constant, never a literal, so renumbering is: the constant, the 2 fixture literals, and the "36" in `docs/aiden-remote-api-v1.md` and the OpenAPI descriptions.
+  - Review dry run (2026-10-21): with the constant and both fixture literals set to 37, every desktop Remote suite passed (`test:aiden-remote` minus the IPv6-bound service test, plus `test:peer-hosts`). That needed one fix: the protocol test's "require contract revision 36" regex now builds from the constant.
+  - PR #564 merged first and took 36 on `main`, so the integrator renumbers this work to 37 when merging `main`.
 - iOS `AidenRemotePhase0Tests.swift` asserts the fixture revision literally; P5 bumps it.
 
 ## Negotiation

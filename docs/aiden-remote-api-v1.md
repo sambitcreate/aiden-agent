@@ -773,7 +773,7 @@ Revision 36 is provisional and is re-claimed at merge, after whatever `main` hol
 
 A Bot can hand a step back to the person ("Your turn: Enter the 2FA code your bank sent you"), and the person can pause a Bot. Phones that opt in answer hand-offs and pause or unpause a Bot; other devices keep their revision-35 view.
 
-**Negotiation.** The host lists `bot:handoffs` in `serverCapabilities` to Bot-aware devices while the hand-off bridge, the Mac opener and the pause routes are all wired; there is no `/server` feature token. A device sends `POST /device/capabilities {accepts: ["bot:handoffs"]}` in its **own** call, after any other negotiation, so a host that refuses it (`404 not_found`) never costs the device its other grants. Any device type may hold it; pairing never issues it.
+**Negotiation.** The host lists `bot:handoffs` in `serverCapabilities` to Bot-aware devices while the hand-off bridge, the Mac opener and the pause routes are all wired; there is no `/server` feature token. A device sends `POST /device/capabilities {accepts: ["bot:handoffs"]}` in its **own** call, after any other negotiation, so a host that refuses it (`404 not_found` from a host without the routes, `400 invalid_request` from a host older than revision 36, which does not know the capability) never costs the device its other grants. Any device type may hold it; pairing never issues it.
 
 **Before revision 36, and for every device without `bot:handoffs`.**
 - A Bot the person paused reads as `unavailable` (`interrupted: false`); the snapshot keeps its transcript. Messages, Resume and Dismiss for it return `409 operation_stale`. Bot summaries and details carry `sessionState: "unavailable"` and no `paused`.

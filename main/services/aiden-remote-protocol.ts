@@ -1386,8 +1386,9 @@ export interface AidenRemoteBotHandoffAnswerReceipt {
 }
 
 /**
- * `POST /bots/{botId}/handoffs/{waitId}/open-on-mac`: whether the Mac showed
- * the card (its window, or a notification when no window could take focus).
+ * `POST /bots/{botId}/handoffs/{waitId}/open-on-mac`: whether the Mac brought
+ * the card forward (the Bot's chat, and for a sign-in the Bot's own browser
+ * when it has one). It posts no notification.
  */
 export interface AidenRemoteBotHandoffOpenOnMacReceipt {
   waitId: string;

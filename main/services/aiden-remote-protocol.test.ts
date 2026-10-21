@@ -2704,12 +2704,16 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
   assert.throws(() => parseAidenRemoteBotSessionEvent({ ...opened, payload: { handoff: card, approval: null } }));
 });
 
-test("Bot hand-off fixtures require revision 36, and an older fixture parses without them", async () => {
+test("Bot hand-off fixtures require their own revision, and an older fixture parses without them", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const older = structuredClone(raw);
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
-  assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 36/u);
+  // The number is re-claimed at merge, so the test names it only through the constant.
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION}\\b`, "u"),
+  );
   delete older.botHandoffs;
   assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
 
