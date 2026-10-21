@@ -19,9 +19,11 @@
 //   nobody could sign in there.
 // - On the Bot's computer (`where: "computer"`, the default for a Bot with a
 //   computer and no browser): Open takes the computer over for the person
-//   and opens the site in Safari there (`bot-computer-handoff.ts`). The Bot
-//   sees nothing of the screen until the card settles and the computer is
-//   given back, and never the password. Without a computer that is an error.
+//   and opens the site in Safari there (`bot-computer-handoff.ts`). The Bot's
+//   computer tools wait until the card settles and the computer is given
+//   back, and never return the password; a program the Bot left running in
+//   the guest is the documented limit (docs/bot-computers.md). Without a
+//   computer that is an error.
 
 import { randomUUID } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";

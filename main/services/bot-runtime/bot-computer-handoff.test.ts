@@ -113,6 +113,22 @@ test("the computer is given back once the card is answered or withdrawn", async 
   assert.equal(h.control.controller(BOT), "bot");
 });
 
+test("a card asked again under the same wait id leaves the computer with the person signing in", async () => {
+  const h = setup();
+  h.ask("wait-1");
+  await h.open(BOT, "wait-1", ORIGIN);
+  // The same call asks again (its stale invocation is withdrawn): it is the same card.
+  const again = h.ask("wait-1");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.control.controller(BOT), "person", "the person is still signing in");
+  assert.equal(h.control.takenOverBy(BOT), "sign_in");
+
+  h.handoffs.answer(BOT, "wait-1", { outcome: "done" });
+  await again.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.control.controller(BOT), "bot", "answered, the computer goes back to the Bot");
+});
+
 test("a person who gave the computer back and took it again from the viewer keeps it", async () => {
   const h = setup();
   const card = h.ask("wait-1");

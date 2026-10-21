@@ -14,7 +14,8 @@
 // - Then the site opens in Safari in the computer, and the panel's Computer
 //   tab comes forward in the window whose Open was pressed.
 // - When the card settles or is withdrawn, the computer is given back, unless
-//   the person already gave it back or took it again some other way.
+//   the person already gave it back or took it again some other way. A card
+//   asked again under the same wait id keeps it with the person.
 // - Only for a Bot with a computer while Bot computers are on. Anything that
 //   fails gives the computer back and opens nothing.
 //
@@ -68,7 +69,15 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
     }
   };
 
-  deps.handoffs.onSettled((prompt) => release(prompt.botId, prompt.waitId));
+  // A card asked again under the same `waitId` (its stale invocation
+  // withdrawn) is the same card, and the person keeps the computer: `request`
+  // registers it right after withdrawing the old one, so it waits again by the
+  // time this runs.
+  deps.handoffs.onSettled((prompt) => {
+    queueMicrotask(() => {
+      if (deps.handoffs.get(prompt.botId, prompt.waitId) === undefined) release(prompt.botId, prompt.waitId);
+    });
+  });
 
   const run = async (botId: string, command: string, what: string) => {
     const result = await deps.host.runGuestCommand(botId, command, {
