@@ -61,6 +61,38 @@ export function withImageReferences(messages: readonly Message[]): Message[] {
   });
 }
 
+/** How many of the Bot's own browser screenshots a request carries, newest first (as in workspace chats). */
+export const BOT_BROWSER_SNAPSHOT_IMAGES_KEPT = 3;
+
+/** What an older screenshot leaves in a request, so the Bot knows to look again. */
+export const BOT_OLDER_SCREENSHOT_NOTE = "An older screenshot was left out of this request. Take a new snapshot to see the page now.";
+
+/**
+ * The request keeps the images of only the newest `keep` results of
+ * `toolName`; each older image becomes a short note, so a long browsing
+ * session doesn't carry every screenshot it took. For that request only: the
+ * stored transcript keeps every image. Returns `messages` itself when nothing
+ * changes.
+ */
+export function withNewestToolImages(messages: readonly Message[], toolName: string, keep: number): readonly Message[] {
+  const withImages: number[] = [];
+  messages.forEach((message, index) => {
+    if (message.role === "toolResult" && message.toolName === toolName && message.content.some((part) => part.type === "image")) {
+      withImages.push(index);
+    }
+  });
+  const kept = Math.max(0, Math.floor(keep));
+  if (withImages.length <= kept) return messages;
+  const older = new Set(withImages.slice(0, withImages.length - kept));
+  return messages.map((message, index) => {
+    if (!older.has(index) || message.role !== "toolResult") return message;
+    const content = message.content.map((part): TextContent | ImageContent =>
+      part.type === "image" ? { type: "text", text: BOT_OLDER_SCREENSHOT_NOTE } : part,
+    );
+    return { ...message, content };
+  });
+}
+
 /** Every image the person attached in this conversation, as legacy-shaped attachments. */
 export function imageAttachmentsFromEntries(entries: readonly EntryRecord[]): Attachment[] {
   const seen = new Set<string>();

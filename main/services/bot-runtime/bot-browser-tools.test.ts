@@ -29,6 +29,7 @@ import {
 } from "./bot-browser-tools.js";
 import { botIngressAllowsTool, botToolVerdict } from "./bot-tool-policy.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
+import { BOT_OLDER_SCREENSHOT_NOTE } from "./bot-images.js";
 import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority } from "./test-support/assembly-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
 
@@ -81,7 +82,16 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
       duringCommand?.();
       context.beforeEffect?.();
       commands.push({ command, context });
-      return { state: state(workspaceId) };
+      if (command.action !== "snapshot") return { state: state(workspaceId) };
+      // Each look at the page is its own screenshot.
+      const shot = Buffer.from(`screenshot-${commands.length}`).toString("base64");
+      return {
+        state: state(workspaceId),
+        snapshot: {
+          tab: tabs[0]!, text: "Inbox", elements: [], diagnostics: [],
+          image: { data: shot, mimeType: "image/png", width: 1280, height: 720 },
+        },
+      };
     },
     getApprovalTarget(workspaceId, tabId) {
       const target = tabs.find((candidate) => candidate.id === tabId) ?? tabs[0]!;
@@ -444,6 +454,47 @@ test("typing into a password field hands the step to the person, and the card ne
     handoffs.answer(BOT, card.waitId, { outcome: "done" });
     await run.wait(ctx);
     assert.equal(fake.commands.length, 0, "the Bot never typed it");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a Bot's request carries only its newest three screenshots, and its transcript keeps every one", async () => {
+  const fake = fakeBrowser();
+  const seen: Array<{ images: number; notes: number }> = [];
+  const looks = (context: { messages: readonly Message[] }) => {
+    let images = 0;
+    let notes = 0;
+    for (const message of context.messages) {
+      if (message.role !== "toolResult" || message.toolName !== "browser_snapshot") continue;
+      for (const part of message.content) {
+        if (part.type === "image") images += 1;
+        else if (part.text === BOT_OLDER_SCREENSHOT_NOTE) notes += 1;
+      }
+    }
+    seen.push({ images, notes });
+  };
+  const step = (reply: () => ReturnType<typeof fauxAssistantMessage>) => (context: { messages: readonly Message[] }) => {
+    looks(context);
+    return reply();
+  };
+  const snapshot = (id: string) => step(() => fauxAssistantMessage([fauxToolCall("browser_snapshot", {}, { id })], { stopReason: "toolUse" }));
+  const fauxModels = createFauxModels([
+    step(() => fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], { stopReason: "toolUse" })),
+    snapshot("look-1"), snapshot("look-2"), snapshot("look-3"), snapshot("look-4"), snapshot("look-5"),
+    step(() => fauxAssistantMessage("read it")),
+  ]);
+  const deps = await browserDeps(fake, { rules: () => defaultBotRules() });
+  const { harness, root } = await botTurn(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "read my inbox" }, ctx)).wait(ctx);
+    assert.deepEqual(seen.map(({ images }) => images), [0, 0, 1, 2, 3, 3, 3]);
+    assert.deepEqual(seen[seen.length - 1], { images: 3, notes: 2 }, "the two oldest screenshots became notes");
+    const kept = (await toolResults(root)).filter((result) => result.toolName === "browser_snapshot");
+    assert.equal(kept.length, 5);
+    for (const result of kept) {
+      assert.ok((result.content as Array<{ type?: string }>).some((part) => part.type === "image"), "the transcript keeps every screenshot");
+    }
   } finally {
     await harness.close(ctx);
   }

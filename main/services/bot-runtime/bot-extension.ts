@@ -66,7 +66,7 @@ import type {
   BotHandoffRule,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
-import { withImageReferences } from "./bot-images.js";
+import { BOT_BROWSER_SNAPSHOT_IMAGES_KEPT, withImageReferences, withNewestToolImages } from "./bot-images.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 
@@ -414,6 +414,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           messages = withoutTools(messages, (name) => !turnAllows(name, requestIds));
         }
         messages = withoutTools(messages, withheldUntilDisclosed(messages));
+        messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
         return messages === request.messages ? undefined : { messages };
       },

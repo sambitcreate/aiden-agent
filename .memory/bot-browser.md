@@ -28,6 +28,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
   - `bound()` pins the approved `tabId` and re-asserts; the port re-asserts in `beforeEffect` right before input. Click/type/press without an approval throw.
   - Owner: `hasOwner` or `mintOwner()` (`currentMainWindow` in `bot-connection-setup.ts`), else `botBrowserOwnerMissing(name)`.
 - `bot-browser-approval.ts`: `prepareBrowserToolApproval` on tab/page/control revision + args; probe → `BotClassifiableAction {surface:"browser"}`; summary hides typed text when the probe failed or a locked class (credentials, money) matched.
+- `bot-images.ts` `withNewestToolImages(messages, "browser_snapshot", 3)` in `bot-extension.ts` `beforeRequest` (own line after the disclosure filter): older snapshot images become `BOT_OLDER_SCREENSHOT_NOTE` for that request only; the journal keeps them. P10's `computer` image cap (G23) can reuse it.
 - `bot-tool-disclosure.ts` `withheldUntilDisclosed(messages)`: `browser_*` stays out of each request until a successful `browser` toolResult is in that request's messages. Applied in `bot-extension.ts` `beforeRequest`.
 - `bot-tool-policy.ts`: browser verdict needs `hasCapability("browser")`, never Telegram or routine; omitted tools always refused; all browser names in `UNATTENDED_WITHHELD`. `botToolApprovalSummary` returns undefined for them (the live approval asks).
 - `bot-tool-sources-main.ts`: candidates when `has("browser")` on attended turns; `approvalFor` default branch; `forgetBot` closes tabs.
