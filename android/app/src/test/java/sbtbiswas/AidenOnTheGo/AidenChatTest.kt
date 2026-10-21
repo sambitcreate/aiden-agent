@@ -178,19 +178,23 @@ class AidenChatTest {
                 withTimeout(5_000) { model.isLoading.first { !it } }
                 withTimeout(5_000) { while (chatReads.get() < 1) yield() }
                 val before = chatReads.get()
-                assertTrue(model.isConnected)
+                check(model.isConnected) { "the chat is bound to the pairing's first client" }
+                val errorBefore = model.presentedError.value
 
                 // Retry after a failed connection gives the same pairing a new client object.
+                val firstClient = coordinator.client.value
                 coordinator.refreshClient()
+                check(coordinator.client.value !== firstClient) { "refreshClient must make a new client for the same pairing" }
                 withTimeout(5_000) { while (chatReads.get() <= before) yield() }
                 withTimeout(5_000) { model.isLoading.first { !it } }
-                assertTrue("the chat sends and loads with the pairing's new client", model.isConnected)
-                assertNull(model.presentedError.value)
+                check(model.isConnected) { "the chat sends and loads with the pairing's new client" }
+                // The reread with the new client adds no error of its own.
+                assertEquals(errorBefore, model.presentedError.value)
 
                 // A removed pairing still takes the client away.
                 installations.setActiveInstallation(null)
                 coordinator.refreshClient()
-                assertFalse(model.isConnected)
+                check(!model.isConnected) { "a removed pairing takes the client away" }
             }
         } finally {
             runBlocking(dispatcher) { owners.clearAndJoin() }
