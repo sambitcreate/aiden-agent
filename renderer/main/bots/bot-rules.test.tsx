@@ -1,11 +1,12 @@
 import { installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { createBotRuleStore } from "../../../main/services/bot-rules/store";
+import { BOT_RULES_FILE, createBotRuleStore } from "../../../main/services/bot-rules/store";
+import { botSessionDirectory } from "../../../main/services/bot-routine-notes";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/app-capabilities";
 import type { BotRulesUpdateInput } from "../../shared/bot-rules";
 import { BotRules } from "./bot-rules";
@@ -32,7 +33,12 @@ function rulesIpc() {
     },
   });
   const updates = () => calls.filter((call) => call.channel === "bots:rules:update");
-  return { store, updates };
+  /** Writes the Bot's rules file by hand, as a crash or another program might have left it. */
+  const writeRulesFile = (content: string) => {
+    mkdirSync(botSessionDirectory(root, bot.id), { recursive: true });
+    writeFileSync(path.join(botSessionDirectory(root, bot.id), BOT_RULES_FILE), content);
+  };
+  return { store, updates, writeRulesFile };
 }
 
 async function mount() {
@@ -154,6 +160,23 @@ test("a change made against rules another window changed says so and shows the c
   await waitFor(() => assert.ok(within(row(list, "Permanently delete something")).getByText("Hand off to me")));
   assert.ok(within(row(list, "Send a message or email to someone")).getByText("Ask first"));
   assert.equal((await store.rules(bot.id)).find((rule) => rule.id === "default.communicate")?.behavior, "ask");
+});
+
+test("rules Aiden can't read say the Bot won't take the steps they check, until a change starts again from the defaults", async () => {
+  const { store, writeRulesFile } = rulesIpc();
+  writeRulesFile('{"version":1,"revision":4,"behaviors":{"delete":"hand_');
+  const list = await mount();
+  assert.match(
+    (await screen.findByRole("alert")).textContent ?? "",
+    /Planner’s saved rules couldn’t be read, so Planner won’t take any step its rules check\. Change a rule below to start again from these defaults\./u,
+  );
+  assert.ok(within(row(list, "Permanently delete something")).getByText("Ask first"), "the editor shows what a change starts from");
+  await assert.rejects(store.rules(bot.id), "the Bot's calls still can't read them");
+
+  fireEvent.click(within(await openMenu("Permanently delete something")).getByRole("menuitemradio", { name: "Hand off to me" }));
+  await waitFor(() => assert.ok(within(row(list, "Permanently delete something")).getByText("Hand off to me")));
+  assert.equal(screen.queryByRole("alert"), null);
+  assert.equal((await store.rules(bot.id)).find((rule) => rule.id === "default.delete")?.behavior, "hand_off");
 });
 
 test("where Bots have their own computers, the rules say they read the Bot's stated intent there", async () => {

@@ -2,9 +2,12 @@
 //
 // The file holds only what the person changed: each built-in rule's behavior
 // and the custom rules. Locked rules are code constants, so a tampered or
-// missing file can never remove them, and a file that does not parse exactly
-// reads as the defaults. Every edit names the revision it was made against,
-// so two editors never overwrite each other silently.
+// missing file can never remove them. A missing file is the defaults; a file
+// that does not parse exactly fails closed: the Bot's calls can't read their
+// rules (so a call a rule would check doesn't run), the editor shows the
+// defaults marked `unreadable`, and its next change starts again from them,
+// replacing the file. Every edit names the revision it was made against, so
+// two editors never overwrite each other silently.
 //
 // The Bot's directory is shared with its session database, which deleting the
 // Bot removes. This store never brings that directory back for a deleted Bot:
@@ -40,9 +43,16 @@ export const BOT_RULES_FILE = "rules.json";
 const FILE_VERSION = 1;
 
 export interface BotRuleStore {
-  /** Missing or invalid file: the defaults, revision 0. Throws when the file can't be read. */
+  /**
+   * Missing file: the defaults, revision 0. A file that does not parse: the
+   * same, marked `unreadable`. Throws when the file can't be read at all.
+   */
   get(botId: string): Promise<BotRulesView>;
-  /** The effective rules: locked, then built-in, then custom. */
+  /**
+   * The effective rules: locked, then built-in, then custom. Throws
+   * `BotRulesUnreadableError` for a file that does not parse, since the
+   * defaults may be looser than what the person set.
+   */
   rules(botId: string): Promise<readonly BotRule[]>;
   update(botId: string, revision: number, change: BotRuleChange): Promise<BotRulesUpdateResult>;
   /** Deleting the Bot: remove its rules and refuse every later write. */
@@ -69,6 +79,14 @@ interface RulesFile {
 }
 
 const EMPTY: RulesFile = Object.freeze({ version: FILE_VERSION, revision: 0, behaviors: {}, custom: [] }) as RulesFile;
+
+/** The rules file is there but doesn't parse, so what the person set is unknown. */
+export class BotRulesUnreadableError extends Error {
+  constructor() {
+    super("This Bot's rules file couldn't be read.");
+    this.name = "BotRulesUnreadableError";
+  }
+}
 
 export class BotRulesUnavailableError extends Error {
   constructor(message = "This Bot no longer exists.") {
@@ -121,10 +139,18 @@ function parseRulesFile(value: unknown): RulesFile | undefined {
   return { version: FILE_VERSION, revision: value.revision as number, behaviors, custom };
 }
 
-function viewOf(botId: string, file: RulesFile): BotRulesView {
+/** What's on disk: the file, or the defaults standing in for one that doesn't parse. */
+interface StoredRules {
+  file: RulesFile;
+  unreadable: boolean;
+}
+
+function viewOf(botId: string, stored: StoredRules): BotRulesView {
+  const { file } = stored;
   return {
     botId,
     revision: file.revision,
+    ...(stored.unreadable ? { unreadable: true as const } : {}),
     rules: [
       ...BOT_LOCKED_RULES.map((rule) => ({ ...rule })),
       ...BOT_DEFAULT_RULES.map((rule) => ({
@@ -193,20 +219,22 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
   const directory = (botId: string) => botSessionDirectory(options.profileDir, botId);
   const fileOf = (botId: string) => path.join(directory(botId), BOT_RULES_FILE);
 
-  async function read(botId: string): Promise<RulesFile> {
+  async function read(botId: string): Promise<StoredRules> {
     let text: string;
     try {
       text = await fs.readFile(fileOf(botId), "utf8");
     } catch (error) {
       // No file (or no directory yet): nothing changed from the defaults.
-      if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return EMPTY;
+      if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return { file: EMPTY, unreadable: false };
       throw error;
     }
+    let parsed: RulesFile | undefined;
     try {
-      return parseRulesFile(JSON.parse(text)) ?? EMPTY;
+      parsed = parseRulesFile(JSON.parse(text));
     } catch {
-      return EMPTY;
+      parsed = undefined;
     }
+    return parsed === undefined ? { file: EMPTY, unreadable: true } : { file: parsed, unreadable: false };
   }
 
   async function ensureDirectory(botId: string): Promise<void> {
@@ -230,15 +258,18 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
     },
 
     async rules(botId) {
-      return viewOf(botId, await read(botId)).rules;
+      const stored = await read(botId);
+      if (stored.unreadable) throw new BotRulesUnreadableError();
+      return viewOf(botId, stored).rules;
     },
 
     update(botId, revision, change) {
       return serial(botId, async () => {
         await assertWritable(botId);
+        // An unreadable file is the defaults at revision 0 here: the editor showed them, and its change replaces the file.
         const current = await read(botId);
-        if (revision !== current.revision) return { ok: false, reason: "stale", view: viewOf(botId, current) };
-        const applied = applyChange(current, change);
+        if (revision !== current.file.revision) return { ok: false, reason: "stale", view: viewOf(botId, current) };
+        const applied = applyChange(current.file, change);
         if (!applied.ok) return { ok: false, reason: applied.reason, view: viewOf(botId, current) };
         await ensureDirectory(botId);
         await writeJsonAtomic(fileOf(botId), applied.file, {
@@ -247,7 +278,7 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
           trailingNewline: true,
           beforePublish: () => assertWritable(botId),
         });
-        return { ok: true, view: viewOf(botId, applied.file) };
+        return { ok: true, view: viewOf(botId, { file: applied.file, unreadable: false }) };
       });
     },
 

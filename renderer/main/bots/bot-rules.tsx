@@ -86,6 +86,13 @@ export function BotRules({ bot }: { bot: RuleBot }) {
             {problem}
           </Text>
         </Callout>
+      ) : rules.data?.unreadable ? (
+        // Main fails closed on a rules file it can't parse; the next change replaces it.
+        <Callout color="red" role="alert" className="mb-3">
+          <Text variant="small-strong" color="red">
+            {bot.name}’s saved rules couldn’t be read, so {bot.name} won’t take any step its rules check. Change a rule below to start again from these defaults.
+          </Text>
+        </Callout>
       ) : null}
       <div className="settings-group-card overflow-hidden rounded-card bg-well">
         {rules.isLoading ? (
