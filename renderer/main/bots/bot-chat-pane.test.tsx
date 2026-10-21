@@ -1204,10 +1204,18 @@ const CREDENTIALS_HANDOFF = {
   rule: { id: "locked.credentials", label: "Enter a password or 2FA code, or change account security" },
 };
 
-test("a card that takes a note says the Bot reads it, so a password or code stays out of the chat", async () => {
-  await mountChat({ "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }) });
-  const card = await screen.findByRole("group", { name: "Planner needs you" });
-  assert.ok(within(card).getByText("Planner reads any note you send. Enter passwords and codes on the page, never in the chat."));
+test("a card that takes a note says the Bot reads it, so a password, code or card number stays out of the chat", async () => {
+  // A money rule's card takes a note too (a payment reference), so it names card numbers.
+  const payment = { ...CREDENTIALS_HANDOFF, waitId: "wait-m", rule: { id: "locked.money", label: "Move money or enter card details" } };
+  for (const handoff of [BANK_HANDOFF, payment]) {
+    await mountChat({ "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff }) });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    assert.ok(
+      within(card).getByText("Planner reads any note you send. Enter passwords, codes and card numbers on the page, never in the chat."),
+      handoff.waitId,
+    );
+    cleanup();
+  }
 });
 
 test("a password-or-code card takes no note: the composer points to the card, and Done answers it without one", async () => {
