@@ -52,6 +52,10 @@ export interface BotComputerHost {
   updateBase(): Promise<void>;
   removeEverything(): Promise<void>;
   updateSettings(settings: Partial<BotComputersSettings>): Promise<BotComputersSettings>;
+  /**
+   * Give, Reset and Delete of one Bot's computer run one at a time, in the order they were
+   * called; Remove everything waits for those called before it, and those called after wait for it.
+   */
   give(botId: string): Promise<BotComputerStatus>;
   reset(botId: string): Promise<BotComputerStatus>;
   /** Idempotent: a Bot with no computer, or a VM Lume no longer has, counts as success. */
@@ -62,8 +66,9 @@ export interface BotComputerHost {
   ): Promise<BotComputerConnection>;
   /**
    * Stops the computer. When even a forced stop fails and Lume still reports the VM running,
-   * it stays running (with its connection and place) and this rejects. A stop that turns it
-   * off gives control back to the Bot, except while a sign-in card holds it for the person.
+   * it stays running (with its place, and its connection if it had one) and this rejects. A
+   * stop that turns it off gives control back to the Bot, except while a sign-in card holds it
+   * for the person.
    */
   stop(botId: string, options?: { reason: BotComputerStopReason }): Promise<void>;
   /** This run's connection while the computer is running, or undefined; never starts it. */

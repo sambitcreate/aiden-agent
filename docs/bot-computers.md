@@ -111,6 +111,12 @@ Bot computer that was interrupted while it was being made is marked for
 - **A stop that fails:** if Lume can't stop a computer, Aiden asks Lume for its
   state again. A computer that is still running stays shown as running (and
   keeps its idle timer), rather than being shown as off while it runs.
+- **A start that fails:** Lume starts a computer in the background before it
+  reports back, so a start that is cancelled (Pause, Stop, or every caller
+  giving up) or fails can leave it on. Aiden turns it off before the computer
+  reads Stopped and gives up its place. If Lume can't turn it off, it stays
+  shown as running, keeps its place and has no screen to use; its idle timer,
+  Stop, Pause or quit tries again, and its next start turns it off first.
 - **Startup** stops computers an earlier launch left running and marks
   interrupted ones for Reset. It never stops a computer this launch is already
   starting or using, or the base while Set up builds it. A Mac that never chose
@@ -147,10 +153,10 @@ and it goes away when the computer is removed.
   a call that was waiting goes on and its next call starts the computer again,
   instead of waiting for a Give back nobody can press on a stopped computer.
   The one exception is a sign-in card that holds the computer for you: that
-  hold lasts until the card is answered or withdrawn. While Reset, Remove,
-  Delete Bot or Remove everything is replacing or deleting the computer,
-  nothing starts it: a call that was waiting starts the fresh copy once Reset
-  is done, and finds no computer after the others.
+  hold lasts until the card is answered or withdrawn. While Give, Reset,
+  Remove, Delete Bot or Remove everything is making, replacing or deleting the
+  computer, nothing starts it: a call that was waiting starts the fresh copy
+  once Give or Reset is done, and finds no computer after the others.
 - **What you leave on the screen.** While you control the computer, the Bot
   captures nothing. Once you give it back (or answer a sign-in card), the
   Bot's next capture shows whatever is on the screen. Password fields show
@@ -234,6 +240,13 @@ the screen keeps working.
   the base, the macOS download and any partial download, Aiden's SSH key and pinned host key, the guest password, and the
   Bot-computer settings. Files in each Bot's `Computer` folder stay. To use Bot
   computers again, choose Set up, which downloads macOS again.
+- **One at a time, in order:** Give, Reset, Remove and Delete Bot for the same
+  Bot wait for each other and run in the order you chose them. Remove
+  everything waits for any already chosen, and anything chosen after it waits
+  for it. So Remove or Delete Bot while Reset is still copying the base deletes
+  the fresh copy once Reset finishes, rather than Reset bringing the computer
+  back, and a Give chosen during Remove everything finds Bot computers not set
+  up.
 
 Everything lives under `bot-computers/` in Aiden's data folder
 (`~/Library/Application Support/Aiden Agent/` on a standard install).

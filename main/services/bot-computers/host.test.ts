@@ -40,6 +40,8 @@ interface FakeConfig {
   stopDelayMs?: number;
   stopFails?: string;
   cloneDelayMs?: number;
+  runReturnDelayMs?: number;
+  runFailsLate?: string;
   hostKey?: string;
 }
 
@@ -55,6 +57,8 @@ interface LoggedCall {
   at?: number;
   kind: string;
   pid?: number;
+  /** The VM a `vnc` entry plays. */
+  name?: string;
   op?: string;
   args?: string[];
   env?: Record<string, string | undefined>;
@@ -566,6 +570,60 @@ test("a stop Lume fails to carry out leaves the computer running, as Lume report
   });
 });
 
+const failsWith = (code: BotComputerError["code"]) => (error: unknown) => error instanceof BotComputerError && error.code === code;
+
+test("a start cancelled or failing after Lume launched the VM turns it off; one Lume can't turn off keeps its place", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    const launches = () => context.calls().filter((call) => call.kind === "vnc" && call.name === vmName).length;
+
+    // `lume run --detach` has launched the VM but not returned when the only caller gives up, and Pause follows.
+    context.config.runReturnDelayMs = 30_000;
+    context.writeConfig();
+    const caller = new AbortController();
+    const cancelled = context.host.ensureRunning("ada", { reason: "tool", signal: caller.signal });
+    await waitFor(() => launches() === 1, "the detached VM");
+    caller.abort();
+    await assert.rejects(cancelled, failsWith("cancelled"));
+    await context.host.stop("ada", { reason: "pause" });
+    assert.equal(context.vmRunning(vmName), false, "the VM the cancelled start launched is off once Pause returns");
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+
+    // `run` exits non-zero after it launched the VM.
+    context.config.runReturnDelayMs = undefined;
+    context.config.runFailsLate = vmName;
+    context.writeConfig();
+    await assert.rejects(context.host.ensureRunning("ada", { reason: "tool" }), failsWith("start_failed"));
+    assert.equal(launches(), 2);
+    assert.equal(context.vmRunning(vmName), false);
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+
+    // When even the forced stop fails, the computer reads running, with no connection to use, and keeps its place.
+    context.config.stopFails = vmName;
+    context.writeConfig();
+    await assert.rejects(context.host.ensureRunning("ada", { reason: "tool" }), failsWith("start_failed"));
+    assert.equal(context.vmRunning(vmName), true);
+    assert.equal((await context.host.computer("ada"))?.state, "running");
+    assert.equal(context.host.runningConnection("ada"), undefined);
+    await assert.rejects(context.host.stop("ada", { reason: "pause" }), failsWith("lume_failed"));
+    assert.equal((await context.host.computer("ada"))?.state, "running", "a Pause that couldn't turn it off doesn't call it stopped");
+    await context.host.updateSettings({ maxRunning: 1 });
+    await context.host.give("ben");
+    await assert.rejects(context.host.ensureRunning("ben", { reason: "tool" }), failsWith("lume_failed"), "Ben's start needs the place Ada's VM still holds");
+    assert.equal(context.vmRunning(botComputerVmName("ben")), false);
+
+    // Once Lume can stop it, Ada's next start turns it off first and starts afresh.
+    context.config.stopFails = undefined;
+    context.config.runFailsLate = undefined;
+    context.writeConfig();
+    const connection = await context.host.ensureRunning("ada", { reason: "tool" });
+    assert.equal(launches(), 4);
+    assert.equal(context.vmRunning(vmName), true);
+    assert.equal(context.host.runningConnection("ada")?.vnc.password, connection.vnc.password);
+  });
+});
+
 test("a Bot call that waited for Give back starts nothing while Reset, Delete or Remove everything replaces the computer", async () => {
   await withHost(async (context) => {
     await setUp(context);
@@ -612,6 +670,53 @@ test("a Bot call that waited for Give back starts nothing while Reset, Delete or
       );
       assert.equal(context.vmRunning(vmName), false, what);
     }
+  });
+});
+
+test("Give, Reset, Delete and Remove everything of a computer take turns in the order they were asked for", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const vmName = botComputerVmName("ada");
+    const clones = () => context.calls().filter((call) => call.op === "clone").length;
+    const copyTakes = (ms: number | undefined) => {
+      context.config.cloneDelayMs = ms;
+      context.writeConfig();
+    };
+    await context.host.give("ada");
+
+    // Delete while Reset copies the base: Reset finishes, then Delete removes the fresh copy.
+    copyTakes(300);
+    let copies = clones();
+    const resetting = context.host.reset("ada");
+    await waitFor(() => clones() > copies, "Reset's copy");
+    await context.host.deleteForBot("ada");
+    assert.equal((await resetting).vmName, vmName);
+    assert.equal(await context.host.computer("ada"), undefined, "the deleted computer stays deleted");
+    assert.deepEqual(context.vmNames(), [BOT_COMPUTER_BASE_VM]);
+
+    // Delete while Give copies the base: the computer Give made is the one deleted.
+    copies = clones();
+    const giving = context.host.give("ada");
+    await waitFor(() => clones() > copies, "Give's copy");
+    await context.host.deleteForBot("ada");
+    assert.equal((await giving).vmName, vmName);
+    assert.equal(await context.host.computer("ada"), undefined);
+    assert.deepEqual(context.vmNames(), [BOT_COMPUTER_BASE_VM]);
+
+    // Remove everything while Reset copies: Reset finishes first, and a Give asked for afterwards finds nothing set up.
+    copyTakes(undefined);
+    await context.host.give("ada");
+    copyTakes(300);
+    copies = clones();
+    const lateReset = context.host.reset("ada");
+    await waitFor(() => clones() > copies, "Reset's copy");
+    const removing = context.host.removeEverything();
+    const givenAfter = context.host.give("ben");
+    await removing;
+    assert.equal((await lateReset).vmName, vmName);
+    await assert.rejects(givenAfter, failsWith("not_set_up"));
+    assert.deepEqual((await context.host.status()).computers, []);
+    assert.equal(existsSync(path.join(context.root, "vms")), false, "no VM is left or made again");
   });
 });
 

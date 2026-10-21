@@ -13,8 +13,8 @@
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit, vncHost, stopDelayMs, stopFails, cloneDelayMs, hostKey and vncUpstream of a
-// JSON file named by a leading `--fake-config <file>`):
+// keys log, stale, limit, vncHost, stopDelayMs, stopFails, cloneDelayMs, runReturnDelayMs, runFailsLate,
+// hostKey and vncUpstream of a JSON file named by a leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)";
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
 //   Virtualization VM-limit error (written to the --log-file, as the detached run does);
@@ -25,6 +25,10 @@
 //   fails and leaves the VM running;
 // - AIDEN_FAKE_LUME_CLONE_DELAY_MS: how long `clone` copies the disk. A source that starts
 //   running meanwhile fails the clone: the real copy would be torn, and the fake says so.
+// - AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS: how long `run --detach` takes to return once its
+//   detached VM is up (the real detach branch launches the VM before it prints and returns);
+// - AIDEN_FAKE_LUME_RUN_FAILS_LATE: comma-separated VM names whose `run` launches the detached
+//   VM and then exits non-zero, leaving the VM running;
 // - AIDEN_FAKE_LUME_HOST_KEY: the `ssh-ed25519 …` host key a fresh install gets
 //   (every macOS install makes its own; clones keep their source's). The VM's
 //   key is in the fake state, so host tests can check what ssh would trust.
@@ -55,6 +59,8 @@ if (args[0] === "--fake-config") {
     stopDelayMs: "AIDEN_FAKE_LUME_STOP_DELAY_MS",
     stopFails: "AIDEN_FAKE_LUME_STOP_FAILS",
     cloneDelayMs: "AIDEN_FAKE_LUME_CLONE_DELAY_MS",
+    runReturnDelayMs: "AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS",
+    runFailsLate: "AIDEN_FAKE_LUME_RUN_FAILS_LATE",
     hostKey: "AIDEN_FAKE_LUME_HOST_KEY",
     vncUpstream: "AIDEN_FAKE_LUME_VNC_UPSTREAM",
   };
@@ -344,6 +350,11 @@ async function main() {
       for (let attempt = 0; attempt < 100; attempt += 1) {
         await sleep(50);
         if (readState(storage).vms[name]?.status === "running") break;
+      }
+      const returnDelay = Number(process.env.AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS ?? "0");
+      if (returnDelay > 0) await sleep(returnDelay);
+      if ((process.env.AIDEN_FAKE_LUME_RUN_FAILS_LATE ?? "").split(",").includes(name)) {
+        fail(`fake lume: '${name}' was launched, then run failed`);
       }
       process.stdout.write(`Started '${name}' in the background (PID ${child.pid}).\nLog: ${logFile}\n`);
       return;
