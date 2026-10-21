@@ -10,6 +10,8 @@
 //   bindings in `bot-tool-candidates.ts`;
 // - the Bot's own browser (`bot-browser-tools.ts`): the `browser` gateway and
 //   the browser tools without page scripts or recording;
+// - the Bot's own computer (`bot-computers/computer-tool.ts`): `computer` and
+//   `computer_shell`, when the Bot has the capability and a computer;
 // - the cards a person answers: `ask_user_question`, `hand_off` and `sign_in`.
 //
 // Policy is applied afterwards by `bot-tool-assembly.ts`. This module only
@@ -70,6 +72,10 @@ import { SUBAGENT_TOOL } from "./bot-tool-policy.js";
 import { isBrowserToolName } from "../browser-tools.js";
 import { botBrowser } from "./bot-browser-main.js";
 import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
+import { botComputerAction } from "./bot-computer-approval.js";
+import { createBotComputerShellTool } from "../bot-computers/computer-shell-tool.js";
+import { createBotComputerTool, createBotComputerToolState, type BotComputerToolState } from "../bot-computers/computer-tool.js";
+import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 
 const BOT_HOME_LOCATION_ID = "builtin.bot_home.v1";
 
@@ -176,6 +182,17 @@ function once<T>(load: () => Promise<T>): () => Promise<T> {
   return () => (value ??= load());
 }
 
+// Bot computers load lazily, and only where the platform has them.
+const botComputerServices = () => import("../bot-computers/bot-computers-main.js");
+let botComputerToolState: BotComputerToolState | undefined;
+
+/** Whether the Bot has its own computer. Never on Linux or Intel Macs; an unreadable state counts as none. */
+async function botHasComputer(botId: string): Promise<boolean> {
+  const { botComputers, botComputersEnabled } = await botComputerServices();
+  if (!botComputersEnabled()) return false;
+  return (await botComputers().host.computer(botId).catch(() => undefined)) !== undefined;
+}
+
 export interface BotToolSourcesMain extends BotToolSources {
   /** Close every Bot's Computer Use controller and browser state (app quit). */
   shutdown(): Promise<void>;
@@ -274,10 +291,12 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     async facts(botId, admission): Promise<ProductionFacts> {
       const authority = admission.authority;
       const catalog = once(() => resolveBotRuntimeCatalogSnapshot(authority));
+      const computerGranted = authority.otherCapabilities.some((grant) => grant.kind === "computer");
       return createBotToolFacts({
         admission,
         supportsImages: await deps.imageInput(botId),
         fileLocations: (await botFileLocations(admission)).length,
+        hasComputer: computerGranted && (await botHasComputer(botId)),
         catalog: async () => (await catalog()).resources,
         mcpTools: async () => builtMcpTools.get(botId) ?? [],
         liveMcpTools: async () => {
@@ -357,6 +376,30 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         // The built tool itself must be the granted tool, not only a same-named one.
         return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool)) ? [{ tool, mcp: true }] : [];
       });
+      // The Bot's own computer. Routines may use it unattended (§8.7); the
+      // screen is vision only, so a model without image input gets the shell alone.
+      if (has("computer") && facts.hasComputer) {
+        const { botComputers } = await botComputerServices();
+        const computers = botComputers();
+        const state = (botComputerToolState ??= createBotComputerToolState(computers.control));
+        const botName = async (id: string) => (await deps.botName?.(id).catch(() => undefined)) ?? "The Bot";
+        // No one answers a card on routine and Telegram runs, so there is no hand_off there.
+        const computerTurn = { routine: routineRun, unattended: routineRun || telegram };
+        if (facts.supportsImages) {
+          tools.push({
+            tool: createBotComputerTool(
+              botId,
+              { host: computers.host, sessions: computers.sessions, control: computers.control, state, botName },
+              computerTurn,
+            ),
+            replay: "unsafe",
+          });
+        }
+        tools.push({
+          tool: createBotComputerShellTool(botId, { host: computers.host, control: computers.control, botName }, computerTurn),
+          replay: "unsafe",
+        });
+      }
       // The Bot's own browser. Never on routine or Telegram turns: nobody is
       // there to approve a click or use a held tab (blueprint G12).
       if (has("browser") && !routineRun && !telegram) {
@@ -441,6 +484,12 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
             revoke: () => closeController(botId),
           });
         }
+        // Allowed inside the Bot's own computer; the rules read the stated intent.
+        case BOT_COMPUTER_TOOL_NAME:
+          return botComputerAction(call);
+        // A guest shell command: allowed, and not something the rules can read.
+        case BOT_COMPUTER_SHELL_TOOL_NAME:
+          return undefined;
         default:
           // The browser gateway and tools: the live tab, page and targeted field.
           if (toolName === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(toolName)) {
@@ -457,6 +506,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
 
     async forgetBot(botId) {
       await closeController(botId);
+      // The host deletes the Bot's computer on its own Delete Bot step.
+      botComputerToolState?.forget(botId);
       // Bot delete clears the browser profile, closing any tab left, on its own step.
       await botBrowser.forget(botId).catch((error: unknown) => logger.warn("bots", `Could not close Bot ${botId}'s browser tabs.`, error));
     },

@@ -28,6 +28,7 @@ function facts(
     authority: { connections: [{ sourceId: "conn-crm", tools: [...granted.values()] }] },
     supportsImages: true,
     fileLocations: 0,
+    hasComputer: false,
     mcpTools: async () => granted,
     skillToolNames: async () => new Set(),
     mcpToolDescriptor: async (name: string) => (granted.has(name) ? live.get(name) : undefined),

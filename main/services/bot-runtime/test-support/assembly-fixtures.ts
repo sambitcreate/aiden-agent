@@ -219,6 +219,8 @@ export interface AssemblyState {
    */
   liveMailTools: SubagentMcpRemoteTool[];
   skillSnapshot: SkillRegistrySnapshot;
+  /** The Bot has its own computer (Bot computers set up and given). */
+  hasComputer?: boolean;
 }
 
 export function assemblyState(authority: BotRuntimeEffectiveAuthority, supportsImages = true): AssemblyState {
@@ -280,6 +282,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
           admission,
           supportsImages: state.supportsImages,
           fileLocations: admission.authority.files.botHome ? 1 : 0,
+          hasComputer: state.hasComputer === true,
           catalog: async () => state.catalog,
           mcpTools: async () => MAIL_BUILT_TOOLS,
           liveMcpTools: async () =>

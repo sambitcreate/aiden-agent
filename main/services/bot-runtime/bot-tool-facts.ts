@@ -27,6 +27,8 @@ export interface BotToolFactsInput {
   admission: BotAdmission;
   supportsImages: boolean;
   fileLocations: number;
+  /** The Bot has its own computer on a host with Bot computers. */
+  hasComputer: boolean;
   /** A fresh catalog snapshot (connections and skills) for this Bot. */
   catalog(): Promise<{
     connections: readonly BotCatalogConnectionResource[];
@@ -80,6 +82,7 @@ export function createBotToolFacts(input: BotToolFactsInput): BotToolFactsWithSk
     authority,
     supportsImages: input.supportsImages,
     fileLocations: input.fileLocations,
+    hasComputer: input.hasComputer,
     mcpTools,
     skillToolNames: async () => (await skills()).names,
     skillSnapshot: async () => (await skills()).snapshot,

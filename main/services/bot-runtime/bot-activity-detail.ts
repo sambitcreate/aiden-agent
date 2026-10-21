@@ -1,8 +1,9 @@
 // One Bot tool call, as the chat may show it (spec §6 "Projection changes"):
 // its phase kind, a past-tense label and a short, safe detail. The detail is
 // built here in main and only from allow-listed arguments: a file's base name,
-// a search query or pattern, or a command's own description (the model's
-// plain-words summary). The command itself is never shown: the redactor does
+// a search query or pattern, a command's own description (the model's
+// plain-words summary), or the stated intent of a step in the Bot's own
+// computer ("Click Place order"), never the text it types. The command itself is never shown: the redactor does
 // not know shell shapes (`curl -H 'X-Api-Key: …'`, `mysql -pSecret`). Text
 // passes the diagnostic redactor before it is cut to the display length.
 // Arguments of connection tools are never shown.
@@ -85,6 +86,9 @@ function rawDetail(toolName: string, kind: BotToolPhase, args: Record<string, un
       return stringOf(args.description);
     case "searching":
       return stringOf(args.query);
+    case "app":
+      // Only the Bot's own computer; connection tools never show arguments.
+      return toolName === "computer" ? stringOf(args.intent) : undefined;
     default:
       return undefined;
   }

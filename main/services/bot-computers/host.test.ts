@@ -246,10 +246,12 @@ test("Set up downloads the pinned image, builds and provisions the base, then de
   await withHost(async (context) => {
     const before = await context.host.status();
     assert.equal(before.setup.kind, "not_set_up");
+    assert.equal(await context.host.baseReady(), false, "no Bot can use a computer before Set up");
     assert.equal(context.calls().length, 0, "status alone never runs Lume");
     assert.equal(context.fetches.length, 0, "nothing downloads before Set up");
 
     await setUp(context);
+    assert.equal(await context.host.baseReady(), true);
     const status = await context.host.status();
     assert.deepEqual(status.setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false });
     assert.deepEqual(context.fetches, [{ url: "https://updates.cdn-apple.com/test/UniversalMac_26.6.2_25G83_Restore.ipsw", redirect: "error" }]);
@@ -413,8 +415,11 @@ test("give, run, stop and delete a Bot's computer; delete is idempotent", async 
     assert.equal(result.stdout, "guest says hi\n");
     assert.equal(last([...(last(context.sshCalls)?.args ?? [])])?.includes("sw_vers"), true);
 
+    context.host.activity.set("ada", "Ada is using the computer: Open Safari");
+    assert.equal((await context.host.computer("ada"))?.activity, "Ada is using the computer: Open Safari");
     await context.host.stop("ada", { reason: "person" });
     assert.equal((await context.host.computer("ada"))?.state, "stopped");
+    assert.equal((await context.host.computer("ada"))?.activity, undefined, "what the Bot was doing ends with the run");
     assert.equal(context.vmRunning(given.vmName), false);
 
     await context.host.ensureRunning("ada", { reason: "viewer" });
@@ -696,6 +701,7 @@ test("building a base needs a running place: an idle computer gives up its own, 
       (error: unknown) => error instanceof BotComputerError && error.code === "busy" && /Stop a Bot's computer/u.test(error.message),
     );
     assert.equal((await host.status()).setup.kind, "failed");
+    assert.equal(await host.baseReady(), true, "a failed update leaves the working base usable");
     assert.equal(context.vmRunning(botComputerVmName("ada")), true);
     assert.equal(context.vmRunning(botComputerVmName("ben")), true);
     assert.equal(context.calls().filter((call) => call.op === "create").length, 1, "no install is tried past the limit");
@@ -775,6 +781,7 @@ test("Remove everything deletes every VM, the keys, the guest password and the s
     assert.equal(context.secrets.get("aiden-internal:other"), "kept");
     const status = await context.host.status();
     assert.equal(status.setup.kind, "not_set_up");
+    assert.equal(await context.host.baseReady(), false);
     assert.deepEqual(status.computers, []);
     assert.equal(context.events.removed, 1);
     // Reconcile on a removed setup touches nothing.
@@ -788,6 +795,7 @@ test("an unsupported Mac reports why and never runs Lume", async () => {
   await withHost(
     async (context) => {
       assert.deepEqual((await context.host.status()).setup, { kind: "unsupported", reason: "host_os" });
+      assert.equal(await context.host.baseReady(), false);
       await assert.rejects(context.host.setUp(), (error: unknown) => error instanceof BotComputerError && error.code === "unsupported");
       await context.host.reconcile();
       assert.equal(context.calls().length, 0);

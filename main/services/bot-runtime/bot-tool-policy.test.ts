@@ -16,6 +16,7 @@ function bareFacts(): BotToolFacts {
     } as unknown as BotRuntimeEffectiveAuthority,
     supportsImages: true,
     fileLocations: 0,
+    hasComputer: false,
     mcpTools: async () => new Map(),
     skillToolNames: async () => new Set(),
   };

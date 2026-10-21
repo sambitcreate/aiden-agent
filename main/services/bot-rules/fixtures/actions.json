@@ -1103,6 +1103,207 @@
       ]
     },
     {
+      "id": "co-vnc-place-order",
+      "note": "The VNC lane: only the Bot's stated intent, no app, window or element.",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Click Place order"
+      },
+      "expected": [
+        "purchase"
+      ]
+    },
+    {
+      "id": "co-vnc-return-send",
+      "note": "A key chord that presses something reads like a click.",
+      "action": {
+        "surface": "computer",
+        "action": "press",
+        "intent": "Press Return to send the reply to Bob"
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "co-vnc-letter-key",
+      "note": "A key that only types a letter is typing, not sending.",
+      "action": {
+        "surface": "computer",
+        "action": "key",
+        "intent": "Type the reply to Bob"
+      },
+      "expected": []
+    },
+    {
+      "id": "co-vnc-password",
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Type the account password"
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "co-vnc-code",
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Enter the verification code from the text message"
+      },
+      "expected": [
+        "credentials"
+      ]
+    },
+    {
+      "id": "co-vnc-card",
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Enter the card number"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "co-vnc-pay-now",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Click Pay now"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "co-vnc-trash-key",
+      "action": {
+        "surface": "computer",
+        "action": "press",
+        "intent": "Press Command-Delete to move the file to the Trash"
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "co-vnc-empty-trash",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Empty the Trash"
+      },
+      "expected": [
+        "delete"
+      ]
+    },
+    {
+      "id": "co-vnc-publish",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Click Publish to post the article"
+      },
+      "expected": [
+        "publish"
+      ]
+    },
+    {
+      "id": "co-vnc-send-email",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Click Send on the email to Sam"
+      },
+      "expected": [
+        "communicate"
+      ]
+    },
+    {
+      "id": "co-vnc-transfer",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Confirm the bank transfer"
+      },
+      "expected": [
+        "money"
+      ]
+    },
+    {
+      "id": "co-vnc-open-app",
+      "action": {
+        "surface": "computer",
+        "action": "double_click",
+        "intent": "Open Safari from the Dock"
+      },
+      "expected": []
+    },
+    {
+      "id": "co-vnc-drag-shared",
+      "action": {
+        "surface": "computer",
+        "action": "drag",
+        "intent": "Drag the report into the Shared folder"
+      },
+      "expected": []
+    },
+    {
+      "id": "co-vnc-search-terms",
+      "action": {
+        "surface": "computer",
+        "action": "type",
+        "intent": "Type the search terms"
+      },
+      "expected": []
+    },
+    {
+      "id": "co-vnc-return-search",
+      "action": {
+        "surface": "computer",
+        "action": "press",
+        "intent": "Press Return to search"
+      },
+      "expected": []
+    },
+    {
+      "id": "co-vnc-context-menu",
+      "action": {
+        "surface": "computer",
+        "action": "right_click",
+        "intent": "Open the context menu on the photo"
+      },
+      "expected": []
+    },
+    {
+      "id": "co-vnc-flight-custom",
+      "note": "A person's own rule matches the stated intent too.",
+      "action": {
+        "surface": "computer",
+        "action": "click",
+        "intent": "Book the 9am flight to Lisbon"
+      },
+      "expected": [
+        "purchase"
+      ],
+      "customRules": [
+        {
+          "id": "custom.00000000-0000-4000-8000-0000000000a1",
+          "text": "book a flight",
+          "behavior": "ask",
+          "locked": false
+        }
+      ],
+      "expectedCustom": [
+        "custom.00000000-0000-4000-8000-0000000000a1"
+      ]
+    },
+    {
       "id": "br-password",
       "tags": [
         "sensitive_field"

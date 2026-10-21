@@ -241,6 +241,11 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
     // Loaded lazily: the browser service pulls in Electron's web contents.
     browserAgentAccess: async () =>
       (await import("./browser/service.js")).browserService.agentAccessDefaultAllowed(),
+    // Never on Linux or Intel Macs; elsewhere once Settings → Bot computers is set up.
+    botComputersReady: async () => {
+      const { botComputers, botComputersEnabled } = await import("./bot-computers/bot-computers-main.js");
+      return botComputersEnabled() && (await botComputers().host.baseReady());
+    },
   }),
   {
     onRuntimeSnapshot: (botId, snapshot) => {

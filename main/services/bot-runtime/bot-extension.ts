@@ -66,7 +66,14 @@ import type {
   BotHandoffRule,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
-import { BOT_BROWSER_SNAPSHOT_IMAGES_KEPT, withImageReferences, withNewestToolImages } from "./bot-images.js";
+import {
+  BOT_BROWSER_SNAPSHOT_IMAGES_KEPT,
+  BOT_COMPUTER_CAPTURE_IMAGES_KEPT,
+  BOT_OLDER_COMPUTER_CAPTURE_NOTE,
+  withImageReferences,
+  withNewestToolImages,
+} from "./bot-images.js";
+import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 
@@ -419,6 +426,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         }
         messages = withoutTools(messages, withheldUntilDisclosed(messages));
         messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
+        messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
         return messages === request.messages ? undefined : { messages };
       },

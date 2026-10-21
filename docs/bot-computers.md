@@ -222,3 +222,83 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   in `ps`, and that `~/.lume` is untouched.
 - A Set up interrupted mid-download resumes with a range request and ends with
   the pinned SHA-256; whether Apple's URL redirects.
+
+## How the Bot uses its computer
+
+- **Offered when.** A Bot gets its computer's tools when its access includes
+  **Bot computer** (Full access includes it once Bot computers are set up) and
+  it has been given a computer in its profile. Neither is offered on Linux or
+  Intel Macs, or to a Bot without a computer of its own. The `computer` tool is
+  separate from `computer_use`: Computer Use drives the person's Mac, while
+  `computer` drives only the Bot's own virtual machine.
+- **`computer`** sees and acts through the computer's screen (the VNC lane):
+  vision only, with no accessibility tree. Its actions are `capture`, `click`,
+  `double_click`, `right_click`, `drag`, `scroll`, `type`, `key`, `wait` and
+  `verify`. Screenshots are JPEG, at most 1280 pixels on the long side, at
+  quality 70, and coordinates are pixels of the newest screenshot. Each request
+  to the model carries only the newest three screenshots; older ones become a
+  short note there, and the transcript keeps them all. A Bot whose model has no
+  image input gets only `computer_shell`.
+- **A stated intent on every change.** Each `click`, `double_click`,
+  `right_click`, `drag`, `scroll`, `type` and `key` needs a short intent, such
+  as "Click Place order". The status line ("Ada is using the computer: Click
+  Place order"), the chat's step detail, rule cards and the rules read it. The
+  text the Bot types is never shown back to the model, on a card or in the
+  chat. Typed text can't contain line breaks or tabs, and the destructive
+  shortcuts Computer Use blocks (such as Command-Q) are blocked here too.
+- **`computer_shell`** runs one command with `/bin/sh` inside the computer, over
+  SSH as the computer's user, for up to 120 seconds and 64 KiB of output, shown
+  like `run_command`'s output. That user is the computer's administrator, but
+  `sudo` and system changes need the guest password, which only Aiden holds.
+  The model never sees the guest password or the screen-sharing password.
+- **Starting and idle.** Either tool starts the computer when it isn't running,
+  with "Starting Ada's computer…" as the step's progress, and each call
+  restarts the idle timer. A routine's call starts it for the routine.
+- **Take over.** While the person has the computer, nothing the Bot asks for
+  runs and nothing is captured: a `computer` call waits until they give it
+  back, then tells the Bot "The person used the computer; take a fresh capture
+  first.", and a `computer_shell` command waits and then runs. Take over stops
+  a `computer` action in progress and releases any key or button it held. For
+  a running `computer_shell` command it ends the SSH connection and tells the
+  Bot the command may have partly run or still be running: without a terminal
+  the command itself isn't signalled, so it can go on in the computer until it
+  ends or its time limit stops it.
+  A screenshot from before Take over, or from an earlier run of the computer,
+  no longer places a click.
+- **Shared folder.** `<botHome>/Computer` is shared read-write into the
+  computer at `/Volumes/My Shared Files`, which `~/Shared` links to. It is the
+  one way files move between the computer and the Bot's Files panel.
+- **Rules.** Inside its own computer the Bot's baseline is allowed: nothing asks
+  per click, because the virtual machine is the boundary. Rules still apply:
+  purchase, communicate, publish and delete ask, credentials and money hand
+  off, and the person's own rules match too. The rules read the stated intent;
+  a key chord that does more than type a character (Return, Command-S) counts
+  as pressing a button. "Install software" covers the person's Mac, not the
+  Bot's own computer, though a rule of the person's own can still cover an
+  install there. Shell commands aren't classified by rules.
+- **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
+  Bot's own description of each step. The tool's guidance tells the Bot to
+  call `hand_off` for passwords, codes and payments and let the person do those
+  steps, and the rules editor says so. A rule's hand-off card has no Open
+  button in this lane.
+- **Routines and Telegram.** Unlike the Bot's browser, which those turns never
+  get, the Bot may use its own computer on routine runs and Telegram turns,
+  where nobody is watching, and without asking per step as Computer Use on the
+  person's Mac does. A rule that would ask or hand off on those turns never
+  waits: the call is blocked with what the person needs to do, and the Bot tells them in
+  its reply. Those turns have no `hand_off`, so there the tool's guidance tells
+  the Bot never to enter passwords, codes or payment details and to say in its
+  reply what the person needs to do instead.
+- **Network.** The computer uses Lume's default shared (NAT) network, so what
+  the Bot does there can reach the open internet and services listening on the
+  Mac's network interfaces. Aiden Remote on those interfaces still needs a
+  paired device.
+- **Activity.** The Bot's status line reads "Using its computer" for
+  `computer` and "Running a command" for `computer_shell`, on the Mac and on
+  phones, through the existing activity phases.
+- **Confirming on a Mac.** With a set-up base and a Bot given a computer: a
+  `computer` capture shows the guest's screen at most 1280 pixels wide, a click
+  at a screenshot's coordinate lands there, `type` enters text with the right
+  shifted characters, Command shortcuts work, Take over during a long `type`
+  stops it and leaves no key held, and a `computer_shell` `ls ~/Shared` lists
+  the Bot's `Computer` folder.

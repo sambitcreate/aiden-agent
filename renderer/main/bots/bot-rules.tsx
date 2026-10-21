@@ -18,6 +18,7 @@ import {
   RadioGroupItem,
   Text,
 } from "../../components/ui";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import type { BotDefinition } from "../../shared/bots";
 import {
   BOT_RULE_TEXT_MAX_CHARS,
@@ -57,6 +58,7 @@ function behaviorDescription(bot: RuleBot, behavior: BotRuleBehavior): string {
 export function BotRules({ bot }: { bot: RuleBot }) {
   const rules = useBotRules(bot.id);
   const { apply, busy } = useBotRuleChange(bot.id);
+  const { botComputers } = useAppCapabilities();
   const [problem, setProblem] = React.useState<string | null>(null);
   const [editing, setEditingState] = React.useState<BotRule | "new" | null>(null);
   const [editorSession, setEditorSession] = React.useState(0);
@@ -140,6 +142,12 @@ export function BotRules({ bot }: { bot: RuleBot }) {
       <Text as="p" variant="small" color="secondary" className="mt-2 px-4 text-pretty">
         Rules don’t cover shell commands; the Shell setting does.
       </Text>
+      {botComputers ? (
+        // The VNC lane's known gap (plan §8.7): clicks are coordinates, so rules read the Bot's own words.
+        <Text as="p" variant="small" color="secondary" className="mt-1 px-4 text-pretty">
+          On {bot.name}’s own computer, rules read {bot.name}’s stated intent; {bot.name} is told to hand off passwords and payments.
+        </Text>
+      ) : null}
       <BotRuleEditor
         // Each opening starts a fresh form from the rule it edits (or a blank one).
         key={editorSession}
