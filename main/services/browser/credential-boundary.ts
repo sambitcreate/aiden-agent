@@ -181,11 +181,29 @@ function elementIsSensitive(element: BrowserElement): boolean {
   });
 }
 
+/** Playwright engines that name an element by the text inside it (`internal:text="…"`, `:has-text(…)`). */
+const TEXT_ENGINE = /(?:^|>>|\s)\s*(?:internal:)?(?:has-)?text\s*=|:(?:has-)?text(?:-is|-matches)?\s*\(/iu;
+
+/** A locator for a field from its tag and the attributes a snapshot shows, never from its contents. */
+function structuralSelector(element: BrowserElement): string {
+  const attributes = element.attributes ?? {};
+  const tag = /^[a-z][a-z\d-]*$/u.test(element.tag) ? element.tag : "*";
+  const named = ["type", "autocomplete", "name"].flatMap((name) =>
+    attributes[name] === undefined ? [] : [`[${name}=${JSON.stringify(attributes[name])}]`],
+  );
+  return `${tag}${named.join("")}`;
+}
+
 function scrubElement(element: BrowserElement): BrowserElement {
   if (!elementIsSensitive(element)) return element;
   const attributes = element.attributes ?? {};
-  // `text` may be what the field shows (a contenteditable field's innerText).
-  return { ...element, text: (attributes["aria-label"] ?? attributes.placeholder ?? "").slice(0, 500) };
+  return {
+    ...element,
+    // `text` may be what the field shows (a contenteditable field's innerText).
+    text: (attributes["aria-label"] ?? attributes.placeholder ?? "").slice(0, 500),
+    // Playwright names a field with text inside it (a textarea) by that text.
+    ...(TEXT_ENGINE.test(element.selector) ? { selector: structuralSelector(element) } : {}),
+  };
 }
 
 /**

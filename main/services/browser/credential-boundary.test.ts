@@ -187,6 +187,27 @@ test("scrubbing drops a sensitive field's value, value text and rendered text, a
   assert.deepEqual(scrubbed.elements.map(({ text }) => text), ["Password", "", "Email"]);
 });
 
+test("a sensitive field's locator never carries what it holds; other locators stay as they are", () => {
+  const at = { x: 0, y: 0, width: 1, height: 1 };
+  // Playwright names a field with text in it by that text, as Electron's
+  // selector generator did for this card field.
+  const snapshot: BrowserSnapshot = {
+    tab: {} as BrowserTab,
+    text: "",
+    diagnostics: [],
+    elements: [
+      { ref: "1-0", tag: "textarea", text: "", selector: 'internal:text="4111111111111111"i', bounds: at, attributes: { autocomplete: "cc-number", name: "card" } },
+      { ref: "1-1", tag: "input", text: "", selector: "#pw", bounds: at, attributes: { type: "password" } },
+      { ref: "1-2", tag: "button", text: "Pay 4111", selector: 'internal:role=button[name="Pay 4111"i]', bounds: at },
+    ],
+  };
+  const scrubbed = scrubBrowserSnapshot(snapshot, new Set());
+  assert.doesNotMatch(JSON.stringify(scrubbed.elements[0]), /4111/u);
+  assert.ok(scrubbed.elements[0]!.selector.length > 0, "the field can still be found");
+  assert.equal(scrubbed.elements[1]!.selector, "#pw");
+  assert.equal(scrubbed.elements[2]!.selector, snapshot.elements[2]!.selector, "a button keeps its name");
+});
+
 test("only keys that put text into a field count as typing", () => {
   for (const [key, modifiers] of [["a", []], ["7", []], ["Control+v", []], ["v", ["Meta"]], ["V", ["Control"]], ["Insert", ["Shift"]]] as const) {
     assert.equal(browserKeyInsertsText(key, modifiers), true, `${key} ${modifiers.join("+")}`);
