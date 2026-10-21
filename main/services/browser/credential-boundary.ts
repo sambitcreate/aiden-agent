@@ -223,6 +223,19 @@ export function browserTypingGuardSource(element: string): string {
   return `{const __target=${element};const __focus=__aidenFocused();if(__aidenSensitive(__target)||__aidenSensitive(__focus.element))throw new Error(${JSON.stringify(BROWSER_SENSITIVE_TYPING_REFUSED)});if(__focus.opaque)throw new Error(${JSON.stringify(BROWSER_OPAQUE_TYPING_REFUSED)});}`;
 }
 
+/**
+ * A guard's refusal thrown inside the page reaches main as the page's error
+ * text, stack included. This gives the Bot the sentence alone; any other
+ * error passes through unchanged.
+ */
+export function boundaryRefusalOf(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  for (const sentence of [BROWSER_SENSITIVE_TYPING_REFUSED, BROWSER_OPAQUE_TYPING_REFUSED]) {
+    if (message.includes(sentence)) return new Error(sentence);
+  }
+  return error;
+}
+
 /** Attribute tests on `value` (or escapes that could spell one) would let a selector read a field. */
 const VALUE_PROBE = /\[\s*(?:[\w*-]*\|)?value\b|@value\b|\\/iu;
 

@@ -72,6 +72,7 @@ import { botBrowserPartition, botBrowserProfileId, botIdOfBrowserProfile, isBotB
 import { botIdForBrowserWorkspace, browserWorkspacesOfBot, forgetBotBrowserWorkspace } from "./bot-workspaces.js";
 import {
   assertBoundarySelector,
+  boundaryRefusalOf,
   BROWSER_HELD_TAB_REFUSED,
   BROWSER_IMAGE_MASKED_NOTE,
   BROWSER_SENSITIVE_FIELD_SOURCE,
@@ -2569,7 +2570,9 @@ export class BrowserService {
                   `(()=>{const e=${target};if(!e)throw new Error('Input not found');${guard}if(!globalThis.__aidenPlaywright.elementState(e,'editable').matches)throw new Error('Target is not editable or is read-only');e.focus();${focusedGuard}${command.clear ? "if('select' in e)e.select();else {const range=document.createRange();range.selectNodeContents(e);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}" : ""}})()`,
                   signal,
                   true,
-                );
+                ).catch((error: unknown) => {
+                  throw boundaryRefusalOf(error);
+                });
                 check();
                 context.beforeEffect?.();
                 if (command.clear && command.text === "")
@@ -2579,7 +2582,11 @@ export class BrowserService {
               }
               case "press":
                 if (context.credentialBoundary && browserKeyInsertsText(text(command.key, "keyboard key", 100), command.modifiers ?? [])) {
-                  await this.evaluate(tab, `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}})()`, signal, true);
+                  await this.evaluate(tab, `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}})()`, signal, true).catch(
+                    (error: unknown) => {
+                      throw boundaryRefusalOf(error);
+                    },
+                  );
                   check();
                 }
                 await this.press(tab, command.key, command.modifiers, signal, check, context.beforeEffect);

@@ -3,7 +3,9 @@ import test from "node:test";
 import type { BrowserImage, BrowserSnapshot, BrowserTab } from "../../../renderer/shared/browser.js";
 import {
   assertBoundarySelector,
+  boundaryRefusalOf,
   BROWSER_IMAGE_OMITTED,
+  BROWSER_SENSITIVE_TYPING_REFUSED,
   browserKeyInsertsText,
   maskBrowserSnapshotImage,
   scrubBrowserSnapshot,
@@ -201,4 +203,13 @@ test("a Bot can't find a field by what is typed in it", () => {
   for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip"]) {
     assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
   }
+});
+
+test("a refusal thrown in the page reaches the Bot as its sentence alone; other errors pass through", () => {
+  const fromPage = new Error(`Error: ${BROWSER_SENSITIVE_TYPING_REFUSED}\n    at <anonymous>:1:1269\n    at <anonymous>:1:1908`);
+  const refused = boundaryRefusalOf(fromPage);
+  assert.ok(refused instanceof Error);
+  assert.equal(refused.message, BROWSER_SENSITIVE_TYPING_REFUSED);
+  const other = new Error("Error: Input not found\n    at <anonymous>:1:20");
+  assert.equal(boundaryRefusalOf(other), other);
 });
