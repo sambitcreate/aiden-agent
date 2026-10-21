@@ -30,13 +30,26 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
   let waiting = new Set<string>();
   const admitted: string[] = [];
   let savedChanged = false;
-  let signIn = { authorized: true, needsSignIn: false };
+  let signIn = { authorized: true, needsSignIn: false, hasSession: true };
+  const invalidated = new Set<() => void>();
+  const authorizations: Array<{ server: McpServer; signal: AbortSignal }> = [];
+  let authorizeResult: { authorized: true; connectionError?: string } = { authorized: true };
+  let authorizeGate: Promise<void> = Promise.resolve();
   const connected: McpStatus = { connected: true, toolCount: 3, tools: ["a", "b", "c"], serverCapabilities: {} };
   const deps: McpControlDependencies<string> = {
     handle: (channel, handler) => { handlers.set(channel, handler); },
     owner(event) {
       if (event !== "settings") throw new Error("Untrusted document");
-      return { isDestroyed: () => destroyed };
+      return {
+        isDestroyed: () => destroyed,
+        onInvalidated: (listener: () => void) => { invalidated.add(listener); return () => invalidated.delete(listener); },
+      };
+    },
+    authorize: async (server, _isCurrent, signal) => {
+      authorizations.push({ server, signal });
+      await authorizeGate;
+      signal.throwIfAborted();
+      return authorizeResult;
     },
     configured: async (id) => saved.find((server) => server.id === id),
     cancelAuthorization: (id) => { const had = waiting.delete(id); log.push(`cancel:${id}:${had}`); return had; },
@@ -68,7 +81,11 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
   const invoke = (channel: string, event: string, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(event, ...args));
   return {
-    invoke, log, drafts, admitted,
+    invoke, log, drafts, admitted, authorizations,
+    setAuthorizeResult: (result: typeof authorizeResult) => { authorizeResult = result; },
+    holdAuthorize: () => { let release!: () => void; authorizeGate = new Promise((resolve) => { release = resolve; }); return release; },
+    invalidate: () => { destroyed = true; for (const listener of invalidated) listener(); },
+    watchers: () => invalidated.size,
     changeSaved: () => { savedChanged = true; },
     setSignIn: (state: typeof signIn) => { signIn = state; },
     destroy: () => { destroyed = true; },
@@ -84,6 +101,34 @@ test("cancel sign-in reports whether a sign-in was waiting and requires the live
   await assert.rejects(ipc.invoke("mcp:cancelAuthorize", "foreign", linear.id), /Untrusted/u);
   ipc.destroy();
   await assert.rejects(ipc.invoke("mcp:cancelAuthorize", "settings", linear.id), /active application document/u);
+});
+
+test("authorize runs browser sign-in only for OAuth servers from the live document and reports a kept sign-in's connection error", async () => {
+  const apiKeyPreset = serverFromPreset(MCP_PRESETS.find((candidate) => candidate.auth.kind === "apiKey")!);
+  const ipc = setup();
+  assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", { ...linear, name: "  Linear  " }), { authorized: true });
+  assert.equal(ipc.authorizations[0]?.server.id, linear.id);
+  ipc.setAuthorizeResult({ authorized: true, connectionError: "MCP HTTP request failed with status 503" });
+  assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", linear), { authorized: true, connectionError: "MCP HTTP request failed with status 503" });
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", apiKeyPreset), /API key instead of OAuth/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { id: "files", name: "Files", transport: "stdio", command: "npx", enabled: true }), /does not use browser sign-in/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauth: false }), /does not use browser sign-in/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauthClientId: " padded " }), /OAuth client ID/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "foreign", linear), /Untrusted/u);
+  assert.equal(ipc.authorizations.length, 2);
+  assert.equal(ipc.watchers(), 0, "each sign-in stops watching its document");
+});
+
+test("authorize is aborted when its document goes away", async () => {
+  const ipc = setup();
+  const release = ipc.holdAuthorize();
+  const pending = ipc.invoke("mcp:authorize", "settings", linear);
+  await new Promise((resolve) => setImmediate(resolve));
+  ipc.invalidate();
+  release();
+  await assert.rejects(pending, /no longer active/u);
+  assert.equal(ipc.authorizations[0]?.signal.aborted, true);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", linear), /active application document/u);
 });
 
 test("sign out stops a waiting sign-in first, then clears the configured OAuth server", async () => {
@@ -119,11 +164,12 @@ test("testing a draft validates like save and never lends saved sign-in to a cha
 
 test("a draft borrowing saved credentials is tested only under admission for that saved record, with its sign-in state", async () => {
   const ipc = setup();
-  ipc.setSignIn({ authorized: false, needsSignIn: true });
+  ipc.setSignIn({ authorized: false, needsSignIn: true, hasSession: true });
   const status = (await ipc.invoke("mcp:testDraft", "settings", { ...linear, name: "Renamed" })) as McpStatus;
   assert.deepEqual(ipc.admitted, [linear.id]);
   assert.equal(status.authorized, false);
   assert.equal(status.needsSignIn, true);
+  assert.equal(status.hasSession, true, "Sign out stays available for a broken sign-in");
   // A brand-new draft borrows nothing: no admission, no sign-in fields.
   const fresh = (await ipc.invoke("mcp:testDraft", "settings", { id: "new", name: "New", transport: "stdio", command: "npx", enabled: true })) as McpStatus;
   assert.deepEqual(ipc.admitted, [linear.id]);

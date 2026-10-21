@@ -13,7 +13,7 @@ import {
   cancelMcpAuthorization,
   clearOAuth,
   endReservedMcpAuthorization,
-  hasOAuthTokens,
+  mcpOAuthSignInStateFor,
   reserveMcpAuthorization,
   suspendMcpOAuthOperations,
 } from "../services/mcp-oauth.js";
@@ -322,6 +322,16 @@ function voiceOperationKey(owner: RendererDocumentOwner, value: unknown): string
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { asString, parseSkill, parseMcpServer };
 
+/**
+ * Stored sign-in state plus this process's live finding that stored tokens
+ * stopped working. `needsSignIn` comes from the stored session too, so it
+ * survives restarts; `hasSession` offers Sign out whenever anything is stored.
+ */
+async function mcpOAuthSignInState(serverId: string, server: McpServer | undefined) {
+  const stored = await mcpOAuthSignInStateFor(serverId, server);
+  return { ...stored, needsSignIn: stored.needsSignIn || mcpLiveStatus.needsSignIn(serverId) };
+}
+
 export function registerPhase2Handlers(): void {
   // ── Skills ───────────────────────────────────────────────────────────
   ipcMain.handle("skills:list", async () => configStore.listSkills());
@@ -369,9 +379,12 @@ export function registerPhase2Handlers(): void {
                 mcpPresetKeyBinding(existing),
               )),
             )
-          : !mcpLiveStatus.needsSignIn(serverId) &&
-            hasOAuthTokens(serverId, existing?.url ?? preset.url, existing?.authServerMetadataUrl, existing?.oauthClientName),
-      needsSignIn: (preset, serverId) => preset.auth.kind === "oauth" && mcpLiveStatus.needsSignIn(serverId),
+          : Boolean(existing) && (await mcpOAuthSignInState(serverId, existing)).authorized && !mcpLiveStatus.needsSignIn(serverId),
+      signIn: async (preset, serverId, existing) => {
+        if (preset.auth.kind !== "oauth") return undefined;
+        const state = await mcpOAuthSignInState(serverId, existing);
+        return { needsSignIn: state.needsSignIn, hasSession: state.hasSession };
+      },
     }),
   );
   // Save or clear a preset's API key. Empty key clears; the key is never returned.
@@ -468,10 +481,13 @@ export function registerPhase2Handlers(): void {
           () => !owner.isDestroyed(),
           statusGeneration,
         );
+        if (!parsed.oauth) return { ...status, authorized: undefined };
+        const signIn = await mcpOAuthSignInState(parsed.id, parsed);
         return {
           ...status,
-          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url, parsed.authServerMetadataUrl, parsed.oauthClientName) : undefined,
-          ...(parsed.oauth && mcpLiveStatus.needsSignIn(parsed.id) ? { needsSignIn: true } : {}),
+          authorized: signIn.authorized,
+          ...(signIn.needsSignIn ? { needsSignIn: true } : {}),
+          ...(signIn.hasSession ? { hasSession: true } : {}),
         };
       },
       () => !owner.isDestroyed(),
@@ -479,44 +495,6 @@ export function registerPhase2Handlers(): void {
         statusGeneration = mcpManager.statusGeneration(parsed.id);
       },
     );
-  });
-  // Browser OAuth sign-in for a remote MCP server. Stores tokens on success.
-  ipcMain.handle("mcp:authorize", async (event, server: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("MCP authorization must come from the active application document."),
-    );
-    const parsed = parseMcpServer(server);
-    const preset = assertMcpPresetServer(parsed);
-    if (preset && preset.auth.kind !== "oauth") {
-      throw new Error("This MCP preset uses an API key instead of OAuth.");
-    }
-    const ownerAbort = new AbortController();
-    let reserved: McpOAuthOperation | undefined;
-    const stopWatching = owner.onInvalidated(() =>
-      ownerAbort.abort(new Error("The renderer document is no longer active.")),
-    );
-    try {
-      return await withConfiguredMcp(
-        parsed.id,
-        mcpRuntimeConnectionSnapshot(parsed),
-        async () => {
-          await mcpManager.disconnect(parsed.id);
-          // Sign-in reaches the server with its stored header values.
-          await authorizeMcpServer(await resolveStoredMcpFieldSecrets(parsed), () => !owner.isDestroyed(), ownerAbort.signal, reserved);
-          reserved = undefined;
-          prewarmMcpServers([parsed]);
-          return { authorized: true };
-        },
-        () => !owner.isDestroyed(),
-        () => {
-          reserved = reserveMcpAuthorization(parsed.id);
-        },
-      );
-    } finally {
-      if (reserved) endReservedMcpAuthorization(reserved);
-      stopWatching();
-    }
   });
   registerMcpProviderAuthHandler<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
@@ -535,9 +513,9 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => {
     const serverId = asString(id, "id");
     const server = (await configStore.listMcpServers()).find((item) => item.id === serverId);
+    const signIn = await mcpOAuthSignInState(serverId, server);
     return {
-      authorized: await hasOAuthTokens(serverId, server?.url, server?.authServerMetadataUrl, server?.oauthClientName),
-      needsSignIn: mcpLiveStatus.needsSignIn(serverId),
+      ...signIn,
       providerAuthorized: server ? await hasMcpProviderAuthGrant(server) : false,
     };
   });
@@ -545,6 +523,29 @@ export function registerPhase2Handlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("MCP changes must come from the active application document.")),
     configured: async (serverId) => (await configStore.listMcpServers()).find((server) => server.id === serverId),
+    authorize: async (parsed, isCurrent, ownerSignal) => {
+      let reserved: McpOAuthOperation | undefined;
+      try {
+        return await withConfiguredMcp(
+          parsed.id,
+          mcpRuntimeConnectionSnapshot(parsed),
+          async () => {
+            await mcpManager.disconnect(parsed.id);
+            // Sign-in reaches the server with its stored header values and client secret.
+            const result = await authorizeMcpServer(await resolveStoredMcpFieldSecrets(parsed), isCurrent, ownerSignal, reserved);
+            reserved = undefined;
+            prewarmMcpServers([parsed]);
+            return result;
+          },
+          isCurrent,
+          () => {
+            reserved = reserveMcpAuthorization(parsed.id);
+          },
+        );
+      } finally {
+        if (reserved) endReservedMcpAuthorization(reserved);
+      }
+    },
     cancelAuthorization: cancelMcpAuthorization,
     signOut: (server, isCurrent) =>
       mutateCredentialForConfiguredMcp(
@@ -567,10 +568,7 @@ export function registerPhase2Handlers(): void {
       mcpManager.status(server, isCurrent, mcpManager.statusGeneration(server.id), draftCredentialResolver(credentials)),
     admitSaved: (saved, operation, isCurrent) =>
       withConfiguredMcp(saved.id, mcpRuntimeConnectionSnapshot(saved), operation, isCurrent),
-    signInState: async (server) => ({
-      authorized: await hasOAuthTokens(server.id, server.url, server.authServerMetadataUrl, server.oauthClientName),
-      needsSignIn: mcpLiveStatus.needsSignIn(server.id),
-    }),
+    signInState: (server) => mcpOAuthSignInState(server.id, server),
     dependents: mcpServerDependents,
     liveStatus: () => mcpLiveStatus.snapshot(),
     toolList: (serverId) => mcpLiveStatus.tools(serverId),

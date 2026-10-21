@@ -627,6 +627,104 @@ test("replacing a saved value and adding a header send the typed values once", a
   assert.deepEqual(savedServers(calls)[0]?.headers, { Authorization: "Bearer rotated", "X-Team": "blue" });
 });
 
+test("a pre-registered OAuth client is entered in the editor; its saved secret stays masked and goes back as its marker", async () => {
+  const calls = mount({
+    "mcp:list": () => [remoteServer],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  assert.equal(within(dialog).queryByRole("textbox", { name: "OAuth client name" }), null, "there is no client name override");
+  assert.equal(within(dialog).queryByLabelText("OAuth client secret"), null, "the secret field appears with a client ID");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "OAuth client ID" }), { target: { value: " slack-app " } });
+  const secret = within(dialog).getByLabelText("OAuth client secret", { selector: "input" }) as HTMLInputElement;
+  assert.equal(secret.type, "password");
+  fireEvent.change(secret, { target: { value: "typed-secret" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(savedServers(calls)[0]?.oauthClientId, "slack-app");
+  assert.equal(savedServers(calls)[0]?.oauthClientSecret, "typed-secret");
+});
+
+test("a saved OAuth client secret is shown as dots and kept unless replaced", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, oauthClientId: "slack-app", oauthClientSecret: savedMarker }],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  assert.doesNotMatch(dialog.textContent ?? "", /aiden-secret/u);
+  assert.equal(within(dialog).queryByDisplayValue(savedMarker), null);
+  assert.ok(within(dialog).getByText("Saved OAuth client secret"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(savedServers(calls)[0]?.oauthClientSecret, savedMarker);
+  // Clearing the client ID drops the secret with it.
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const again = await screen.findByRole("dialog");
+  fireEvent.change(within(again).getByRole("textbox", { name: "OAuth client ID" }), { target: { value: "" } });
+  fireEvent.click(within(again).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 2));
+  assert.equal(savedServers(calls)[1]?.oauthClientId, undefined);
+  assert.equal(savedServers(calls)[1]?.oauthClientSecret, undefined);
+});
+
+test("changing the OAuth client ID asks for its secret again instead of sending the previous client's", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, oauthClientId: "old-app", oauthClientSecret: savedMarker }],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "OAuth client ID" }), { target: { value: "new-app" } });
+  assert.equal(within(dialog).queryByText("Saved OAuth client secret"), null);
+  assert.equal((within(dialog).getByLabelText("OAuth client secret", { selector: "input" }) as HTMLInputElement).value, "");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(savedServers(calls)[0]?.oauthClientId, "new-app");
+  assert.equal(savedServers(calls)[0]?.oauthClientSecret, undefined);
+});
+
+test("a stored sign-in that no longer matches the server can still be signed out", async () => {
+  const calls = mount({
+    "mcp:list": () => [remoteServer],
+    "mcp:oauthStatus": () => ({ authorized: false, needsSignIn: false, hasSession: true }),
+    "mcp:signOut": () => ({ authorized: false }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  assert.ok(within(dialog).getByRole("button", { name: "Authorize" }));
+  fireEvent.click(await within(dialog).findByRole("button", { name: "Sign out" }));
+  await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:signOut").map((call) => call.args[0]), [remoteServer.id]));
+  await waitFor(() => assert.equal(within(dialog).queryByRole("button", { name: "Sign out" }), null));
+});
+
+test("a sign-in kept despite a failed connection check says so instead of claiming success", async () => {
+  mount({
+    "mcp:list": () => [remoteServer],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:authorize": () => ({ authorized: true, connectionError: "MCP HTTP request failed with status 503" }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  assert.ok(await screen.findByText(/Signed in, but connecting failed: MCP HTTP request failed with status 503/u));
+  assert.equal(screen.queryByText(/you're signed in/u), null);
+  assert.ok(await within(dialog).findByText("Authorized"));
+});
+
+test("a preset with a stored sign-in offers Sign out even when it is not flagged", async () => {
+  const state = linearState({ configured: true, ready: false, hasSession: true });
+  const server: McpServer = { id: state.serverId, name: "Linear", transport: "http", url: state.preset.url, oauth: true, presetId: "linear", enabled: true };
+  renderPreset(state, server, { "mcp:signOut": () => ({ authorized: false }) });
+  const dialog = await screen.findByRole("dialog");
+  assert.ok(within(dialog).getByRole("button", { name: "Authorize" }));
+  assert.ok(within(dialog).getByRole("button", { name: "Sign out" }));
+});
+
 test("a local server added outside Aiden shows exactly what it runs and is approved only from Settings", async () => {
   const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS", value: "--require /tmp/p.js" }, { name: "TOKEN" }, { name: "EXTRA", unavailable: true as const }] };
   let approvals = [pending];

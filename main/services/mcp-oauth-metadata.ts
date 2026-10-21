@@ -7,40 +7,6 @@ import {
 import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import { createMcpFetchPolicy, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
 
-/** Observe the bounded wire document before an OAuth metadata parser can drop extensions. */
-export function withMcpOAuthMetadataObservation(
-  fetch: typeof globalThis.fetch,
-  observe: (url: URL, document: unknown) => void,
-): typeof globalThis.fetch {
-  return async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const response = await fetch(input, init);
-    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-    if (method !== "GET" || !response.ok || !/\/\.well-known\/(?:oauth-authorization-server|openid-configuration)(?:\/|$)/u.test(url.pathname)) return response;
-    const reader = response.body?.getReader();
-    const chunks: Uint8Array[] = [];
-    let bytes = 0;
-    try {
-      if (reader) while (true) {
-        const part = await reader.read();
-        if (part.done) break;
-        bytes += part.value.byteLength;
-        if (bytes > 64 * 1024) throw new Error("OAuth metadata document exceeds its bounds.");
-        chunks.push(part.value);
-      }
-      const document: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      observe(url, document);
-      const headers = new Headers(response.headers);
-      headers.delete("content-length");
-      headers.delete("content-encoding");
-      return new Response(JSON.stringify(document), { status: response.status, statusText: response.statusText, headers });
-    } catch (error) {
-      await reader?.cancel(error).catch(() => undefined);
-      throw error;
-    }
-  };
-}
-
 const OPTIONAL_STRING_ARRAYS = [
   "scopes_supported", "response_modes_supported", "grant_types_supported",
   "token_endpoint_auth_methods_supported", "token_endpoint_auth_signing_alg_values_supported",

@@ -1,6 +1,6 @@
 # MCP audit and move to Pi's MCP client
 
-Status: **In progress** (2026-10-20). Phase 0 committed; Phase 1 implemented (see `.memory/mcp-pi-migration.md`). Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
+Status: **In progress** (2026-10-21). Phases 0 and 1 committed; Phase 2 implemented (see `.memory/mcp-pi-migration.md`). Audit run against `main` at `fc9cb56bc` (Pi 1.3.0 pins, `@modelcontextprotocol/sdk` 1.30.0).
 
 ## Why
 
@@ -125,6 +125,14 @@ Unblocks Figma, Vercel and Supabase sign-in before the migration lands.
 
 ### Phase 2 — OAuth on `pi-mcp/oauth`
 
+Implemented 2026-10-21. Outcome, where it differs from the list below:
+
+- Aiden keeps its own `OAuthClientProvider` (now Electron-free in `main/services/mcp-oauth-provider-core.ts`) instead of Pi's `McpOAuthProvider` + `McpOAuthStateStore`: Pi's provider writes per-URL state unconditionally, and Aiden needs private transactions with rollback, generation gates, compare-and-set refresh saves, compare-and-delete invalidation, background modes that never register or redirect, and live status. Tests drive this real provider against a fake OAuth + MCP server (`mcp-oauth-test-server.ts`).
+- Removed: the token, registration and metadata normalizers, `withoutEmptyChallengeScope` and the metadata observation fetch (the CLI keeps copies in `packages/cli/src/mcp-sdk-oauth-compat.ts` until Phase 3, because its SDK provider still needs them). Kept: `prompt=consent` when Aiden merges a granted `offline_access` scope that Pi did not see (fake-server test).
+- `scope=" "` (whitespace only) in a challenge is no longer rewritten; Pi treats only `scope=""` as absent.
+- The custom-server "OAuth client name" field is gone (part of Phase 5 done early). Custom servers can carry a pre-registered `oauthClientId` and `oauthClientSecret` (the secret in the encrypted field-secret store).
+- CIMD is wired (`AIDEN_MCP_CLIENT_METADATA_URL`, unset) with the document to host in `docs/mcp/aiden-agent-client-metadata.json`; its `client_id` is a placeholder until the URL exists.
+
 - **Provider and storage:** build the provider on `McpOAuthProvider` with an Aiden `McpOAuthStateStore` backed by the encrypted `mcp-oauth.json`. Client secrets are stored encrypted, never in plaintext.
 - **Per-server settings, internal only:**
   - `clientRegistration: "cimd" | "dcr"`, with CIMD preferred when the server advertises it.
@@ -171,7 +179,7 @@ Unblocks Figma, Vercel and Supabase sign-in before the migration lands.
   - Card status follows live status, so a failing connection never shows "Configured" in green.
   - Remove the "built-in" badge and the raw transport badge.
 - **Remove or move:**
-  - Remove the "OAuth client name" field.
+  - Remove the "OAuth client name" field (done in Phase 2).
   - Move provider-credential sharing to Settings → Providers, excluding subscription tokens.
   - Move "Reset connections" into an overflow menu.
 - **Design-system conformance:** follow `docs/settings-design-system.md`, with explanations behind `InfoHint` and `FieldSet` group titles. Review `docs/chatgpt-desktop-ui-inspiration.md` and the specimen first, as AGENTS.md requires.

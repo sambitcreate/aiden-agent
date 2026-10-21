@@ -12,7 +12,9 @@ export interface McpCredentialConnectionSnapshot {
   headersHash?: string;
   oauth?: boolean;
   authServerMetadataUrl?: string;
-  oauthClientName?: string;
+  oauthClientId?: string;
+  /** Hash of the client secret's marker (it changes with the value), like the env/header hashes. */
+  oauthClientSecretHash?: string;
   authProvider?: string;
   presetId?: string;
 }
@@ -64,6 +66,9 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
     "headersHash",
     "oauth",
     "authServerMetadataUrl",
+    "oauthClientId",
+    "oauthClientSecretHash",
+    // Retired custom client-name override; journals written before it was removed still parse.
     "oauthClientName",
     "authProvider",
     "presetId",
@@ -84,7 +89,10 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
       (typeof record.headersHash !== "string" || !/^[a-f0-9]{64}$/u.test(record.headersHash))) ||
     (record.oauth !== undefined && typeof record.oauth !== "boolean") ||
     (record.authServerMetadataUrl !== undefined && typeof record.authServerMetadataUrl !== "string") ||
+    (record.oauthClientId !== undefined && typeof record.oauthClientId !== "string") ||
     (record.oauthClientName !== undefined && typeof record.oauthClientName !== "string") ||
+    (record.oauthClientSecretHash !== undefined &&
+      (typeof record.oauthClientSecretHash !== "string" || !/^[a-f0-9]{64}$/u.test(record.oauthClientSecretHash))) ||
     (record.authProvider !== undefined && typeof record.authProvider !== "string") ||
     (record.presetId !== undefined && typeof record.presetId !== "string")
   ) {
@@ -92,7 +100,7 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
   }
   // Journals written before credentials stopped being bound to env/header
   // values still carry their hashes; compare them as the canonical identity.
-  const { envHash: _env, headersHash: _headers, ...identity } = structuredClone(record);
+  const { envHash: _env, headersHash: _headers, oauthClientSecretHash: _secret, oauthClientName: _name, ...identity } = structuredClone(record);
   return identity as unknown as McpCredentialConnectionSnapshot;
 }
 
@@ -109,7 +117,10 @@ export function mcpCredentialConnectionSnapshot(
     ...(server.headers !== undefined ? { headersHash: secretMapHash(server.headers) } : {}),
     ...(server.oauth !== undefined ? { oauth: server.oauth } : {}),
     ...(server.authServerMetadataUrl !== undefined ? { authServerMetadataUrl: server.authServerMetadataUrl } : {}),
-    ...(server.oauthClientName !== undefined ? { oauthClientName: server.oauthClientName } : {}),
+    ...(server.oauthClientId !== undefined ? { oauthClientId: server.oauthClientId } : {}),
+    ...(server.oauthClientSecret !== undefined
+      ? { oauthClientSecretHash: createHash("sha256").update(server.oauthClientSecret).digest("hex") }
+      : {}),
     ...(server.authProvider !== undefined ? { authProvider: server.authProvider } : {}),
     ...(server.presetId !== undefined ? { presetId: server.presetId } : {}),
   };
@@ -125,7 +136,7 @@ export function mcpCredentialConnectionSnapshot(
  * leases use.
  */
 export function mcpCredentialCleanupSnapshot(server: McpServer): McpCredentialConnectionSnapshot {
-  const { envHash: _env, headersHash: _headers, ...identity } = mcpCredentialConnectionSnapshot(server);
+  const { envHash: _env, headersHash: _headers, oauthClientSecretHash: _secret, ...identity } = mcpCredentialConnectionSnapshot(server);
   return identity;
 }
 

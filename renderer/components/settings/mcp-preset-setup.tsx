@@ -48,6 +48,7 @@ export function PresetSetupDialog({
   const [hasKey, setHasKey] = React.useState(state.ready);
   const [authorized, setAuthorized] = React.useState(state.ready);
   const [needsSignIn, setNeedsSignIn] = React.useState(Boolean(state.needsSignIn));
+  const [hasSession, setHasSession] = React.useState(Boolean(state.hasSession));
   const [signingOut, setSigningOut] = React.useState(false);
   // Set up for sign-in only: removed again if the dialog closes without Connect.
   const storedForSignIn = React.useRef(false);
@@ -73,12 +74,13 @@ export function PresetSetupDialog({
       setHasKey(state.ready);
       setAuthorized(state.ready);
       setNeedsSignIn(Boolean(state.needsSignIn));
+      setHasSession(Boolean(state.hasSession));
       setEnabled(server?.enabled ?? true);
       storedForSignIn.current = false;
       confirmed.current = false;
       closed.current = false;
     }
-  }, [open, server, preset, initialUrl, state.enabled, state.ready, state.needsSignIn]);
+  }, [open, server, preset, initialUrl, state.enabled, state.ready, state.needsSignIn, state.hasSession]);
 
   const build = (): McpServer => ({
     id: state.serverId,
@@ -128,11 +130,13 @@ export function PresetSetupDialog({
         await mcpApi.save(record);
       }
       if (closed.current || cancelledSignIn.current) return;
-      await mcpApi.authorize(record);
+      const result = await mcpApi.authorize(record);
       setAuthorized(true);
       setNeedsSignIn(false);
+      setHasSession(true);
       await refresh();
-      toast.success(`Authorized — you're signed in to ${preset.name}.`);
+      if (result.connectionError) toast.error(`Signed in to ${preset.name}, but connecting failed: ${result.connectionError}`);
+      else toast.success(`Authorized — you're signed in to ${preset.name}.`);
     } catch (error) {
       if (!cancelledSignIn.current && !closed.current)
         toast.error(error instanceof Error ? error.message : String(error));
@@ -163,6 +167,7 @@ export function PresetSetupDialog({
       await mcpApi.signOut(state.serverId);
       setAuthorized(false);
       setNeedsSignIn(false);
+      setHasSession(false);
       await refresh();
       toast.success(`Signed out of ${preset.name}.`);
     } catch (error) {
@@ -391,6 +396,7 @@ export function PresetSetupDialog({
               authorizing={authorizing}
               authorized={authorized}
               needsSignIn={needsSignIn}
+              hasSession={hasSession}
               signingOut={signingOut}
               disabled={saving || testing || toggling || !url.trim()}
               onAuthorize={() => void handleAuthorize()}

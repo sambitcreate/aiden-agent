@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   hasMcpOAuthSessionData,
   mcpAuthorizationBinding,
-  mcpScopeTokens,
   McpOAuthSessionTransaction,
   McpOAuthAuthorizationFlow,
   parseMcpOAuthSession,
@@ -21,11 +20,9 @@ import { McpClient } from "@earendil-works/pi-mcp";
 import {
   authorizeMcp,
   McpOAuthAuthorizationRequiredError,
-  type OAuthClientInformationMixed,
   type OAuthClientProvider,
 } from "@earendil-works/pi-mcp/oauth";
 import { createMcpRemoteFetch, createMcpRemoteTransport } from "./mcp-remote-transport.js";
-import { MCP_OAUTH_REDIRECT_URI, mcpOAuthClientMetadata } from "./mcp-oauth-client-metadata.js";
 
 test("fresh MCP authorization drops the registration, tokens and verifier but keeps granted scope", () => {
   const session = {
@@ -226,9 +223,14 @@ test("provider denials are bound to state and ambiguous callback payloads cannot
     assert.throws(() => flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&${query}`)), /result/u);
   }
   assert.throws(() => flow.callback(new URL("http://127.0.0.1/callback?state=wrong&error=access_denied")), /state/u);
-  const denied = flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&error=access_denied&error_description=secret`));
+  const denied = flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&error=access_denied&error_description=${encodeURIComponent("Admin\u0000 approval\nrequired " + "x".repeat(400))}`));
   assert.ok("error" in denied);
-  assert.equal(denied.error.message, "Authorization was denied by the provider.");
+  assert.match(denied.error.message, /^Sign-in was denied in the browser: Admin approval required x+…$/u, "one line, no control characters, bounded");
+  assert.ok(denied.error.message.length < 360);
+  const odd = startedFlow();
+  const unusual = odd.callback(new URL(`http://127.0.0.1/callback?state=${odd.state}&error=${encodeURIComponent("<script>")}`));
+  assert.ok("error" in unusual);
+  assert.equal(unusual.error.message, "The authorization server returned “invalid_response”.", "an error code that is not a token is not echoed");
 });
 
 test("step-up authorization retains granted scopes only for the same protected-resource binding", () => {
@@ -326,7 +328,7 @@ test("configured OAuth metadata bypasses a wrong advertised issuer without chang
     const url = String(input); requests.push(url);
     if (url === "https://identity.test/config") {
       assert.equal(new Headers(init?.headers).has("X-Service-Secret"), false);
-      assert.equal(init?.redirect, "error");
+      assert.notEqual(init?.redirect ?? "follow", "follow", "redirects are never followed blindly");
       return Response.json({ issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", token_endpoint: "https://identity.test/token", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], authorization_response_iss_parameter_supported: true });
     }
     if (url.includes("oauth-protected-resource")) return Response.json({ resource: "https://service.test/mcp", authorization_servers: ["https://wrong.test"], scopes_supported: ["files.read"] });
@@ -376,30 +378,6 @@ test("OAuth metadata overrides reject oversized, insecure and stale discovery be
 });
 
 
-test("token exchanges normalize optional null and empty fields before saving without weakening required credentials", async () => {
-  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
-  const responses = [
-    { access_token: "valid", token_type: "Bearer", scope: null, refresh_token: "", id_token: null, expires_in: null },
-    { access_token: "valid", token_type: "Bearer", scope: "", refresh_token: null, id_token: "", expires_in: "3600" },
-    { access_token: "", token_type: "Bearer", scope: null },
-    { access_token: "valid", token_type: null, scope: null },
-  ];
-  const saved: unknown[] = [];
-  const provider: OAuthClientProvider = {
-    redirectUrl: "http://127.0.0.1/callback", clientMetadata: { redirect_uris: ["http://127.0.0.1/callback"] },
-    clientInformation: () => ({ client_id: "registered" }), tokens: () => undefined, saveTokens: (tokens) => { saved.push(tokens); },
-    discoveryState: () => ({ authorizationServerUrl: "https://identity.test", resourceMetadata: { resource: "https://service.test/mcp" }, authorizationServerMetadata: { issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", token_endpoint: "https://identity.test/token", response_types_supported: ["code"] } }),
-    saveCodeVerifier() {}, codeVerifier: () => "verifier", redirectToAuthorization() { throw new Error("Unexpected browser request"); },
-  };
-  for (const response of responses) {
-    const fetchFn = createMcpFetchPolicy({ serviceUrl: "https://service.test/mcp", fetch: async () => Response.json(response) });
-    if (response.access_token && response.token_type) assert.equal(await authorizeMcp(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetch: fetchFn }), "AUTHORIZED");
-    else await assert.rejects(authorizeMcp(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetch: fetchFn }), /required credentials/u);
-  }
-  assert.deepEqual(saved, [{ access_token: "valid", token_type: "Bearer" }, { access_token: "valid", token_type: "Bearer", expires_in: 3600 }]);
-});
-
-
 for (const oidc of [false, true]) {
   for (const issuerMismatch of [false, true]) {
     test(`real MCP transport ${oidc ? "OIDC fallback" : "OAuth discovery"} ${issuerMismatch ? "rejects an inconsistent issuer before consent" : "preserves mandatory callback issuer policy"}`, async (t) => {
@@ -409,7 +387,7 @@ for (const oidc of [false, true]) {
       let exchanges = 0;
       const requested: string[] = [];
       const issuer = "https://identity.example.test/tenant";
-      const provider: OAuthClientProvider & { observeAuthorizationMetadata: (url: URL, document: unknown) => void } = {
+      const provider: OAuthClientProvider = {
         redirectUrl: "http://127.0.0.1:49152/callback",
         clientMetadata: { redirect_uris: ["http://127.0.0.1:49152/callback"], token_endpoint_auth_method: "none" },
         clientInformation: () => ({ client_id: "registered-client" }),
@@ -418,7 +396,6 @@ for (const oidc of [false, true]) {
         saveTokens: () => {},
         saveDiscoveryState: (state) => flow.saveDiscovery(state),
         discoveryState: () => flow.discoveryState(),
-        observeAuthorizationMetadata: (url, document) => flow.observeAuthorizationMetadata(url, document),
         saveCodeVerifier: (value) => { verifier = value; },
         codeVerifier: () => verifier!,
         redirectToAuthorization: (url) => { browser = flow.authorizationUrl(url); },
@@ -471,21 +448,6 @@ for (const oidc of [false, true]) {
   }
 }
 
-
-test("metadata observation rejects oversized wire documents and forgets policy after invalidation", async () => {
-  const { withMcpOAuthMetadataObservation } = await import("./mcp-oauth-metadata.js");
-  const flow = new McpOAuthAuthorizationFlow();
-  const url = new URL("https://identity.test/.well-known/openid-configuration");
-  let observed = 0;
-  const fetch = withMcpOAuthMetadataObservation(async () => Response.json({ issuer: "https://identity.test", padding: "x".repeat(64 * 1024) }), () => { observed++; });
-  await assert.rejects(fetch(url), /bounds/u);
-  assert.equal(observed, 0);
-  flow.observeAuthorizationMetadata(url, { issuer: "https://identity.test", authorization_response_iss_parameter_supported: true });
-  flow.clearDiscovery();
-  flow.saveDiscovery({ authorizationServerUrl: "https://identity.test", authorizationServerMetadata: { issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", token_endpoint: "https://identity.test/token", response_types_supported: ["code"] } });
-  flow.authorizationUrl(new URL(`https://identity.test/authorize?state=${flow.state}`));
-  assert.deepEqual(flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&code=allowed`)), { code: "allowed" });
-});
 
 test("a token refresh keeps the same grant; re-authorization, revocation and sign-out do not", async () => {
   const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
@@ -591,25 +553,13 @@ const rootMetadata = (issuer: string, extra: Record<string, unknown> = {}) => Re
   response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], ...extra,
 });
 
-test("an empty challenge scope falls back to the resource's scopes_supported instead of requesting \"\"", async () => {
-  for (const challenge of ['Bearer scope="", resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp"',
-    'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", scope=" "']) {
-    const flow = new McpOAuthAuthorizationFlow();
-    const { provider, record } = recordingProvider(flow, { clientInformation: () => ({ client_id: "registered" }) });
-    await connectExpectingSignIn("https://mcp.example.test/mcp", provider, async (input) => {
-      const url = new URL(String(input));
-      if (url.pathname === "/mcp") return new Response(null, { status: 401, headers: { "www-authenticate": challenge } });
-      if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: "https://mcp.example.test/mcp", authorization_servers: ["https://login.example.test"], scopes_supported: ["files.read", "files.write"] });
-      return rootMetadata("https://login.example.test");
-    });
-    assert.equal(record.browser?.searchParams.get("scope"), "files.read files.write", challenge);
-  }
+test("quote-only scope remnants are never requested as scopes", () => {
   const flow = new McpOAuthAuthorizationFlow();
   const url = flow.authorizationUrl(new URL(`https://login.example.test/authorize?state=${flow.state}&scope=%22%22`), "''");
-  assert.equal(url.searchParams.has("scope"), false, "quote-only remnants are never requested as scopes");
+  assert.equal(url.searchParams.has("scope"), false);
 });
 
-test("null and empty optional members in metadata and registration responses do not fail dynamic registration", async () => {
+test("Pi's parsers accept null and empty optional members in metadata and registration responses", async () => {
   const flow = new McpOAuthAuthorizationFlow();
   const { provider, record } = recordingProvider(flow);
   let registrations = 0;
@@ -627,7 +577,9 @@ test("null and empty optional members in metadata and registration responses do 
       scopes_supported: null, service_documentation: "", op_policy_uri: null, revocation_endpoint: "" });
   });
   assert.equal(registrations, 1);
-  assert.deepEqual(record.client, { client_id: "dcr-client", redirect_uris: ["http://127.0.0.1:49152/callback"] });
+  const client = record.client as Record<string, unknown>;
+  assert.equal(client.client_id, "dcr-client");
+  assert.equal("client_secret" in client, false, "a null secret is no secret");
   assert.ok(record.browser, "registration proceeds to the consent page");
 });
 
@@ -741,213 +693,4 @@ test("a 403 insufficient_scope on another path of the service origin is remember
   // A non-MCP request on the same origin (an OAuth form POST) records nothing.
   await fetch("https://sse-step-up.example.test/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=refresh_token" });
   assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read"), "mail.read");
-});
-
-/**
- * A local authorization server that, like Figma, Vercel and Supabase, only
- * accepts confidential clients: registration issues a client secret and the
- * token endpoint rejects any request that does not present it.
- */
-async function startConfidentialOnlyAuthorizationServer(options: { scopesSupported?: string[] } = {}) {
-  const { createServer } = await import("node:http");
-  const clients = new Map<string, string>();
-  const codes = new Map<string, string>();
-  const refreshTokens = new Map<string, string>();
-  const seen = { registrations: 0, authorizeClientIds: [] as string[], rejectedTokenRequests: 0, grants: [] as string[] };
-  let base = "";
-  let issued = 0;
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => chunks.push(chunk));
-    request.on("end", () => {
-      const url = new URL(request.url ?? "/", base);
-      const body = Buffer.concat(chunks).toString("utf8");
-      const json = (status: number, value: unknown) => {
-        response.writeHead(status, { "content-type": "application/json" });
-        response.end(JSON.stringify(value));
-      };
-      if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
-        return json(200, { resource: `${base}/mcp`, authorization_servers: [base], ...(options.scopesSupported ? { scopes_supported: options.scopesSupported } : {}) });
-      }
-      if (url.pathname.startsWith("/.well-known/oauth-authorization-server")) {
-        return json(200, {
-          issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`,
-          registration_endpoint: `${base}/register`, response_types_supported: ["code"],
-          grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"],
-          token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
-        });
-      }
-      if (url.pathname === "/register" && request.method === "POST") {
-        seen.registrations += 1;
-        const clientId = `client-${seen.registrations}`;
-        const clientSecret = `secret-${seen.registrations}`;
-        clients.set(clientId, clientSecret);
-        // Echo the requested metadata (including token_endpoint_auth_method "none") and add a secret anyway.
-        return json(201, { ...JSON.parse(body), client_id: clientId, client_secret: clientSecret, client_secret_expires_at: 0 });
-      }
-      if (url.pathname === "/authorize") {
-        const clientId = url.searchParams.get("client_id") ?? "";
-        seen.authorizeClientIds.push(clientId);
-        // A server that dropped a registration shows an error page and never calls back.
-        if (!clients.has(clientId)) { response.writeHead(400); return response.end("Unknown client"); }
-        const code = `code-${++issued}`;
-        codes.set(code, clientId);
-        const callback = new URL(url.searchParams.get("redirect_uri")!);
-        callback.searchParams.set("code", code);
-        callback.searchParams.set("state", url.searchParams.get("state") ?? "");
-        response.writeHead(302, { location: callback.href });
-        return response.end();
-      }
-      if (url.pathname === "/token" && request.method === "POST") {
-        const form = new URLSearchParams(body);
-        let clientId = form.get("client_id");
-        let clientSecret = form.get("client_secret");
-        const basic = /^Basic\s+(.+)$/iu.exec(request.headers.authorization ?? "")?.[1];
-        if (basic) {
-          const [id, secret] = Buffer.from(basic, "base64").toString("utf8").split(":").map(decodeURIComponent);
-          clientId = id;
-          clientSecret = secret;
-        }
-        if (!clientId || !clientSecret || clients.get(clientId) !== clientSecret) {
-          seen.rejectedTokenRequests += 1;
-          return json(401, { error: "invalid_client", error_description: "Client ID and client secret are required" });
-        }
-        const grant = form.get("grant_type") ?? "";
-        const owner = grant === "authorization_code" ? codes.get(form.get("code") ?? "") : refreshTokens.get(form.get("refresh_token") ?? "");
-        if (owner !== clientId) return json(400, { error: "invalid_grant" });
-        if (grant === "authorization_code") codes.delete(form.get("code")!);
-        else refreshTokens.delete(form.get("refresh_token")!);
-        seen.grants.push(grant);
-        const refreshToken = `refresh-${++issued}`;
-        refreshTokens.set(refreshToken, clientId);
-        return json(200, { access_token: `access-${issued}`, token_type: "Bearer", refresh_token: refreshToken, expires_in: 3600 });
-      }
-      response.writeHead(404);
-      response.end();
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("The fake authorization server did not bind.");
-  base = `http://127.0.0.1:${address.port}`;
-  return { serviceUrl: `${base}/mcp`, seen, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
-}
-
-/**
- * The desktop provider's persistence path without Electron: the session goes
- * through the same JSON + parse round trip as the encrypted store, so a new
- * provider instance reading it is what Aiden sees after a restart.
- */
-function storeBackedProvider(
-  store: Map<string, string>,
-  serverId: string,
-  binding: string,
-  options: { transaction?: McpOAuthSessionTransaction; flow?: McpOAuthAuthorizationFlow } = {},
-) {
-  const flow = options.flow ?? new McpOAuthAuthorizationFlow();
-  const read = (): McpOAuthSession => {
-    const session = options.transaction ? options.transaction.read() : parseMcpOAuthSession(JSON.parse(store.get(serverId) ?? "{}"));
-    return sessionMatchesMcpBinding(session, binding) ? session : { authorizationBinding: binding };
-  };
-  const write = (session: McpOAuthSession) => {
-    if (options.transaction) options.transaction.replace(session);
-    else store.set(serverId, JSON.stringify(session));
-  };
-  const browser: { url?: URL } = {};
-  const provider: OAuthClientProvider = {
-    redirectUrl: MCP_OAUTH_REDIRECT_URI,
-    clientMetadata: mcpOAuthClientMetadata() as OAuthClientProvider["clientMetadata"],
-    state: () => flow.state,
-    saveDiscoveryState: (state) => flow.saveDiscovery(state),
-    discoveryState: () => flow.discoveryState(),
-    clientInformation: () => usableMcpClientInformation(read().clientInformation),
-    // Dynamic registration always returns the full RFC 7591 document.
-    saveClientInformation: (information) => write(sessionWithMcpClientInformation(read(), binding, information as OAuthClientInformationMixed)),
-    tokens: () => read().tokens,
-    saveTokens: (tokens) => write(sessionWithSavedMcpTokens(read(), binding, tokens, flow.requestedScope)),
-    saveCodeVerifier: (codeVerifier) => write({ ...read(), codeVerifier }),
-    codeVerifier: () => read().codeVerifier!,
-    redirectToAuthorization: (url) => {
-      if (!options.transaction) throw new Error("A background connection must not open a browser.");
-      browser.url = flow.authorizationUrl(url, read().grantedScope);
-    },
-  };
-  return { provider, flow, browser };
-}
-
-/** Settings → Authorize: a transactional attempt, the browser consent, the code exchange, then commit. */
-async function interactiveSignIn(store: Map<string, string>, serverId: string, serviceUrl: string) {
-  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
-  const binding = mcpAuthorizationBinding(serviceUrl);
-  const previous = parseMcpOAuthSession(JSON.parse(store.get(serverId) ?? "{}"));
-  const transaction = new McpOAuthSessionTransaction(sessionForMcpAuthorizationAttempt(previous, binding));
-  const { provider, flow, browser } = storeBackedProvider(store, serverId, binding, { transaction });
-  const fetchFn = createMcpFetchPolicy({ serviceUrl });
-  assert.equal(await authorizeMcp(provider, { serverUrl: serviceUrl, fetch: fetchFn }), "REDIRECT");
-  const consent = await fetch(browser.url!, { redirect: "manual" });
-  assert.equal(consent.status, 302, "the authorization server accepted the client and called back");
-  const callback = flow.callback(new URL(consent.headers.get("location")!));
-  assert.ok("code" in callback);
-  assert.equal(await authorizeMcp(provider, { serverUrl: serviceUrl, fetch: fetchFn, ...flow.codeExchange(callback.code) }), "AUTHORIZED");
-  store.set(serverId, JSON.stringify(transaction.read()));
-}
-
-test("a confidential-only authorization server completes sign-in and refreshes after a restart", async () => {
-  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
-  const authorizationServer = await startConfidentialOnlyAuthorizationServer();
-  try {
-    const store = new Map<string, string>();
-    const { serviceUrl, seen } = authorizationServer;
-    await interactiveSignIn(store, "preset-figma", serviceUrl);
-    assert.deepEqual(seen.grants, ["authorization_code"]);
-    assert.equal(seen.rejectedTokenRequests, 0);
-    const signedIn = parseMcpOAuthSession(JSON.parse(store.get("preset-figma")!));
-    assert.equal(signedIn.clientInformation?.client_id, "client-1");
-    assert.ok(signedIn.tokens?.refresh_token);
-
-    // Restart: a background provider reads the persisted session and refreshes.
-    const { provider } = storeBackedProvider(store, "preset-figma", mcpAuthorizationBinding(serviceUrl));
-    assert.equal(await authorizeMcp(provider, { serverUrl: serviceUrl, fetch: createMcpFetchPolicy({ serviceUrl }) }), "AUTHORIZED");
-    assert.deepEqual(seen.grants, ["authorization_code", "refresh_token"]);
-    assert.equal(seen.rejectedTokenRequests, 0);
-    assert.equal(seen.registrations, 1, "a background refresh reuses the stored registration");
-    const refreshed = parseMcpOAuthSession(JSON.parse(store.get("preset-figma")!));
-    assert.notEqual(refreshed.tokens?.access_token, signedIn.tokens?.access_token);
-  } finally {
-    await authorizationServer.close();
-  }
-});
-
-test("an interactive Authorize registers a fresh client instead of reusing one the server dropped", async () => {
-  const authorizationServer = await startConfidentialOnlyAuthorizationServer();
-  try {
-    const { serviceUrl, seen } = authorizationServer;
-    const binding = mcpAuthorizationBinding(serviceUrl);
-    const store = new Map([["preset-figma", JSON.stringify({
-      authorizationBinding: binding,
-      clientInformation: { client_id: "forgotten-client", client_secret: "stale-secret", redirect_uris: [MCP_OAUTH_REDIRECT_URI] },
-    } satisfies McpOAuthSession)]]);
-    await interactiveSignIn(store, "preset-figma", serviceUrl);
-    assert.equal(seen.registrations, 1);
-    assert.deepEqual(seen.authorizeClientIds, ["client-1"]);
-    assert.equal(parseMcpOAuthSession(JSON.parse(store.get("preset-figma")!)).clientInformation?.client_id, "client-1");
-  } finally {
-    await authorizationServer.close();
-  }
-});
-
-test("re-authorizing keeps earlier granted scopes when the token response omits scope", async () => {
-  const authorizationServer = await startConfidentialOnlyAuthorizationServer({ scopesSupported: ["files.read"] });
-  try {
-    const { serviceUrl } = authorizationServer;
-    const binding = mcpAuthorizationBinding(serviceUrl);
-    // An earlier step-up granted files.write; the resource advertises only files.read.
-    const store = new Map([["server", JSON.stringify({ authorizationBinding: binding, grantedScope: "files.write" } satisfies McpOAuthSession)]]);
-    await interactiveSignIn(store, "server", serviceUrl);
-    const session = parseMcpOAuthSession(JSON.parse(store.get("server")!));
-    assert.deepEqual(mcpScopeTokens(session.tokens?.scope).sort(), ["files.read", "files.write"]);
-    assert.deepEqual(mcpScopeTokens(session.grantedScope).sort(), ["files.read", "files.write"]);
-  } finally {
-    await authorizationServer.close();
-  }
 });

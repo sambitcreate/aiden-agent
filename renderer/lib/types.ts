@@ -791,7 +791,10 @@ export interface McpServer {
   oauth?: boolean;
   /** Explicit authorization-server metadata document for custom remote OAuth connections. */
   authServerMetadataUrl?: string;
-  oauthClientName?: string;
+  /** Pre-registered OAuth client for a custom server without dynamic registration. */
+  oauthClientId?: string;
+  /** Its secret: a keychain marker once saved (never the value); plain text only while being entered. */
+  oauthClientSecret?: string;
   /** Built-in provider reference; requires separate device-local consent before use. */
   authProvider?: string;
   /** Optional bounded server description used for tool discovery. */
@@ -838,6 +841,8 @@ export interface McpPresetState {
   ready: boolean;
   /** OAuth presets: the stored sign-in was rejected and must be renewed. */
   needsSignIn?: boolean;
+  /** OAuth presets: a browser sign-in is stored (usable or not), so it can be signed out. */
+  hasSession?: boolean;
   /** The saved record for this preset is unusable; setup can repair it or it can be removed. */
   error?: string;
   /** The saved record failed validation; setup rebuilds it from the preset's official settings. */

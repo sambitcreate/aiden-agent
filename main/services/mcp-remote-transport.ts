@@ -1,32 +1,79 @@
 import {
   McpSessionExpiredError,
+  type AuthProvider,
   StreamableHttpTransport,
   type JsonRpcMessage,
   type McpTransportSendOptions,
 } from "@earendil-works/pi-mcp";
 import { adaptOAuthProvider, type OAuthClientProvider } from "@earendil-works/pi-mcp/oauth";
 import { createMcpFetchPolicy, MAX_MCP_RESPONSE_BYTES, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
-import { withMcpOAuthMetadataObservation } from "./mcp-oauth-metadata.js";
 
-/** An OAuth provider that may also watch the authorization-server metadata documents it is served. */
+/**
+ * An OAuth provider that may also hear why a token refresh failed for a
+ * reason other than an OAuth error (network failure, timeout, 5xx). Pi's flow
+ * swallows those and continues to the authorization redirect; the provider
+ * uses the cause to report a transient connection failure instead of asking
+ * for sign-in.
+ */
 export type McpRemoteOAuthProvider = OAuthClientProvider & {
-  observeAuthorizationMetadata?: (url: URL, document: unknown) => void;
+  observeRefreshFailure?: (cause: Error) => void;
+  /** Replace an error the OAuth recovery after a 401 ended with (for example a transient refresh failure). */
+  mapAuthorizationError?: (error: unknown) => unknown;
 };
+
+function adaptRemoteOAuthProvider(provider: McpRemoteOAuthProvider): AuthProvider {
+  const adapted = adaptOAuthProvider(provider);
+  if (!provider.mapAuthorizationError || !adapted.onUnauthorized) return adapted;
+  const onUnauthorized = adapted.onUnauthorized.bind(adapted);
+  return {
+    token: () => adapted.token(),
+    onUnauthorized: async (context) => {
+      try {
+        await onUnauthorized(context);
+      } catch (error) {
+        throw provider.mapAuthorizationError!(error);
+      }
+    },
+  };
+}
 
 export type McpRemoteFetchOptions = McpFetchPolicyOptions & {
   authProvider?: McpRemoteOAuthProvider;
 };
 
+function isRefreshRequest(init: RequestInit | undefined): boolean {
+  if ((init?.method ?? "GET").toUpperCase() !== "POST") return false;
+  const body = init?.body;
+  return (typeof body === "string" || body instanceof URLSearchParams) &&
+    new URLSearchParams(body).get("grant_type") === "refresh_token";
+}
+
+/** Statuses after which a token endpoint may well answer on the next try. */
+function transientStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
 /**
  * Aiden's fetch policy for one remote MCP service: service headers stay on
- * the service origin, bodies are bounded, redirects are refused, and OAuth
- * metadata documents are observed before they are parsed. Used by the
- * transport and by the OAuth code exchange alike.
+ * the service origin, bodies are bounded, and only same-origin metadata
+ * redirects are followed. Used by the transport and by the OAuth code
+ * exchange alike.
  */
 export function createMcpRemoteFetch(options: McpRemoteFetchOptions): typeof globalThis.fetch {
-  const fetch: typeof globalThis.fetch = (input, init) => createMcpFetchPolicy(options)(input, init);
-  const observer = options.authProvider?.observeAuthorizationMetadata;
-  return observer ? withMcpOAuthMetadataObservation(fetch, observer.bind(options.authProvider)) : fetch;
+  const fetch = createMcpFetchPolicy(options);
+  const provider = options.authProvider;
+  if (!provider?.observeRefreshFailure) return fetch;
+  return async (input, init) => {
+    if (!isRefreshRequest(init)) return fetch(input, init);
+    try {
+      const response = await fetch(input, init);
+      if (transientStatus(response.status)) provider.observeRefreshFailure?.(new Error(`the token endpoint answered HTTP ${response.status}`));
+      return response;
+    } catch (error) {
+      provider.observeRefreshFailure?.(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  };
 }
 
 /**
@@ -98,6 +145,6 @@ export function createMcpRemoteTransport(
     url: options.serviceUrl,
     fetch,
     maxMessageBytes: MAX_MCP_RESPONSE_BYTES,
-    ...(options.authProvider ? { authProvider: adaptOAuthProvider(options.authProvider) } : {}),
+    ...(options.authProvider ? { authProvider: adaptRemoteOAuthProvider(options.authProvider) } : {}),
   }, lifetime, options.onTerminalFailure);
 }

@@ -112,7 +112,8 @@ export function mcpConnectionChanged(saved: McpServer, draft: McpServer): boolea
       map(server.headers),
       server.oauth === true,
       server.authServerMetadataUrl ?? null,
-      server.oauthClientName ?? null,
+      server.oauthClientId ?? null,
+      server.oauthClientSecret ?? null,
       server.authProvider ?? null,
     ]);
   return pick(saved) !== pick(draft);

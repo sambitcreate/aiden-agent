@@ -1,10 +1,11 @@
 import { createMcpFetchPolicy } from "../../../main/services/mcp-fetch-policy.js";
 import { mcpOAuthMetadataUrlForServer } from "../../../renderer/shared/mcp-oauth-config.js";
 import { mcpServerOffersTools, mcpToolsOfferedToModel, validateMcpExposureFields } from "../../../renderer/shared/mcp-exposure.js";
-import { loadMcpOAuthMetadataOverride, withMcpOAuthMetadataObservation } from "../../../main/services/mcp-oauth-metadata.js";
+import { loadMcpOAuthMetadataOverride } from "../../../main/services/mcp-oauth-metadata.js";
 import { McpOAuthAuthorizationFlow } from "../../../main/services/mcp-oauth-session.js";
 import { mcpAuthorityConnectionSnapshot } from "../../../main/services/mcp-credential-cleanup-core.js";
 import { createBoundedSubagentMcpFetch } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
+import { SdkIssuerPolicyObserver, withSdkOAuthCompat } from "./mcp-sdk-oauth-compat.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -18,7 +19,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "../../../main/services/types.js";
-import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } from "../../../main/services/mcp-presets.js";
+import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer, mcpOAuthClientNameForServer } from "../../../main/services/mcp-presets.js";
 import { markMcpAgentTool, mcpAgentToolNames } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
@@ -62,13 +63,14 @@ export function validateMcpServer(value: unknown): McpServer {
   } else throw new Error("Unknown MCP transport.");
   for (const fields of [server.env, server.headers]) if (fields !== undefined && (!fields || typeof fields !== "object" || Array.isArray(fields) || Object.values(fields).some((value) => typeof value !== "string"))) throw new Error("MCP env and headers must be string maps.");
   validateMcpExposureFields(server);
+  if (server.oauthClientId !== undefined || server.oauthClientSecret !== undefined) throw new Error("Pre-registered OAuth clients are not supported by the CLI yet.");
   assertMcpPresetServer(server);
   return server;
 }
 
 export function mcpCredentialId(server: McpServer): string {
-  const override = server.authServerMetadataUrl !== undefined || server.oauthClientName !== undefined
-    ? `\0${JSON.stringify([server.authServerMetadataUrl ?? null, server.oauthClientName?.trim() ?? null])}` : "";
+  const override = server.authServerMetadataUrl !== undefined
+    ? `\0${JSON.stringify([server.authServerMetadataUrl, null])}` : "";
   return `mcp-${createHash("sha256").update(`${server.id}\0${server.url}${override}`).digest("hex")}`;
 }
 /**
@@ -92,7 +94,7 @@ export async function mcpCredentialSignature(agentDir: string, server: McpServer
 
 /** `incarnation` is minted per interactive sign-in and survives token refreshes. */
 interface OAuthState { tokens?: OAuthTokens; client?: OAuthClientInformationMixed; redirectUrl?: string; grantedScope?: string; incarnation?: string; }
-async function oauthProvider(agentDir: string, server: McpServer, interaction?: { redirectUrl: string; flow: McpOAuthAuthorizationFlow; notify(url: URL): void }): Promise<OAuthClientProvider> {
+async function oauthProvider(agentDir: string, server: McpServer, interaction?: { redirectUrl: string; flow: McpOAuthAuthorizationFlow; issuerPolicy: SdkIssuerPolicyObserver; notify(url: URL): void }): Promise<OAuthClientProvider> {
   const credentials = insightCredentials(agentDir);
   const id = mcpCredentialId(server);
   const load = async (): Promise<OAuthState> => { const serialized = await credentials.read(id); return serialized ? JSON.parse(serialized) : {}; };
@@ -108,9 +110,9 @@ async function oauthProvider(agentDir: string, server: McpServer, interaction?: 
   const save = () => credentials.write(id, JSON.stringify(stored));
   return {
     redirectUrl: stored.redirectUrl ?? "http://127.0.0.1/callback",
-    clientMetadata: { client_name: server.oauthClientName?.trim() || "Aiden CLI", redirect_uris: [stored.redirectUrl ?? "http://127.0.0.1/callback"], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
+    clientMetadata: { client_name: mcpOAuthClientNameForServer(server), redirect_uris: [stored.redirectUrl ?? "http://127.0.0.1/callback"], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
     state: () => flow.state,
-    saveDiscoveryState: (state) => flow.saveDiscovery(state),
+    saveDiscoveryState: (state) => flow.saveDiscovery(interaction ? interaction.issuerPolicy.apply(state) : state),
     async discoveryState() {
       if (metadataUrl && !flow.discoveryState()) flow.saveDiscovery(await loadMcpOAuthMetadataOverride(metadataUrl, { serviceUrl: server.url!, serviceHeaders: server.headers }));
       return flow.discoveryState();
@@ -147,8 +149,9 @@ export async function mcpLogin(agentDir: string, server: McpServer): Promise<voi
   try {
     await new Promise<void>((resolve, reject) => { listener.once("error", reject); listener.listen(0, "127.0.0.1", resolve); });
     const port = (listener.address() as import("node:net").AddressInfo).port;
-    const provider = await oauthProvider(agentDir, server, { flow, redirectUrl: `http://127.0.0.1:${port}/callback`, notify: (url) => process.stderr.write(`Open this URL to sign in:\n${url.href}\n`) });
-    const fetchFn = withMcpOAuthMetadataObservation(createMcpFetchPolicy({ serviceUrl: server.url, serviceHeaders: server.headers }), (url, document) => flow.observeAuthorizationMetadata(url, document));
+    const issuerPolicy = new SdkIssuerPolicyObserver();
+    const provider = await oauthProvider(agentDir, server, { flow, issuerPolicy, redirectUrl: `http://127.0.0.1:${port}/callback`, notify: (url) => process.stderr.write(`Open this URL to sign in:\n${url.href}\n`) });
+    const fetchFn = issuerPolicy.wrap(withSdkOAuthCompat(createMcpFetchPolicy({ serviceUrl: server.url, serviceHeaders: server.headers })));
     const status = await auth(provider, { serverUrl: server.url, fetchFn });
     if (status === "REDIRECT") {
       const authorizationCode = await Promise.race([code, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("MCP login timed out.")), 180_000); })]);
@@ -300,7 +303,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
       entry.attempt = client;
       inventories.watch(client);
       try {
-        const options = server.transport === "stdio" ? undefined : { fetch: createBoundedSubagentMcpFetch(createMcpFetchPolicy({ serviceUrl: server.url!, serviceHeaders: server.headers }), maxResponseBytes), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
+        const options = server.transport === "stdio" ? undefined : { fetch: withSdkOAuthCompat(createBoundedSubagentMcpFetch(createMcpFetchPolicy({ serviceUrl: server.url!, serviceHeaders: server.headers }), maxResponseBytes)), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
         // Shutdown or a newer attempt may have landed during the credential read; start nothing then.
         if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
         const transport = server.transport === "stdio" ? new StdioClientTransport({ command: server.command!, args: server.args, env: { ...getDefaultEnvironment(), ...server.env }, stderr: "pipe" })

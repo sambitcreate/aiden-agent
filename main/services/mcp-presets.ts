@@ -80,9 +80,12 @@ export function getMcpPreset(presetId: string): McpPreset | undefined {
   return MCP_PRESETS.find((preset) => preset.id === presetId);
 }
 
-/** DCR `client_name` for this server: preset override, otherwise Aiden Agent. */
+/**
+ * DCR `client_name` for this server: the catalog preset's name when it sets
+ * one, otherwise Aiden Agent. The single source every OAuth registration uses.
+ */
 export function mcpOAuthClientNameForServer(
-  server: Pick<McpServer, "id" | "presetId" | "oauthClientName">,
+  server: Pick<McpServer, "id" | "presetId">,
 ): string {
   const preset =
     getMcpPresetForServerId(server.id) ??
@@ -90,7 +93,7 @@ export function mcpOAuthClientNameForServer(
   if (preset?.auth.kind === "oauth" && preset.auth.clientName?.trim()) {
     return preset.auth.clientName.trim();
   }
-  return server.oauthClientName?.trim() || DEFAULT_MCP_OAUTH_CLIENT_NAME;
+  return DEFAULT_MCP_OAUTH_CLIENT_NAME;
 }
 
 export function getMcpPresetForServerId(serverId: string): McpPreset | undefined {
@@ -107,7 +110,7 @@ export function assertMcpPresetServer(server: McpServer): McpPreset | undefined 
   const idPreset = getMcpPresetForServerId(server.id);
   const declaredPreset = server.presetId ? getMcpPreset(server.presetId) : undefined;
   if (!idPreset && !server.presetId) return undefined;
-  if (server.authProvider !== undefined || server.authServerMetadataUrl !== undefined || server.oauthClientName !== undefined) throw new Error("OAuth overrides require a custom MCP server.");
+  if (server.authProvider !== undefined || server.authServerMetadataUrl !== undefined || server.oauthClientId !== undefined || server.oauthClientSecret !== undefined) throw new Error("OAuth overrides require a custom MCP server.");
   if (!idPreset || !declaredPreset || idPreset.id !== declaredPreset.id) {
     throw new Error("This MCP preset has an invalid identity.");
   }

@@ -181,7 +181,7 @@ test("OAuth presets require OAuth while API-key presets reject it", () => {
 });
 
 
-test("custom OAuth registration names override the default without overriding curated presets", () => {
-  assert.equal(mcpOAuthClientNameForServer({ id: "custom", oauthClientName: "Allowed Client" }), "Allowed Client");
-  assert.throws(() => assertMcpPresetServer({ ...serverFromPreset(MCP_PRESETS.find((preset) => preset.auth.kind === "oauth")!), oauthClientName: "Changed client" }), /OAuth/u);
+test("custom servers register as Aiden Agent and presets cannot carry a pre-registered client", () => {
+  assert.equal(mcpOAuthClientNameForServer({ id: "custom" }), "Aiden Agent");
+  assert.throws(() => assertMcpPresetServer({ ...serverFromPreset(MCP_PRESETS.find((preset) => preset.auth.kind === "oauth")!), oauthClientId: "manual" }), /OAuth/u);
 });

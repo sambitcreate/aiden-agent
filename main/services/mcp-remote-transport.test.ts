@@ -6,7 +6,11 @@ import { authorizeMcp, type OAuthClientProvider, type OAuthTokens } from "@earen
 import { GenerationBoundConnectionCache } from "./generation-bound-connection-cache.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { callMcpTool } from "./mcp-tool-inventory.js";
-import { mcpAuthorizationBinding, sessionAfterTokenInvalidation, sessionWithRefreshedMcpTokens, sessionWithSavedMcpTokens, type McpOAuthSession } from "./mcp-oauth-session.js";
+import { mcpAuthorizationBinding, sessionAfterTokenInvalidation, sessionWithSavedMcpTokens, type McpOAuthSession } from "./mcp-oauth-session.js";
+import { createBackgroundMcpOAuthProvider, McpOAuthRefreshUnavailableError, type McpOAuthRuntime } from "./mcp-oauth-provider-core.js";
+import { McpOAuthOperationGate } from "./mcp-oauth-operation.js";
+import { McpLiveStatusRegistry } from "./mcp-status-events.js";
+import type { McpServer } from "./types.js";
 import { createMcpFetchPolicy } from "./mcp-fetch-policy.js";
 
 const serviceUrl = "https://mcp.example/mcp";
@@ -172,7 +176,10 @@ test("HTTP tools/list POST succeeds on the same session after optional GET retri
 
 function authenticatedFixture(mode: "failed" | "successful" | "transient") {
   // A distinct grant per fixture: identical concurrent refreshes are shared process-wide.
-  let tokens: OAuthTokens = { access_token: "old-token", refresh_token: `refresh-token-${mode}`, token_type: "Bearer" };
+  const store = { session: {
+    authorizationBinding: mcpAuthorizationBinding(serviceUrl),
+    tokens: { access_token: "old-token", refresh_token: `refresh-token-${mode}`, token_type: "Bearer" },
+  } as McpOAuthSession };
   let rejectOldToken = false;
   let refreshFails = mode === "failed";
   let transient = mode === "transient";
@@ -181,16 +188,7 @@ function authenticatedFixture(mode: "failed" | "successful" | "transient") {
   let gets = 0;
   let refreshes = 0;
   const encoder = new TextEncoder();
-  const provider: OAuthClientProvider = {
-    redirectUrl: "http://127.0.0.1:41432/callback",
-    clientMetadata: { redirect_uris: ["http://127.0.0.1:41432/callback"] },
-    clientInformation: () => ({ client_id: "fixture-client" }),
-    tokens: () => tokens,
-    saveTokens: (next) => { tokens = next; },
-    redirectToAuthorization: () => { throw new Error("fixture sign-in required"); },
-    saveCodeVerifier: () => {},
-    codeVerifier: () => "fixture-verifier",
-  };
+  const provider = storeBackedProvider(store);
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = String(input);
     if (url.includes("oauth-protected-resource")) {
@@ -254,8 +252,8 @@ for (const mode of ["failed", "successful", "transient"] as const) {
     assert.equal((await first.listTools()).length, 1);
     remote.interrupt();
     if (mode === "failed") {
-      // The refresh failed and sign-in is needed: the optional GET stream stops.
-      await until(() => fixture.errors.some((error) => error.message === "fixture sign-in required"));
+      // The refresh failed for a transient reason: the optional GET stream stops, the sign-in stays.
+      await until(() => fixture.errors.some((error) => error instanceof McpOAuthRefreshUnavailableError));
       remote.recoverAuthorization();
     } else {
       await until(() => remote.receives(), 2500);
@@ -268,40 +266,37 @@ for (const mode of ["failed", "successful", "transient"] as const) {
   });
 }
 
+const oauthServer: McpServer = { id: "server", name: "Fixture", transport: "http", url: serviceUrl, oauth: true, enabled: true };
+
 /**
- * Provider over one shared session store, with the background provider's
- * persistence rules: rotate refreshed tokens into the bound session only while
- * it still holds the tokens the refresh presented, and invalidate only the
- * tokens this provider last observed. `beforeTokens` can hold a read open.
+ * Aiden's real background provider over one shared session store (another
+ * client may change `store.session` at any time). `beforeTokens` holds the
+ * provider's third store read open: the token read of a direct refresh, after
+ * the discovery and client reads.
  */
-function storeBackedProvider(store: { session: McpOAuthSession }, beforeTokens?: () => Promise<void>): OAuthClientProvider {
-  const binding = mcpAuthorizationBinding(serviceUrl);
-  let observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined;
-  return {
-    redirectUrl: "http://127.0.0.1:41432/callback",
-    clientMetadata: { redirect_uris: ["http://127.0.0.1:41432/callback"] },
-    clientInformation: () => ({ client_id: "fixture-client" }),
-    tokens: async () => {
-      const tokens = store.session.tokens;
-      observed = tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
-      await beforeTokens?.();
-      return tokens;
+function storeBackedProvider(store: { session: McpOAuthSession }, beforeTokens?: () => Promise<void>) {
+  store.session.clientInformation ??= { client_id: "fixture-client", redirect_uris: ["http://127.0.0.1:41432/callback"] };
+  let reads = 0;
+  const runtime: McpOAuthRuntime = {
+    store: {
+      async get() {
+        const snapshot = structuredClone(store.session);
+        reads += 1;
+        if (reads === 3) await beforeTokens?.();
+        return snapshot;
+      },
+      async set(_serverId, session) { store.session = structuredClone(session); },
+      async clear() { store.session = {}; },
     },
-    saveTokens: (tokens) => {
-      const next = sessionWithRefreshedMcpTokens(store.session, binding, observed, tokens);
-      if (!next) return;
-      store.session = next;
-      observed = { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
-    },
-    invalidateCredentials: (scope) => {
-      if (scope !== "tokens") return;
-      const next = sessionAfterTokenInvalidation(store.session, observed);
-      if (next) store.session = next;
-    },
-    redirectToAuthorization: () => { throw new Error("fixture sign-in required"); },
-    saveCodeVerifier: () => {},
-    codeVerifier: () => "fixture-verifier",
+    gate: new McpOAuthOperationGate(),
+    status: new McpLiveStatusRegistry(),
+    openBrowser: async () => { throw new Error("A background connection must not open a browser."); },
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    clientVersion: "test",
+    loopback: { port: 41432, redirectUri: "http://127.0.0.1:41432/callback", timeoutMs: 1_000 },
+    publish: (_serverId, operation) => operation(),
   };
+  return createBackgroundMcpOAuthProvider(runtime, oauthServer);
 }
 
 /** Rotating authorization server: each refresh token works exactly once. */

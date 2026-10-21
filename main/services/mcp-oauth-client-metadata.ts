@@ -1,12 +1,24 @@
-// Electron-free MCP OAuth client metadata. Hosted servers that allowlist
-// Dynamic Client Registration by exact `client_name` (notably Figma) must
-// receive the catalog name documented for that connector.
+// Electron-free MCP OAuth client metadata. Every registration uses the
+// client name "Aiden Agent" unless a catalog preset names another one
+// (`mcpOAuthClientNameForServer` is the single source).
 
-import { OAuthIssuerMismatchError, OAuthRegistrationError } from "@earendil-works/pi-mcp/oauth";
+import { OAuthError, OAuthIssuerMismatchError, OAuthRegistrationError } from "@earendil-works/pi-mcp/oauth";
+import { mcpOAuthDisplayText } from "./mcp-oauth-session.js";
+import { MCP_OAUTH_LOOPBACK_PORT, MCP_OAUTH_REDIRECT_URI } from "../../renderer/shared/mcp-oauth-config.js";
+
+export { MCP_OAUTH_LOOPBACK_PORT, MCP_OAUTH_REDIRECT_URI };
 
 export const DEFAULT_MCP_OAUTH_CLIENT_NAME = "Aiden Agent";
-export const MCP_OAUTH_LOOPBACK_PORT = 41390;
-export const MCP_OAUTH_REDIRECT_URI = `http://127.0.0.1:${MCP_OAUTH_LOOPBACK_PORT}/callback`;
+
+/**
+ * HTTPS URL of Aiden's OAuth Client ID Metadata Document (CIMD). When it is
+ * set and an authorization server advertises
+ * `client_id_metadata_document_supported`, Aiden identifies with this URL as
+ * its `client_id` instead of registering a client. It stays unset until the
+ * document (`docs/mcp/aiden-agent-client-metadata.json`) is hosted at a
+ * stable Aiden-owned URL; until then every server gets dynamic registration.
+ */
+export const AIDEN_MCP_CLIENT_METADATA_URL: string | undefined = undefined;
 
 export interface McpOAuthClientMetadata {
   client_name: string;
@@ -17,11 +29,11 @@ export interface McpOAuthClientMetadata {
   application_type: "native";
 }
 
-export function mcpOAuthClientMetadata(clientName?: string): McpOAuthClientMetadata {
+export function mcpOAuthClientMetadata(clientName?: string, redirectUri: string = MCP_OAUTH_REDIRECT_URI): McpOAuthClientMetadata {
   const name = clientName?.trim() || DEFAULT_MCP_OAUTH_CLIENT_NAME;
   return {
     client_name: name,
-    redirect_uris: [MCP_OAUTH_REDIRECT_URI],
+    redirect_uris: [redirectUri],
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
     token_endpoint_auth_method: "none",
@@ -45,6 +57,17 @@ function explained(message: string, error: unknown): Error & { cause?: unknown }
   return result;
 }
 
+/** `: description.` from a JSON OAuth error body, or `.` for anything else. */
+function oauthDescription(body: string): string {
+  try {
+    const value = JSON.parse(body) as { error_description?: unknown; error?: unknown };
+    const text = mcpOAuthDisplayText(typeof value.error_description === "string" ? value.error_description : typeof value.error === "string" ? value.error : undefined);
+    return text ? `: ${text}` : ".";
+  } catch {
+    return ".";
+  }
+}
+
 /**
  * Readable Settings lines for OAuth failures users can act on. The original
  * error stays as a non-enumerable `cause` for logs.
@@ -53,6 +76,8 @@ function explained(message: string, error: unknown): Error & { cause?: unknown }
  * - Authorization-server metadata whose issuer does not match the server it
  *   was discovered from (RFC 8414) is refused; a custom server can name the
  *   right metadata document instead.
+ * - Other registration and token-endpoint errors keep only their status, OAuth
+ *   error code and a bounded one-line description, never the response body.
  */
 export function explainMcpOAuthFailure(error: unknown): Error & { cause?: unknown } {
   if (error instanceof OAuthRegistrationError && error.status === 403) {
@@ -60,6 +85,17 @@ export function explainMcpOAuthFailure(error: unknown): Error & { cause?: unknow
       "This MCP server rejected OAuth client registration (HTTP 403). Some hosts only allow listed MCP clients to register. Check Settings → Plugins for this connector's documented setup, then try Authorize again.",
       error,
     );
+  }
+  if (error instanceof OAuthRegistrationError) {
+    // The response body is the server's to choose (an HTML error page, a stack trace): show only a bounded description.
+    return explained(`This MCP server rejected OAuth client registration (HTTP ${error.status})${oauthDescription(error.body)}`, error);
+  }
+  if (error instanceof OAuthError) {
+    // Pi reports a token response without an OAuth error document as "HTTP <status>: <body>".
+    const status = error.code === "server_error" ? /\bHTTP (\d{3})\b/u.exec(error.message)?.[1] : undefined;
+    if (status) return explained(`The authorization server answered HTTP ${status}.`, error);
+    const description = mcpOAuthDisplayText(error.message);
+    return explained(description && description !== error.code ? `The authorization server returned “${error.code}”: ${description}` : `The authorization server returned “${error.code}”.`, error);
   }
   if (error instanceof OAuthIssuerMismatchError) {
     return explained(

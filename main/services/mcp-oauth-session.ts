@@ -1,6 +1,5 @@
 import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import {
-  buildAuthorizationServerDiscoveryUrls,
   type OAuthClientInformationMixed,
   type OAuthDiscoveryState,
   type OAuthTokens,
@@ -88,12 +87,18 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
   return session as McpOAuthSession;
 }
 
-export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, oauthClientName?: string): string {
+/**
+ * What stored registrations and tokens belong to: the protected resource, an
+ * explicit authorization-metadata document, and the OAuth client identity
+ * (`clientIdentity`, see `mcpOAuthClientIdentityKey`). Changing any of them
+ * leaves the old session unmatched, so it is never reused.
+ */
+export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, clientIdentity?: string): string {
   const parsed = new URL(url);
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   const resource = parsed.toString();
-  return authServerMetadataUrl === undefined && oauthClientName === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), oauthClientName?.trim() ?? null]);
+  return authServerMetadataUrl === undefined && clientIdentity === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), clientIdentity ?? null]);
 }
 
 export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: string): boolean {
@@ -345,25 +350,11 @@ export class McpOAuthAuthorizationFlow {
    * issuer's trailing-slash spelling cannot fail the exchange's exact check.
    */
   responseIssuer?: string;
-  private observedMetadata?: { url: string; issuer: string; issuerRequired: boolean };
-
-  observeAuthorizationMetadata(url: URL, document: unknown): void {
-    if (!isRecord(document) || typeof document.issuer !== "string") throw new Error("Invalid OAuth metadata issuer.");
-    const supported = document.authorization_response_iss_parameter_supported;
-    if (supported !== undefined && typeof supported !== "boolean") throw new Error("Invalid OAuth issuer response policy.");
-    this.observedMetadata = { url: url.href, issuer: document.issuer, issuerRequired: supported === true };
-  }
 
   saveDiscovery(state: OAuthDiscoveryState): void {
     const metadata = state.authorizationServerMetadata;
     if (metadata && !sameMcpOAuthIssuer(metadata.issuer, state.authorizationServerUrl)) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
-    const discovery = structuredClone(state);
-    const observed = this.observedMetadata;
-    if (metadata && observed?.issuer === metadata.issuer && observed.issuerRequired &&
-        buildAuthorizationServerDiscoveryUrls(state.authorizationServerUrl).some(({ url }) => url.href === observed.url)) {
-      discovery.authorizationServerMetadata = { ...metadata, authorization_response_iss_parameter_supported: true };
-    }
-    this.discovery = discovery;
+    this.discovery = structuredClone(state);
   }
 
   discoveryState(): OAuthDiscoveryState | undefined {
@@ -372,7 +363,6 @@ export class McpOAuthAuthorizationFlow {
 
   clearDiscovery(): void {
     this.discovery = undefined;
-    this.observedMetadata = undefined;
   }
 
   authorizationUrl(url: URL, grantedScope?: string): URL {
@@ -382,6 +372,8 @@ export class McpOAuthAuthorizationFlow {
     this.requestedScope = scopes.join(" ") || undefined;
     if (this.requestedScope) result.searchParams.set("scope", this.requestedScope);
     else result.searchParams.delete("scope");
+    // Pi asks for consent when its own scope includes offline_access; a
+    // granted scope merged in here can add it, so apply the same rule.
     if (scopes.includes("offline_access") && !result.searchParams.has("prompt")) result.searchParams.set("prompt", "consent");
     const metadata = this.discovery?.authorizationServerMetadata;
     this.expectedIssuer = metadata?.issuer ?? this.discovery?.authorizationServerUrl;
@@ -419,7 +411,43 @@ export class McpOAuthAuthorizationFlow {
     if (codes.length + errors.length !== 1 || !(codes[0] || errors[0])) throw new Error("Invalid OAuth callback result.");
     this.consumed = true;
     this.responseIssuer = issuers.length === 1 ? this.discovery?.authorizationServerMetadata?.issuer : undefined;
-    return errors.length ? { error: new Error("Authorization was denied by the provider.") } : { code: codes[0] };
+    return errors.length
+      ? { error: new McpOAuthCallbackError(errors[0], url.searchParams.get("error_description") ?? undefined) }
+      : { code: codes[0] };
+  }
+}
+
+const MAX_CALLBACK_DESCRIPTION_CHARS = 300;
+
+/** Text from an OAuth server shown to the user: one line, no control characters, bounded. */
+export function mcpOAuthDisplayText(value: string | undefined, maximum: number = MAX_CALLBACK_DESCRIPTION_CHARS): string | undefined {
+  const line = value === undefined ? undefined : [...value]
+    .map((char) => { const code = char.charCodeAt(0); return code < 32 || (code >= 127 && code <= 159) ? " " : char; })
+    .join("").replace(/\s+/gu, " ").trim();
+  if (!line) return undefined;
+  return line.length > maximum ? `${line.slice(0, maximum - 1)}…` : line;
+}
+
+/**
+ * The authorization server redirected back with `error=` (RFC 6749 §4.1.2.1).
+ * `code` is the OAuth error code; `description` is the server's sanitized
+ * `error_description`, if it sent one.
+ */
+export class McpOAuthCallbackError extends Error {
+  readonly code: string;
+  readonly description?: string;
+
+  constructor(code: string, description?: string) {
+    const safeCode = /^[\w.-]{1,64}$/u.test(code) ? code : "invalid_response";
+    const detail = mcpOAuthDisplayText(description);
+    super(
+      safeCode === "access_denied"
+        ? `Sign-in was denied in the browser${detail ? `: ${detail}` : "."}`
+        : `The authorization server returned “${safeCode}”${detail ? `: ${detail}` : "."}`,
+    );
+    this.name = "McpOAuthCallbackError";
+    this.code = safeCode;
+    this.description = detail;
   }
 }
 
@@ -430,6 +458,29 @@ export function hasMcpOAuthSessionData(session: McpOAuthSession): boolean {
     session.tokens ||
     session.codeVerifier,
   );
+}
+
+/** What Settings shows for a server's stored browser sign-in. */
+export interface McpOAuthSignInState {
+  /** Tokens are stored for the server's current binding. */
+  authorized: boolean;
+  /**
+   * A sign-in for the current binding lost its tokens (the server rejected
+   * them, for example with `invalid_grant`). Read from the stored session, so
+   * it survives restarts.
+   */
+  needsSignIn: boolean;
+  /** Anything is stored for the server, matching its binding or not: Sign out can remove it. */
+  hasSession: boolean;
+}
+
+export function mcpOAuthSignInState(session: McpOAuthSession, binding: string | undefined): McpOAuthSignInState {
+  const hasSession = hasMcpOAuthSessionData(session);
+  if (binding === undefined || !sessionMatchesMcpBinding(session, binding)) {
+    return { authorized: false, needsSignIn: false, hasSession };
+  }
+  const authorized = Boolean(session.tokens);
+  return { authorized, needsSignIn: !authorized && Boolean(session.grantId || session.grantedScope), hasSession };
 }
 
 /** Keep an interactive replacement session private until verification succeeds. */

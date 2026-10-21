@@ -34,7 +34,7 @@ const serviceUrl = "https://service.example/mcp";
       const url = String(input);
       const headers = new Headers(init?.headers);
       calls.push({ url, headers });
-      assert.equal(init?.redirect, "error");
+      assert.notEqual(init?.redirect ?? "follow", "follow", "redirects are never followed by fetch itself");
       if (url === serviceUrl) {
         assert.equal(headers.get("x-service-key"), "synthetic-marker");
         return new Response(null, { status: 401, headers: {
@@ -92,8 +92,64 @@ test("configured credentials never follow a real cross-origin HTTP redirect", as
     t.after(() => { server.closeAllConnections(); server.close(); });
   }
   const url = `http://127.0.0.1:${(source.address() as { port: number }).port}/mcp`;
-  await assert.rejects(createMcpFetchPolicy({ serviceUrl: url, serviceHeaders: { "X-Key": "marker" } })(url));
+  // A GET (discovery) reads the redirect as "not here"; a POST refuses it.
+  assert.equal((await createMcpFetchPolicy({ serviceUrl: url, serviceHeaders: { "X-Key": "marker" } })(url)).status, 404);
+  await assert.rejects(createMcpFetchPolicy({ serviceUrl: url, serviceHeaders: { "X-Key": "marker" } })(url, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+  }));
   assert.equal(destinationCalls, 0);
+});
+
+test("OAuth metadata follows a few same-origin redirects without credentials and treats other origins as a miss", async () => {
+  const seen: { url: string; headers: Headers; redirect?: RequestRedirect }[] = [];
+  const hops = (count: number, final: string): typeof fetch => async (input, init) => {
+    const url = new URL(String(input));
+    seen.push({ url: url.href, headers: new Headers(init?.headers), redirect: init?.redirect });
+    const hop = Number(url.searchParams.get("hop") ?? "0");
+    if (hop < count) return new Response(null, { status: 307, headers: { location: hop + 1 === count ? final : `/.well-known/oauth-protected-resource?hop=${hop + 1}` } });
+    return Response.json({ resource: serviceUrl });
+  };
+  const headers = { Authorization: "Bearer service", "MCP-Protocol-Version": "2025-11-25" };
+  const policy = (fetchImpl: typeof fetch) => createMcpFetchPolicy({ serviceUrl, serviceHeaders: { "X-Service-Key": "marker" }, fetch: fetchImpl });
+  const followed = await policy(hops(2, "/moved?hop=9"))("https://service.example/.well-known/oauth-protected-resource", { headers });
+  assert.deepEqual(await followed.json(), { resource: serviceUrl });
+  assert.deepEqual(seen.map(({ url }) => new URL(url).pathname), ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource", "/moved"]);
+  assert.equal(seen[0].headers.get("x-service-key"), "marker");
+  for (const hop of seen.slice(1)) {
+    assert.equal(hop.headers.get("x-service-key"), null);
+    assert.equal(hop.headers.get("authorization"), null);
+    assert.equal(hop.headers.get("mcp-protocol-version"), "2025-11-25", "the request's own headers are kept");
+  }
+  assert.ok(seen.every(({ redirect }) => redirect === "manual"));
+
+  // Another origin is never asked: discovery sees a miss and tries its next candidate.
+  seen.length = 0;
+  const offOrigin = await policy(hops(1, "https://elsewhere.example/prm"))("https://service.example/.well-known/oauth-protected-resource");
+  assert.equal(offOrigin.status, 404);
+  assert.ok(seen.every(({ url }) => new URL(url).origin === "https://service.example"));
+  await assert.rejects(policy(hops(4, "/moved"))("https://service.example/.well-known/oauth-protected-resource"),
+    (error: Error) => error instanceof TypeError && /more than 3 times/u.test(error.message));
+
+  // Token and MCP requests never follow a redirect.
+  let tokenRedirect: RequestRedirect | undefined;
+  await (await policy(async (_input, init) => { tokenRedirect = init?.redirect; return Response.json({}); })("https://auth.example/token", {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=authorization_code",
+  })).text();
+  assert.equal(tokenRedirect, "error");
+});
+
+test("network failures name the host and the real cause", async () => {
+  const unreachable: typeof fetch = async () => {
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND auth.example"), { code: "ENOTFOUND" });
+    throw Object.assign(new TypeError("fetch failed"), { cause });
+  };
+  const policy = createMcpFetchPolicy({ serviceUrl, fetch: unreachable });
+  await assert.rejects(policy("https://auth.example/.well-known/oauth-authorization-server"),
+    (error: Error) => error instanceof TypeError && /^Could not reach auth\.example: ENOTFOUND\b/u.test(error.message));
+  const redirected: typeof fetch = async () => { throw Object.assign(new TypeError("fetch failed"), { cause: new Error("unexpected redirect") }); };
+  await assert.rejects(createMcpFetchPolicy({ serviceUrl, fetch: redirected })("https://auth.example/token", {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=refresh_token&refresh_token=r",
+  }), /Could not reach auth\.example: it answered with a redirect/u);
 });
 
 for (const phase of ["discovery", "registration", "token", "refresh"]) {

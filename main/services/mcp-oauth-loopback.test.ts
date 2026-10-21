@@ -3,6 +3,7 @@ import * as http from "node:http";
 import * as net from "node:net";
 import test from "node:test";
 import { mcpOAuthLoopbackHolder, startMcpOAuthLoopback, type McpOAuthLoopbackOptions } from "./mcp-oauth-loopback.js";
+import { McpOAuthCallbackError } from "./mcp-oauth-session.js";
 
 async function freePort(): Promise<number> {
   const server = net.createServer();
@@ -18,10 +19,11 @@ function options(port: number, patch: Partial<McpOAuthLoopbackOptions> = {}): Mc
     redirectUri: `http://127.0.0.1:${port}/callback`,
     label: "Linear",
     timeoutMs: 5_000,
-    callbackHtml: "<p>done</p>",
     authorization: {
       callback: (url) => {
         if (url.searchParams.get("state") !== "expected") throw new Error("bad state");
+        const error = url.searchParams.get("error");
+        if (error) return { error: new McpOAuthCallbackError(error, url.searchParams.get("error_description") ?? undefined) };
         return { code: url.searchParams.get("code") ?? "" };
       },
     },
@@ -29,21 +31,34 @@ function options(port: number, patch: Partial<McpOAuthLoopbackOptions> = {}): Mc
   };
 }
 
-function get(port: number, path: string): Promise<number> {
+function page(port: number, path: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     http.get({ host: "127.0.0.1", port, path, agent: false }, (res) => {
-      res.resume();
-      res.on("end", () => resolve(res.statusCode ?? 0));
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => { body += chunk; });
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
     }).on("error", reject);
   });
 }
 
-test("the browser callback delivers the code and closing frees the port", async () => {
+async function get(port: number, path: string): Promise<number> {
+  return (await page(port, path)).status;
+}
+
+test("the browser callback delivers the code, waits for the outcome, and closing frees the port", async () => {
   const port = await freePort();
   const loopback = await startMcpOAuthLoopback(options(port));
   assert.equal(await get(port, "/callback?state=forged&code=x"), 400);
-  assert.equal(await get(port, "/callback?state=expected&code=abc"), 200);
+  let answered = false;
+  const browser = page(port, "/callback?state=expected&code=abc").finally(() => { answered = true; });
   assert.equal(await loopback.waitForCode(), "abc");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(answered, false, "the tab is not told anything before the code exchange");
+  loopback.finish({ ok: true });
+  const shown = await browser;
+  assert.equal(shown.status, 200);
+  assert.match(shown.body, /Connected/u);
   loopback.close();
   assert.equal(mcpOAuthLoopbackHolder(port), undefined);
   const again = await startMcpOAuthLoopback(options(port));
@@ -60,6 +75,43 @@ test("a second sign-in while one waits names the waiting one instead of a port e
   first.close();
   const second = await startMcpOAuthLoopback(options(port, { label: "Linear" }));
   second.close();
+});
+
+test("a failed exchange answers the waiting tab with a failure page, escaped", async () => {
+  const port = await freePort();
+  const loopback = await startMcpOAuthLoopback(options(port));
+  const browser = page(port, "/callback?state=expected&code=abc");
+  await loopback.waitForCode();
+  loopback.finish({ ok: false, message: "Client <b>secret</b> required." });
+  loopback.finish({ ok: true });
+  const shown = await browser;
+  assert.match(shown.body, /Sign-in failed/u);
+  assert.doesNotMatch(shown.body, /Connected|<b>/u);
+  assert.match(shown.body, /Client &#60;b&#62;secret&#60;\/b&#62; required\./u);
+  loopback.close();
+});
+
+test("a callback carrying an OAuth error is answered with the provider's reason at once", async () => {
+  const port = await freePort();
+  const loopback = await startMcpOAuthLoopback(options(port));
+  const code = loopback.waitForCode();
+  code.catch(() => undefined);
+  const shown = await page(port, `/callback?state=expected&error=access_denied&error_description=${encodeURIComponent("Admin approval required")}`);
+  assert.match(shown.body, /Sign-in failed/u);
+  assert.match(shown.body, /denied in the browser: Admin approval required/u);
+  await assert.rejects(code, /Admin approval required/u);
+  loopback.close();
+});
+
+test("closing before an outcome answers a waiting tab with a failure page", async () => {
+  const port = await freePort();
+  const loopback = await startMcpOAuthLoopback(options(port));
+  const browser = page(port, "/callback?state=expected&code=abc");
+  await loopback.waitForCode();
+  loopback.close();
+  const shown = await browser;
+  assert.match(shown.body, /Sign-in failed/u);
+  assert.equal(mcpOAuthLoopbackHolder(port), undefined);
 });
 
 test("cancelling rejects the pending code and releases the port immediately", async () => {

@@ -625,7 +625,16 @@ export interface McpServer {
   oauth?: boolean;
   /** Explicit authorization-server metadata document for custom remote OAuth connections. */
   authServerMetadataUrl?: string;
-  oauthClientName?: string;
+  /**
+   * Custom remote OAuth servers without dynamic registration: a client the
+   * person registered with the provider. Sign-in uses it instead of registering.
+   */
+  oauthClientId?: string;
+  /**
+   * That client's secret. config.json holds only a keychain marker (see
+   * mcp-field-secrets-core.ts); the value never reaches the renderer.
+   */
+  oauthClientSecret?: string;
   /** Built-in provider reference; requires separate device-local consent before use. */
   authProvider?: string;
   /** Optional bounded server description used for tool discovery. */

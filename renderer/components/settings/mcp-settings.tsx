@@ -1,5 +1,6 @@
 import { McpProviderAuthFields } from "./mcp-provider-auth-fields";
 import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
+import { McpOAuthClientFields, mcpOAuthClientSecretDraft, mcpOAuthClientSecretValue } from "./mcp-oauth-client-fields";
 // Plugins settings — Codex official directory plus custom MCP servers whose
 // tools become available to the assistant. Connectable plugins reuse the
 // hosted HTTP preset flow; other directory entries explain compatibility.
@@ -755,7 +756,8 @@ function McpEditor({
   const [providerAuthorizing, setProviderAuthorizing] = React.useState(false);
   const [name, setName] = React.useState(server.name);
   const [description, setDescription] = React.useState(server.description ?? "");
-  const [oauthClientName, setOauthClientName] = React.useState(server.oauthClientName ?? "");
+  const [oauthClientId, setOauthClientId] = React.useState(server.oauthClientId ?? "");
+  const [oauthClientSecret, setOauthClientSecret] = React.useState(() => mcpOAuthClientSecretDraft(server.oauthClientSecret));
   const [transport, setTransport] = React.useState<McpTransport>(server.transport);
   const [command, setCommand] = React.useState(server.command ?? "");
   const [args, setArgs] = React.useState(argsToLines(server.args));
@@ -771,6 +773,7 @@ function McpEditor({
   const [authorizing, setAuthorizing] = React.useState(false);
   const [authorized, setAuthorized] = React.useState(false);
   const [needsSignIn, setNeedsSignIn] = React.useState(false);
+  const [hasSession, setHasSession] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -791,7 +794,8 @@ function McpEditor({
       setAuthProvider(server.authProvider ?? "");
       setApprovedProviderConnection(undefined);
       setDescription(server.description ?? "");
-      setOauthClientName(server.oauthClientName ?? "");
+      setOauthClientId(server.oauthClientId ?? "");
+      setOauthClientSecret(mcpOAuthClientSecretDraft(server.oauthClientSecret));
       setTransport(server.transport);
       setCommand(server.command ?? "");
       setArgs(argsToLines(server.args));
@@ -802,6 +806,7 @@ function McpEditor({
       setAuthServerMetadataUrl(server.authServerMetadataUrl ?? "");
       setAuthorized(false);
       setNeedsSignIn(false);
+      setHasSession(false);
       storedForSignIn.current = false;
       savedByUser.current = false;
       closed.current = false;
@@ -814,6 +819,7 @@ function McpEditor({
           .then((status) => {
             setAuthorized(status.authorized && !status.needsSignIn);
             setNeedsSignIn(Boolean(status.needsSignIn));
+            setHasSession(Boolean(status.hasSession));
           })
           .catch(() => setAuthorized(false));
       }
@@ -824,7 +830,8 @@ function McpEditor({
     id: server.id,
     name: name.trim(),
     description: description.trim() || undefined,
-    oauthClientName: transport !== "stdio" && oauth ? oauthClientName.trim() || undefined : undefined,
+    oauthClientId: transport !== "stdio" && oauth && !authProvider ? oauthClientId.trim() || undefined : undefined,
+    oauthClientSecret: transport !== "stdio" && oauth && !authProvider ? mcpOAuthClientSecretValue(oauthClientId, oauthClientSecret) : undefined,
     transport,
     enabled: server.enabled,
     command: transport === "stdio" ? command.trim() || undefined : undefined,
@@ -872,7 +879,8 @@ function McpEditor({
               oauth: true,
               authProvider: undefined,
               authServerMetadataUrl: draft.authServerMetadataUrl,
-              oauthClientName: draft.oauthClientName,
+              oauthClientId: draft.oauthClientId,
+              oauthClientSecret: draft.oauthClientSecret,
             };
       // Sign-in uses the stored record: its header values are markers once saved.
       let stored = record;
@@ -889,12 +897,14 @@ function McpEditor({
         if (isNew) storedForSignIn.current = true;
       }
       if (closed.current || cancelledSignIn.current) return;
-      await mcpApi.authorize(stored);
+      const result = await mcpApi.authorize(stored);
       setOauth(true);
       setAuthorized(true);
       setNeedsSignIn(false);
+      setHasSession(true);
       onSaved();
-      toast.success("Authorized — you're signed in.");
+      if (result.connectionError) toast.error(`Signed in, but connecting failed: ${result.connectionError}`);
+      else toast.success("Authorized — you're signed in.");
     } catch (error) {
       if (!cancelledSignIn.current && !closed.current)
         toast.error(error instanceof Error ? error.message : String(error));
@@ -925,6 +935,7 @@ function McpEditor({
       await mcpApi.signOut(server.id);
       setAuthorized(false);
       setNeedsSignIn(false);
+      setHasSession(false);
       onSaved();
       toast.success("Signed out.");
     } catch (error) {
@@ -951,6 +962,7 @@ function McpEditor({
       const status = await mcpApi.testDraft(build());
       if (oauth && status.authorized !== undefined) setAuthorized(status.authorized && !status.needsSignIn);
       if (status.needsSignIn) setNeedsSignIn(true);
+      if (status.hasSession) setHasSession(true);
       if (status.connected) toast.success(`Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`);
       else toast.error(`Connection failed: ${status.error ?? "unknown error"}`);
     } catch (error) {
@@ -1063,13 +1075,21 @@ function McpEditor({
             {transport === "http" ? <McpProviderAuthFields providerId={authProvider} endpoint={url.trim()} approved={providerApproved} busy={providerAuthorizing}
               disabled={!name.trim() || !url.trim() || !authProvider || (!providerApproved && !providers.data?.some((provider) => provider.id === authProvider && provider.isBuiltin && provider.hasKey))}
               providers={(providers.data ?? []).filter((provider) => provider.isBuiltin && (provider.hasKey || provider.id === authProvider))}
-              onProviderChange={(id) => { setAuthProvider(id); setApprovedProviderConnection(undefined); if (id) { setOauth(false); setHeaders([]); setAuthServerMetadataUrl(""); setOauthClientName(""); } }}
+              onProviderChange={(id) => { setAuthProvider(id); setApprovedProviderConnection(undefined); if (id) { setOauth(false); setHeaders([]); setAuthServerMetadataUrl(""); setOauthClientId(""); setOauthClientSecret({ value: "", saved: false }); } }}
               onConsent={(allowed) => { void handleProviderConsent(allowed); }} /> : null}
             {oauth ? (
               <>
-              <Field label="OAuth client name" description="Optional name required by the server’s registration policy. Defaults to Aiden Agent.">
-                <Input aria-label="OAuth client name" maxLength={128} value={oauthClientName} onChange={(event) => { setOauthClientName(event.target.value); setAuthorized(false); }} placeholder="Aiden Agent" />
-              </Field>
+              <McpOAuthClientFields
+                clientId={oauthClientId}
+                secret={oauthClientSecret}
+                onClientIdChange={(value) => {
+                  setOauthClientId(value);
+                  setAuthorized(false);
+                  // A saved secret belongs to the previous client: it is never sent with another client ID.
+                  setOauthClientSecret((secret) => (secret.saved ? { value: "", saved: false } : secret));
+                }}
+                onSecretChange={setOauthClientSecret}
+              />
               <McpOAuthMetadataField value={authServerMetadataUrl} onChange={(value) => { setAuthServerMetadataUrl(value); setAuthorized(false); }} />
               <Field
                 label="Authorize"
@@ -1087,6 +1107,7 @@ function McpEditor({
                   authorizing={authorizing}
                   authorized={authorized}
                   needsSignIn={needsSignIn}
+                  hasSession={hasSession}
                   signingOut={signingOut}
                   disabled={!url.trim() || Boolean(metadataError)}
                   onAuthorize={() => void handleAuthorize()}

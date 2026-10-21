@@ -1453,7 +1453,7 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${server.address().port}`;
   t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
-  writeFileSync(file, JSON.stringify({ id: "metadata", name: "Metadata", transport: "http", url: `${issuer}/mcp`, enabled: true, oauth: true, ...(oidc ? {} : { authServerMetadataUrl: `${issuer}/metadata` }), oauthClientName: "Approved Aiden CLI", description: "Documents" }));
+  writeFileSync(file, JSON.stringify({ id: "metadata", name: "Metadata", transport: "http", url: `${issuer}/mcp`, enabled: true, oauth: true, ...(oidc ? {} : { authServerMetadataUrl: `${issuer}/metadata` }), description: "Documents" }));
   await api.mcpCommand(dir, ["add", file]);
   const write = process.stderr.write;
   process.stderr.write = function(chunk, ...args) {
@@ -1479,7 +1479,7 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
     await callbackCheck;
   } finally { process.stderr.write = write; }
   assert.equal(tokenCalls, 1);
-  assert.equal(registration.client_name, "Approved Aiden CLI");
+  assert.equal(registration.client_name, "Aiden Agent", "every MCP OAuth registration uses the catalog's client name");
   assert.equal(requests.filter((path) => path === "/metadata").length, oidc ? 0 : 1);
   assert.equal(requests.some((path) => path.includes("openid-configuration")), oidc);
   assert.ok(requests.every((path) => !path.includes("wrong")));
