@@ -1,8 +1,13 @@
 // A hand-off card's Open in the Bot's own browser (blueprint §2.5, G14): the
 // `botBrowser` opener of `bot-handoff-open.ts`.
 //
-// - The link opens in a new tab of the Bot's browser, shown to the person
-//   (`source: "user"`, so the panel's Browser tab comes forward).
+// - A sign-in opens its site in a new tab of the Bot's browser. An action's
+//   link opens in the Bot's tab already showing that page (a rule handed the
+//   Bot's own step there to the person), else in a new tab. Either is shown
+//   to the person (`source: "user"`, so the panel's Browser tab comes
+//   forward).
+// - Open again on the same card brings back the tab it already opened,
+//   rather than opening another.
 // - The tab is held for the person (`sign_in` or `handoff`) under the card's
 //   `waitId`: the Bot can't read or drive it until the card settles or is
 //   withdrawn, which releases it.
@@ -44,7 +49,7 @@ export interface BotBrowserHandoffDeps {
 
 /**
  * Open `url` for the card `waitId` of `botId` in the Bot's browser and hold
- * the new tab for the person. `owner` is the document whose Open was pressed.
+ * its tab for the person. `owner` is the document whose Open was pressed.
  * False when the Bot's browser can't open it.
  */
 export type BotBrowserHandoffOpener = (
@@ -55,29 +60,51 @@ export type BotBrowserHandoffOpener = (
   owner?: RendererDocumentOwner,
 ) => Promise<boolean>;
 
+interface HeldTab {
+  workspaceId: string;
+  tabId: string;
+}
+
 function heldKey(botId: string, waitId: string): string {
   return `${botId}\u0000${waitId}`;
 }
 
 export function createBotBrowserHandoffOpener(deps: BotBrowserHandoffDeps): BotBrowserHandoffOpener {
-  /** The workspaces holding a tab for each waiting card. */
-  const held = new Map<string, Set<string>>();
+  /** The tabs each waiting card holds. */
+  const held = new Map<string, HeldTab[]>();
 
   const release = (botId: string, waitId: string): void => {
     const key = heldKey(botId, waitId);
-    const workspaces = held.get(key);
-    if (workspaces === undefined) return;
+    const tabs = held.get(key);
+    if (tabs === undefined) return;
     held.delete(key);
     void deps
       .service()
       .then((service) => {
-        for (const workspaceId of workspaces) service.release(workspaceId, waitId);
+        for (const workspaceId of new Set(tabs.map((tab) => tab.workspaceId))) service.release(workspaceId, waitId);
       })
       .catch((error: unknown) => deps.onReleaseError?.(error));
   };
 
   // A settled or withdrawn card gives its tabs back to the Bot.
   deps.handoffs.onSettled((prompt) => release(prompt.botId, prompt.waitId));
+
+  /** The tab this card already opened in `workspaceId`, brought forward; `undefined` when the person closed it. */
+  async function reopen(service: BotBrowserHandoffService, key: string, workspaceId: string): Promise<string | undefined> {
+    for (const tab of held.get(key) ?? []) {
+      if (tab.workspaceId !== workspaceId) continue;
+      try {
+        await service.command(workspaceId, { action: "select", tabId: tab.tabId }, { source: "user" });
+        return tab.tabId;
+      } catch {
+        // Closed since: forget it, and open the page again below.
+        const rest = (held.get(key) ?? []).filter((each) => each !== tab);
+        if (rest.length > 0) held.set(key, rest);
+        else held.delete(key);
+      }
+    }
+    return undefined;
+  }
 
   return async (botId, waitId, url, hold, owner) => {
     if (hold === "handoff" && !(await deps.hasBrowserAccess(botId))) return false;
@@ -87,11 +114,18 @@ export function createBotBrowserHandoffOpener(deps: BotBrowserHandoffDeps): BotB
     const document = owner ?? (service.hasOwner(workspaceId) ? undefined : deps.mintOwner());
     if (document === undefined && !service.hasOwner(workspaceId)) return false;
     if (document !== undefined) service.transferOwner(workspaceId, document);
-    const result = await service.command(workspaceId, { action: "create", url, show: true }, { source: "user" });
-    if (result.tabId === undefined) return false;
-    service.hold(workspaceId, result.tabId, { holdId: waitId, reason: hold });
     const key = heldKey(botId, waitId);
-    held.set(key, new Set([...(held.get(key) ?? []), workspaceId]));
+    let tabId = await reopen(service, key, workspaceId);
+    if (tabId === undefined) {
+      // `open_link` shows the Bot's tab already on that page, else opens one.
+      const command: BrowserCommand =
+        hold === "sign_in" ? { action: "create", url, show: true } : { action: "open_link", url };
+      tabId = (await service.command(workspaceId, command, { source: "user" })).tabId;
+    }
+    if (tabId === undefined) return false;
+    service.hold(workspaceId, tabId, { holdId: waitId, reason: hold });
+    const tabs = (held.get(key) ?? []).filter((tab) => !(tab.workspaceId === workspaceId && tab.tabId === tabId));
+    held.set(key, [...tabs, { workspaceId, tabId }]);
     // The card may have settled while the tab opened: nothing would release it then.
     if (deps.handoffs.get(botId, waitId) === undefined) release(botId, waitId);
     return true;

@@ -10,8 +10,10 @@
 // action host. Typed text and field values never reach the classifier, and
 // the card leaves typed text out when the field is a password, code or card
 // field (or couldn't be read), because a rule's hand-off quotes the card's
-// text, also on the person's phone.
+// text, also on the person's phone. When a rule hands the call to the
+// person, its card opens the page the Bot was on, in the Bot's own tab.
 
+import { isBotHandoffOpenUrl } from "../../../renderer/shared/bot-handoffs.js";
 import type { BrowserHoldReason } from "../../../renderer/shared/browser.js";
 import {
   assertBrowserToolApproval,
@@ -152,7 +154,10 @@ export async function botBrowserApproval(
     ...(field === undefined ? {} : { field: { ...field } }),
   };
   const secret = field === undefined || [...classifyBotAction(action, []).classes].some((entry) => LOCKED_CLASSES.has(entry));
+  // A rule that hands this to the person opens the same page for them, in this tab.
+  const page = approval.target.url;
   return {
+    ...(isBotHandoffOpenUrl(page) ? { open: { url: page } } : {}),
     approval: {
       summary: botBrowserApprovalSummary(tool, args, approval.target.url, { hideText: secret }),
       // The person answered: the page, tab and control must still be the ones

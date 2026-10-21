@@ -148,8 +148,15 @@ test("the gateway explains the browser and lists the Bot's tabs, marking the one
   const gateway = (await fake.browser.candidates(BOT, TURN)).find(({ tool }) => tool.name === "browser")!.tool;
   const text = textOf(await gateway.execute("gateway-1", {}));
   assert.ok(text.startsWith(BOT_BROWSER_GUIDANCE));
-  const listing = JSON.parse(text.slice(text.indexOf("{"))) as { tabs: Array<{ tabId: string; usedByThePerson?: boolean }> };
-  assert.deepEqual(listing.tabs.map((entry) => [entry.tabId, entry.usedByThePerson === true]), [["slack", false], ["shop", true]]);
+  const listing = JSON.parse(text.slice(text.indexOf("{"))) as {
+    tabs: Array<{ tabId: string; url: string; title: string; usedByThePerson?: boolean }>;
+  };
+  assert.deepEqual(
+    listing.tabs.map((entry) => [entry.tabId, entry.url, entry.usedByThePerson === true]),
+    [["slack", SLACK, false], ["shop", "", true]],
+    "a tab the person is using shows no address while they use it",
+  );
+  assert.equal(text.includes("checkout"), false);
 });
 
 test("with no window to show it in, the Bot is told to ask the person to open Aiden; a window that appears owns it", async () => {
@@ -428,7 +435,7 @@ test("Enter in a web message box falls under the Send a message rule, and a Deny
   }
 });
 
-test("typing into a password field hands the step to the person, and the card never shows what would be typed", async () => {
+test("typing into a password field hands the step to the person on that page, and the card never shows what would be typed", async () => {
   const fake = fakeBrowser();
   fake.setProbe({ tag: "input", type: "password", accessibleName: "Password" });
   const handoffs = createBotHandoffs();
@@ -451,6 +458,7 @@ test("typing into a password field hands the step to the person, and the card ne
     const card = handoffs.pending(BOT)[0]!;
     assert.equal(card.rule?.id, "locked.credentials");
     assert.equal(JSON.stringify(card).includes("hunter2"), false);
+    assert.deepEqual(card.open, { url: SLACK }, "Open takes the person to the page the Bot was on, in its own tab");
     handoffs.answer(BOT, card.waitId, { outcome: "done" });
     await run.wait(ctx);
     assert.equal(fake.commands.length, 0, "the Bot never typed it");

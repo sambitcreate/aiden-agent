@@ -98,3 +98,42 @@ test("a link that is not a plain https page is never opened, whoever asks", asyn
     assert.deepEqual(await open({ ...SIGN_IN, open: { url } }, "desktop", { browser: true }), { opened: "none", calls: [] }, url);
   }
 });
+
+test("when the Bot's browser fails to open an action's page, the system browser opens it instead", async () => {
+  const errors: unknown[] = [];
+  const calls: string[] = [];
+  const opened = await openBotHandoff(card({ open: LINK }), "desktop", {
+    external: async (url) => void calls.push(`external ${url}`),
+    focusChat: async () => assert.fail("the Mac's own Open never moves the chat"),
+    botBrowser: async () => {
+      throw new Error("Close a browser tab before opening more than 20.");
+    },
+    onOpenerError: (error) => errors.push(error),
+  });
+  assert.equal(opened, "external");
+  assert.deepEqual(calls, ["external https://bank.example/verify"]);
+  assert.deepEqual(errors.map((error) => (error as Error).message), ["Close a browser tab before opening more than 20."]);
+});
+
+test("a sign-in the Bot's browser can't open says why on the Mac, and from a phone still brings the chat forward", async () => {
+  const failing: BotHandoffOpeners = {
+    external: async () => assert.fail("a sign-in never opens in the system browser"),
+    focusChat: async () => undefined,
+    botBrowser: async () => {
+      throw new Error("Close a browser tab before opening more than 20.");
+    },
+  };
+  await assert.rejects(openBotHandoff(SIGN_IN, "desktop", failing), /Close a browser tab/u);
+  const errors: unknown[] = [];
+  const focused: string[] = [];
+  assert.equal(
+    await openBotHandoff(SIGN_IN, "phone", {
+      ...failing,
+      focusChat: async (botId) => void focused.push(botId),
+      onOpenerError: (error) => errors.push(error),
+    }),
+    "focused",
+  );
+  assert.deepEqual(focused, ["bot:ada"]);
+  assert.equal(errors.length, 1);
+});

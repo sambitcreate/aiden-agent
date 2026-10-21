@@ -17,6 +17,7 @@ function owner(id: number): RendererDocumentOwner {
 function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
   const tabs = new Map<string, { url: string; hold?: { holdId: string; reason: BrowserHoldReason } }>();
   const created: Array<{ command: BrowserCommand; context: BrowserCommandContext }> = [];
+  let opened = 0;
   let shownIn = options.owner;
   const service: BotBrowserHandoffService = {
     hasOwner: () => shownIn !== undefined,
@@ -24,11 +25,22 @@ function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
       assert.equal(workspaceId, WORKSPACE);
       shownIn = next;
     },
+    // As the browser service runs them: `open_link` shows a tab already on the
+    // page, else opens one; `select` needs a tab that is still open.
     async command(workspaceId, command, context) {
       assert.equal(workspaceId, WORKSPACE);
       created.push({ command, context });
-      const tabId = `tab-${tabs.size + 1}`;
-      tabs.set(tabId, { url: (command as { url?: string }).url ?? "about:blank" });
+      if (command.action === "select") {
+        if (!tabs.has(command.tabId)) throw new Error("This browser tab is no longer available.");
+        return { state: {} as never, tabId: command.tabId };
+      }
+      const url = (command as { url?: string }).url ?? "about:blank";
+      if (command.action === "open_link") {
+        const existing = [...tabs].find(([, tab]) => tab.url === url)?.[0];
+        if (existing !== undefined) return { state: {} as never, tabId: existing };
+      }
+      const tabId = `tab-${(opened += 1)}`;
+      tabs.set(tabId, { url });
       return { state: {} as never, tabId };
     },
     hold(workspaceId, tabId, hold) {
@@ -152,4 +164,39 @@ test("nothing opens with no window, for a Bot that is gone, or for an action car
   assert.equal(noAccess.browser.created.length, 0);
   noAccess.ask("wait-2");
   assert.equal(await noAccess.open(BOT, "wait-2", "https://github.com", "sign_in"), true);
+});
+
+test("an action card's Open shows the Bot's tab already on that page and holds it, rather than opening another", async () => {
+  const { browser, open, ask } = setup({ owner: owner(1) });
+  // The Bot was on the cart when a rule handed the purchase to the person.
+  browser.tabs.set("tab-0", { url: "https://shop.example.com/cart" });
+  ask("wait-1", "action");
+  assert.equal(await open(BOT, "wait-1", "https://shop.example.com/cart", "handoff"), true);
+  assert.deepEqual(browser.created.map(({ command, context }) => [command, context.source]), [
+    [{ action: "open_link", url: "https://shop.example.com/cart" }, "user"],
+  ]);
+  assert.equal(browser.tabs.size, 1);
+  assert.deepEqual(browser.heldBy("tab-0"), { holdId: "wait-1", reason: "handoff" });
+});
+
+test("Open again on the same card brings back the tab it opened; once the person closed it, the page opens again", async () => {
+  const { browser, handoffs, open, ask } = setup({ owner: owner(1) });
+  const card = ask("wait-1");
+  await open(BOT, "wait-1", "https://github.com", "sign_in");
+  await open(BOT, "wait-1", "https://github.com", "sign_in");
+  assert.deepEqual(
+    browser.created.map(({ command }) => command),
+    [{ action: "create", url: "https://github.com", show: true }, { action: "select", tabId: "tab-1" }],
+  );
+  assert.equal(browser.tabs.size, 1);
+
+  browser.tabs.delete("tab-1");
+  await open(BOT, "wait-1", "https://github.com", "sign_in");
+  assert.deepEqual(browser.created.at(-1)?.command, { action: "create", url: "https://github.com", show: true });
+  assert.deepEqual(browser.heldBy("tab-2"), { holdId: "wait-1", reason: "sign_in" });
+
+  handoffs.answer(BOT, "wait-1", { outcome: "done" });
+  await card.answer;
+  await settled();
+  assert.equal(browser.heldBy("tab-2"), undefined);
 });

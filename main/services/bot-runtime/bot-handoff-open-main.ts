@@ -1,10 +1,15 @@
 // Production openers for hand-off cards (`bot-handoff-open.ts`): the system
 // browser through the same validation as `browser:open-external`, the Bot's
 // chat through app navigation, which brings the main window forward, and the
-// Bot's own browser, where the new tab is held for the person until the card
+// Bot's own browser, where the tab is held for the person until the card
 // settles.
+//
+// A sign-in opens in a new tab of the Bot's browser, shown in its panel's
+// Browser tab: the window whose Open was pressed brings that tab forward, and
+// from a phone the Mac's window comes forward on the Bot's chat first, whose
+// panel then shows the held tab (`bot-browser-tab.tsx`).
 
-import { shell } from "../../platform.js";
+import { logger, shell } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { externalUrl } from "../browser/core.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
@@ -21,6 +26,7 @@ function openers(owner: RendererDocumentOwner | undefined): BotHandoffOpeners {
       await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
     },
     botBrowser: (botId, waitId, url, hold) => openInBotBrowser(botId, waitId, url, hold, owner),
+    onOpenerError: (error) => logger.warn("bots", "A hand-off's page couldn't open in the Bot's own browser.", error),
   };
 }
 

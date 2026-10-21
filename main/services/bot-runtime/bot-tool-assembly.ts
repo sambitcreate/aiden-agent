@@ -24,6 +24,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   BOT_HANDOFF_ACTION_MAX_CHARS,
   BOT_HANDOFF_WHY_MAX_CHARS,
+  isBotHandoffOpenUrl,
   normalizeBotHandoffAction,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { botRuleLabel, type BotRule } from "../../../renderer/shared/bot-rules.js";
@@ -82,6 +83,11 @@ export interface BotCandidateSet {
 export interface BotLiveApproval {
   approval: BotApprovalRequirement | null;
   action?: BotClassifiableAction;
+  /**
+   * Where the person can do the step themselves when a rule hands it to them
+   * (the Bot browser's page): the card's Open. An https page only.
+   */
+  open?: { url: string };
 }
 
 export interface BotToolSources {
@@ -250,6 +256,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         }
         if (unattended) return { allowed: false, reason: ruleUnattendedBlock(label) };
         const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
+        const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
         return {
           allowed: true,
           handoff: {
@@ -257,6 +264,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
             summary: callSummary,
             action: ruleActionText(rule),
             why: ruleWhyText(label, botName, callSummary),
+            ...(open === undefined ? {} : { open }),
           },
         };
       } catch (error) {

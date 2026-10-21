@@ -22,7 +22,11 @@ export interface BotHandoffRequest extends BotPendingHandoff {
   signal: AbortSignal | undefined;
 }
 
-/** The card a rule opens instead of running a call (plan §4.4): an action card naming its rule. */
+/**
+ * The card a rule opens instead of running a call (plan §4.4): an action card
+ * naming its rule, with the page the call was on (a Bot browser call) as its
+ * Open.
+ */
 export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRequest {
   return {
     botId: request.botId,
@@ -31,6 +35,7 @@ export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRe
     kind: "action",
     action: request.action,
     why: request.why,
+    ...(request.open === undefined ? {} : { open: { url: request.open.url } }),
     source: "rule",
     rule: { id: request.rule.id, label: request.rule.label },
     signal: request.signal,
