@@ -39,6 +39,7 @@ export class RemoteBotSessionFollower {
   /** A read is in flight: events wait for it, then apply on top of its answer. */
   private inFlight = false;
   private subscribing = false;
+  private resyncPending = false;
   private buffered: AidenRemoteBotSessionEvent[] = [];
 
   constructor(
@@ -117,6 +118,14 @@ export class RemoteBotSessionFollower {
     }
     if (this.stopped || request !== this.reading) return;
     this.inFlight = false;
+    // Content this Mac could not read arrived while this read was out: it may
+    // be newer than the answer, so read once more after taking this one.
+    if (this.resyncPending) {
+      this.resyncPending = false;
+      queueMicrotask(() => {
+        if (!this.stopped && !this.inFlight) void this.read();
+      });
+    }
     const buffered = this.buffered;
     this.buffered = [];
     if (!outcome.ok) {
@@ -143,20 +152,29 @@ export class RemoteBotSessionFollower {
       this.publish({ stream: message.state, ...(message.state === "gone" ? { gone: true } : {}) });
       return;
     }
+    if (message.kind === "resync") {
+      // One read at a time: a burst of unreadable frames becomes one follow-up read.
+      if (this.inFlight) this.resyncPending = true;
+      else void this.read();
+      return;
+    }
     const { event } = message;
     if (event.type === "snapshot") {
       // A connection's opening snapshot supersedes any read still in flight.
       this.reading += 1;
       this.inFlight = false;
+      this.resyncPending = false;
       this.buffered = [];
       this.publish({ view: remoteBotSessionView(event.payload.session), failed: null, gone: false });
       return;
     }
-    const current = this.state.view;
-    if (current === null || this.inFlight) {
+    if (this.inFlight) {
       this.buffered.push(event);
       return;
     }
+    // With no read in flight and nothing shown, the next read replaces everything.
+    const current = this.state.view;
+    if (current === null) return;
     const next = applyRemoteBotSessionEvent(current, event);
     if (next === null) void this.read();
     else if (next !== current) this.publish({ view: next });

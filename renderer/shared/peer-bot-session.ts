@@ -18,4 +18,6 @@ export interface PeerBotSessionSubscription {
 
 export type PeerBotSessionMessage =
   | { kind: "event"; hostId: string; botId: string; event: AidenRemoteBotSessionEvent }
-  | { kind: "state"; hostId: string; botId: string; state: PeerBotSessionStreamState };
+  | { kind: "state"; hostId: string; botId: string; state: PeerBotSessionStreamState }
+  /** The host sent something newer than this Mac reads; read the session again. */
+  | { kind: "resync"; hostId: string; botId: string };

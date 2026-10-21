@@ -187,6 +187,8 @@ export class PeerEventFrames {
 export interface PeerRemoteError {
   code: string;
   retryable: boolean;
+  /** The host's own one-line explanation, bounded and stripped of control characters. */
+  message?: string;
   details?: {
     decision?: "allow" | "deny";
     outcome?: "answered" | "expired";
@@ -218,6 +220,8 @@ export class PeerTransportError extends Error {
           ? "The other device's identity changed. Pair it again."
           : code === "unsupported_protocol"
             ? "The other device runs an incompatible Aiden version."
+          : code === "request_failed" && remote?.message
+            ? remote.message
           : "The other device could not complete this request.",
     );
   }
@@ -259,9 +263,14 @@ export function parsePeerErrorEnvelope(text: string): PeerRemoteError | undefine
       retryAfter <= 3600
     )
       details.retryAfterSeconds = retryAfter;
+    const message =
+      typeof error.message === "string"
+        ? error.message.replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/gu, " ").trim()
+        : "";
     return {
       code,
       retryable: error.retryable === true,
+      ...(message && message.length <= 300 ? { message } : {}),
       ...(Object.keys(details).length ? { details } : {}),
     };
   } catch {

@@ -1071,7 +1071,9 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "BotAvatarUploadRequest",
   ];
   for (const name of closedBotSchemas) {
-    assert.equal(record(schemas[name], name).additionalProperties, false, `${name} must be closed`);
+    // A schema composed with allOf closes over everything it evaluates instead.
+    const schema = record(schemas[name], name);
+    assert.equal(schema.additionalProperties ?? schema.unevaluatedProperties, false, `${name} must be closed`);
   }
   for (const name of [
     "BotAccessView",

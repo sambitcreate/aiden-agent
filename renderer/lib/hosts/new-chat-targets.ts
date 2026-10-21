@@ -116,6 +116,8 @@ export interface RemoteBotChoice {
   id: string;
   name: string;
   purpose?: string;
+  /** The host says a turn is running. */
+  working?: true;
 }
 
 export interface RemoteBotGroup {
@@ -139,7 +141,12 @@ export function remoteBotGroups(
     const bots = (feeds.get(host.id)?.bots ?? [])
       .map((row) => {
         const purpose = text(row, "purpose");
-        return { id: row.id, name: text(row, "name") ?? "Untitled Bot", ...(purpose ? { purpose } : {}) };
+        return {
+          id: row.id,
+          name: text(row, "name") ?? "Untitled Bot",
+          ...(purpose ? { purpose } : {}),
+          ...(row.sessionState === "running" ? { working: true as const } : {}),
+        };
       });
     if (bots.length === 0) continue;
     const disabledReason = unavailableReason(host, byId.get(host.id), "botChats", "start Bot chats");
