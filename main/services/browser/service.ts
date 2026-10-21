@@ -167,6 +167,8 @@ interface LiveTab {
   recording?: RecordingSession;
   pendingRecorder?: BrowserWindow;
   visible: boolean;
+  /** Actions and captures running on this tab; while any is, a hidden tab stays in its window. */
+  activeHosts: number;
   bounds?: BrowserBounds;
   closing: boolean;
   expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
@@ -1098,6 +1100,7 @@ export class BrowserService {
       refs: new Map(),
       referenceGeneration: 0,
       visible: false,
+      activeHosts: 0,
       closing: false,
       expectedInputs: [],
       crashTimes: [],
@@ -1148,7 +1151,7 @@ export class BrowserService {
     tab.visible = false;
     tab.state.visible = false;
     tab.view.setVisible(false);
-    if (process.platform !== "linux") {
+    if (process.platform !== "linux" && tab.activeHosts === 0) {
       this.detach(tab);
       return;
     }
@@ -1165,6 +1168,32 @@ export class BrowserService {
     }
     window.contentView.addChildView(tab.view);
     tab.attached = window;
+  }
+  /**
+   * macOS takes a hidden tab out of its window, where its page gets no frames:
+   * an animation-frame wait never ends, and a page loaded there has nothing to
+   * capture. While an action or capture runs, the tab is hosted as Linux always
+   * hosts it, an invisible child of its window, and taken out again after.
+   */
+  private hostWhileActive(tab: LiveTab): () => void {
+    if (process.platform === "linux") return () => {};
+    tab.activeHosts += 1;
+    if (!tab.visible && !tab.attached && !tab.closing) {
+      try {
+        const window = this.mainWindow(tab.state.workspaceId);
+        window.contentView.addChildView(tab.view);
+        tab.attached = window;
+      } catch {
+        // No window to host it: the action runs as it would have.
+      }
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      tab.activeHosts -= 1;
+      if (tab.activeHosts === 0 && !tab.visible) this.detach(tab);
+    };
   }
   private present(tab: LiveTab, visible: boolean, bounds?: BrowserBounds): void {
     if (bounds) tab.bounds = boundedBounds(bounds);
@@ -1416,9 +1445,11 @@ export class BrowserService {
     signal?: AbortSignal,
   ): Promise<BrowserImage> {
     const release = tab.backgroundThrottling.acquire(signal);
+    const unhost = this.hostWhileActive(tab);
     try {
       return await this.capturePage(tab, fullPage, bounds, signal);
     } finally {
+      unhost();
       release();
     }
   }
@@ -2390,6 +2421,7 @@ export class BrowserService {
           // Playwright actionability waits use animation frames, including user
           // initiated automation. Acquire only after the action leaves the queue.
           const release = tab.backgroundThrottling.acquire(signal);
+          const unhost = this.hostWhileActive(tab);
           tab.state.agentControlling = context.source === "agent";
           this.emit(workspaceId);
           try {
@@ -2687,6 +2719,7 @@ export class BrowserService {
             throw error;
           } finally {
             release();
+            unhost();
             await this.removeAgentCursor(tab);
             actionEvent.completedAt = Date.now();
             tab.state.agentControlling = false;

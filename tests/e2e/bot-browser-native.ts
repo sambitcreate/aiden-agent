@@ -16,7 +16,12 @@ import type { BrowserCommand, BrowserCommandResult, BrowserSnapshot } from "../.
 const root = process.env.AIDEN_BOT_BROWSER_ROOT!;
 await mkdir(path.join(root, "user-data"), { recursive: true });
 app.setPath("userData", path.join(root, "user-data"));
-const deadline = setTimeout(() => app.exit(2), 60_000);
+// Name each step on stderr, so a stalled run says where it stopped.
+const step = (name: string) => console.error(`[bot-browser] ${name}`);
+const deadline = setTimeout(() => {
+  step("deadline reached");
+  app.exit(2);
+}, 60_000);
 
 const BOT = "bot:ada";
 const BOT_WORKSPACE = "bot-home-ada";
@@ -107,6 +112,7 @@ void app.whenReady().then(async () => {
     (await session.fromPartition(partition).cookies.get({})).map((cookie) => `${cookie.name}=${cookie.value}`).sort();
 
   // 1. The Bot signs in to a site in its own browser; the person's browser stays signed out.
+  step("1 sign-in isolation");
   const botTab = await opened(BOT_WORKSPACE, `${origin}/sign-in?who=bot`);
   const botProfile = browser.getState(BOT_WORKSPACE).tabs[0]?.profileId;
   const personTab = await opened(PERSON_WORKSPACE, `${origin}/whoami`);
@@ -145,8 +151,10 @@ void app.whenReady().then(async () => {
       leaked: ["hunter2-secret", "481516", "4242424242424242"].filter((secret) => serialized.includes(secret)),
     };
   };
+  step("2 masking");
   await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
   const masking = loginAsSeen(await snapshot(botTab));
+  step("2 typing");
   const outcome = (run: Promise<unknown>) => run.then(() => "ran", (error: Error) => error.message);
   const typing = await outcome(agent({ action: "type", tabId: botTab, selector: "#password", text: "guess" }));
   const noteTyping = await outcome(agent({ action: "type", tabId: botTab, selector: "#note", text: "fine" }));
@@ -165,6 +173,7 @@ void app.whenReady().then(async () => {
   };
 
   // 3. A visible cross-site frame can't be inspected for fields: the image is dropped, with a note.
+  step("3 cross-site frame");
   await navigate(BOT_WORKSPACE, botTab, `${origin}/framed`);
   const framed = await snapshot(botTab);
   const frame = {
@@ -175,6 +184,7 @@ void app.whenReady().then(async () => {
 
   // 4. A tab the person holds (signing in) refuses the Bot until it is released;
   // after that the Bot sees it again, still masked.
+  step("4 hold");
   await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
   browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-1", reason: "sign_in" });
   const heldState = browser.getState(BOT_WORKSPACE).tabs.find((tab) => tab.id === botTab)?.heldForPerson;
@@ -189,6 +199,7 @@ void app.whenReady().then(async () => {
   const heldTraces = typeof released === "string" ? null : JSON.stringify(released).includes("held-sign-in-code");
 
   // 5. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
+  step("5 delete");
   await browser.clearBotProfile(BOT, BOT_WORKSPACE);
   const cleared = {
     botCookies: await cookieNames(botBrowserPartition(BOT)),
