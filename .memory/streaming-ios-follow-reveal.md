@@ -60,3 +60,15 @@ Part of the live cross-device streaming plan (iOS lane I1–I3). The direction w
   - The progress stream stays open through `openEventStreamStatus`, and the test pushes roster frames with `pushEvent`. Only one sink exists, so a live `runs/current` response takes the sink over.
   - `isLookingForForeignRun` and `agentRoster?.revision` give tests deterministic waits instead of sleeps.
   - The fixture also serves this phone's own turn (`/turns` with stream `run-mac`) for the own-run accounting test.
+
+## 2026-10-21 follow-up: settle in place, paced reveal, Markdown tail (thread "iOS chat flicker and jitter")
+
+- Root cause of the settle flicker: `finishStream` published the reconciled chat, then `clearFinishedStream` awaited `cache.removeActiveStream` before clearing `liveText`, so for at least a frame both the settled message and the live view drew the reply. `clearLiveOutput()` now runs before that await, in the same main-actor turn as `chat = presented`. `reconcileMissingStream` clears right after its reconcile too (its Live Activity awaits come next). Foreign runs were already atomic (`endForeignRunQuietly` has no suspension after publication). Test: `testTheSettledReplyReplacesTheLiveReplyInOneUpdate` samples at every main-actor yield.
+- `AidenChatViewModel.showsLiveResponse` keeps the live view while `activeStreamID`/`foreignRunIsLive` holds tools, reasoning or a timeline, so a tools-only reply doesn't vanish between `done` and the transcript read. `endForeignRunObservation` now also clears `activityTimeline`, otherwise this would show a stale timeline.
+- `AidenLiveResponseView` puts "Working for" in a bottom row of `AidenMessageFooter.minimumHeight` (32pt), empty after the run ends, so the settled footer swaps in place.
+- `messageRenderIDs` (server ID -> optimistic `local-` ID) set right before `chat = acceptedChat` in `send()`; `AidenTranscriptRowIdentity.rows` keys the settled `ForEach` and ignores an alias that would collide.
+- Gate: 33ms tick, budget `max(3, ceil(backlog/8), backlog-600)`, rounded up to the end of a word; no-whitespace buffers hold one tick, then release whole when <= 24 chars or paced. `paced: false` (Reduce Motion, set from the views' `aidenReduceMotion`) is the old unpaced gate. The 2026-10-13 plan had decided against mobile pacing (Hermex lag); the owner asked for it, and the 600-char catch-up cap answers the lag concern.
+- Bot session: `AidenBotSessionModel.revealedPartial` trails `partial` through the same gate; snapshots, rewrites and the answer entry apply at once.
+- `AidenStreamingMarkdownTail.displayText` (in `AidenMarkdownContentCache.swift`) heals only the open tail when `chunks(for:streaming: true)`; it reuses the splitter's `Fence`. `_` emphasis is deliberately ignored.
+- Not changed: composer height still reaches the transcript spacer through a preference (one-frame lag while the composer grows); Android still uses the unpaced gate and has no tail healing.
+

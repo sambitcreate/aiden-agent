@@ -205,13 +205,21 @@ final class AidenMarkdownContentCache {
     /// reused from the cache) followed by the open tail. A chunk keeps its
     /// index as it grows and seals, so a view keyed by index keeps its
     /// identity and only the tail's view sees new text while a reply streams.
-    func chunks(for markdown: String) -> [AidenMarkdownChunk] {
+    ///
+    /// With `streaming`, the open tail is drawn through
+    /// `AidenStreamingMarkdownTail.displayText`, so a half-received marker
+    /// never flashes as raw syntax. Sealed chunks are never altered.
+    func chunks(for markdown: String, streaming: Bool = false) -> [AidenMarkdownChunk] {
         let split = AidenMarkdownBlockSplitter.split(markdown)
         guard !split.settled.isEmpty else {
-            return [AidenMarkdownChunk(index: 0, text: markdown, content: parse(markdown), leadingGap: 0)]
+            let text = streaming ? AidenStreamingMarkdownTail.displayText(markdown) : markdown
+            return [AidenMarkdownChunk(index: 0, text: text, content: parse(text), leadingGap: 0)]
         }
         var pieces = split.settled.map { (text: String($0), sealed: true) }
-        if !split.tail.isEmpty { pieces.append((String(split.tail), false)) }
+        if !split.tail.isEmpty {
+            let tail = String(split.tail)
+            pieces.append((streaming ? AidenStreamingMarkdownTail.displayText(tail) : tail, false))
+        }
         var chunks: [AidenMarkdownChunk] = []
         chunks.reserveCapacity(pieces.count)
         for (index, piece) in pieces.enumerated() {
@@ -403,5 +411,205 @@ enum AidenMarkdownChunkSpacing {
         }
         let run = content.prefix { $0 == marker }
         return content.dropFirst(run.count).allSatisfy { $0 == " " || $0 == "\t" }
+    }
+}
+
+/// Display-only repair of a streaming reply's open tail, so Markdown that has
+/// only half arrived never flashes as raw syntax and then snaps into place:
+///
+/// - A last, unfinished line that is only a block marker (`-`, `1.`, `#`,
+///   `>`, `|`, `---`) is hidden until its content arrives. Under a paragraph
+///   a lone `-` or `=` would otherwise turn that paragraph into a heading for
+///   a tick.
+/// - A link whose destination is still arriving (`[label](https://exa`)
+///   shows as its label.
+/// - Inline code, `**strong**`, `*emphasis*` and `~~strike~~` left open in
+///   the last paragraph are closed, or dropped when nothing follows them yet.
+///
+/// Only the last paragraph is examined, and nothing inside an open fenced
+/// code block changes (CommonMark already draws it as code). `_` emphasis is
+/// left alone because intraword underscores (`snake_case`) are not emphasis.
+/// The settled reply is always drawn from the real text.
+enum AidenStreamingMarkdownTail {
+    static func displayText(_ tail: String) -> String {
+        guard !tail.isEmpty else { return tail }
+        let lines = tail.split(separator: "\n", omittingEmptySubsequences: false)
+        var openFence: AidenMarkdownBlockSplitter.Fence?
+        var paragraphStart = 0
+        for (index, rawLine) in lines.enumerated() {
+            let line = rawLine.hasSuffix("\r") ? rawLine.dropLast() : rawLine
+            if let fence = openFence {
+                if fence.isClosed(by: line.utf8) {
+                    openFence = nil
+                    paragraphStart = index + 1
+                }
+                continue
+            }
+            if let fence = AidenMarkdownBlockSplitter.Fence(opening: line.utf8) {
+                openFence = fence
+                continue
+            }
+            if line.allSatisfy({ $0 == " " || $0 == "\t" }) { paragraphStart = index + 1 }
+        }
+        guard openFence == nil else { return tail }
+
+        var lineCount = lines.count
+        if let last = lines.last, isLoneBlockMarker(last) {
+            lineCount -= 1
+        }
+        guard paragraphStart < lineCount else {
+            let kept = lines[..<lineCount].joined(separator: "\n")
+            return lineCount < lines.count && lineCount > 0 ? kept + "\n" : kept
+        }
+        let prefix = lines[..<paragraphStart].map { $0 + "\n" }.joined()
+        let paragraph = lines[paragraphStart..<lineCount].joined(separator: "\n")
+        let repaired = repairInline(paragraph)
+        let droppedLine = lineCount < lines.count
+        return prefix + repaired + (droppedLine && !repaired.isEmpty ? "\n" : "")
+    }
+
+    /// An unfinished line holding only a block marker and spaces.
+    static func isLoneBlockMarker(_ line: Substring) -> Bool {
+        let content = line.filter { $0 != " " && $0 != "\t" && $0 != "\r" }
+        guard !content.isEmpty else { return false }
+        if content.allSatisfy({ "-=*_#>+|~`".contains($0) }) { return true }
+        // An ordered-list marker: up to nine digits, then `.` or `)`.
+        guard let last = content.last, last == "." || last == ")" else { return false }
+        let digits = content.dropLast()
+        return !digits.isEmpty && digits.count <= 9 && digits.allSatisfy(\.isASCII) && digits.allSatisfy(\.isNumber)
+    }
+
+    private enum Marker: Equatable {
+        case code(Int)
+        case strong
+        case emphasis
+        case strike
+
+        var text: String {
+            switch self {
+            case .code(let length): return String(repeating: "`", count: length)
+            case .strong: return "**"
+            case .emphasis: return "*"
+            case .strike: return "~~"
+            }
+        }
+    }
+
+    private static func repairInline(_ paragraph: String) -> String {
+        var text = Array(paragraph)
+        if let label = openLinkLabel(in: text) {
+            text = Array(text[..<label.start]) + Array(label.text)
+        }
+        // Open markers, innermost last, with the offset each one starts at.
+        var open: [(marker: Marker, offset: Int)] = []
+        var index = 0
+        var lineStart = true
+        while index < text.count {
+            let character = text[index]
+            if character == "\n" {
+                lineStart = true
+                index += 1
+                continue
+            }
+            if case .code(let length)? = open.last?.marker {
+                if character == "`" {
+                    let run = runLength(of: "`", in: text, from: index)
+                    if run == length { open.removeLast() }
+                    index += run
+                } else {
+                    index += 1
+                }
+                lineStart = false
+                continue
+            }
+            switch character {
+            case "\\":
+                index += 2
+            case "`":
+                let run = runLength(of: "`", in: text, from: index)
+                open.append((.code(run), index))
+                index += run
+            case "*":
+                let run = runLength(of: "*", in: text, from: index)
+                let next = index + run < text.count ? text[index + run] : nil
+                if lineStart, run == 1, next == " " || next == "\t" {
+                    // A bullet, not emphasis.
+                    index += run
+                    break
+                }
+                let previous = index > 0 ? text[index - 1] : nil
+                if run >= 2 { toggle(.strong, at: index, previous: previous, next: next, in: &open) }
+                if run == 1 || run >= 3 {
+                    toggle(.emphasis, at: run >= 3 ? index + 2 : index, previous: previous, next: next, in: &open)
+                }
+                index += run
+            case "~":
+                let run = runLength(of: "~", in: text, from: index)
+                if run == 2 {
+                    let previous = index > 0 ? text[index - 1] : nil
+                    let next = index + run < text.count ? text[index + run] : nil
+                    toggle(.strike, at: index, previous: previous, next: next, in: &open)
+                }
+                index += run
+            default:
+                index += 1
+            }
+            if character != " " && character != "\t" { lineStart = false }
+        }
+        var closers = ""
+        while let entry = open.popLast() {
+            let marker = entry.marker
+            let offset = entry.offset
+            let rest = text[(offset + marker.text.count)...]
+            if rest.allSatisfy(\.isWhitespace) {
+                // Nothing follows the opener yet: hide it.
+                text.removeSubrange(offset...)
+            } else {
+                closers += marker.text
+            }
+        }
+        guard !closers.isEmpty else { return String(text) }
+        while let last = text.last, last.isWhitespace { text.removeLast() }
+        return String(text) + closers
+    }
+
+    /// Opens a marker, or closes the innermost matching one. A closer must
+    /// follow non-whitespace; an opener must precede non-whitespace (or the
+    /// end, where it is hidden).
+    private static func toggle(
+        _ marker: Marker,
+        at offset: Int,
+        previous: Character?,
+        next: Character?,
+        in open: inout [(marker: Marker, offset: Int)]
+    ) {
+        if let match = open.lastIndex(where: { $0.marker == marker }),
+           let previous, !previous.isWhitespace {
+            open.removeSubrange(match...)
+            return
+        }
+        if next == nil || next?.isWhitespace == false {
+            open.append((marker, offset))
+        }
+    }
+
+    private static func runLength(of character: Character, in text: [Character], from start: Int) -> Int {
+        var end = start
+        while end < text.count, text[end] == character { end += 1 }
+        return end - start
+    }
+
+    /// `[label](destination` with no closing `)` yet, outside inline code:
+    /// where the link starts and what to show for it (its label; nothing for
+    /// an image).
+    private static func openLinkLabel(in text: [Character]) -> (start: Int, text: String)? {
+        guard let open = text.lastIndex(of: "["),
+              let close = text[open...].firstIndex(of: "]"),
+              close + 1 < text.count, text[close + 1] == "(",
+              !text[(close + 1)...].contains(")") else { return nil }
+        let ticksBefore = text[..<open].filter { $0 == "`" }.count
+        guard ticksBefore % 2 == 0 else { return nil }
+        if open > 0, text[open - 1] == "!" { return (open - 1, "") }
+        return (open, String(text[(open + 1)..<close]))
     }
 }

@@ -4284,7 +4284,8 @@ final class AidenChatTests: XCTestCase {
         ticks.releaseAll()
         try await waitUntil { model.liveText == "Hello wor" }
 
-        // A burst of tokens between ticks lands as one update.
+        // A burst of tokens between ticks is paced out over several ticks,
+        // a whole word or more at a time, rather than landing at once.
         for (offset, token) in ["ld, ", "how ", "are ", "you?"].enumerated() {
             AidenChatProgressLifecycleURLProtocol.pushEvent(
                 AidenRevealStreamFixture.frame(2 + offset, "text_delta", #"{"text":"\#(token)"}"#)
@@ -4293,9 +4294,74 @@ final class AidenChatTests: XCTestCase {
         try await waitUntil { ticks.pending == 1 }
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(model.liveText, "Hello wor")
+        var revealed = [model.liveText]
+        while model.liveText != "Hello world, how are you?" {
+            try await waitUntil { ticks.pending == 1 }
+            ticks.releaseAll()
+            try await waitUntil { model.liveText != revealed.last }
+            revealed.append(model.liveText)
+            XCTAssertLessThan(revealed.count, 20, "the burst drains in a few ticks")
+        }
+        XCTAssertGreaterThan(revealed.count, 2, "the burst is paced over more than one tick")
+        for step in revealed.dropFirst().dropLast() {
+            XCTAssertEqual(step.last?.isWhitespace, true, "a paced tick ends on a word boundary: \(step)")
+        }
+    }
+
+    @MainActor
+    func testTheSettledReplyReplacesTheLiveReplyInOneUpdate() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Hello world"}"#))
+        try await waitUntil { ticks.pending == 1 }
         ticks.releaseAll()
-        try await waitUntil { model.liveText != "Hello wor" }
-        XCTAssertEqual(model.liveText, "Hello world, how are ")
+        try await waitUntil { !model.liveText.isEmpty }
+        fixture.commit(AidenChatMessage(id: "reply", role: .assistant, text: "Hello world", createdAt: Date()))
+
+        // Every main-actor suspension is a chance to draw a frame. None may
+        // draw the settled reply while the live copy is still up.
+        let framesShowingBoth = AidenMainActorCounter()
+        let sampler = Task { @MainActor in
+            while !Task.isCancelled {
+                if model.showsLiveResponse, model.chat.messages.contains(where: { $0.id == "reply" }) {
+                    framesShowingBoth.value += 1
+                }
+                await Task.yield()
+            }
+        }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "done", #"{"messageId":"reply"}"#, terminal: true)
+        )
+        try await waitUntil { model.chat.messages.contains(where: { $0.id == "reply" }) && !model.showsLiveResponse }
+        sampler.cancel()
+        XCTAssertEqual(framesShowingBoth.value, 0, "the reply was drawn twice during the hand-off")
+        XCTAssertEqual(model.liveText, "")
+    }
+
+    @MainActor
+    func testAReplyWithOnlyToolsStaysOnScreenUntilTheSettledTranscriptArrives() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(1, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#)
+        )
+        try await waitUntil { !model.tools.isEmpty }
+        fixture.commit(AidenChatMessage(id: "reply", role: .assistant, text: "Read the file.", createdAt: Date()))
+        let held = expectation(description: "settled transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "done", #"{"messageId":"reply"}"#, terminal: true)
+        )
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertTrue(model.showsLiveResponse, "the tool rows stay until the transcript that holds them is read")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        try await waitUntil { model.chat.messages.contains(where: { $0.id == "reply" }) }
+        XCTAssertFalse(model.showsLiveResponse)
     }
 
     @MainActor
@@ -13117,6 +13183,11 @@ private struct AidenFollowTriggerOwner: View {
 
 /// Reveal ticks the test releases by hand, so a test sees exactly what one
 /// streaming tick shows.
+@MainActor
+final class AidenMainActorCounter {
+    var value = 0
+}
+
 final class AidenManualRevealTicks: @unchecked Sendable {
     private let lock = NSLock()
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -13143,11 +13214,16 @@ final class AidenManualRevealTicks: @unchecked Sendable {
 /// test pushes each frame with `pushEvent`.
 private final class AidenRevealStreamFixture: @unchecked Sendable {
     private let lock = NSLock()
-    private let chat: AidenChat
+    private var chat: AidenChat
     private var reads = 0
     var chatReads: Int { lock.withLock { reads } }
 
     init(chat: AidenChat) { self.chat = chat }
+
+    /// Later transcript reads include `reply`, as the Mac's do once a run commits.
+    func commit(_ reply: AidenChatMessage) {
+        lock.withLock { chat.messages.append(reply) }
+    }
 
     func response(_ request: URLRequest) -> (Int, String, Data)? {
         lock.withLock {
