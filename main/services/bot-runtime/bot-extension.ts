@@ -67,6 +67,7 @@ import type {
 } from "../../../renderer/shared/bot-handoffs.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { withImageReferences } from "./bot-images.js";
+import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 
 export const BOT_EXTENSION_NAME = "aiden-bot";
@@ -412,6 +413,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           const requestIds = await runRequestIds(api, context);
           messages = withoutTools(messages, (name) => !turnAllows(name, requestIds));
         }
+        messages = withoutTools(messages, withheldUntilDisclosed(messages));
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
         return messages === request.messages ? undefined : { messages };
       },

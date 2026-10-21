@@ -72,6 +72,7 @@ import { botBrowserPartition, botBrowserProfileId, botIdOfBrowserProfile, isBotB
 import { botIdForBrowserWorkspace, browserWorkspacesOfBot, forgetBotBrowserWorkspace } from "./bot-workspaces.js";
 import {
   assertBoundarySelector,
+  BROWSER_HELD_TAB_REFUSED,
   BROWSER_IMAGE_MASKED_NOTE,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
@@ -101,12 +102,32 @@ type CommandContext = {
    */
   credentialBoundary?: true;
 };
+export type BrowserCommandContext = CommandContext;
+/** What `probeAgentTarget` reads about the element an agent action targets. */
+export interface BrowserFieldProbe {
+  tag?: string;
+  type?: string;
+  autocomplete?: string;
+  role?: string;
+  accessibleName?: string;
+  formActionHost?: string;
+}
+export interface BrowserProbeTarget {
+  ref?: string;
+  selector?: string;
+  locator?: string;
+  x?: number;
+  y?: number;
+  /** The element that has focus (typing without a target, key presses). */
+  focused?: boolean;
+  /** A click: read the control around the pressed element. */
+  click?: boolean;
+}
 /** The person is using a Bot's tab: the Bot can't read or drive it until it is released. */
 export interface BrowserHold {
   holdId: string;
   reason: BrowserHoldReason;
 }
-export const BROWSER_HELD_TAB_REFUSED = "The person is using this tab. Wait for them to finish.";
 const BROWSER_BOUNDARY_REFUSED = "A Bot's browser can't run page scripts, record, or open local files.";
 /** Actions a Bot's browser port never runs. */
 const BOUNDARY_REFUSED_ACTIONS: ReadonlySet<string> = new Set([
@@ -403,6 +424,11 @@ export class BrowserService {
       if (this.workspaces.has(workspaceId)) this.closeForWorkspace(workspaceId);
     for (const tab of [...this.tabs.values()]) if (tab.state.profileId === profileId) this.close(tab);
   }
+  /** Whether Browser settings let agents use the browser (the global default; a Bot's browser follows it). */
+  agentAccessDefaultAllowed(): boolean {
+    this.load();
+    return resolveBrowserAgentAccess(this.defaults.agentAccess, "inherit");
+  }
   linkOpening(): BrowserLinkOpening {
     this.load();
     return this.defaults.linkOpening;
@@ -451,6 +477,53 @@ export class BrowserService {
     const tab = this.tab(workspaceId, selected);
     return { workspaceId, tabId: selected, url: tab.state.url,
       documentRevision: `${tab.navigationSequence}:${tab.committedNavigation}`, controlRevision: tab.queue.epoch };
+  }
+  /**
+   * What a Bot's pending click, typing or key press would touch, for its
+   * approval and the rules classifier: the element's tag, type, autocomplete,
+   * role, accessible name and form action host, never its value. Read in
+   * Aiden's isolated world; `undefined` when nothing can be read.
+   */
+  async probeAgentTarget(
+    workspaceId: string,
+    tabId: string,
+    target: BrowserProbeTarget,
+    signal?: AbortSignal,
+  ): Promise<BrowserFieldProbe | undefined> {
+    const tab = this.tab(workspaceId, tabId);
+    let pick: string;
+    if (target.focused) pick = "__aidenFocused().element";
+    else if (target.x !== undefined && target.y !== undefined) {
+      const x = browserBoundedNumber(target.x, 0, 8192, "Click X"), y = browserBoundedNumber(target.y, 0, 8192, "Click Y");
+      pick = `(()=>{let e=document.elementFromPoint(${x},${y});for(let i=0;i<32&&e&&e.shadowRoot;i+=1){const inner=e.shadowRoot.elementFromPoint(${x},${y});if(!inner||inner===e)break;e=inner;}return e;})()`;
+    } else {
+      try {
+        pick = this.target(tab, target);
+      } catch {
+        return undefined;
+      }
+    }
+    // A click lands on the control around the pressed element (a label inside a button).
+    const control = target.click
+      ? "raw.closest('button,a[href],input,select,textarea,summary,label,[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=radio],[role=switch],[role=option]')||raw"
+      : "raw";
+    try {
+      const probe = await this.evaluate(
+        tab,
+        `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}const raw=${pick};if(!raw||raw.nodeType!==1)return null;const e=${control};const u=globalThis.__aidenPlaywright.utils;const attr=n=>{const v=e.getAttribute(n);return v===null?undefined:v.slice(0,200);};const form=e.form||e.closest('form');let host;try{if(form)host=new URL(form.getAttribute('action')||location.href,location.href).hostname;}catch{host=undefined;}let name;try{name=String(u.getElementAccessibleNameText(e,false)||'').slice(0,300)||undefined;}catch{name=undefined;}return{tag:String(e.localName||''),type:attr('type'),autocomplete:attr('autocomplete'),role:u.getAriaRole(e)||(e.isContentEditable?'textbox':undefined),accessibleName:name,formActionHost:host};})()`,
+        signal,
+        true,
+      );
+      if (!probe || typeof probe !== "object") return undefined;
+      const field: BrowserFieldProbe = {};
+      for (const key of ["tag", "type", "autocomplete", "role", "accessibleName", "formActionHost"] as const) {
+        const value = (probe as Record<string, unknown>)[key];
+        if (typeof value === "string" && value.length > 0) field[key] = value.slice(0, 300);
+      }
+      return field;
+    } catch {
+      return undefined;
+    }
   }
   private beginPreviewNavigation(tab: LiveTab, url: string): void {
     const next = browserFileService.reserveUrl(tab.state.workspaceId, url);
@@ -1475,7 +1548,7 @@ export class BrowserService {
     return browserRedactPreviewUrls(scrubBrowserSnapshot(snapshot, sensitive));
   }
   private cdpPort(tab: LiveTab, signal?: AbortSignal) {
-    return { send: (method: string, params?: Record<string, unknown>) => this.send(tab, method, params ?? {}, signal) };
+    return { call: (method: string, params?: Record<string, unknown>) => this.send(tab, method, params ?? {}, signal) };
   }
   /** A capture with every password, code and card field painted over, or why there is none. */
   private async maskedCapture(tab: LiveTab, signal?: AbortSignal) {

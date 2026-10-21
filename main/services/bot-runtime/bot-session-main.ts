@@ -161,6 +161,7 @@ const toolSources = createBotToolSources({
     );
   },
   connectCards,
+  botName: async (botId) => (await botStore.get(botId))?.name,
 });
 
 const tools = createBotToolAssembly({

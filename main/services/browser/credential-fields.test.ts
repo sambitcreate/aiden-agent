@@ -113,7 +113,7 @@ test("Chromium: boxes match where fields are drawn, hidden ones are skipped, and
     await page.frameLocator("#same").locator("#inner").waitFor();
     await page.evaluate(() => window.scrollTo(0, 100));
     const session = await context.newCDPSession(page);
-    const cdp = { send: (method: string, params?: Record<string, unknown>) => session.send(method as never, params as never) as Promise<unknown> };
+    const cdp = { call: (method: string, params?: Record<string, unknown>) => session.send(method as never, params as never) as Promise<unknown> };
     const result = await sensitiveFieldBoxes(cdp, { width: 800, height: 600 });
     // Three fields on the page (one `display:none`, so it has no box) and one in the same-process frame.
     assert.equal(result.sensitive.length, 4);
@@ -157,7 +157,7 @@ test("Chromium: the in-page typing guard follows focus through shadow roots and 
     await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
     await page.frameLocator("#same").locator("#card").waitFor();
     await page.frameLocator("#cross").locator("#remote").waitFor();
-    const guard = (element: string) => page.evaluate(`(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource(element)}return "ok";})()`).catch((error: Error) => error.message);
+    const guard = (element: string): Promise<string> => page.evaluate<string>(`(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource(element)}return "ok";})()`).catch((error: Error) => error.message);
     await page.focus("#name");
     assert.equal(await guard("null"), "ok");
     assert.match(await guard('document.getElementById("pw")'), new RegExp(BROWSER_SENSITIVE_TYPING_REFUSED.slice(0, 30)));

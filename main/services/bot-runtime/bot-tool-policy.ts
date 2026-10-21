@@ -23,6 +23,8 @@ import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-conne
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import { BOT_HANDOFF_TOOL_NAME } from "../../../renderer/shared/bot-handoffs.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
+import { BROWSER_BOT_OMITTED_TOOLS, BROWSER_TOOL_NAMES, isBrowserToolName } from "../browser-tools.js";
+import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 
 export const WEB_SEARCH_TOOL = "web_search";
 export const SUBAGENT_TOOL = "subagent";
@@ -73,6 +75,9 @@ const UNATTENDED_WITHHELD = new Set<string>([
   ROUTINE_TOOL,
   SUBAGENT_TOOL,
   BOT_HANDOFF_TOOL_NAME,
+  // Nobody can approve a click or use a held tab on these turns (G12).
+  BOT_BROWSER_GATEWAY_TOOL,
+  ...BROWSER_TOOL_NAMES,
 ]);
 
 /**
@@ -128,6 +133,15 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
   if (name === BOT_HANDOFF_TOOL_NAME) {
     return verdict(turn.telegram !== true && turn.routine !== true, "Hand-offs are off for this Bot.");
   }
+  if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) {
+    // A page script can read a field's value and a recording shows what the
+    // person types: a Bot never gets either (plan §5.1.6).
+    if (BROWSER_BOT_OMITTED_TOOLS.has(name)) return { allowed: false, reason: "A Bot's browser can't run page scripts or record." };
+    return verdict(
+      hasCapability(facts, "browser") && turn.telegram !== true && turn.routine !== true,
+      "The browser is off for this Bot.",
+    );
+  }
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
   // Writes only the routine's own notes; ingress (`botIngressAllowsTool`) keeps it to routine runs.
   if (name === ROUTINE_NOTES_TOOL) return { allowed: true };
@@ -148,6 +162,8 @@ export async function botToolApprovalSummary(
 ): Promise<string | undefined> {
   if (name === SHARE_IMAGE_TOOL_NAME) return summarizeToolCall(name, args);
   if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL) return undefined;
+  // The browser asks through its live tab and page (`bot-browser-approval.ts`).
+  if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
   const grant = (await facts.mcpTools()).get(name);
   return grant?.effect === "mutating" ? summarizeToolCall(name, args) : undefined;
 }

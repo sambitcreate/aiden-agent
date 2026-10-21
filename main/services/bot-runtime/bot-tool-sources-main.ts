@@ -7,7 +7,9 @@
 // - the Bot file router, the pinned shell, the Bot routine tool and
 //   `suggest_connection`;
 // - `share_image` and companion vision `inspect_image` through the durable
-//   bindings in `bot-tool-candidates.ts`.
+//   bindings in `bot-tool-candidates.ts`;
+// - the Bot's own browser (`bot-browser-tools.ts`): the `browser` gateway and
+//   the browser tools without page scripts or recording.
 //
 // Policy is applied afterwards by `bot-tool-assembly.ts`. This module only
 // builds; it never decides what a Bot may use.
@@ -63,6 +65,9 @@ import { botHandoffCandidate } from "./bot-handoff-tool.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
 import { SUBAGENT_TOOL } from "./bot-tool-policy.js";
+import { isBrowserToolName } from "../browser-tools.js";
+import { botBrowser } from "./bot-browser-main.js";
+import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 
 const BOT_HOME_LOCATION_ID = "builtin.bot_home.v1";
 
@@ -76,6 +81,8 @@ export interface BotToolSourceDeps {
   dismissals: Pick<BotConnectionDismissalStore, "isDismissed">;
   appendConnectCard(botId: string, card: ConnectCardEntry): Promise<void>;
   connectCards(botId: string): Promise<ConnectCardEntry[]>;
+  /** The Bot's name, for what its browser tells the person. */
+  botName?(botId: string): Promise<string | undefined>;
 }
 
 type ProductionFacts = BotToolFactsWithSkills;
@@ -168,9 +175,9 @@ function once<T>(load: () => Promise<T>): () => Promise<T> {
 }
 
 export interface BotToolSourcesMain extends BotToolSources {
-  /** Close every Bot's Computer Use controller (app quit). */
+  /** Close every Bot's Computer Use controller and browser state (app quit). */
   shutdown(): Promise<void>;
-  /** Close one Bot's Computer Use controller (Bot deleted). */
+  /** Close one Bot's Computer Use controller and browser tabs (Bot deleted). */
   forgetBot(botId: string): Promise<void>;
 }
 
@@ -348,6 +355,19 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         // The built tool itself must be the granted tool, not only a same-named one.
         return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool)) ? [{ tool, mcp: true }] : [];
       });
+      // The Bot's own browser. Never on routine or Telegram turns: nobody is
+      // there to approve a click or use a held tab (blueprint G12).
+      if (has("browser") && !routineRun && !telegram) {
+        tools.push(
+          ...(await botBrowser.candidates(botId, {
+            workspaceId: workspace.id,
+            chatId: await deps.canonicalChatId(botId),
+            generationId: `bot:${botId}:${turn.requestId ?? "turn"}`,
+            supportsImages: facts.supportsImages,
+            botName: (await deps.botName?.(botId).catch(() => undefined)) ?? "this Bot",
+          })),
+        );
+      }
 
       const locations = await botFileLocations(admission);
       if (locations.length > 0) {
@@ -418,15 +438,24 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           });
         }
         default:
+          // The browser gateway and tools: the live tab, page and targeted field.
+          if (toolName === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(toolName)) {
+            return botBrowser.approvalFor(botId, toolName, call);
+          }
           return undefined;
       }
     },
 
     async shutdown() {
+      botBrowser.shutdown();
       await Promise.all([...controllers.keys()].map(closeController));
     },
 
-    forgetBot: closeController,
+    async forgetBot(botId) {
+      await closeController(botId);
+      // Bot delete clears the browser profile, closing any tab left, on its own step.
+      await botBrowser.forget(botId).catch((error: unknown) => logger.warn("bots", `Could not close Bot ${botId}'s browser tabs.`, error));
+    },
   };
   return sources;
 }

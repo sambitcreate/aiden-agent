@@ -202,6 +202,8 @@ export function scrubBrowserSnapshot(snapshot: BrowserSnapshot, sensitive: Reado
   };
 }
 
+/** The agent's answer on a tab the person holds (a sign-in or hand-off card, or a takeover), snapshots included. */
+export const BROWSER_HELD_TAB_REFUSED = "The person is using this tab. Wait for them to finish.";
 export const BROWSER_SENSITIVE_TYPING_REFUSED =
   "A Bot can't type into a password, one-time code or card field. Hand this step to the person.";
 export const BROWSER_OPAQUE_TYPING_REFUSED =

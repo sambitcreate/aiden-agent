@@ -1611,6 +1611,10 @@ export const botsApi = {
     update: (input: import("../shared/bot-rules").BotRulesUpdateInput) =>
       invoke<import("../shared/bot-rules").BotRulesUpdateResult>("bots:rules:update", input),
   },
+  /** A Bot's own browser: its workspace for the `browser:*` channels, or null when the Bot is gone. */
+  browser: {
+    workspace: (botId: string) => invoke<{ workspaceId: string } | null>("bots:browser:workspace", botId),
+  },
   /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
   onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>
     onNotification<import("../shared/bot-memory").BotMemoryChangedEvent>("bots:memory:changed", handler),

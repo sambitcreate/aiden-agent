@@ -41,7 +41,7 @@ function fakePage(options: { frame?: boolean } = {}) {
   });
   const port: CredentialBoundaryPort = {
     cdp: {
-      async send(method, params) {
+      async call(method, params) {
         if (page.failCdp) throw new Error("Target closed");
         if (method === "DOM.getDocument") return { root: tree() };
         if (method === "DOM.getContentQuads") {

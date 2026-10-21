@@ -31,10 +31,12 @@ import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
 import { registerBotRuleHandlers } from "./bot-rules.js";
 import { botRules } from "../services/bot-rules/store-main.js";
 import { botMemoryService } from "../services/bot-memory/bot-memory-main.js";
+import { registerBotBrowserHandlers } from "./bot-browser.js";
 import { registerBotFileHandlers } from "./bot-files.js";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
 import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
 import { botHandoffs } from "../services/bot-runtime/bot-handoffs-main.js";
+import { botBrowserWorkspace } from "../services/bot-runtime/bot-browser-main.js";
 import { openBotHandoffById } from "../services/bot-runtime/bot-handoff-open-main.js";
 import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
 import {
@@ -202,8 +204,9 @@ export function registerBotHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     handoffs: botHandoffs,
     open: async (botId, waitId, event) => {
-      rendererDocumentOwner(event, () => new Error("Opening a hand-off requires the active application document."));
-      return openBotHandoffById(botId, waitId, "desktop");
+      const owner = rendererDocumentOwner(event, () => new Error("Opening a hand-off requires the active application document."));
+      // A link opens in the Bot's own browser, shown in this window.
+      return openBotHandoffById(botId, waitId, "desktop", owner);
     },
   });
   // The Bot store answers null for a Bot it doesn't have.
@@ -226,6 +229,11 @@ export function registerBotHandlers(): void {
     homePath: async (botId) => (await botApplicationService.resolveManagedWorkspace(botId)).homePath,
     list: listWorkspaceFiles,
     read: readWorkspaceFile,
+  });
+  // The Bot's own browser, watched and driven in its panel's Browser tab.
+  registerBotBrowserHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    workspace: botBrowserWorkspace,
   });
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));

@@ -25,7 +25,7 @@ export interface CdpDomNode {
 
 /** The DevTools protocol, as main reaches it through `webContents.debugger`. */
 export interface CdpPort {
-  send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  call(method: string, params?: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface CssRect {
@@ -107,7 +107,7 @@ export function scanCredentialTree(root: CdpDomNode): CredentialTreeScan {
 }
 
 async function readTree(port: CdpPort): Promise<CredentialTreeScan> {
-  const document = (await port.send("DOM.getDocument", { depth: -1, pierce: true })) as { root?: CdpDomNode };
+  const document = (await port.call("DOM.getDocument", { depth: -1, pierce: true })) as { root?: CdpDomNode };
   if (!document.root) throw new Error("The page's document could not be read.");
   return scanCredentialTree(document.root);
 }
@@ -142,14 +142,14 @@ function intersectsViewport(rect: CssRect, viewport: { width: number; height: nu
  */
 async function nodeBounds(port: CdpPort, backendNodeId: number): Promise<CssRect | undefined> {
   try {
-    const result = (await port.send("DOM.getContentQuads", { backendNodeId })) as { quads?: number[][] };
+    const result = (await port.call("DOM.getContentQuads", { backendNodeId })) as { quads?: number[][] };
     const bounds = quadsBounds(result.quads ?? []);
     if (bounds) return bounds;
   } catch {
     /* Not rendered, or no content quads: try the box model. */
   }
   try {
-    const result = (await port.send("DOM.getBoxModel", { backendNodeId })) as { model?: { border?: number[] } };
+    const result = (await port.call("DOM.getBoxModel", { backendNodeId })) as { model?: { border?: number[] } };
     return result.model?.border ? quadsBounds([result.model.border]) : undefined;
   } catch {
     return undefined;

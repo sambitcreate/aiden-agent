@@ -38,6 +38,8 @@ export interface BotCapabilityInventoryPortDependencies {
   subagentsAvailable(): boolean;
   /** Host policy always narrows a persisted Computer Use preference. */
   computerUseSupported?: () => boolean;
+  /** Browser settings let agents use Aiden's browser (a Bot's own browser follows them). */
+  browserAgentAccess?: () => Promise<boolean>;
   shellFingerprint?: string;
   fullMacScopeFingerprint?: string;
   botHomeScopeFingerprint?: string;
@@ -256,6 +258,7 @@ function ordinaryInventory(input: {
   webSearchReady: boolean;
   subagentsAvailable: boolean;
   computerUseSupported: boolean;
+  browserAgentAccess: boolean;
 }): BotOrdinaryCapabilityInventory[] {
   const values: Array<{
     kind: BotOrdinaryCapabilityInventory["kind"];
@@ -272,8 +275,8 @@ function ordinaryInventory(input: {
     {
       kind: "browser",
       label: "Browser",
-      description: "Browser control is not currently available to ordinary Bot chats.",
-      available: false,
+      description: "Browse the web in its own browser, with its own sign-ins, which you can watch in its Browser tab.",
+      available: input.browserAgentAccess,
     },
     {
       kind: "computer_use",
@@ -440,9 +443,10 @@ export function createBotCapabilityInventoryPorts(
       return skills;
     },
     async inspectOtherCapabilities(signal) {
-      const [settings, webSearchAvailability] = await Promise.all([
+      const [settings, webSearchAvailability, browserAgentAccess] = await Promise.all([
         dependencies.getSettings(),
         dependencies.webSearchAvailability(),
+        dependencies.browserAgentAccess?.() ?? Promise.resolve(false),
       ]);
       if (signal.aborted) throw signal.reason;
       return ordinaryInventory({
@@ -451,6 +455,7 @@ export function createBotCapabilityInventoryPorts(
         subagentsAvailable: dependencies.subagentsAvailable(),
         computerUseSupported:
           dependencies.computerUseSupported?.() === true,
+        browserAgentAccess: browserAgentAccess === true,
       });
     },
   };
