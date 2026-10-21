@@ -25,6 +25,8 @@ import {
   isPortableProviderList,
   isProviderAliasMap,
   isMcpServerList,
+  withoutRetiredMcpServers,
+  retiredMcpServerIds,
   isSkillList,
   mergeProviderModelCacheEntries,
   providerAliasSourcesAreInactive,
@@ -182,7 +184,7 @@ function normalizePortableConfig(value: unknown): {
     safeAliases = {};
   }
 
-  const mcpServers = value.mcpServers;
+  const mcpServers = withoutRetiredMcpServers(value.mcpServers);
   const safeMcpServers = !has("mcpServers")
     ? []
     : isMcpServerList(mcpServers)
@@ -485,6 +487,7 @@ export function createConfigStore(
         // — before the corrupt-file guard below — silently replace a file with a
         // JSON typo with an empty default.
         const before = await portable.load();
+        noteRetiredMcpServers(before);
         const normalized = normalizePortableConfig(before);
         const config = normalized.config;
         if (normalized.unsafe) return false;
@@ -668,9 +671,19 @@ export function createConfigStore(
     }
   }
 
+  // Saved legacy SSE servers seen by this process. Any write drops them from
+  // the file, so remember their ids until their credentials are cleaned up.
+  const retiredMcpIds = new Set<string>();
+  const noteRetiredMcpServers = (value: unknown) => {
+    const servers = value && typeof value === "object" ? (value as { mcpServers?: unknown }).mcpServers : undefined;
+    for (const id of retiredMcpServerIds(servers)) retiredMcpIds.add(id);
+  };
+
   async function readPortable(): Promise<PortableConfigShape> {
     await ensureSeeded();
-    return normalizePortableConfig(await portable.load()).config;
+    const loaded = await portable.load();
+    noteRetiredMcpServers(loaded);
+    return normalizePortableConfig(loaded).config;
   }
 
   async function mutatePortable<R>(
@@ -682,6 +695,7 @@ export function createConfigStore(
       throw new Error("Portable config contains invalid JSON; fix ~/.aiden/config.json first.");
     }
     return portable.update(async (draft) => {
+      noteRetiredMcpServers(draft);
       const normalized = normalizePortableConfig(draft);
       if (normalized.unsafe) {
         throw new Error(
@@ -747,6 +761,21 @@ export function createConfigStore(
       await modelCache.update((config) => {
         config.byProvider = {};
       });
+    },
+
+    /**
+     * Ids of saved legacy SSE servers this process found in the portable
+     * file. They never load, so their stored sign-ins and header values are
+     * cleaned up instead.
+     */
+    async retiredMcpServerIds(): Promise<string[]> {
+      await readPortable();
+      return [...retiredMcpIds];
+    },
+
+    /** Forget retired ids whose credentials were cleaned up. */
+    forgetRetiredMcpServerIds(ids: readonly string[]): void {
+      for (const id of ids) retiredMcpIds.delete(id);
     },
 
     async portableConfigSafeForCredentialReconciliation(): Promise<boolean> {

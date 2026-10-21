@@ -4,7 +4,7 @@ const SETTINGS_SECTIONS = [
   "Providers",
   "Model Pad",
   "Skills",
-  "Plugins",
+  "Connectors",
   "Web Search",
   "Connections",
   "Scheduled tasks",
@@ -38,10 +38,11 @@ async function assertRenderedSettingsDestination(
         page.getByText(/Reusable instruction sets the assistant can invoke/u),
       ).toBeVisible();
       return;
-    case "Plugins":
+    case "Connectors":
       await expect(
-        page.getByText(/Browse plugins, connect hosted MCP servers, or add your own/u),
+        page.getByRole("heading", { level: 1, name: "Connectors", exact: true }),
       ).toBeVisible();
+      await expect(page.getByRole("searchbox", { name: "Search connectors" })).toBeVisible();
       return;
     case "Web Search":
       await expect(

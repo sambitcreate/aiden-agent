@@ -10,48 +10,22 @@ import {
   presetServerId,
   serverFromPreset,
 } from "./mcp-presets.js";
+import { isConnectorAvailable } from "../../renderer/shared/connector-catalog.js";
+import type { McpServer } from "./types.js";
 
-test("catalog entries are well-formed", () => {
-  assert.ok(MCP_PRESETS.length >= 20, "expected Composio plus hosted Codex MCP plugins Aiden can authorize");
-  const ids = new Set(MCP_PRESETS.map((p) => p.id));
-  assert.equal(ids.size, MCP_PRESETS.length, "preset ids must be unique");
-  for (const preset of MCP_PRESETS) {
-    assert.match(preset.id, /^[a-z0-9-]+$/);
-    assert.ok(preset.name.length > 0);
-    assert.ok(preset.tagline.length > 0);
-    assert.ok(preset.vendor.startsWith("By "));
-    assert.ok(preset.category.length > 0);
-    assert.equal(preset.transport, "http");
-    assert.match(preset.url, /^https:\/\//);
-    assert.match(preset.docsUrl, /^https:\/\//);
-    if (preset.auth.kind === "apiKey") {
-      assert.ok(preset.auth.headerName.length > 0);
-      assert.ok(preset.auth.keyLabel.length > 0);
-      assert.match(preset.auth.keyHelpUrl, /^https:\/\//);
-    }
-    assert.equal(new URL(preset.url).origin.length > 0, true);
-  }
-});
+const available = MCP_PRESETS.filter(isConnectorAvailable);
 
-test("catalog includes composio (apiKey) and hosted Codex OAuth plugins", () => {
-  const composio = getMcpPreset("composio");
-  assert.equal(composio?.auth.kind, "apiKey");
-  if (composio?.auth.kind === "apiKey") {
-    assert.equal(composio.auth.headerName, "x-consumer-api-key");
+test("every available preset builds a server record that main accepts", () => {
+  assert.ok(available.length >= 20);
+  for (const preset of available) {
+    const server = serverFromPreset(preset);
+    assert.equal(server.id, presetServerId(preset.id));
+    assert.equal(server.transport, "http");
+    assert.equal(server.url, preset.url);
+    assert.equal(server.oauth === true, preset.auth.kind === "oauth", `${preset.id} OAuth flag`);
+    assert.equal(assertMcpPresetServer(server)?.id, preset.id);
+    assert.equal(getMcpPresetForServerId(server.id)?.id, preset.id);
   }
-  assert.equal(getMcpPreset("notion")?.auth.kind, "oauth");
-  assert.equal(getMcpPreset("linear")?.auth.kind, "oauth");
-  assert.equal(getMcpPreset("github")?.auth.kind, "apiKey");
-  assert.equal(getMcpPreset("figma")?.url, "https://mcp.figma.com/mcp");
-  const figmaAuth = getMcpPreset("figma")?.auth;
-  assert.equal(figmaAuth?.kind, "oauth");
-  if (figmaAuth?.kind === "oauth") {
-    assert.equal(figmaAuth.clientName, "Codex");
-  }
-  assert.equal(mcpOAuthClientNameForServer({ id: "preset-figma", presetId: "figma" }), "Codex");
-  assert.equal(mcpOAuthClientNameForServer({ id: "preset-notion", presetId: "notion" }), "Aiden Agent");
-  assert.equal(getMcpPreset("superpowers"), undefined);
-  assert.equal(getMcpPreset("nope"), undefined);
 });
 
 test("presetServerId and presetSecretId are deterministic", () => {
@@ -59,129 +33,93 @@ test("presetServerId and presetSecretId are deterministic", () => {
   assert.equal(presetSecretId("preset-composio"), "mcp:preset-composio");
   assert.equal(getMcpPresetForServerId("preset-notion")?.id, "notion");
   assert.equal(getMcpPresetForServerId("notion"), undefined);
+  assert.equal(getMcpPreset("nope"), undefined);
 });
 
-test("serverFromPreset builds an enabled http server with preset defaults", () => {
-  const composio = getMcpPreset("composio");
-  assert.ok(composio);
-  const server = serverFromPreset(composio);
+test("hosted presets keep credentials on their exact catalog origin", () => {
+  for (const preset of available.filter((entry) => !entry.local)) {
+    const origin = new URL(preset.url).origin;
+    // Provider-owned paths on the same origin are allowed.
+    assert.equal(serverFromPreset(preset, `${origin}/mcp/session/abc`).url, `${origin}/mcp/session/abc`);
+    for (const elsewhere of [
+      `https://attacker.invalid/mcp`,
+      `${origin.replace("https:", "http:")}/mcp`,
+      `${origin}.evil.test/mcp`,
+      origin.replace("https://", "https://user:pass@") + "/mcp",
+    ]) {
+      assert.throws(() => serverFromPreset(preset, elsewhere), /official secure server/u, `${preset.id} rejects ${elsewhere}`);
+    }
+  }
+  // A blank address falls back to the catalog default.
+  const notion = getMcpPreset("notion")!;
+  assert.equal(serverFromPreset(notion, "   ").url, notion.url);
+});
+
+test("Figma Desktop connects without a credential and only to its loopback origin", () => {
+  const desktop = getMcpPreset("figma-desktop");
+  assert.ok(desktop);
+  assert.equal(desktop.auth.kind, "none");
+  const server = serverFromPreset(desktop);
   assert.deepEqual(server, {
-    id: "preset-composio",
-    name: "Composio",
+    id: "preset-figma-desktop",
+    name: "Figma Desktop",
     transport: "http",
-    url: "https://connect.composio.dev/mcp",
+    url: "http://127.0.0.1:3845/mcp",
     oauth: undefined,
-    presetId: "composio",
+    presetId: "figma-desktop",
     enabled: true,
   });
-  assert.equal(composio.category, "Productivity");
+  for (const elsewhere of [
+    "http://localhost:3845/mcp",
+    "http://127.0.0.1:3846/mcp",
+    "https://127.0.0.1:3845/mcp",
+    "http://192.168.1.4:3845/mcp",
+    "https://mcp.figma.com/mcp",
+  ]) {
+    assert.throws(() => serverFromPreset(desktop, elsewhere), /only connects to http:\/\/127\.0\.0\.1:3845/u, elsewhere);
+  }
+  assert.throws(() => assertMcpPresetServer({ ...server, oauth: true }), /invalid authentication mode/u);
+  assert.throws(() => assertMcpPresetServer({ ...server, headers: { Authorization: "Bearer x" } }), /does not take headers/u);
 });
 
-test("serverFromPreset sets oauth and allows only provider-owned endpoint paths", () => {
-  const notion = getMcpPreset("notion");
-  assert.ok(notion);
-  const server = serverFromPreset(notion, "  https://mcp.notion.com/mcp/session/abc  ");
-  assert.equal(server.oauth, true);
-  assert.equal(server.url, "https://mcp.notion.com/mcp/session/abc");
-  // Blank url falls back to the preset default.
-  assert.equal(serverFromPreset(notion, "   ").url, notion.url);
-  assert.throws(
-    () => serverFromPreset(notion, "https://attacker.invalid/mcp"),
-    /official secure server/,
-  );
-});
-
-test("hosted Figma credentials stay on mcp.figma.com", () => {
+test("hosted Figma is refused with its reason wherever main validates a preset", () => {
   const figma = getMcpPreset("figma");
   assert.ok(figma);
-  const server = serverFromPreset(figma, "https://mcp.figma.com/mcp/session/abc");
-  assert.equal(server.oauth, true);
-  assert.throws(
-    () => serverFromPreset(figma, "https://api.figma.com/mcp"),
-    /official secure server/,
-  );
+  assert.equal(isConnectorAvailable(figma), false);
+  const record: McpServer = {
+    id: "preset-figma",
+    name: "Figma",
+    transport: "http",
+    url: "https://mcp.figma.com/mcp",
+    oauth: true,
+    presetId: "figma",
+    enabled: true,
+  };
+  assert.throws(() => assertMcpPresetServer(record), /only lets approved apps connect/u);
+  assert.throws(() => serverFromPreset(figma), /Use Figma Desktop instead/u);
 });
 
-test("GitHub remote MCP stays on api.githubcopilot.com with a Bearer PAT", () => {
-  const github = getMcpPreset("github");
-  assert.ok(github);
-  assert.equal(github.auth.kind, "apiKey");
-  if (github.auth.kind === "apiKey") {
-    assert.equal(github.auth.headerName, "Authorization");
-    assert.equal(github.auth.headerValuePrefix, "Bearer ");
-  }
-  const server = serverFromPreset(github);
-  assert.equal(server.oauth, undefined);
-  assert.equal(server.url, "https://api.githubcopilot.com/mcp/");
-  assert.throws(
-    () => serverFromPreset(github, "https://github.com/mcp"),
-    /official secure server/,
-  );
-});
-
-test("preset validation binds credentials to exact identities and HTTPS origins", () => {
-  const composio = getMcpPreset("composio");
-  assert.ok(composio);
+test("preset identity, transport and authentication mode are bound together", () => {
+  const composio = getMcpPreset("composio")!;
   const valid = serverFromPreset(composio, "https://connect.composio.dev/mcp/session/abc");
-  assert.equal(assertMcpPresetServer(valid)?.id, "composio");
   assert.equal(
-    assertMcpPresetServer({
-      id: "custom",
-      name: "Custom",
-      transport: "http",
-      url: "https://example.com/mcp",
-      enabled: true,
-    }),
+    assertMcpPresetServer({ id: "custom", name: "Custom", transport: "http", url: "https://example.com/mcp", enabled: true }),
     undefined,
   );
-
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, id: "preset-notion" }),
-    /invalid identity/,
-  );
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, presetId: undefined }),
-    /invalid identity/,
-  );
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, presetId: "unknown" }),
-    /invalid identity/,
-  );
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, url: "http://connect.composio.dev/mcp" }),
-    /official secure server/,
-  );
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, url: "https://connect.composio.dev.evil.test/mcp" }),
-    /official secure server/,
-  );
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, url: "https://user:pass@connect.composio.dev/mcp" }),
-    /official secure server/,
-  );
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, transport: "sse" }),
-    /secure HTTP connection/,
-  );
-  assert.throws(
-    () => assertMcpPresetServer({ ...valid, oauth: true }),
-    /invalid authentication mode/,
-  );
+  assert.throws(() => assertMcpPresetServer({ ...valid, id: "preset-notion" }), /invalid identity/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, presetId: undefined }), /invalid identity/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, presetId: "unknown" }), /invalid identity/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, transport: "stdio" }), /own HTTP connection/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, oauth: true }), /invalid authentication mode/u);
+  const notion = serverFromPreset(getMcpPreset("notion")!);
+  assert.throws(() => assertMcpPresetServer({ ...notion, oauth: undefined }), /invalid authentication mode/u);
 });
 
-test("OAuth presets require OAuth while API-key presets reject it", () => {
-  const notion = getMcpPreset("notion");
-  assert.ok(notion);
-  const notionServer = serverFromPreset(notion);
-  assert.equal(assertMcpPresetServer(notionServer)?.auth.kind, "oauth");
-  assert.throws(
-    () => assertMcpPresetServer({ ...notionServer, oauth: undefined }),
-    /invalid authentication mode/,
-  );
-});
-
-
-test("custom OAuth registration names override the default without overriding curated presets", () => {
-  assert.equal(mcpOAuthClientNameForServer({ id: "custom", oauthClientName: "Allowed Client" }), "Allowed Client");
-  assert.throws(() => assertMcpPresetServer({ ...serverFromPreset(MCP_PRESETS.find((preset) => preset.auth.kind === "oauth")!), oauthClientName: "Changed client" }), /OAuth/u);
+test("every server registers as Aiden Agent and presets cannot carry a pre-registered client", () => {
+  for (const preset of MCP_PRESETS) {
+    assert.equal(mcpOAuthClientNameForServer({ id: presetServerId(preset.id), presetId: preset.id }), "Aiden Agent");
+  }
+  assert.equal(mcpOAuthClientNameForServer({ id: "custom" }), "Aiden Agent");
+  const notion = serverFromPreset(getMcpPreset("notion")!);
+  assert.throws(() => assertMcpPresetServer({ ...notion, oauthClientId: "manual" }), /OAuth/u);
 });

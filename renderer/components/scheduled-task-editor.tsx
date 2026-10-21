@@ -97,11 +97,11 @@ export function scheduledTaskMcpServerChoices(
       .filter((server) => usable(server) || selectedMcpIds.includes(server.id))
       .map(({ id, name, enabled, exposure }) =>
         enabled && !mcpServerOffersTools({ exposure })
-          ? { id, name, enabled: false, unavailableReason: "Off for the model in Settings → Plugins" }
+          ? { id, name, enabled: false, unavailableReason: "Off for the model in Settings → Connectors" }
           : { id, name, enabled }),
     ...unavailableMcpIds
       .filter((id) => !mcpServers.some((server) => server.id === id))
-      .map((id) => ({ id, name: `Unavailable MCP server (${id})`, enabled: false })),
+      .map((id) => ({ id, name: `Unavailable connector (${id})`, enabled: false })),
   ];
   return { unavailableMcpIds, visibleMcpServers };
 }
@@ -747,20 +747,20 @@ export function ScheduledTaskEditor({
         ) : null}
         {draft.mode === "llm" ? (
           <Field
-            label="MCP tools"
-            description="Choose the exact connected servers this automation may call unattended. MCP access requires Full permission."
+            label="Connectors"
+            description="Choose the exact connectors this automation may call unattended. Connector access requires Full permission."
             orientation="vertical"
           >
             {mcpServersUnavailable ? (
               <Callout color="red">
                 <Text variant="small" color="secondary">
-                  MCP servers could not be loaded. Retry from Settings before granting connector
+                  Connectors could not be loaded. Retry from Settings before granting connector
                   access.
                 </Text>
               </Callout>
             ) : visibleMcpServers.length === 0 ? (
               <Text variant="small" color="tertiary">
-                No MCP servers are enabled. Connect one in Settings → Plugins.
+                No connectors are enabled. Connect one in Settings → Connectors.
               </Text>
             ) : (
               <ul className="max-h-48 divide-y divide-separator overflow-y-auto rounded-control bg-background">
@@ -802,14 +802,14 @@ export function ScheduledTaskEditor({
         {!assistantOwned && draft.workspaceId && selectedMcpIds.length > 0 ? (
           <Callout color="red">
             <Text variant="small" color="secondary">
-              Choose either a workspace or MCP servers. Split combined work into separate tasks.
+              Choose either a workspace or connectors. Split combined work into separate tasks.
             </Text>
           </Callout>
         ) : null}
         {selectedMcpIds.length > 16 ? (
           <Callout color="red">
             <Text variant="small" color="secondary">
-              Choose at most 16 MCP servers for one scheduled task.
+              Choose at most 16 connectors for one scheduled task.
             </Text>
           </Callout>
         ) : null}
@@ -821,9 +821,9 @@ export function ScheduledTaskEditor({
                 {draft.mode === "script"
                   ? "Scripts run unattended with Full access. Only select a script you trust."
                   : selectedMcpIds.length > 0
-                    ? `This task may call ${selectedMcpIds.length} selected MCP ${
-                        selectedMcpIds.length === 1 ? "server" : "servers"
-                      } unattended. MCP tools may read or change external data.`
+                    ? `This task may call ${selectedMcpIds.length} selected ${
+                        selectedMcpIds.length === 1 ? "connector" : "connectors"
+                      } unattended. Connector tools may read or change external data.`
                     : "Full tasks run edits and commands unattended. Use it only for a prompt you trust."}
               </Text>
             </Callout>

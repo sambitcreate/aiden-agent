@@ -15,7 +15,7 @@ export class McpOAuthCredentialStorageError extends Error {
   override readonly name = "McpOAuthCredentialStorageError";
   constructor(options?: { cause?: unknown }) {
     super(
-      "Aiden could not read the saved sign-in for this MCP server because secure credential storage is unavailable. Unlock the keychain or sign in again in Settings → Plugins.",
+      "Aiden could not read the saved sign-in for this MCP server because secure credential storage is unavailable. Unlock the keychain or sign in again in Settings → Connectors.",
     );
     if (options) Object.defineProperty(this, "cause", { value: options.cause, configurable: true, writable: true });
   }

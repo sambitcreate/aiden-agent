@@ -91,6 +91,7 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "retention-check",
   "backpressure-fixture",
   "write-failure",
+  "mcp-recovered",
 ] as const;
 export type DiagnosticBaseEventName = (typeof DIAGNOSTIC_BASE_EVENT_NAMES)[number];
 export type DiagnosticEventName =
@@ -139,6 +140,64 @@ export const DIAGNOSTIC_CODES = [
   "unresponsive",
 ] as const;
 export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];
+
+/** Stable MCP failure classes, recorded as `mcpFailure` (see mcp-failure-diagnostics.ts). */
+export const MCP_FAILURE_CODES = [
+  "auth-required",
+  "auth-rejected",
+  "auth-refresh-unavailable",
+  "oauth-error",
+  "oauth-registration-rejected",
+  "oauth-issuer-mismatch",
+  "oauth-insecure-endpoint",
+  "session-expired",
+  "http-4xx",
+  "http-5xx",
+  "timeout",
+  "network",
+  "tls",
+  "protocol",
+  "connection-closed",
+  "stdio-exit",
+  "stdio-spawn",
+  "stdio-approval",
+  "credentials-unavailable",
+  "oversized",
+  "cancelled",
+  "unknown",
+] as const;
+export type McpFailureCode = (typeof MCP_FAILURE_CODES)[number];
+
+/** Category of a remote MCP host that is not a bundled connector's endpoint, recorded as `serverHostKind`. */
+export const MCP_SERVER_HOST_KINDS = ["loopback", "private-ip", "public-ip", "custom"] as const;
+export type McpServerHostKind = (typeof MCP_SERVER_HOST_KINDS)[number];
+
+/** Registered OAuth error codes, recorded as `oauthError` (RFC 6749, 6750, 7591, 8707, OIDC). Anything else is "other". */
+export const MCP_OAUTH_ERROR_CODES = [
+  "access_denied",
+  "account_selection_required",
+  "consent_required",
+  "insufficient_scope",
+  "interaction_required",
+  "invalid_client",
+  "invalid_client_metadata",
+  "invalid_grant",
+  "invalid_redirect_uri",
+  "invalid_request",
+  "invalid_response",
+  "invalid_scope",
+  "invalid_software_statement",
+  "invalid_target",
+  "invalid_token",
+  "login_required",
+  "server_error",
+  "temporarily_unavailable",
+  "unapproved_software_statement",
+  "unauthorized_client",
+  "unsupported_grant_type",
+  "unsupported_response_type",
+  "other",
+] as const;
 
 export type DiagnosticSafeFieldValue = boolean | number | string | null;
 export type DiagnosticSafeFields = Readonly<Record<string, DiagnosticSafeFieldValue>>;
@@ -209,7 +268,11 @@ const NUMBER_FIELDS = new Set([
   "suppressed",
   "uptimeSeconds",
 ]);
-const BOOLEAN_FIELDS = new Set(["isMainFrame", "retryable", "snapshotFailed", "truncated"]);
+const BOOLEAN_FIELDS = new Set(["isMainFrame", "keptLastGood", "retryable", "snapshotFailed", "truncated"]);
+/** A hostname or bracketed IPv6 literal: never a URL, path, port, query or userinfo. */
+const SAFE_HOSTNAME = /^(?:(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]{2,45}\])$/u;
+/** Node and undici error codes (ECONNREFUSED, UND_ERR_SOCKET, CERT_HAS_EXPIRED, …). */
+const SAFE_ERRNO = /^[A-Z][A-Z0-9_]{1,47}$/u;
 const EXPORT_OMITTED_FIELDS = new Set(["legacyScope", "message"]);
 const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   causeCode: new Set(DIAGNOSTIC_CODES),
@@ -217,7 +280,11 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   compactionReason: new Set(["threshold", "overflow", "manual"]),
   recoveryStage: new Set(["local-compiler", "semantic-summary", "checkpoint"]),
   localCompilerCause: new Set(["history_limit", "unsafe_boundary", "empty_summary", "insufficient_reduction", "busy", "cancelled", "timeout", "worker_failed", "worker_exited", "cleanup_failed"]),
-  failurePhase: new Set(["renderer-script", "renderer-promise", "renderer-react", "renderer-route", "mcp-tool-discovery", "mcp-recent-failure", "mcp-prewarm", "mcp-stdio-approval", "provider-request", "provider-compaction"]),
+  failurePhase: new Set(["renderer-script", "renderer-promise", "renderer-react", "renderer-route", "mcp-tool-discovery", "mcp-recent-failure", "mcp-prewarm", "mcp-stdio-approval", "mcp-bot-inventory", "mcp-sign-in", "provider-request", "provider-compaction"]),
+  mcpFailure: new Set(MCP_FAILURE_CODES),
+  oauthError: new Set(MCP_OAUTH_ERROR_CODES),
+  transport: new Set(["http", "stdio"]),
+  serverHostKind: new Set(MCP_SERVER_HOST_KINDS),
   providerCategory: new Set(["authentication", "quota", "rate_limit", "context_window", "context_management", "output_limit", "interrupted", "timeout", "service_unavailable", "model_unavailable", "network", "invalid_request", "unknown"]),
   transportCause: new Set(["connection-error", "dns", "connection-reset", "connection-refused", "socket-closed", "fetch-failed", "network-unknown"]),
   arch: new Set(["arm64", "ia32", "universal", "unknown", "x64"]),
@@ -292,7 +359,9 @@ function normalizedStringField(key: string, value: string): string | undefined {
   const enumerated = ENUM_STRING_FIELDS[key];
   if (enumerated) return enumerated.has(sanitized) ? sanitized : undefined;
   if (key === "errorType") return normalizeDiagnosticErrorType(sanitized);
-  if (key === "fingerprint") return SAFE_FINGERPRINT.test(sanitized) ? sanitized : undefined;
+  if (key === "fingerprint" || key === "serverRef") return SAFE_FINGERPRINT.test(sanitized) ? sanitized : undefined;
+  if (key === "serverHost") return sanitized.length <= 253 && SAFE_HOSTNAME.test(sanitized) ? sanitized : undefined;
+  if (key === "errno") return SAFE_ERRNO.test(sanitized) ? sanitized : undefined;
   if (key === "referenceId") return SAFE_REFERENCE.test(sanitized) ? sanitized : undefined;
   if (["appVersion", "chromeVersion", "electronVersion", "nodeVersion"].includes(key)) {
     return SAFE_VERSION.test(sanitized) ? sanitized : undefined;

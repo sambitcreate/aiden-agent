@@ -3,8 +3,8 @@
 // outside Electron (see subagent-mcp-credential-production.ts).
 
 import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
+import { mcpOAuthBindingForServer } from "../mcp-oauth-identity.js";
 import {
-  mcpAuthorizationBinding,
   sessionMatchesMcpBinding,
   type McpOAuthSession,
 } from "../mcp-oauth-session.js";
@@ -60,7 +60,7 @@ export async function resolveSubagentMcpCredentialBoundary(
     assertCurrent(signal);
     oauthSession =
       server.url &&
-      sessionMatchesMcpBinding(session, mcpAuthorizationBinding(server.url, server.authServerMetadataUrl, server.oauthClientName))
+      sessionMatchesMcpBinding(session, mcpOAuthBindingForServer(server))
         ? session
         : {};
   }
@@ -69,6 +69,7 @@ export async function resolveSubagentMcpCredentialBoundary(
   return createSubagentMcpCredentialBoundary({
     revisionKey: sources.revisionKey,
     configuredHeaders: resolved.headers,
+    ...(resolved.oauthClientSecret !== undefined ? { oauthClientSecret: resolved.oauthClientSecret } : {}),
     endpointCredentials: subagentMcpEndpointCredentials(server.url),
     presetApiKey,
     oauthSession,

@@ -510,7 +510,8 @@ test("MCP validates transports and redacts configured secrets from listing", asy
   for (const id of ["+remote", "-remote"]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /cannot begin with/);
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "-Remote", transport: "stdio", command: "node", enabled: true }), /name cannot begin with/);
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", enabled: true }), /needs a url/);
-  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "not a url", enabled: true }), /not a valid URL/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "not a url", enabled: true }), /not a valid URL/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "https://example.com/sse", enabled: true }), /Unknown MCP transport/);
   writeFileSync(file, JSON.stringify({ id: "local", name: "Local", transport: "stdio", command: "node", enabled: false, env: { SECRET: "do-not-list" } }));
   await api.mcpCommand(dir, ["add", file]);
   const listed = await api.mcpCommand(dir, ["list"]);
@@ -1099,7 +1100,7 @@ test("MCP connections survive token refreshes, rebuild on sign-out, and connect 
   const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
   api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
   const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
-  const store = (token) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: token, token_type: "Bearer" } }));
+  const store = (token, grantId = "sign-in-1") => credentials.write(id, JSON.stringify({ authorizationBinding: api.mcpOAuthBindingForServer(server), grantId, clientInformation: { client_id: "registered" }, tokens: { access_token: token, token_type: "Bearer" } }));
   await store("first");
   const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
   const client = await pool.connection(server);
@@ -1111,6 +1112,10 @@ test("MCP connections survive token refreshes, rebuild on sign-out, and connect 
   assert.equal(initializes, 1);
   assert.deepEqual(callAuthorizations, ["Bearer first", "Bearer refreshed"], "the retained transport sends the current persisted token");
   await api.mcpCommand(dir, ["logout", "remote"]);
+  // Signed out: the server is not contacted at all until the next sign-in.
+  await assert.rejects(pool.connection(server), /aiden mcp login remote/);
+  assert.equal(initializes, 1);
+  await store("second-account", "sign-in-2");
   const [first, second] = await Promise.all([pool.connection(server), pool.connection(server)]);
   assert.equal(first, second);
   assert.notEqual(first, client);
@@ -1121,7 +1126,7 @@ test("MCP Bot credential signatures ignore token refreshes and display fields bu
   const dir = temporary(t);
   const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
   const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
-  const store = (token, incarnation) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, incarnation, tokens: { access_token: token, refresh_token: `${token}-refresh`, token_type: "Bearer" } }));
+  const store = (token, grantId) => credentials.write(id, JSON.stringify({ authorizationBinding: api.mcpOAuthBindingForServer(server), clientInformation: { client_id: "registered" }, grantId, tokens: { access_token: token, refresh_token: `${token}-refresh`, token_type: "Bearer" } }));
   await store("first", "sign-in-1");
   const signed = await api.mcpCredentialSignature(dir, server);
   await store("refreshed", "sign-in-1");
@@ -1142,7 +1147,7 @@ test("MCP shutdown during credential resolution starts no connection and sends n
   t.after(() => { http.closeAllConnections(); http.close(); });
   const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
   api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
-  await api.insightCredentials(dir).write(api.mcpCredentialId(server), JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: "secret", token_type: "Bearer" } }));
+  await api.insightCredentials(dir).write(api.mcpCredentialId(server), JSON.stringify({ authorizationBinding: api.mcpOAuthBindingForServer(server), clientInformation: { client_id: "registered" }, tokens: { access_token: "secret", token_type: "Bearer" } }));
   // Pause the second credential-file open: the provider read after incarnation resolution.
   const fsPromises = createRequire(import.meta.url)("node:fs/promises"), open = fsPromises.open;
   let opens = 0, reached, release;
@@ -1228,6 +1233,90 @@ test("MCP remove and endpoint edits delete the server's stored credential", asyn
   await credentials.write(api.mcpCredentialId(moved), "{}");
   await api.mcpCommand(dir, ["remove", "remote"]);
   assert.equal(await credentials.read(api.mcpCredentialId(moved)), undefined);
+});
+
+function retiredSseInventory() {
+  const local = { id: "local", name: "Local", enabled: true, transport: "stdio", command: "example" };
+  const hex = "ab".repeat(16);
+  const sse = [
+    { id: "old-disabled", name: "Old disabled", enabled: false, transport: "sse", url: "https://old.example/sse" },
+    { id: "old-oauth", name: "Old OAuth", enabled: true, transport: "sse", url: "https://older.example/sse", oauth: true, oauthClientId: "client", oauthClientSecret: `aiden-secret:v1:${hex}` },
+  ];
+  return { local, sse, servers: [sse[0], local, sse[1]], secretCredential: `mcp-oauth-client-secret-${hex}` };
+}
+
+async function storeRetiredCredentials(dir, inventory) {
+  const credentials = api.insightCredentials(dir);
+  for (const server of inventory.sse) await credentials.write(api.mcpCredentialId(server), JSON.stringify({ tokens: { access_token: `token-${server.id}`, token_type: "Bearer" } }));
+  await credentials.write(inventory.secretCredential, "old-client-secret");
+  return credentials;
+}
+
+async function assertRetiredCredentialsRemoved(credentials, inventory) {
+  for (const server of inventory.sse) assert.equal(await credentials.read(api.mcpCredentialId(server)), undefined, `${server.id} sign-in removed`);
+  assert.equal(await credentials.read(inventory.secretCredential), undefined, "the retired client secret is removed");
+}
+
+test("retired SSE entries in aiden-mcp.json are dropped with their credentials, and the remaining servers load", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.listServers()).map(({ id }) => id), ["local"]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [inventory.local], "the pruned list is persisted");
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["local"]);
+  await api.mcpCommand(dir, ["remove", "local"]);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
+test("retired SSE entries in a legacy mcp.json migrate away with their credentials", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify(inventory.servers));
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), [inventory.local]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [inventory.local]);
+  assert.equal(existsSync(join(dir, "mcp.json")), false);
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  await api.mcpCommand(dir, ["remove", "local"]);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
+test("a retired SSE entry whose credentials could not be deleted stays until a later read deletes them", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  // A directory where the credential file belongs makes the delete fail for
+  // every user, root included (directory permissions would not stop root).
+  const credentialFile = join(dir, "credentials", "insights.json"), held = `${credentialFile}.held`;
+  renameSync(credentialFile, held);
+  mkdirSync(credentialFile);
+  const restore = () => { if (existsSync(held)) { rmSync(credentialFile, { recursive: true, force: true }); renameSync(held, credentialFile); } };
+  t.after(restore);
+  const { value, stderr } = await captureStderr(() => api.mcpCommand(dir, ["list"]));
+  assert.deepEqual(value.map(({ id }) => id), ["local"], "the remaining servers still load");
+  assert.match(stderr, /could not remove retired SSE MCP servers yet/u);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), inventory.servers, "the entries wait for their cleanup");
+  // An ordinary write in the meantime keeps them too.
+  writeFileSync(join(dir, "other.json"), JSON.stringify({ id: "other", name: "Other", enabled: false, transport: "stdio", command: "example" }));
+  await captureStderr(() => api.mcpCommand(dir, ["add", join(dir, "other.json")]));
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).filter(({ transport }) => transport === "sse"), inventory.sse);
+  restore();
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["local", "other"]);
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).map(({ id }) => id), ["local", "other"]);
+});
+
+test("a remaining server that shares a retired entry's sign-in and client secret keeps them", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  const [, retired] = inventory.sse;
+  const live = { ...retired, transport: "http", name: "Same endpoint over HTTP" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [retired, live]);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id, transport }) => [id, transport]), [[live.id, "http"]]);
+  assert.ok(await credentials.read(api.mcpCredentialId(live)), "the shared sign-in stays");
+  assert.equal(await credentials.read(inventory.secretCredential), "old-client-secret", "the shared client secret stays");
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [live]);
 });
 
 test("MCP migration skips a malformed native mcp.json with a warning and leaves it untouched", async (t) => {
@@ -1438,6 +1527,16 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
     if (request.url.includes("oauth-protected-resource")) return response.end(JSON.stringify({ resource: `${issuer}/mcp`, authorization_servers: [oidc ? issuer : `${issuer}/wrong`] }));
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const body = Buffer.concat(chunks).toString();
+    if (request.url === "/mcp") {
+      // The protected MCP endpoint: a challenge without the issued token, JSON-RPC with it.
+      if (request.headers.authorization !== "Bearer new-token") {
+        response.writeHead(401, { "www-authenticate": `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp"` });
+        return response.end();
+      }
+      const message = JSON.parse(body);
+      if (message.id === undefined) { response.statusCode = 202; return response.end(); }
+      return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { protocolVersion: message.params.protocolVersion, capabilities: {}, serverInfo: { name: "metadata", version: "1" } } : {} }));
+    }
     if (request.url === "/register") {
       registration = JSON.parse(body);
       return response.end(JSON.stringify({ client_id: "registered", ...registration }));
@@ -1452,7 +1551,7 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${server.address().port}`;
   t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
-  writeFileSync(file, JSON.stringify({ id: "metadata", name: "Metadata", transport: "http", url: `${issuer}/mcp`, enabled: true, oauth: true, ...(oidc ? {} : { authServerMetadataUrl: `${issuer}/metadata` }), oauthClientName: "Approved Aiden CLI", description: "Documents" }));
+  writeFileSync(file, JSON.stringify({ id: "metadata", name: "Metadata", transport: "http", url: `${issuer}/mcp`, enabled: true, oauth: true, ...(oidc ? {} : { authServerMetadataUrl: `${issuer}/metadata` }), description: "Documents" }));
   await api.mcpCommand(dir, ["add", file]);
   const write = process.stderr.write;
   process.stderr.write = function(chunk, ...args) {
@@ -1478,13 +1577,110 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
     await callbackCheck;
   } finally { process.stderr.write = write; }
   assert.equal(tokenCalls, 1);
-  assert.equal(registration.client_name, "Approved Aiden CLI");
+  assert.equal(registration.client_name, "Aiden Agent", "every MCP OAuth registration uses the catalog's client name");
   assert.equal(requests.filter((path) => path === "/metadata").length, oidc ? 0 : 1);
   assert.equal(requests.some((path) => path.includes("openid-configuration")), oidc);
   assert.ok(requests.every((path) => !path.includes("wrong")));
   const [listed] = await api.mcpCommand(dir, ["list"]);
   assert.equal(listed.authServerMetadataUrl, oidc ? undefined : `${issuer}/metadata`);
   assert.equal(listed.description, "Documents");
+});
+
+/** A browser for the fake OAuth server: follows /authorize to the loopback callback without waiting for its page. */
+function fakeBrowser() {
+  const pages = [];
+  return { pages, open(url) { pages.push((async () => {
+    const consent = await fetch(url, { redirect: "manual" });
+    return (await fetch(consent.headers.get("location"))).text();
+  })()); } };
+}
+
+test("aiden mcp login registers a fresh client on a random loopback port, and stored tokens connect and refresh without registering", async (t) => {
+  const dir = temporary(t), oauth = await api.startFakeOAuthServer({ issueSecret: true, requireSecret: true, authMethods: ["client_secret_post"] });
+  t.after(() => oauth.close());
+  const server = { id: "remote", name: "Remote", transport: "http", url: oauth.serviceUrl, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  // Never signed in: nothing reaches the server, not even an MCP request or discovery.
+  await assert.rejects(pool.connection(server), /aiden mcp login remote/);
+  assert.equal(oauth.seen.requests.length, 0);
+  const browser = fakeBrowser();
+  assert.deepEqual(await api.mcpLogin(dir, server, { openBrowser: browser.open }), { authorized: true });
+  assert.match(await browser.pages[0], /Connected/);
+  assert.equal(oauth.seen.registrations.length, 1);
+  const [redirect] = oauth.seen.registrations[0].redirect_uris;
+  assert.match(redirect, /^http:\/\/127\.0\.0\.1:\d+\/callback$/u);
+  assert.notEqual(new URL(redirect).port, "41390", "a dynamically registered CLI client uses a random loopback port");
+  // The sign-in is stored encrypted, never as plaintext tokens.
+  assert.doesNotMatch(readFileSync(join(dir, "credentials", "insights.json"), "utf8"), /access-|refresh-|secret-/u);
+  assert.deepEqual((await pool.inspectTools(server)).map((tool) => tool.name), ["echo"]);
+  // An expired access token is refreshed with the stored confidential client, without a new registration.
+  await pool.close();
+  oauth.expireAccessTokens();
+  const again = api.createCliMcpPool(dir); t.after(() => again.close());
+  assert.deepEqual((await again.inspectTools(server)).map((tool) => tool.name), ["echo"]);
+  assert.equal(oauth.seen.registrations.length, 1);
+  const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
+  assert.deepEqual(refresh.map(({ status, presentedSecret }) => ({ status, presentedSecret })), [{ status: 200, presentedSecret: true }]);
+});
+
+test("a pre-registered OAuth client keeps its secret encrypted and signs in without registering", async (t) => {
+  const dir = temporary(t), file = join(dir, "server.json");
+  const oauth = await api.startFakeOAuthServer({ registration: false, requireSecret: true, authMethods: ["client_secret_post"], preRegistered: { clientId: "registered-by-hand", clientSecret: "hand-secret-value" } });
+  t.after(() => oauth.close());
+  writeFileSync(file, JSON.stringify({ id: "custom", name: "Custom", transport: "http", url: oauth.serviceUrl, enabled: true, oauth: true, oauthClientId: "registered-by-hand", oauthClientSecret: "hand-secret-value" }));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.doesNotMatch(readFileSync(join(dir, "aiden-mcp.json"), "utf8"), /hand-secret-value/u, "the client secret never lands in aiden-mcp.json");
+  const [listed] = await api.mcpCommand(dir, ["list"]);
+  assert.equal(listed.oauthClientId, "registered-by-hand");
+  assert.equal(listed.oauthClientSecret, undefined, "listing never prints the client secret, even as a marker");
+  assert.equal(listed.hasOAuthClientSecret, true);
+  const [saved] = JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8"));
+  // The provider must see the redirect URI the user registered: the fixed loopback, not a random port.
+  assert.equal(api.cliMcpOAuthLoopback(saved).redirectUri, "http://127.0.0.1:41390/callback");
+  assert.equal(api.cliMcpOAuthLoopback({ ...saved, oauthClientId: undefined, oauthClientSecret: undefined }).port, 0);
+  assert.equal(api.cliMcpOAuthLoopback({ ...saved, oauthClientId: undefined, oauthClientSecret: undefined }, "https://aiden.example/client.json").redirectUri, "http://127.0.0.1:41390/callback");
+  const browser = fakeBrowser();
+  // Port 0 stands in for the fixed port so the test never collides with a running Aiden.
+  await api.mcpLogin(dir, saved, { openBrowser: browser.open, loopback: { port: 0, redirectUri: "http://127.0.0.1/callback", timeoutMs: 30_000 } });
+  await browser.pages[0];
+  assert.equal(oauth.seen.registrations.length, 0);
+  assert.deepEqual(oauth.seen.tokenRequests.map(({ grant, clientId, presentedSecret, status }) => ({ grant, clientId, presentedSecret, status })),
+    [{ grant: "authorization_code", clientId: "registered-by-hand", presentedSecret: true, status: 200 }]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.inspectTools(saved)).map((tool) => tool.name), ["echo"]);
+  // Removing the server deletes its stored secret and sign-in.
+  await api.mcpCommand(dir, ["remove", "custom"]);
+  await assert.rejects(api.mcpLogin(dir, saved, { openBrowser: browser.open }), /client secret .* is missing/u);
+});
+
+test("a plaintext OAuth client secret in aiden-mcp.json is never listed or used", async (t) => {
+  const dir = temporary(t);
+  const server = { id: "edited", name: "Edited", transport: "http", url: "https://mcp.example.com/mcp", enabled: true, oauth: true, oauthClientId: "client", oauthClientSecret: "plaintext-secret" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  assert.doesNotMatch(JSON.stringify(await api.mcpCommand(dir, ["list"])), /plaintext-secret/u);
+  await assert.rejects(api.mcpLogin(dir, server, { openBrowser() { throw new Error("must not open"); } }), /plaintext oauthClientSecret .* aiden mcp add/u);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  await assert.rejects(pool.connection(server), /plaintext oauthClientSecret/u);
+});
+
+test("credential writes queue within a process and wait for another holder of the writer lease", async (t) => {
+  const dir = temporary(t), credentials = api.insightCredentials(dir);
+  // Concurrent writers in one process (two MCP servers refreshing at startup) all persist.
+  await Promise.all(Array.from({ length: 6 }, (_, index) => credentials.write(`source-${index}`, `value-${index}`)));
+  for (let index = 0; index < 6; index++) assert.equal(await credentials.read(`source-${index}`), `value-${index}`);
+  // A lease held elsewhere (another process) is waited for, not failed.
+  const release = api.acquireLease(join(dir, "credentials", "insights-writer"));
+  let written = false;
+  const pending = credentials.write("late", "after-release").then(() => { written = true; });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(written, false);
+  release();
+  await pending;
+  assert.equal(await credentials.read("late"), "after-release");
+  // Read-modify-write sees the value under the lease.
+  await Promise.all([credentials.update("counter", (value) => String(Number(value ?? 0) + 1)), credentials.update("counter", (value) => String(Number(value ?? 0) + 1))]);
+  assert.equal(await credentials.read("counter"), "2");
 });
 
 test("MCP migration validates one snapshot and restores a native replacement without deleting it", (t) => {

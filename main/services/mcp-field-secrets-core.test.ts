@@ -426,3 +426,27 @@ test("a failed prune after an outside edit stays pending and the next reload ret
   await reload();
   assert.throws(() => resolveMcpFieldSecrets(saved.server, record), (error: unknown) => error instanceof McpFieldSecretMissingError && /“X-Team”/u.test(error.message));
 });
+
+test("a pre-registered OAuth client secret is sealed like a header, survives the record round trip and resolves only for its server", () => {
+  const server: McpServer = { ...remote, headers: undefined, oauthClientId: "slack-app", oauthClientSecret: "client-secret-value" };
+  assert.equal(hasPlaintextMcpFields(server), true);
+  const plan = planMcpFieldSecrets(server, counter());
+  assert.equal(plan.server.oauthClientId, "slack-app", "the client ID stays in config");
+  assert.ok(isMcpFieldSecretMarker(plan.server.oauthClientSecret));
+  assert.equal(JSON.stringify(plan.server).includes("client-secret-value"), false, "config never holds the secret");
+  assert.equal(hasPlaintextMcpFields(plan.server), false);
+  const record = parseMcpFieldSecretRecord(serializeMcpFieldSecretRecord(stored(plan)));
+  assert.equal(resolveMcpFieldSecrets(plan.server, record).oauthClientSecret, "client-secret-value");
+  // Sent nowhere else: another address resolves nothing.
+  assert.throws(() => resolveMcpFieldSecrets({ ...plan.server, url: "https://elsewhere.test/mcp" }, record), /changed outside Aiden/u);
+  // Unchanged on the next save: the marker is reused, so nothing looks like a new credential.
+  const again = planMcpFieldSecrets({ ...server }, counter(0x500), { reuse: { current: plan.server, values: mcpFieldSecretFieldValues(plan.server, record) } });
+  assert.equal(again.server.oauthClientSecret, plan.server.oauthClientSecret);
+  assert.deepEqual(again.added, {});
+  // Removing the secret prunes it from the record.
+  assert.equal(pruneMcpFieldSecretRecord(record!, { ...plan.server, oauthClientSecret: undefined }), undefined);
+  // A secret under the same marker but recorded for a header does not resolve as the client secret.
+  const marker = plan.server.oauthClientSecret!;
+  const misfiled: McpFieldSecretRecord = { bindings: { [mcpFieldSecretDestination(plan.server)]: { [marker]: { field: "headers:Authorization", value: "Bearer x" } } } };
+  assert.throws(() => resolveMcpFieldSecrets(plan.server, misfiled), McpFieldSecretMissingError);
+});

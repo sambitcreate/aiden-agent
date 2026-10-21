@@ -48,7 +48,7 @@ test("curated slash catalog freezes unique command names, aliases, and required 
       "editor",
       "worktree",
       "access",
-      "mcp",
+      "connectors",
       "skills",
       "theme",
       "btw",
@@ -96,8 +96,12 @@ test("curated slash catalog freezes unique command names, aliases, and required 
     "generative-ui",
     "generative_ui",
   ]);
-  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "mcp")?.aliases, ["plugins"]);
-  assert.equal(SLASH_COMMANDS.find((command) => command.name === "mcp")?.action.kind, "settings");
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "connectors")?.aliases, ["mcp"]);
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "connectors")?.action, {
+    kind: "settings",
+    section: "mcp",
+  });
+  assert.ok(!SLASH_COMMANDS.some((command) => command.name === "plugins" || command.aliases.includes("plugins")));
   assert.deepEqual(
     SLASH_COMMANDS.find((command) => command.name === "environment"),
     {

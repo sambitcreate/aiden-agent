@@ -1,16 +1,15 @@
 import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
-import type {
-  OAuthClientInformationFull,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
-import { randomBytes, randomUUID } from "node:crypto";
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
-import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+  type OAuthClientInformationMixed,
+  type OAuthDiscoveryState,
+  type OAuthTokens,
+} from "@earendil-works/pi-mcp/oauth";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 export interface McpOAuthSession {
   /** Normalized protected-resource URL this registration and tokens belong to. */
   authorizationBinding?: string;
-  clientInformation?: OAuthClientInformationFull;
+  clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
   codeVerifier?: string;
   /** Last granted scopes survive token invalidation and explicit step-up sign-in. */
@@ -21,6 +20,36 @@ export interface McpOAuthSession {
    * access/refresh token pair currently represents it.
    */
   grantId?: string;
+  /**
+   * The refresh token a background connection saw rejected (`invalid_grant`)
+   * and removed, as a hash. Another client (a second CLI process) may have
+   * presented the same token a moment earlier and received its rotation; its
+   * late save may restore the new tokens while nothing newer is stored. See
+   * `sessionWithRefreshedMcpTokens`.
+   */
+  rejectedRefresh?: McpRejectedRefresh;
+}
+
+export interface McpRejectedRefresh {
+  /** SHA-256 (hex) of the rejected refresh token. */
+  refreshTokenHash: string;
+  /** The grant the rejected tokens belonged to. */
+  grantId?: string;
+  /** When the tokens were removed (ms since the epoch). */
+  at: number;
+}
+
+/** The tokens a provider last read or received, and the grant they belonged to. */
+export type McpObservedTokens = Pick<OAuthTokens, "access_token" | "refresh_token"> & { grantId?: string };
+
+/**
+ * How long after a rejected refresh a concurrent rotation of the same refresh
+ * token may still be restored. A token response older than this is stale.
+ */
+export const MCP_REJECTED_REFRESH_RESTORE_MS = 5 * 60_000;
+
+function refreshTokenHash(refreshToken: string): string {
+  return createHash("sha256").update(refreshToken).digest("hex");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -46,6 +75,18 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
   if (session.grantId !== undefined && (typeof session.grantId !== "string" || !session.grantId)) {
     throw new Error("MCP OAuth grant id is malformed.");
   }
+  if (session.rejectedRefresh !== undefined) {
+    const marker = session.rejectedRefresh;
+    // Advisory only: a malformed marker is dropped rather than failing the session.
+    if (
+      !isRecord(marker) ||
+      typeof marker.refreshTokenHash !== "string" || !/^[0-9a-f]{64}$/u.test(marker.refreshTokenHash) ||
+      (marker.grantId !== undefined && (typeof marker.grantId !== "string" || !marker.grantId)) ||
+      typeof marker.at !== "number" || !Number.isFinite(marker.at)
+    ) {
+      delete session.rejectedRefresh;
+    }
+  }
   if (session.clientInformation !== undefined) {
     if (
       !isRecord(session.clientInformation) ||
@@ -58,6 +99,13 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
           )))
     ) {
       throw new Error("MCP OAuth client information is malformed.");
+    }
+    const { client_secret: secret, client_secret_expires_at: secretExpiry } = session.clientInformation;
+    if (
+      (secret !== undefined && (typeof secret !== "string" || !secret)) ||
+      (secretExpiry !== undefined && (typeof secretExpiry !== "number" || !Number.isFinite(secretExpiry) || secretExpiry < 0))
+    ) {
+      throw new Error("MCP OAuth client secret is malformed.");
     }
   }
   if (session.tokens !== undefined) {
@@ -82,33 +130,69 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
 }
 
 /**
- * Start an explicit Settings re-authorization without discarding the dynamic
- * client registration. The caller retains the original snapshot for rollback.
+ * What stored registrations and tokens belong to: the protected resource, an
+ * explicit authorization-metadata document, and the OAuth client identity
+ * (`clientIdentity`, see `mcpOAuthClientIdentityKey`). Changing any of them
+ * leaves the old session unmatched, so it is never reused.
  */
-export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, oauthClientName?: string): string {
+export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, clientIdentity?: string): string {
   const parsed = new URL(url);
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   const resource = parsed.toString();
-  return authServerMetadataUrl === undefined && oauthClientName === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), oauthClientName?.trim() ?? null]);
+  return authServerMetadataUrl === undefined && clientIdentity === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), clientIdentity ?? null]);
 }
 
 export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: string): boolean {
   return session.authorizationBinding === binding;
 }
 
-/** Native PKCE clients are public clients; never retain a DCR client secret. */
-export function publicMcpClientInformation(
-  information: OAuthClientInformationFull,
-): OAuthClientInformationFull {
-  const {
-    client_secret: _clientSecret,
-    client_secret_expires_at: _clientSecretExpiry,
-    ...publicInformation
-  } = information;
-  return publicInformation as OAuthClientInformationFull;
+/**
+ * The stored dynamic client registration, or undefined when the server-issued
+ * client secret has expired (RFC 7591 `client_secret_expires_at`, seconds; 0
+ * means it never expires) so the SDK registers again. Confidential-only
+ * servers (Figma, Vercel, Supabase) need the secret at the token endpoint, so
+ * it stays in the encrypted session and is handed back to the SDK.
+ */
+export function usableMcpClientInformation(
+  information: OAuthClientInformationMixed | undefined,
+  nowMs: number = Date.now(),
+): OAuthClientInformationMixed | undefined {
+  const expiresAt = information?.client_secret_expires_at;
+  if (information?.client_secret && typeof expiresAt === "number" && expiresAt > 0 && expiresAt * 1000 <= nowMs) {
+    return undefined;
+  }
+  return information;
 }
 
+/** Persist a registration response (including any client secret) into a bound session. */
+export function sessionWithMcpClientInformation(
+  session: McpOAuthSession,
+  binding: string,
+  information: OAuthClientInformationMixed,
+): McpOAuthSession {
+  const clientInformation = structuredClone(information);
+  // Public clients sometimes come back with `"client_secret": ""`; keeping it
+  // would read as a secret at the token endpoint and fail the stored parse.
+  if (typeof clientInformation.client_secret !== "string" || !clientInformation.client_secret) {
+    delete clientInformation.client_secret;
+    delete clientInformation.client_secret_expires_at;
+  } else {
+    const expiry: unknown = clientInformation.client_secret_expires_at;
+    if (expiry !== undefined && (typeof expiry !== "number" || !Number.isFinite(expiry) || expiry < 0)) {
+      delete clientInformation.client_secret_expires_at;
+    }
+  }
+  return { ...session, authorizationBinding: binding, clientInformation };
+}
+
+/**
+ * Start an explicit Settings re-authorization. Tokens, the PKCE verifier and
+ * the stored client registration are all left behind: a server may have
+ * dropped the old client_id (and then never calls back), so every interactive
+ * sign-in registers a fresh client. Granted scopes carry over for step-up. The
+ * caller retains the original snapshot for rollback.
+ */
 export function sessionForFreshMcpAuthorization(
   session: McpOAuthSession,
   binding: string,
@@ -117,7 +201,6 @@ export function sessionForFreshMcpAuthorization(
   const grantedScope = session.tokens?.scope || session.grantedScope;
   return {
     authorizationBinding: binding,
-    ...(session.clientInformation ? { clientInformation: publicMcpClientInformation(session.clientInformation) } : {}),
     ...(grantedScope ? { grantedScope } : {}),
   };
 }
@@ -142,8 +225,9 @@ export function sessionWithSavedMcpTokens(
   requestedScope?: string,
 ): McpOAuthSession {
   const grantedScope = tokens.scope || requestedScope || session.tokens?.scope || session.grantedScope;
+  const { rejectedRefresh: _supersededByNewTokens, ...rest } = session;
   return {
-    ...session,
+    ...rest,
     authorizationBinding: binding,
     tokens,
     ...(grantedScope ? { grantedScope } : {}),
@@ -151,21 +235,45 @@ export function sessionWithSavedMcpTokens(
 }
 
 /**
+ * Whether a refresh that presented `observed` may restore its response into a
+ * session whose tokens a concurrent client removed after its own attempt with
+ * the same refresh token was rejected (the server had just rotated it for
+ * this client). Only while nothing newer is stored, for the same grant, and
+ * within the restore window. A sign-out clears the whole session and a
+ * re-authorization mints a new grant, so neither leaves a matching marker.
+ */
+function mayRestoreRejectedRefresh(session: McpOAuthSession, observed: McpObservedTokens, nowMs: number): boolean {
+  const marker = session.rejectedRefresh;
+  return Boolean(
+    marker && !session.tokens && observed.refresh_token &&
+    marker.refreshTokenHash === refreshTokenHash(observed.refresh_token) &&
+    marker.grantId === observed.grantId && session.grantId === observed.grantId &&
+    nowMs >= marker.at && nowMs - marker.at <= MCP_REJECTED_REFRESH_RESTORE_MS,
+  );
+}
+
+/**
  * Compare-and-set for tokens a background refresh returned. The refresh
  * presented the tokens this client last observed; if the stored pair has since
  * changed (another client rotated, re-authorized or signed out), the response
- * is older than what is persisted and must not replace it. Returns undefined
- * when the stored session should be kept as is.
+ * is older than what is persisted and must not replace it. The one exception:
+ * a concurrent client presented the same refresh token after this one, was
+ * rejected because the server had already rotated it for this refresh, and
+ * removed the pair; this response is then the grant's only live tokens and
+ * is restored (see `mayRestoreRejectedRefresh`). Returns undefined when the
+ * stored session should be kept as is.
  */
 export function sessionWithRefreshedMcpTokens(
   session: McpOAuthSession,
   binding: string,
-  observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined,
+  observed: McpObservedTokens | undefined,
   tokens: OAuthTokens,
   requestedScope?: string,
+  nowMs: number = Date.now(),
 ): McpOAuthSession | undefined {
   const stored = session.tokens;
-  if (observed && (stored?.access_token !== observed.access_token || stored?.refresh_token !== observed.refresh_token)) {
+  if (observed && (stored?.access_token !== observed.access_token || stored?.refresh_token !== observed.refresh_token) &&
+      !mayRestoreRejectedRefresh(session, observed, nowMs)) {
     return undefined;
   }
   return sessionWithSavedMcpTokens(session, binding, tokens, requestedScope);
@@ -281,7 +389,8 @@ export function clearMcpStepUpScope(serviceUrl: string | undefined): void {
  */
 export function sessionAfterTokenInvalidation(
   session: McpOAuthSession,
-  observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined,
+  observed: McpObservedTokens | undefined,
+  nowMs: number = Date.now(),
 ): McpOAuthSession | undefined {
   const stored = session.tokens;
   if (!stored) return undefined;
@@ -291,6 +400,17 @@ export function sessionAfterTokenInvalidation(
   const next = structuredClone(session);
   if (stored.scope) next.grantedScope = stored.scope;
   delete next.tokens;
+  // Remember which refresh token was given up on, so a concurrent client's
+  // rotation of that same token can still land (sessionWithRefreshedMcpTokens).
+  if (stored.refresh_token) {
+    next.rejectedRefresh = {
+      refreshTokenHash: refreshTokenHash(stored.refresh_token),
+      ...(session.grantId ? { grantId: session.grantId } : {}),
+      at: nowMs,
+    };
+  } else {
+    delete next.rejectedRefresh;
+  }
   return next;
 }
 
@@ -303,25 +423,17 @@ export class McpOAuthAuthorizationFlow {
   private started = false;
   private consumed = false;
   requestedScope?: string;
-  private observedMetadata?: { url: string; issuer: string; issuerRequired: boolean };
-
-  observeAuthorizationMetadata(url: URL, document: unknown): void {
-    if (!isRecord(document) || typeof document.issuer !== "string") throw new Error("Invalid OAuth metadata issuer.");
-    const supported = document.authorization_response_iss_parameter_supported;
-    if (supported !== undefined && typeof supported !== "boolean") throw new Error("Invalid OAuth issuer response policy.");
-    this.observedMetadata = { url: url.href, issuer: document.issuer, issuerRequired: supported === true };
-  }
+  /**
+   * The `iss` to hand the code exchange (RFC 9207) once this flow validated
+   * the callback's issuer: the discovered metadata's own issuer, so a root
+   * issuer's trailing-slash spelling cannot fail the exchange's exact check.
+   */
+  responseIssuer?: string;
 
   saveDiscovery(state: OAuthDiscoveryState): void {
     const metadata = state.authorizationServerMetadata;
     if (metadata && !sameMcpOAuthIssuer(metadata.issuer, state.authorizationServerUrl)) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
-    const discovery = structuredClone(state);
-    const observed = this.observedMetadata;
-    if (metadata && observed?.issuer === metadata.issuer && observed.issuerRequired &&
-        buildDiscoveryUrls(state.authorizationServerUrl).some(({ url }) => url.href === observed.url)) {
-      discovery.authorizationServerMetadata = { ...metadata, authorization_response_iss_parameter_supported: true };
-    }
-    this.discovery = discovery;
+    this.discovery = structuredClone(state);
   }
 
   discoveryState(): OAuthDiscoveryState | undefined {
@@ -330,7 +442,6 @@ export class McpOAuthAuthorizationFlow {
 
   clearDiscovery(): void {
     this.discovery = undefined;
-    this.observedMetadata = undefined;
   }
 
   authorizationUrl(url: URL, grantedScope?: string): URL {
@@ -340,6 +451,8 @@ export class McpOAuthAuthorizationFlow {
     this.requestedScope = scopes.join(" ") || undefined;
     if (this.requestedScope) result.searchParams.set("scope", this.requestedScope);
     else result.searchParams.delete("scope");
+    // Pi asks for consent when its own scope includes offline_access; a
+    // granted scope merged in here can add it, so apply the same rule.
     if (scopes.includes("offline_access") && !result.searchParams.has("prompt")) result.searchParams.set("prompt", "consent");
     const metadata = this.discovery?.authorizationServerMetadata;
     this.expectedIssuer = metadata?.issuer ?? this.discovery?.authorizationServerUrl;
@@ -347,6 +460,20 @@ export class McpOAuthAuthorizationFlow {
       metadata.authorization_response_iss_parameter_supported === true;
     this.started = true;
     return result;
+  }
+
+  /**
+   * Options for exchanging this sign-in's authorization code: the validated
+   * response issuer, and the scope the browser was actually sent to. Without
+   * that scope the flow records its own recomputed one on tokens whose
+   * response omits `scope`, which would drop scopes granted earlier.
+   */
+  codeExchange(code: string): { authorizationCode: string; iss?: string; scope?: string } {
+    return {
+      authorizationCode: code,
+      ...(this.responseIssuer === undefined ? {} : { iss: this.responseIssuer }),
+      ...(this.requestedScope ? { scope: this.requestedScope } : {}),
+    };
   }
 
   callback(url: URL): { code: string } | { error: Error } {
@@ -362,7 +489,44 @@ export class McpOAuthAuthorizationFlow {
     const errors = url.searchParams.getAll("error");
     if (codes.length + errors.length !== 1 || !(codes[0] || errors[0])) throw new Error("Invalid OAuth callback result.");
     this.consumed = true;
-    return errors.length ? { error: new Error("Authorization was denied by the provider.") } : { code: codes[0] };
+    this.responseIssuer = issuers.length === 1 ? this.discovery?.authorizationServerMetadata?.issuer : undefined;
+    return errors.length
+      ? { error: new McpOAuthCallbackError(errors[0], url.searchParams.get("error_description") ?? undefined) }
+      : { code: codes[0] };
+  }
+}
+
+const MAX_CALLBACK_DESCRIPTION_CHARS = 300;
+
+/** Text from an OAuth server shown to the user: one line, no control characters, bounded. */
+export function mcpOAuthDisplayText(value: string | undefined, maximum: number = MAX_CALLBACK_DESCRIPTION_CHARS): string | undefined {
+  const line = value === undefined ? undefined : [...value]
+    .map((char) => { const code = char.charCodeAt(0); return code < 32 || (code >= 127 && code <= 159) ? " " : char; })
+    .join("").replace(/\s+/gu, " ").trim();
+  if (!line) return undefined;
+  return line.length > maximum ? `${line.slice(0, maximum - 1)}…` : line;
+}
+
+/**
+ * The authorization server redirected back with `error=` (RFC 6749 §4.1.2.1).
+ * `code` is the OAuth error code; `description` is the server's sanitized
+ * `error_description`, if it sent one.
+ */
+export class McpOAuthCallbackError extends Error {
+  readonly code: string;
+  readonly description?: string;
+
+  constructor(code: string, description?: string) {
+    const safeCode = /^[\w.-]{1,64}$/u.test(code) ? code : "invalid_response";
+    const detail = mcpOAuthDisplayText(description);
+    super(
+      safeCode === "access_denied"
+        ? `Sign-in was denied in the browser${detail ? `: ${detail}` : "."}`
+        : `The authorization server returned “${safeCode}”${detail ? `: ${detail}` : "."}`,
+    );
+    this.name = "McpOAuthCallbackError";
+    this.code = safeCode;
+    this.description = detail;
   }
 }
 
@@ -373,6 +537,29 @@ export function hasMcpOAuthSessionData(session: McpOAuthSession): boolean {
     session.tokens ||
     session.codeVerifier,
   );
+}
+
+/** What Settings shows for a server's stored browser sign-in. */
+export interface McpOAuthSignInState {
+  /** Tokens are stored for the server's current binding. */
+  authorized: boolean;
+  /**
+   * A sign-in for the current binding lost its tokens (the server rejected
+   * them, for example with `invalid_grant`). Read from the stored session, so
+   * it survives restarts.
+   */
+  needsSignIn: boolean;
+  /** Anything is stored for the server, matching its binding or not: Sign out can remove it. */
+  hasSession: boolean;
+}
+
+export function mcpOAuthSignInState(session: McpOAuthSession, binding: string | undefined): McpOAuthSignInState {
+  const hasSession = hasMcpOAuthSessionData(session);
+  if (binding === undefined || !sessionMatchesMcpBinding(session, binding)) {
+    return { authorized: false, needsSignIn: false, hasSession };
+  }
+  const authorized = Boolean(session.tokens);
+  return { authorized, needsSignIn: !authorized && Boolean(session.grantId || session.grantedScope), hasSession };
 }
 
 /** Keep an interactive replacement session private until verification succeeds. */
