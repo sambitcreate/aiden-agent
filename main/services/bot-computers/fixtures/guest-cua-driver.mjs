@@ -13,6 +13,7 @@
 //   --schema-version <v>          tools/list schema_version (default "1")
 //   --driver-version <v>          health_report driver_version (default "0.36.0")
 //   --exit <code>                 exit at once with this code (the daemon never came up)
+//   --elements <file>             JSON array of AX rows every window shows (default: the shared fake's)
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import readline from "node:readline";
@@ -29,6 +30,7 @@ const schemaVersion = option("--schema-version") ?? "1";
 const driverVersion = option("--driver-version") ?? "0.36.0";
 const grantOnPrompt = argv.includes("--grant-on-prompt");
 const exitCode = option("--exit");
+const elementsFile = option("--elements");
 
 const log = (event) => {
   if (logPath) appendFileSync(logPath, `${JSON.stringify(event)}\n`, "utf8");
@@ -44,7 +46,8 @@ const readPermissions = () => {
   return JSON.parse(readFileSync(permissionsFile, "utf8"));
 };
 
-const driver = new FakeCuaDriver({ permissions: readPermissions() });
+const rows = elementsFile ? JSON.parse(readFileSync(elementsFile, "utf8")) : undefined;
+const driver = new FakeCuaDriver({ permissions: readPermissions(), ...(rows ? { elements: () => rows } : {}) });
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const listing = { ...toolListResult(Object.keys(TOOL_DEFINITIONS)), schema_version: schemaVersion };
 

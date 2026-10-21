@@ -1,9 +1,11 @@
 import { Type, type Static } from "@earendil-works/pi-ai";
 
 /**
- * The `computer` tool's arguments (plan §8.6): the VNC-lane subset of
- * `ComputerUseParameters`. The lane is vision only, so there are no element
- * numbers, apps or windows: coordinates are pixels of the newest capture.
+ * The `computer` tool's arguments (plan §8.6): a subset of
+ * `ComputerUseParameters`. Coordinates are pixels of the newest capture on
+ * both lanes. A computer with element control (the guest driver lane) also
+ * reads one app's elements with `capture` and `app`, and clicks them by
+ * `element`; on the VNC lane those two are refused.
  */
 
 export const BOT_COMPUTER_ACTIONS = [
@@ -65,6 +67,22 @@ export const BotComputerParameters = Type.Object(
         maxLength: BOT_COMPUTER_INTENT_MAX_CHARS,
         description:
           'Required for click, double_click, right_click, drag, scroll, type and key: what this step does, in a few words, e.g. "Click Place order" or "Type the search terms". Never include typed text, passwords or codes.',
+      }),
+    ),
+    app: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          "capture only, with element control: also list this app's numbered elements (its name, such as \"Safari\", or its bundle id).",
+      }),
+    ),
+    element: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: 10_000,
+        description:
+          "click, double_click and right_click only, with element control: an element number from the newest capture with app, in place of coordinate.",
       }),
     ),
     coordinate: Type.Optional(Coordinate),

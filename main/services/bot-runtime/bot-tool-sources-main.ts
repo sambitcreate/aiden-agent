@@ -386,11 +386,13 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         // No one answers a card on routine and Telegram runs, so there is no hand_off there.
         const computerTurn = { routine: routineRun, unattended: routineRun || telegram };
         if (facts.supportsImages) {
+          // The guest driver lane, only for a computer whose base passed its probe.
+          const elementControl = (await computers.host.guestDriver(botId).catch(() => undefined)) !== undefined;
           tools.push({
             tool: createBotComputerTool(
               botId,
               { host: computers.host, sessions: computers.sessions, control: computers.control, state, botName },
-              computerTurn,
+              { ...computerTurn, elementControl },
             ),
             replay: "unsafe",
           });
@@ -486,7 +488,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         }
         // Allowed inside the Bot's own computer; the rules read the stated intent.
         case BOT_COMPUTER_TOOL_NAME:
-          return botComputerAction(call);
+          return botComputerAction(call, botComputerToolState?.driverFacts(botId));
         // A guest shell command: allowed, and not something the rules can read.
         case BOT_COMPUTER_SHELL_TOOL_NAME:
           return undefined;
@@ -502,6 +504,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     async shutdown() {
       botBrowser.shutdown();
       await Promise.all([...controllers.keys()].map(closeController));
+      await botComputerToolState?.shutdown();
     },
 
     async forgetBot(botId) {

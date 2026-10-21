@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { CuaDriverHostFactory } from "../computer-use/controller.js";
 import { BOT_COMPUTER_GIVE_BACK_NOTE, createBotComputerControl } from "./control.js";
 import type { BotComputerArgs } from "./computer-schema.js";
 import {
@@ -10,6 +15,7 @@ import {
   createBotComputerToolState,
   type BotComputerResultDetails,
 } from "./computer-tool.js";
+import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
 import {
   BotComputerError,
   type BotComputerConnection,
@@ -73,7 +79,16 @@ function connection(port = 5901): BotComputerConnection {
   };
 }
 
-function harness(options: { width?: number; height?: number; screen?: ReturnType<typeof fakeScreen>; routine?: boolean } = {}) {
+function harness(
+  options: {
+    width?: number;
+    height?: number;
+    screen?: ReturnType<typeof fakeScreen>;
+    routine?: boolean;
+    /** The guest driver lane's host, as `host.guestDriver` hands it out. */
+    guestDriver?: () => CuaDriverHostFactory | undefined;
+  } = {},
+) {
   const control = createBotComputerControl();
   const state = createBotComputerToolState(control);
   const fake = options.screen ?? fakeScreen(options.width ?? 2560, options.height ?? 1600);
@@ -93,6 +108,7 @@ function harness(options: { width?: number; height?: number; screen?: ReturnType
       touch() {
         touches += 1;
       },
+      ...(options.guestDriver ? { guestDriver: async () => options.guestDriver!() } : {}),
     },
     sessions: {
       async screen() {
@@ -112,6 +128,7 @@ function harness(options: { width?: number; height?: number; screen?: ReturnType
     tool.execute("call", args as unknown as BotComputerArgs, signal) as Promise<AgentToolResult<BotComputerResultDetails>>;
   return {
     control,
+    state,
     fake,
     reasons,
     pointers,
@@ -339,4 +356,149 @@ test("stopping the reply stops the call instead of reporting a failure", async (
   const pending = h.call({ action: "capture" }, controller.signal);
   controller.abort(new Error("stopped"));
   await assert.rejects(pending);
+});
+
+/* ------------------------------------------------------------------------- */
+/* Guest driver lane                                                         */
+/* ------------------------------------------------------------------------- */
+
+const GUEST_FIXTURE = fileURLToPath(new URL("./fixtures/guest-cua-driver.mjs", import.meta.url));
+
+/** A computer with element control: the guest bridge is the fake driver on stdio, logging every call. */
+function guestLane(t: test.TestContext, options: { elements?: unknown[] } = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), "aiden-guest-lane-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = path.join(dir, "calls.jsonl");
+  writeFileSync(log, "");
+  const args = [GUEST_FIXTURE, "--log", log];
+  if (options.elements) {
+    const file = path.join(dir, "elements.json");
+    writeFileSync(file, JSON.stringify(options.elements));
+    args.push("--elements", file);
+  }
+  let bridges = 0;
+  const factory = createGuestCuaDriverHostFactory({
+    bridge: () => {
+      bridges += 1;
+      return { command: process.execPath, args, env: { PATH: "/usr/bin:/bin" } };
+    },
+  });
+  const h = harness({ guestDriver: () => factory });
+  t.after(() => h.state.shutdown());
+  const calls = () =>
+    readFileSync(log, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { name: string; args: Record<string, unknown> });
+  return { ...h, calls, bridges: () => bridges };
+}
+
+test("with element control, capture with app adds the app's numbered elements to the screenshot", async (t) => {
+  const h = guestLane(t);
+  const shot = await h.call({ action: "capture", app: "Safari" });
+  assert.equal(shot.isError, undefined);
+  assert.equal(images(shot).length, 1, "one image: the computer's screen");
+  assert.equal(h.fake.captures.length, 1, "the screenshot is the VNC screen, as on the VNC lane");
+  assert.match(textOf(shot), /Safari, window "Example"/u);
+  assert.match(textOf(shot), /^\[0\] AXButton "First"$/mu);
+  assert.match(textOf(shot), /^\[1\] AXButton "Second"$/mu);
+  assert.equal(shot.details.lane, "driver");
+  assert.equal(shot.details.elementCount, 2);
+  const read = h.calls().find((call) => call.name === "get_window_state");
+  assert.equal(read?.args.include_screenshot, false, "the guest driver is asked for elements only, never pixels");
+});
+
+test("an element click goes through the guest driver, and the numbers end once anything acts", async (t) => {
+  const h = guestLane(t);
+  await h.call({ action: "capture", app: "Safari" });
+  const clicked = await h.call({ action: "click", element: 1, intent: "Click Second" });
+  assert.equal(clicked.isError, undefined, textOf(clicked));
+  assert.equal(textOf(clicked), 'Clicked [1] AXButton "Second".');
+  const clicks = h.calls().filter((call) => call.name === "click");
+  assert.equal(clicks.length, 1);
+  assert.match(String(clicks[0]?.args.element_token), /^s[0-9a-f]{8}:1$/u, "the click names element 1 of the captured snapshot");
+  assert.equal(h.fake.events.length, 0, "no VNC pointer events for an element click");
+
+  const again = await h.call({ action: "click", element: 1, intent: "Click Second" });
+  assert.equal(again.isError, true);
+  assert.match(textOf(again), /capture with app again/u);
+  assert.equal(h.calls().filter((call) => call.name === "click").length, 1, "a spent number never reaches the guest");
+
+  // A screen action ends the numbers too: the screen may no longer match them.
+  await h.call({ action: "capture", app: "Safari" });
+  await h.call({ action: "type", text: "hello", intent: "Type the search terms" });
+  const afterTyping = await h.call({ action: "click", element: 0, intent: "Click First" });
+  assert.equal(afterTyping.isError, true);
+  assert.equal(h.calls().filter((call) => call.name === "click").length, 1);
+});
+
+test("element numbers from before the person held the computer, or from another app's absence, don't act", async (t) => {
+  const h = guestLane(t);
+  await h.call({ action: "capture", app: "Safari" });
+  h.control.takeOver("ada", "viewer");
+  h.control.giveBack("ada");
+  const stale = await h.call({ action: "click", element: 0, intent: "Click First" });
+  assert.equal(stale.isError, true);
+  assert.match(textOf(stale), /Capture with app first/u);
+  assert.equal(h.calls().some((call) => call.name === "click"), false);
+
+  const missing = await h.call({ action: "capture", app: "TextEdit" });
+  assert.equal(missing.isError, undefined, "the screenshot still arrives");
+  assert.equal(images(missing).length, 1);
+  assert.match(textOf(missing), /coordinates of the screenshot/u);
+  assert.equal((await h.call({ action: "click", element: 0, intent: "Click First" })).isError, true);
+});
+
+test("while the person has the computer, a capture with app reaches neither the screen nor the guest driver", async (t) => {
+  const h = guestLane(t);
+  h.control.takeOver("ada", "sign_in");
+  const pending = h.call({ action: "capture", app: "Safari" });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(h.fake.captures.length, 0);
+  assert.equal(h.bridges(), 0, "no bridge to the guest opens while the person has the computer");
+  h.control.giveBack("ada");
+  const result = await pending;
+  assert.equal(textOf(result), BOT_COMPUTER_GIVE_BACK_NOTE);
+  assert.equal(images(result).length, 0);
+  assert.deepEqual(h.calls(), []);
+});
+
+test("a hand-over gets a fresh guest bridge for the next element step", async (t) => {
+  const h = guestLane(t);
+  await h.call({ action: "capture", app: "Safari" });
+  assert.equal(h.bridges(), 1);
+  await h.call({ action: "capture", app: "Safari" });
+  assert.equal(h.bridges(), 1, "one bridge serves the run while control stays with the Bot");
+  h.control.takeOver("ada", "sign_in");
+  h.control.giveBack("ada");
+  await h.call({ action: "capture", app: "Safari" });
+  assert.equal(h.bridges(), 2, "after Give back the guest driver is reached afresh (sign-in stops it)");
+});
+
+test("without element control, app and element are explained instead of acting", async () => {
+  const h = harness();
+  const shot = await h.call({ action: "capture", app: "Safari" });
+  assert.equal(shot.isError, undefined);
+  assert.equal(images(shot).length, 1);
+  assert.match(textOf(shot), /no element control/u);
+  assert.equal(shot.details.lane, undefined);
+  const click = await h.call({ action: "click", element: 0, intent: "Click First" });
+  assert.equal(click.isError, true);
+  assert.match(textOf(click), /act with coordinates/u);
+  assert.equal(h.fake.events.length, 0);
+});
+
+test("element and app only go with the actions that use them", async () => {
+  const h = harness();
+  await h.call({ action: "capture" });
+  for (const args of [
+    { action: "click", element: 0, coordinate: [1, 1], intent: "Click First" },
+    { action: "type", element: 0, text: "x", intent: "Type x" },
+    { action: "click", app: "Safari", coordinate: [1, 1], intent: "Click First" },
+    { action: "click", element: 1.5, intent: "Click First" },
+  ]) {
+    const result = await h.call(args);
+    assert.equal(result.isError, true, JSON.stringify(args));
+  }
+  assert.equal(h.fake.events.length, 0);
 });

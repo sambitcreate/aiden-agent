@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -10,6 +11,9 @@ import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@ear
 import { botRuleLabel, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { createBotComputerControl } from "../bot-computers/control.js";
 import { createBotComputerShellTool } from "../bot-computers/computer-shell-tool.js";
+import type { BotComputerArgs } from "../bot-computers/computer-schema.js";
+import { createGuestCuaDriverHostFactory } from "../bot-computers/guest-driver.js";
+import { classifyBotAction } from "../bot-rules/classify.js";
 import { createBotComputerTool, createBotComputerToolState } from "../bot-computers/computer-tool.js";
 import type { BotComputerConnection, BotComputerScreen } from "../bot-computers/types.js";
 import type { BotOrdinaryCapabilityKind } from "../bot-capability-catalog-core.js";
@@ -131,6 +135,88 @@ test("the rules read a computer step's stated intent; looking and invalid calls 
   assert.deepEqual(botComputerAction({ args: { action: "capture" } }), { approval: null });
   assert.deepEqual(botComputerAction({ args: { action: "click", coordinate: [1, 2] } }), { approval: null });
   assert.deepEqual(botComputerAction({ args: { action: "format_disk", intent: "Erase it" } }), { approval: null });
+});
+
+test("on the guest driver lane the rules read the clicked element, its app and window; typing into a clicked password field is credentials", async () => {
+  const dir = tempHome();
+  const elements = path.join(dir, "elements.json");
+  writeFileSync(
+    elements,
+    JSON.stringify([
+      { role: "AXSecureTextField", label: "Password", frame: { x: 110, y: 60, w: 80, h: 20 }, depth: 1 },
+      { role: "AXButton", label: "Delete account", frame: { x: 110, y: 100, w: 80, h: 20 }, depth: 1 },
+    ]),
+  );
+  const fixture = fileURLToPath(new URL("../bot-computers/fixtures/guest-cua-driver.mjs", import.meta.url));
+  const control = createBotComputerControl();
+  const state = createBotComputerToolState(control);
+  const screen: BotComputerScreen = {
+    capture: async ({ maxWidth }) => ({
+      image: Buffer.from("jpeg"),
+      mimeType: "image/jpeg",
+      width: maxWidth,
+      height: Math.round(maxWidth / 1.6),
+      framebufferWidth: 2560,
+      framebufferHeight: 1600,
+    }),
+    pointer: async () => undefined,
+    key: async () => undefined,
+    close: async () => undefined,
+  };
+  const connection: BotComputerConnection = {
+    vmName: "aiden-bot-1",
+    ip: "192.168.64.9",
+    vnc: { host: "127.0.0.1", port: 5905, password: "vnc-password-abcd" },
+    ssh: { host: "192.168.64.9", user: "lume" },
+  };
+  const factory = createGuestCuaDriverHostFactory({
+    bridge: () => ({ command: process.execPath, args: [fixture, "--elements", elements], env: { PATH: "/usr/bin:/bin" } }),
+  });
+  const tool = createBotComputerTool(
+    BOT,
+    {
+      host: { ensureRunning: async () => connection, touch: () => undefined, guestDriver: async () => factory },
+      sessions: { screen: async () => screen, recordPointer: () => undefined, setActivity: () => undefined },
+      control,
+      state,
+      botName: async () => "Ada",
+      sleep: async () => undefined,
+    },
+    { routine: false, elementControl: true },
+  );
+  try {
+    const run = (id: string, args: Record<string, unknown>) => tool.execute(id, args as unknown as BotComputerArgs);
+    await run("c1", { action: "capture", app: "Safari" });
+    const click = { args: { action: "click", element: 1, intent: "Click the red button" } };
+    assert.deepEqual(botComputerAction(click, state.driverFacts(BOT)).action, {
+      surface: "computer",
+      action: "click",
+      intent: "Click the red button",
+      app: "Safari",
+      windowTitle: "Example",
+      element: { role: "AXButton", label: "Delete account" },
+    });
+    // The element's label carries what the Bot's intent left out.
+    const withElement = botComputerAction(click, state.driverFacts(BOT)).action!;
+    assert.equal(classifyBotAction(withElement, []).classes.has("delete"), true);
+    assert.equal(classifyBotAction(botComputerAction(click).action!, []).classes.has("delete"), false, "the VNC lane has only the intent");
+
+    assert.equal((await run("c2", { action: "click", element: 0, intent: "Click the field" })).isError, undefined);
+    const typing = botComputerAction({ args: { action: "type", text: "hunter2", intent: "Type it in" } }, state.driverFacts(BOT));
+    assert.deepEqual(typing.action && "element" in typing.action ? typing.action.element : undefined, {
+      role: "AXSecureTextField",
+      label: "Password",
+    });
+    assert.equal(classifyBotAction(typing.action!, []).classes.has("credentials"), true);
+    assert.equal(JSON.stringify(typing).includes("hunter2"), false, "typed text never reaches the classifier");
+
+    // Once the person has held the computer, nothing Aiden saw before describes the screen.
+    control.takeOver(BOT, "viewer");
+    control.giveBack(BOT);
+    assert.equal(state.driverFacts(BOT), undefined);
+  } finally {
+    await state.shutdown();
+  }
 });
 
 /* ------------------------------------------------------------------------- */
