@@ -134,6 +134,8 @@ interface Runtime {
   cancelIdle?: () => void;
   lastUsedAt?: number;
   leases: number;
+  /** Reset or Delete replacing this computer's VM; a start waits until it is done. */
+  replacing?: Promise<void>;
 }
 
 const SLOT_STATES: ReadonlySet<BotComputerRunState> = new Set(["starting", "running", "stopping"]);
@@ -232,6 +234,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
    * so no copy reads a disk that is running or being swapped.
    */
   const copies = new Set<Promise<unknown>>();
+  /** Remove everything in progress; a start waits until it is done (and then finds no computer). */
+  let removing: Promise<void> | undefined;
   const guestHostFor =
     deps.guestDriverHost ?? ((bridge: () => Promise<GuestDriverBridgeCommand>) => createGuestCuaDriverHostFactory({ bridge }));
 
@@ -690,6 +694,62 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
   async function copiesSettled(): Promise<void> {
     while (copies.size > 0) await Promise.allSettled([...copies]);
+  }
+
+  /** What a start of this computer waits for first: Remove everything, or a Reset or Delete of it. */
+  const startsHeld = (botId: string): Promise<void> | undefined => removing ?? runtimes.get(botId)?.replacing;
+
+  /** A gate that `work` holds until it settles; `set` installs it and later clears it. */
+  async function holdingStarts<T>(
+    set: (gate: Promise<void>) => void,
+    clear: (gate: Promise<void>) => void,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    set(gate);
+    try {
+      return await work();
+    } finally {
+      clear(gate);
+      release();
+    }
+  }
+
+  /**
+   * Reset and Delete replace a computer's VM. Their stop gives a computer the person held back
+   * to the Bot, so a call that waited for Give back goes on at once: it must not start the old
+   * VM while that is deleted or copied over, only the computer that is there afterwards.
+   */
+  function replacingComputer<T>(botId: string, work: () => Promise<T>): Promise<T> {
+    const entry = runtime(botId);
+    return holdingStarts(
+      (gate) => {
+        entry.replacing = gate;
+      },
+      (gate) => {
+        if (entry.replacing === gate) entry.replacing = undefined;
+      },
+      work,
+    );
+  }
+
+  function untilDone(gate: Promise<void>, signal?: AbortSignal): Promise<void> {
+    if (!signal) return gate;
+    return new Promise<void>((resolve, reject) => {
+      const cancel = () => reject(new BotComputerError("cancelled", "Starting the computer was cancelled."));
+      if (signal.aborted) {
+        cancel();
+        return;
+      }
+      signal.addEventListener("abort", cancel, { once: true });
+      void gate.then(() => {
+        signal.removeEventListener("abort", cancel);
+        resolve();
+      });
+    });
   }
 
   async function requireRecord(botId: string): Promise<BotComputerRecord> {
@@ -1255,37 +1315,47 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       return startSetup("update");
     },
 
-    async removeEverything() {
-      host.cancelSetUp();
-      await setupTask?.catch(() => undefined);
-      const ids = [...runtimes.keys()];
-      await Promise.all(ids.map((botId) => stopComputer(botId, "quit").catch(() => undefined)));
-      if (existsSync(dirs.vms)) {
-        try {
-          const listed = await lume({ op: "list" }, 30_000);
-          if (listed.exitCode === 0) {
-            for (const info of parseLumeVmList(listed.stdout)) {
-              if (isAidenVmName(info.name) || info.name === BOT_COMPUTER_STAGING_BASE_VM) {
-                await deleteVm(info.name).catch((error: unknown) => log("Deleting a VM did not finish.", error));
+    removeEverything: () =>
+      // No start may begin while the files go; a call that waited finds no computer afterwards.
+      holdingStarts(
+        (gate) => {
+          removing = gate;
+        },
+        (gate) => {
+          if (removing === gate) removing = undefined;
+        },
+        async () => {
+          host.cancelSetUp();
+          await setupTask?.catch(() => undefined);
+          const ids = [...runtimes.keys()];
+          await Promise.all(ids.map((botId) => stopComputer(botId, "quit").catch(() => undefined)));
+          if (existsSync(dirs.vms)) {
+            try {
+              const listed = await lume({ op: "list" }, 30_000);
+              if (listed.exitCode === 0) {
+                for (const info of parseLumeVmList(listed.stdout)) {
+                  if (isAidenVmName(info.name) || info.name === BOT_COMPUTER_STAGING_BASE_VM) {
+                    await deleteVm(info.name).catch((error: unknown) => log("Deleting a VM did not finish.", error));
+                  }
+                }
               }
+            } catch (error) {
+              log("Listing VMs before removal did not finish.", error);
             }
           }
-        } catch (error) {
-          log("Listing VMs before removal did not finish.", error);
-        }
-      }
-      await downloader.remove();
-      for (const dir of Object.values(dirs)) await rm(dir, { recursive: true, force: true });
-      for (const file of [sshPaths.privateKey, sshPaths.publicKey, sshPaths.knownHosts]) await rm(file, { force: true });
-      await deps.secrets.deleteFamily(BOT_COMPUTER_SECRET_FAMILY);
-      await store.clear();
-      for (const botId of ids) control.forget(botId);
-      runtimes.clear();
-      stale.clear();
-      setupState = undefined;
-      emit();
-      deps.onRemoved?.();
-    },
+          await downloader.remove();
+          for (const dir of Object.values(dirs)) await rm(dir, { recursive: true, force: true });
+          for (const file of [sshPaths.privateKey, sshPaths.publicKey, sshPaths.knownHosts]) await rm(file, { force: true });
+          await deps.secrets.deleteFamily(BOT_COMPUTER_SECRET_FAMILY);
+          await store.clear();
+          for (const botId of ids) control.forget(botId);
+          runtimes.clear();
+          stale.clear();
+          setupState = undefined;
+          emit();
+          deps.onRemoved?.();
+        },
+      ),
 
     async updateSettings(patch) {
       const parsed = parseBotComputersSettingsPatch(patch);
@@ -1322,48 +1392,53 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const state = await store.read();
       if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
       if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
-      const fresh = await copyingBase(
-        (async () => {
-          await stopComputer(botId, "person");
-          await deleteVm(record.vmName);
-          return cloneFromBase(botId, state);
-        })(),
-      );
-      const next = await store.update((draft) => {
-        draft.computers[botId] = fresh;
+      return replacingComputer(botId, async () => {
+        const fresh = await copyingBase(
+          (async () => {
+            await stopComputer(botId, "person");
+            await deleteVm(record.vmName);
+            return cloneFromBase(botId, state);
+          })(),
+        );
+        const next = await store.update((draft) => {
+          draft.computers[botId] = fresh;
+        });
+        stale.delete(botId);
+        emit(botId);
+        return computerStatus(botId, fresh, next);
       });
-      stale.delete(botId);
-      emit(botId);
-      return computerStatus(botId, fresh, next);
     },
 
-    async deleteForBot(botId) {
-      await stopComputer(botId, "quit").catch((error: unknown) => log("Stopping a deleted Bot's computer did not finish.", error));
-      const record = (await store.read()).computers[botId];
-      if (record) await deleteVm(record.vmName);
-      else {
-        // A clone that never reached the store can still exist, so the derived
-        // name is tried too; that guess never holds up deleting a Bot that had
-        // no computer, even when Lume can't run.
-        await deleteVm(botComputerVmName(botId)).catch((error: unknown) =>
-          log("Deleting a VM no record names did not finish.", error),
-        );
-      }
-      // Deleting a Bot that never had a computer must not create Aiden's Bot-computer folder.
-      if (record) {
-        await store.update((draft) => {
-          delete draft.computers[botId];
-        });
-      }
-      runtimes.get(botId)?.cancelIdle?.();
-      runtimes.delete(botId);
-      stale.delete(botId);
-      control.forget(botId);
-      activity.set(botId, undefined);
-      emit(botId);
-    },
+    deleteForBot: (botId) =>
+      replacingComputer(botId, async () => {
+        await stopComputer(botId, "quit").catch((error: unknown) => log("Stopping a deleted Bot's computer did not finish.", error));
+        const record = (await store.read()).computers[botId];
+        if (record) await deleteVm(record.vmName);
+        else {
+          // A clone that never reached the store can still exist, so the derived
+          // name is tried too; that guess never holds up deleting a Bot that had
+          // no computer, even when Lume can't run.
+          await deleteVm(botComputerVmName(botId)).catch((error: unknown) =>
+            log("Deleting a VM no record names did not finish.", error),
+          );
+        }
+        // Deleting a Bot that never had a computer must not create Aiden's Bot-computer folder.
+        if (record) {
+          await store.update((draft) => {
+            delete draft.computers[botId];
+          });
+        }
+        runtimes.get(botId)?.cancelIdle?.();
+        runtimes.delete(botId);
+        stale.delete(botId);
+        control.forget(botId);
+        activity.set(botId, undefined);
+        emit(botId);
+      }),
 
     async ensureRunning(botId, options) {
+      // Remove everything, or a Reset or Delete of this computer, finishes first.
+      for (let held = startsHeld(botId); held; held = startsHeld(botId)) await untilDone(held, options.signal);
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       ensureSupported();
       const record = await requireRecord(botId);
@@ -1382,6 +1457,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (!ending) break;
         await ending.promise.catch(() => undefined);
       }
+      // One of those began while this caller waited above: it starts whatever is there once that is done.
+      if (startsHeld(botId)) return host.ensureRunning(botId, options);
       if (!entry.start) {
         const controller = new AbortController();
         const progress = new Set<(text: string) => void>();

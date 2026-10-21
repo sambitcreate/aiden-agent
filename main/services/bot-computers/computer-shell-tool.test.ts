@@ -160,5 +160,25 @@ test("on a routine or Telegram turn, a command waits for the person only so long
     assert.equal(result.isError, true);
     assert.match(textOf(result), /still using Ada's computer.*say in your reply/u);
     assert.equal(h.calls.length, 0, "the command never ran");
+
+    // Taken over in the middle of a command: the call says it may still be running, and gives up too.
+    const running = harness(
+      (call) => new Promise((_, reject) => call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true })),
+      { ...turn, unattendedWaitMs: 40 },
+    );
+    const pending = running.run("brew install ffmpeg");
+    await new Promise((resolve) => setImmediate(resolve));
+    running.control.takeOver("ada", "input");
+    const interrupted = await Promise.race([
+      pending,
+      new Promise<"still waiting">((resolve) => {
+        timer = setTimeout(() => resolve("still waiting"), 2_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    assert.notEqual(interrupted, "still waiting", `${JSON.stringify(turn)}: a command the person interrupted`);
+    if (interrupted === "still waiting") continue;
+    assert.equal(interrupted.isError, true);
+    assert.match(textOf(interrupted), /still be running.*still using Ada's computer/su);
   }
 });

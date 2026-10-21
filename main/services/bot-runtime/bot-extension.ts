@@ -579,7 +579,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       sections = nextSections.slice(0, BOT_SECTION_KEYS.length - 1);
       installedToolNames = new Set(entries.map(({ tool }) => tool.name));
       const tools = entries.map(({ tool, replay, mcp, bind }) =>
-        adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind }) }),
+        adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) }),
       );
       registry.install(build(tools));
     },

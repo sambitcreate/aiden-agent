@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createBotComputerControl } from "../bot-computers/control.js";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { BOT_COMPUTER_GIVE_BACK_NOTE, createBotComputerControl } from "../bot-computers/control.js";
 import { createBotComputerToolState } from "../bot-computers/computer-tool.js";
 import type { BotComputerStatus } from "../bot-computers/types.js";
 import type { CuaDriverHostFactory } from "../computer-use/controller.js";
 import { botComputerCandidates, botHasComputer, type BotComputerCandidateInput, type BotComputerToolServices } from "./bot-computer-candidates.js";
+import type { BotToolCall } from "./tool-adapter.js";
 
 const BOT = "bot-1";
 
@@ -123,4 +125,54 @@ test("a Bot has a computer only where Bot computers exist and its state reads as
     false,
     "an unreadable state counts as no computer",
   );
+});
+
+/** A call as the registry binds it, serving a run whose inputs have these request ids. */
+function callServing(...requestIds: string[]): BotToolCall {
+  return { callId: "call", signal: new AbortController().signal, runRequestIds: async () => requestIds } as unknown as BotToolCall;
+}
+
+/** The call's result, or "still waiting" if it hasn't settled within `ms`. */
+async function within<T>(call: Promise<T>, ms: number): Promise<T | "still waiting"> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<"still waiting">((resolve) => {
+    timer = setTimeout(() => resolve("still waiting"), ms);
+  });
+  try {
+    return await Promise.race([call, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const resultText = (result: AgentToolResult<unknown>) => result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+
+test("the run a call serves decides how long it waits for Give back, and a routine or Telegram run waits once across both tools", async () => {
+  for (const requestId of ["routine:task-1:2026-10-07T09:00:00.000Z", "tg:bot:1:0:5"]) {
+    const fake = services();
+    // Built as the registry builds them: for an attended turn.
+    const [computer, shell] = await botComputerCandidates(BOT, turn({ computers: fake.computers, unattendedWaitMs: 300 }));
+    const { control } = fake.computers();
+    control.takeOver(BOT, "viewer");
+    const run = callServing(requestId);
+    const first = await within(computer.bind!(run).execute("look", { action: "capture" } as never), 5_000);
+    assert.notEqual(first, "still waiting", requestId);
+    if (first === "still waiting") continue;
+    assert.match(resultText(first), /still using Ada's computer/u);
+    // The run's wait is used up: the shell doesn't wait the whole time over.
+    const second = await within(shell.bind!(run).execute("ls", { command: "ls", description: "List" } as never), 150);
+    assert.notEqual(second, "still waiting", `${requestId}: the shell gives up at once`);
+    if (second !== "still waiting") assert.match(resultText(second), /still using Ada's computer/u);
+    assert.equal(control.controller(BOT), "person", "the person keeps the computer");
+  }
+
+  // A run someone attends keeps waiting until they give it back.
+  const fake = services();
+  const [computer] = await botComputerCandidates(BOT, turn({ computers: fake.computers, unattendedWaitMs: 50 }));
+  const { control } = fake.computers();
+  control.takeOver(BOT, "viewer");
+  const waiting = computer.bind!(callServing("desk-1")).execute("look", { action: "capture" } as never);
+  assert.equal(await within(waiting, 200), "still waiting");
+  control.giveBack(BOT);
+  assert.equal(resultText(await waiting), BOT_COMPUTER_GIVE_BACK_NOTE);
 });

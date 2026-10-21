@@ -35,6 +35,7 @@ import {
   BOT_COMPUTER_UNATTENDED_WAIT_MS,
   botComputerUnattendedGaveUp,
   waitForBotWithin,
+  type BotComputerGiveBackBudget,
 } from "./control.js";
 import {
   BOT_COMPUTER_ELEMENT_LIMIT,
@@ -206,7 +207,7 @@ export interface BotComputerToolDependencies {
   botName(botId: string): Promise<string>;
   /** Pauses between input events; tests pass an instant one. */
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
-  /** How long an unattended turn waits for Give back (default `BOT_COMPUTER_UNATTENDED_WAIT_MS`). */
+  /** How long an unattended turn waits for Give back in all (default `BOT_COMPUTER_UNATTENDED_WAIT_MS`). */
   unattendedWaitMs?: number;
 }
 
@@ -220,6 +221,8 @@ export interface BotComputerToolTurn {
   unattended?: boolean;
   /** The computer has the guest driver lane: the description tells the Bot about elements. */
   elementControl?: boolean;
+  /** An unattended turn's wait for Give back, shared with its `computer_shell` (its own otherwise). */
+  giveBackBudget?: BotComputerGiveBackBudget;
 }
 
 export interface BotComputerResultDetails {
@@ -341,8 +344,10 @@ export function createBotComputerTool(
   const sleep = deps.sleep ?? defaultSleep;
   const reason: BotComputerStartReason = turn.routine ? "routine" : "tool";
   const unattended = turn.unattended ?? turn.routine;
-  // Nobody can give the computer back on behalf of a routine or Telegram run: its wait is bounded.
-  const giveBackWaitMs = unattended ? (deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS) : undefined;
+  // Nobody can give the computer back on behalf of a routine or Telegram run: it waits only so long, in all.
+  const giveBackBudget = unattended
+    ? (turn.giveBackBudget ?? { remainingMs: deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS })
+    : undefined;
   let driverCalls = 0;
 
   /** The guest driver lane's host for this computer, or `undefined` for the VNC lane. */
@@ -434,7 +439,7 @@ export function createBotComputerTool(
 
       const waitForGiveBack = async (): Promise<AgentToolResult<BotComputerResultDetails>> => {
         progress(`Waiting for the person to give ${possessive} computer back.`);
-        if (await waitForBotWithin(deps.control, botId, signal, giveBackWaitMs)) {
+        if (await waitForBotWithin(deps.control, botId, signal, giveBackBudget)) {
           return text(BOT_COMPUTER_GIVE_BACK_NOTE, { ...details, person: true });
         }
         return text(botComputerUnattendedGaveUp(possessive), { ...details, person: true }, true);

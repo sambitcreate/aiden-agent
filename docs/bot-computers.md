@@ -141,10 +141,13 @@ and it goes away when the computer is removed.
   screen you are using.
 - **Stopping gives it back.** When the computer stops while you control it
   (Pause, the idle stop, Stop, or a failure), control goes back to the Bot, so
-  its next call starts the computer again instead of waiting for a Give back
-  nobody can press on a stopped computer. The one exception is a sign-in card
-  that holds the computer for you: that hold lasts until the card is answered
-  or withdrawn.
+  a call that was waiting goes on and its next call starts the computer again,
+  instead of waiting for a Give back nobody can press on a stopped computer.
+  The one exception is a sign-in card that holds the computer for you: that
+  hold lasts until the card is answered or withdrawn. While Reset, Remove,
+  Delete Bot or Remove everything is replacing or deleting the computer,
+  nothing starts it: a call that was waiting starts the fresh copy once Reset
+  is done, and finds no computer after the others.
 - **The screen never starts it.** In the tab, only Start or switching to
   Computer starts a stopped computer. The live screen connects only to a
   computer that is running at that moment, so a stop that lands just as the
@@ -283,10 +286,11 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   runs and nothing is captured: a `computer` call waits until they give it
   back, then tells the Bot "The person used the computer; take a fresh capture
   first.", and a `computer_shell` command waits and then runs. On routine runs
-  and Telegram turns, where nobody may be there to give it back, either tool
-  waits at most 5 minutes, then tells the Bot the person is still using the
-  computer, not to use it again on that run, and to say in its reply what is
-  left to do. Take over stops
+  and Telegram turns, where nobody may be there to give it back, the run waits
+  at most 5 minutes in all, across both tools; then each call tells the Bot the
+  person is still using the computer, not to use it again on that run, and to
+  say in its reply what is left to do. Each call checks which run it serves,
+  because the Bot's tools are built once for an attended turn. Take over stops
   a `computer` action in progress and releases any key or button it held. For
   a running `computer_shell` command it ends the SSH connection and tells the
   Bot the command may have partly run or still be running: without a terminal
@@ -429,14 +433,19 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   signature, so such a program could start the driver again and record the
   screen while you sign in, for the Bot to read once it has the computer back.
   Password fields stay masked on the screen, and the driver never reads a
-  secure field's value. A computer without element control has no such grant.
+  secure field's value. A computer whose base never had these permissions
+  allowed has no such grant. One whose base had them allowed but then had
+  element control skipped or failing its check (Skip during the driver's
+  restart or probe, or a failed probe) keeps the grants with its disk, though
+  Bots act on its screen only, so the same limit applies to it.
   Repeating the sweep while you hold the computer wouldn't close this: each
   sweep checks the signature of every process in the guest and takes seconds,
   while a restarted driver needs well under a second for a capture. Closing it
   needs one of: `computer_shell` running as a second guest user with no GUI
   session (its programs can't reach the driver or the screen), a driver gate
   only root can re-open together with ending the Bot's own processes at Open,
-  or not offering sign-in on a computer with element control. Each is an owner
+  or not offering sign-in on a computer whose base had these permissions
+  allowed. Each is an owner
   decision and needs a Mac to confirm.
 - **Answering.** I'm signed in, Skip, or the card being withdrawn (the Bot was
   stopped or paused) gives the computer back, unless you already gave it back

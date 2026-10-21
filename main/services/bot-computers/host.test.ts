@@ -566,6 +566,55 @@ test("a stop Lume fails to carry out leaves the computer running, as Lume report
   });
 });
 
+test("a Bot call that waited for Give back starts nothing while Reset, Delete or Remove everything replaces the computer", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    // The person holds the computer, and the Bot's next call waits for it, as the computer tool does.
+    const botCall = () => {
+      context.host.control.takeOver("ada", "viewer");
+      return context.host.control.waitForBot("ada", undefined).then(() => context.host.ensureRunning("ada", { reason: "tool" }));
+    };
+    const cli = () => context.calls().filter((call) => call.kind === "cli");
+
+    // Reset stops the computer, which gives it back to the Bot, then copies the base afresh.
+    const afterReset = botCall();
+    const reset = await context.host.reset("ada");
+    assert.equal(reset.outdated, false);
+    const connection = await afterReset;
+    const ops = cli().map((call) => call.op);
+    assert.ok(ops.lastIndexOf("clone") < ops.lastIndexOf("run"), "the Bot's call starts the fresh copy, after it was made");
+    assert.equal(context.vmRunning(vmName), true);
+    assert.equal(context.host.runningConnection("ada")?.vnc.password, connection.vnc.password);
+
+    // Deleting the Bot's computer, then Remove everything: the waiting call finds no computer,
+    // and nothing starts while the VM or its files go.
+    const removals: Array<[string, () => Promise<unknown>]> = [
+      ["delete", () => context.host.deleteForBot("ada")],
+      ["remove everything", () => context.host.removeEverything()],
+    ];
+    for (const [what, remove] of removals) {
+      if (!(await context.host.computer("ada"))) {
+        await context.host.give("ada");
+        await context.host.ensureRunning("ada", { reason: "tool" });
+      }
+      const waiting = botCall();
+      const before = cli().length;
+      await remove();
+      await assert.rejects(waiting, (error: unknown) => error instanceof BotComputerError && error.code === "no_computer", what);
+      assert.deepEqual(
+        cli()
+          .slice(before)
+          .filter((call) => call.op === "run"),
+        [],
+        `no computer starts during ${what}`,
+      );
+      assert.equal(context.vmRunning(vmName), false, what);
+    }
+  });
+});
+
 test("pausing a Bot stops its computer, including one still waiting for a slot", async () => {
   await withHost(async (context) => {
     await setUp(context);
@@ -1285,8 +1334,10 @@ test("Skip during the probe after the grants also finishes without element contr
     answerGuest(context);
     const setup = context.host.setUp();
     await waitFor(() => guest.toolCalls().includes("health_report"), "the probe");
+    const skippedAt = Date.now();
     context.host.skipPermissions();
     await setup;
+    assert.ok(Date.now() - skippedAt < 5_000, "Skip doesn't wait for the probe's own time limit");
     const status = (await context.host.status()).setup;
     assert.equal(status.kind === "ready" && status.elementControl, false);
     assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /skipped/u);

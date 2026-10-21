@@ -14,7 +14,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { boundedToolOutput } from "../tool-output-context.js";
-import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin } from "./control.js";
+import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin, type BotComputerGiveBackBudget } from "./control.js";
 import {
   BOT_COMPUTER_SHELL_TOOL_NAME,
   BotComputerError,
@@ -57,7 +57,7 @@ export interface BotComputerShellDependencies {
   host: Pick<BotComputerHost, "ensureRunning" | "runGuestCommand" | "touch">;
   control: Pick<BotComputerControl, "controller" | "run" | "waitForBot">;
   botName(botId: string): Promise<string>;
-  /** How long an unattended turn waits for Give back (default `BOT_COMPUTER_UNATTENDED_WAIT_MS`). */
+  /** How long an unattended turn waits for Give back in all (default `BOT_COMPUTER_UNATTENDED_WAIT_MS`). */
   unattendedWaitMs?: number;
 }
 
@@ -65,6 +65,8 @@ export interface BotComputerShellTurn {
   routine: boolean;
   /** Nobody can answer on this turn (a routine or Telegram run). Defaults to `routine`. */
   unattended?: boolean;
+  /** An unattended turn's wait for Give back, shared with its `computer` (its own otherwise). */
+  giveBackBudget?: BotComputerGiveBackBudget;
 }
 
 function textResult(value: string, isError = false): AgentToolResult<null> {
@@ -90,8 +92,11 @@ export function createBotComputerShellTool(
   turn: BotComputerShellTurn,
 ): AgentTool<typeof BotComputerShellParameters, null> {
   const reason: BotComputerStartReason = turn.routine ? "routine" : "tool";
-  // Nobody can give the computer back on behalf of a routine or Telegram run: its wait is bounded.
-  const giveBackWaitMs = (turn.unattended ?? turn.routine) ? (deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS) : undefined;
+  // Nobody can give the computer back on behalf of a routine or Telegram run: it waits only so long, in all.
+  const giveBackBudget =
+    (turn.unattended ?? turn.routine)
+      ? (turn.giveBackBudget ?? { remainingMs: deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS })
+      : undefined;
   return {
     name: BOT_COMPUTER_SHELL_TOOL_NAME,
     label: "Computer shell",
@@ -106,7 +111,7 @@ export function createBotComputerShellTool(
       /** False when an unattended turn stopped waiting; the person still has the computer. */
       const waitForGiveBack = async (): Promise<boolean> => {
         progress(`Waiting for the person to give ${owner}'s computer back.`);
-        return waitForBotWithin(deps.control, botId, signal, giveBackWaitMs);
+        return waitForBotWithin(deps.control, botId, signal, giveBackBudget);
       };
       try {
         if (deps.control.controller(botId) === "person" && !(await waitForGiveBack())) {
