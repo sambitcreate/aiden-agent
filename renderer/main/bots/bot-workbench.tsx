@@ -5,6 +5,7 @@
 // time it is shown, then stays mounted like the workspace views. The panel has
 // its own state, id, surface name, width key, focus hand-off and Escape, so the
 // workspace Environment panel (suppressed on Bots pages) is never touched.
+// Floating over a narrow chat, it repeats a waiting hand-off card's buttons.
 
 import * as React from "react";
 import { CalendarClock, Files, Globe, ListChecks } from "lucide-react";
@@ -20,6 +21,7 @@ import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
 import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type BotPanelTab } from "./bot-panel-context";
 import { BotPanelFiles } from "./bot-panel-files";
+import { BotPanelHandoff } from "./bot-panel-handoff";
 import { BotRoutines } from "./bot-routines";
 
 const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
@@ -202,6 +204,8 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         onWidthCommit={panelWidth.commitPreferredWidth}
         views={views}
         selectedViewId={tab}
+        // Floating, the panel covers the hand-off card above the composer; it carries the card's buttons instead.
+        notice={open && !inline && bot ? <BotPanelHandoff botId={bot.id} name={bot.name} avatar={bot.avatar} /> : null}
         activeTabRef={activeTabRef}
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}

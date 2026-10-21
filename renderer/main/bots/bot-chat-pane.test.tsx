@@ -1193,6 +1193,49 @@ test("a sign-in card opens the site in the Bot's browser, brings its panel forwa
   await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-s", outcome: "done" }]));
 });
 
+// This DOM lays nothing out, so the chat measures no room beside the panel and the panel floats over it.
+test("a panel floating over the chat carries the sign-in's buttons, so I'm signed in stays in reach", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+    "bots:openHandoff": () => ({ opened: "browser" }),
+    "bots:answerHandoff": () => ({ answered: true }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+  const panel = document.getElementById("bot-panel");
+  assert.ok(panel);
+  await waitFor(() => assert.equal(panel.getAttribute("data-state"), "open"));
+  assert.equal(panel.getAttribute("data-surface-mode"), "tools-floating");
+
+  const inPanel = within(panel).getByRole("group", { name: "Planner needs you" });
+  assert.ok(within(inPanel).getByText("Sign in to github.com for Planner"));
+  fireEvent.click(within(inPanel).getByRole("button", { name: "I’m signed in" }));
+  await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-s", outcome: "done" }]));
+
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "handoff", handoff: null }));
+  await waitFor(() => assert.equal(within(panel).queryByRole("group", { name: "Planner needs you" }), null));
+});
+
+test("a panel docked beside the chat leaves the hand-off to its card, with no second set of buttons", async () => {
+  const measure = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function wide() {
+    return { x: 0, y: 0, top: 0, left: 0, right: 1400, bottom: 900, width: 1400, height: 900, toJSON: () => ({}) } as DOMRect;
+  };
+  try {
+    await mountChat({ "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }) });
+    await screen.findByRole("group", { name: "Planner needs you" });
+    fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+    const panel = document.getElementById("bot-panel");
+    assert.ok(panel);
+    assert.equal(panel.getAttribute("data-state"), "open");
+    assert.equal(panel.getAttribute("data-surface-mode"), "tools-pinned");
+    assert.equal(within(panel).queryByRole("group", { name: "Planner needs you" }), null);
+    assert.equal(screen.getAllByRole("button", { name: "I’m signed in" }).length, 1);
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = measure;
+  }
+});
+
 test("while a sign-in waits the composer takes no note, so a password typed there never reaches the Bot", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),

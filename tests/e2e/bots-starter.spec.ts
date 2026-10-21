@@ -178,7 +178,9 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     )
     .toEqual([{ botId: "bot-chief", waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d", outcome: "done" }]);
 
-  // The Bot asks the person to sign in to a site in its own browser.
+  // The Bot asks the person to sign in to a site in its own browser. At this
+  // width the Bot panel docks beside the chat, so the card stays in view.
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1280, 800));
   await aiden.app.evaluate(({ BrowserWindow }, botId) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send("bots:live:event", { botId, epoch: "e1", seq: 10, type: "handoff", handoff: null });
@@ -212,7 +214,16 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect
     .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { opened: unknown[] } }).botStarterE2e.opened))
     .toEqual([{ botId: "bot-chief", waitId: "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }]);
-  await signIn.getByRole("button", { name: "I’m signed in" }).click();
+  const botPanel = page.locator("#bot-panel");
+  await expect(botPanel).toHaveAttribute("data-state", "open");
+  await expect(botPanel).toHaveAttribute("data-surface-mode", "tools-pinned");
+  await expect(botPanel.getByRole("group", { name: "Chief of Staff needs you" })).toHaveCount(0);
+  // Narrower, the panel floats over the chat and its card, so it carries the card's buttons.
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(900, 720));
+  await expect(botPanel).toHaveAttribute("data-surface-mode", "tools-floating");
+  const panelSignIn = botPanel.getByRole("group", { name: "Chief of Staff needs you" });
+  await expect(panelSignIn.getByText("Sign in to github.com for Chief of Staff")).toBeVisible();
+  await panelSignIn.getByRole("button", { name: "I’m signed in" }).click();
   await expect
     .poll(() =>
       aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { handoffs: unknown[] } }).botStarterE2e.handoffs),

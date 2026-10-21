@@ -44,6 +44,7 @@ import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { useBotMenuActions } from "./bot-menu";
 import { useBotPanelActions } from "./bot-panel-context";
+import { useBotHandoffActions } from "./use-bot-handoff-actions";
 import { botSidebarPreferenceActions, useIsBotPinned } from "./use-bot-sidebar-preferences";
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
@@ -594,7 +595,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
-  const [handoffBusy, setHandoffBusy] = React.useState(false);
+  const handoffActions = useBotHandoffActions(botId);
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
@@ -775,29 +776,6 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  /** Send Done or Skip for the hand-off card: null once main recorded it, else what to tell the person. */
-  const sendHandoffAnswer = async (
-    pending: BotPendingHandoff,
-    outcome: BotHandoffOutcome,
-    note?: string,
-  ): Promise<string | null> => {
-    setHandoffBusy(true);
-    try {
-      const { answered } = await botsApi.answerHandoff(current.id, pending.waitId, outcome, note);
-      return answered ? null : "That card was already answered or closed.";
-    } catch (error) {
-      return userFacingErrorMessage(error, "Aiden couldn’t send that answer.");
-    } finally {
-      setHandoffBusy(false);
-    }
-  };
-
-  /** The card's Done or Skip. */
-  const answerHandoff = async (pending: BotPendingHandoff, outcome: BotHandoffOutcome) => {
-    const problem = await sendHandoffAnswer(pending, outcome);
-    if (problem) toast.error(problem);
-  };
-
   /**
    * What the person types while a hand-off card waits answers it as Done, with
    * their words as the note, whichever way the composer sends. A throw keeps
@@ -817,27 +795,8 @@ export function BotChatPane({ botId }: { botId: string }) {
     if ([...note].length > BOT_HANDOFF_NOTE_MAX_CHARS) {
       throw new Error(`Keep the note under ${BOT_HANDOFF_NOTE_MAX_CHARS.toLocaleString()} characters.`);
     }
-    const problem = await sendHandoffAnswer(pending, "done", note || undefined);
+    const problem = await handoffActions.send(pending, "done", note || undefined);
     if (problem) throw new Error(problem);
-  };
-
-  /**
-   * The card's Open. A sign-in opens in the Bot's own browser, and its panel's
-   * Browser tab comes forward with focus, so the person can sign in there.
-   */
-  const openHandoff = async (pending: BotPendingHandoff) => {
-    const signIn = pending.kind === "sign_in";
-    const failed = signIn ? "Aiden couldn’t open the sign-in page." : "Aiden couldn’t open that page.";
-    setHandoffBusy(true);
-    try {
-      const { opened } = await botsApi.openHandoff(current.id, pending.waitId);
-      if (opened === "none") toast.error(failed);
-      else if (signIn && opened === "browser") panel.show("browser");
-    } catch (error) {
-      toast.error(userFacingErrorMessage(error, failed));
-    } finally {
-      setHandoffBusy(false);
-    }
   };
 
   /** Retry: the same message as a NEW submission, with a new request id. */
@@ -935,9 +894,9 @@ export function BotChatPane({ botId }: { botId: string }) {
               name={current.name}
               avatar={current.avatar}
               handoff={handoff}
-              busy={handoffBusy}
-              onOpen={() => void openHandoff(handoff)}
-              onAnswer={(outcome) => void answerHandoff(handoff, outcome)}
+              busy={handoffActions.busy}
+              onOpen={() => void handoffActions.open(handoff)}
+              onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
             />
           ) : null}
           {approvals.prompts.map((prompt) => (
