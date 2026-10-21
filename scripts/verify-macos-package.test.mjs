@@ -1,7 +1,19 @@
 /* global Buffer */
 
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  truncate,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -43,7 +55,16 @@ import {
   verifyPackagedNodePtyResources,
   verifyPackagedGenerativeUiLibraries,
   verifyReviewedComputerUseInfoPlist,
+  assertLumeArchitecture,
+  assertLumeEntitlements,
+  verifyPackagedLume,
 } from "./verify-macos-package.mjs";
+import {
+  LUME_APP_TREE,
+  LUME_ARTIFACT_PROVENANCE,
+  lumeRequirement,
+  packagedLumePaths,
+} from "./bot-computers-lume-pins.mjs";
 
 async function createComputerUseHelperTree(root) {
   const contents = path.join(root, "Contents");
@@ -855,4 +876,141 @@ test("package verifier requires the local VCC worker and pinned attribution", as
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+const LUME_ENTITLEMENTS_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>com.apple.security.virtualization</key><true/>
+<key>com.apple.vm.networking</key><true/>
+</dict></plist>`;
+
+/** A packaged app holding a stand-in Lume bundle with the pinned layout. */
+async function createPackagedLumeFixture(t) {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-lume-package-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = path.join(root, "Aiden Agent.app");
+  const paths = packagedLumePaths(app);
+  for (const entry of LUME_APP_TREE) {
+    const [type, relative] = entry.split(/:(.*)/su);
+    const target = path.join(paths.lumeApp, relative);
+    if (type === "directory") await mkdir(target, { recursive: true });
+    else {
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, `stand-in ${relative}`);
+    }
+  }
+  await chmod(paths.binary, 0o755);
+  await truncate(paths.binary, LUME_ARTIFACT_PROVENANCE.binaryBytes);
+  const reviewedProvenance = path.join(root, "reviewed-lume-artifact.json");
+  const reviewedLicense = path.join(root, "reviewed-LICENSE.lume.md");
+  await writeFile(reviewedProvenance, `${JSON.stringify(LUME_ARTIFACT_PROVENANCE, null, 2)}\n`);
+  await writeFile(reviewedLicense, "MIT License\n");
+  await mkdir(path.dirname(paths.outerProvenance), { recursive: true });
+  await writeFile(paths.outerProvenance, await readFile(reviewedProvenance));
+  await writeFile(paths.outerLicenseNotice, await readFile(reviewedLicense));
+  return { root, app, paths, reviewedProvenance, reviewedLicense };
+}
+
+function lumeRunner({ entitlements = LUME_ENTITLEMENTS_XML, archs = "arm64\n", bundleIdentifier } = {}) {
+  const calls = [];
+  const runCommand = async (command, args) => {
+    calls.push({ command, args });
+    if (command === "/usr/bin/plutil") {
+      const value =
+        args[1] === "CFBundleIdentifier"
+          ? (bundleIdentifier ?? LUME_ARTIFACT_PROVENANCE.bundleIdentifier)
+          : LUME_ARTIFACT_PROVENANCE.bundleVersion;
+      return { stdout: `${value}\n`, stderr: "" };
+    }
+    if (command === "/usr/bin/codesign" && args[0] === "--display") return { stdout: entitlements, stderr: "" };
+    if (command === "/usr/bin/lipo") return { stdout: archs, stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+  return { runCommand, calls };
+}
+
+test("package verifier accepts the pinned Lume bundle with its upstream signature and entitlements", async (t) => {
+  const fixture = await createPackagedLumeFixture(t);
+  const { runCommand, calls } = lumeRunner();
+  await verifyPackagedLume(fixture.app, {
+    runCommand,
+    hash: async () => LUME_ARTIFACT_PROVENANCE.binarySha256,
+    reviewedProvenance: fixture.reviewedProvenance,
+    reviewedLicense: fixture.reviewedLicense,
+  });
+  const deepVerify = calls.find((call) => call.command === "/usr/bin/codesign" && call.args[0] === "--verify");
+  assert.deepEqual(deepVerify.args, [
+    "--verify",
+    "--deep",
+    "--strict",
+    "--verbose=2",
+    `-R=${lumeRequirement()}`,
+    fixture.paths.lumeApp,
+  ]);
+  assert.equal(calls.some((call) => call.command === "/usr/bin/vtool"), false, "no universal check for Lume");
+});
+
+test("package verifier refuses a changed Lume binary before any tool reads it", async (t) => {
+  const fixture = await createPackagedLumeFixture(t);
+  const { runCommand, calls } = lumeRunner();
+  await assert.rejects(
+    verifyPackagedLume(fixture.app, {
+      runCommand,
+      hash: async () => "0".repeat(64),
+      reviewedProvenance: fixture.reviewedProvenance,
+      reviewedLicense: fixture.reviewedLicense,
+    }),
+    /Packaged Lume hash mismatch/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("package verifier refuses extra files, symlinks and substituted Lume provenance", async (t) => {
+  const options = (fixture, runCommand) => ({
+    runCommand,
+    hash: async () => LUME_ARTIFACT_PROVENANCE.binarySha256,
+    reviewedProvenance: fixture.reviewedProvenance,
+    reviewedLicense: fixture.reviewedLicense,
+  });
+  const extra = await createPackagedLumeFixture(t);
+  await writeFile(path.join(extra.paths.lumeApp, "Contents", "MacOS", "extra-helper"), "x");
+  await assert.rejects(verifyPackagedLume(extra.app, options(extra, lumeRunner().runCommand)), /tree differs/);
+
+  const linked = await createPackagedLumeFixture(t);
+  const real = path.join(linked.root, "real-lume");
+  await rename(linked.paths.binary, real);
+  await symlink(real, linked.paths.binary);
+  await assert.rejects(verifyPackagedLume(linked.app, options(linked, lumeRunner().runCommand)), /tree differs/);
+
+  const substituted = await createPackagedLumeFixture(t);
+  await writeFile(substituted.paths.outerLicenseNotice, "Some other licence\n");
+  await assert.rejects(
+    verifyPackagedLume(substituted.app, options(substituted, lumeRunner().runCommand)),
+    /differs from the reviewed copy/,
+  );
+
+  const otherBundle = await createPackagedLumeFixture(t);
+  await assert.rejects(
+    verifyPackagedLume(otherBundle.app, options(otherBundle, lumeRunner({ bundleIdentifier: "com.example.vm" }).runCommand)),
+    /Unexpected Lume bundle identifier/,
+  );
+});
+
+test("package verifier requires Lume's virtualization entitlements and an arm64-only binary", () => {
+  assert.doesNotThrow(() => assertLumeEntitlements(LUME_ENTITLEMENTS_XML));
+  assert.throws(
+    () => assertLumeEntitlements(LUME_ENTITLEMENTS_XML.replace(/<key>com\.apple\.security\.virtualization<\/key><true\/>/u, "")),
+    /virtualization entitlements/,
+  );
+  assert.throws(
+    () =>
+      assertLumeEntitlements(
+        LUME_ENTITLEMENTS_XML.replace("</dict>", "<key>com.apple.security.cs.disable-library-validation</key><true/></dict>"),
+      ),
+    /virtualization entitlements/,
+  );
+  assert.throws(() => assertLumeEntitlements("<plist><dict></dict></plist>"), /virtualization entitlements/);
+  assert.doesNotThrow(() => assertLumeArchitecture("arm64\n"));
+  assert.throws(() => assertLumeArchitecture("x86_64 arm64\n"), /arm64-only/);
+  assert.throws(() => assertLumeArchitecture(""), /arm64-only/);
 });
