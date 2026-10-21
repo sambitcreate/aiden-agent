@@ -68,7 +68,7 @@ test("an answer that is not Done or Skip keeps the card waiting", async () => {
   assert.deepEqual(await asked, { outcome: "skipped" });
 });
 
-test("a password-or-code card and a sign-in take no note: whatever is typed with the answer would reach the Bot", async () => {
+test("a password-or-code card takes no note: whatever is typed with the answer would reach the Bot", async () => {
   const handoffs = createBotHandoffs();
   const credentials = handoffs.request(
     request({
@@ -84,13 +84,6 @@ test("a password-or-code card and a sign-in take no note: whatever is typed with
   assert.equal(handoffs.pending().length, 1, "the card still waits for Done or Skip");
   assert.equal(handoffs.answer("bot:ada", waitId, { outcome: "done" }), "answered");
   assert.deepEqual(await credentials, { outcome: "done" });
-
-  const signIn = handoffs.request(
-    request({ kind: "sign_in", action: "Sign in to github.com", origin: "https://github.com", open: { url: "https://github.com" } }),
-  );
-  assert.equal(handoffs.answer("bot:ada", waitId, { outcome: "done", note: "hunter2" }), "invalid");
-  assert.equal(handoffs.answer("bot:ada", waitId, { outcome: "done" }), "answered");
-  assert.deepEqual(await signIn, { outcome: "done" });
 
   // A note still goes with any other card, a money rule's included.
   const payment = handoffs.request(

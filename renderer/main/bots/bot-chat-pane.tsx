@@ -799,7 +799,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const handoff = snapshot.handoff ?? null;
   const signInWaits = handoff?.kind === "sign_in";
   // A sign-in or a password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
-  const noteRefused = handoff !== null && !botHandoffTakesNote(handoff);
+  const noteRefused = signInWaits || (handoff !== null && !botHandoffTakesNote(handoff));
   const chatActivity = resolveBotChatActivity(current.chatActivity);
   // While the reply's visible words stream, the words are the signal (§5.2). The
   // partial text can outlast narration into a tool call, so a running step keeps the line.

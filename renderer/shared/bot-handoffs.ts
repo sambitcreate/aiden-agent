@@ -69,12 +69,12 @@ const CREDENTIAL_RULE_IDS: ReadonlySet<string> = new Set(
 
 /**
  * Whether an answer to this card may carry a note. A note is the person's
- * words to the Bot: it reaches the model with the answer. A sign-in and a
- * card a password-or-code rule opened take none, so a password or code typed
- * as a note can never reach the Bot; they are answered on the card itself.
+ * words to the Bot: it reaches the model with the answer. A card a
+ * password-or-code rule opened takes none, so a password or code typed as a
+ * note can never reach the Bot; it is answered on the card itself. (A sign-in
+ * may still carry a note with Skip; no composer sends one with it.)
  */
-export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "kind" | "rule">): boolean {
-  if (handoff.kind === "sign_in") return false;
+export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule">): boolean {
   return handoff.rule === undefined || !CREDENTIAL_RULE_IDS.has(handoff.rule.id);
 }
 

@@ -205,7 +205,7 @@ export function HandoffCard({
       {handoff.why ? <p className="whitespace-pre-line">{handoff.why}</p> : null}
       {handoff.rule ? <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p> : null}
       {host ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
-      {botHandoffTakesNote(handoff) ? (
+      {!signIn && botHandoffTakesNote(handoff) ? (
         <p className="mt-1 text-tertiary">{`${name} reads any note you send. Enter passwords and codes on the page, never in the chat.`}</p>
       ) : null}
       {signIn && !elsewhere ? (
