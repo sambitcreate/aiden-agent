@@ -1,13 +1,16 @@
 // The Bot side panel (spec §8) on the C1 workbench shell, beside a Bot's chat:
-// fixed Activity, Files, Memory and Routines tabs, and Browser once the Bot's
+// fixed Activity, Files, Memory and Routines tabs, Browser once the Bot's
 // own browser has a tab (a stored Browser tab shows Activity until then; a tab
-// the Bot or a hand-off opens to show reveals it). A tab's body mounts the first
+// the Bot or a hand-off opens to show reveals it), and Computer while the Bot
+// has a computer on a Mac with Bot computers (plan §8.5; a stored Computer tab
+// shows Activity once the computer is known to be gone). The computer can also
+// float over the chat, in the Simulator's floating player. A tab's body mounts the first
 // time it is shown, then stays mounted like the workspace views. The panel has
 // its own state, id, surface name, width key, focus hand-off and Escape, so the
 // workspace Environment panel (suppressed on Bots pages) is never touched.
 
 import * as React from "react";
-import { CalendarClock, Files, Globe, ListChecks } from "lucide-react";
+import { CalendarClock, Files, Globe, ListChecks, Monitor } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
 import { BOT_PANEL_WIDTH_BOUNDS, resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
@@ -16,6 +19,8 @@ import { cn } from "../../lib/ui-utils";
 import { useBotLive } from "../../lib/use-bot-live";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { BotBrowserTab, useBotBrowserPresence } from "./bot-browser-tab";
+import { BotComputerFloat } from "./bot-computer-float";
+import { BotComputerTab, useBotComputer, useBotComputerStart } from "./bot-computer-tab";
 import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
 import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type BotPanelTab } from "./bot-panel-context";
@@ -28,6 +33,7 @@ const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{
   memory: { label: "Memory", icon: MemoryCardIcon },
   routines: { label: "Routines", icon: CalendarClock },
   browser: { label: "Browser", icon: Globe },
+  computer: { label: "Computer", icon: Monitor },
 };
 
 /**
@@ -63,7 +69,7 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
  * subscription for as long as it is shown; the Activity tab shares it.
  */
 export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
-  const { open, tab: storedTab, fileRequest, focusRequest, close, consumeFocusRequest, setTab, reveal } = useBotPanel();
+  const { open, tab: storedTab, fileRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
   const bot = useBot(botId).data ?? null;
   const revealBrowser = React.useCallback(() => reveal("browser"), [reveal]);
   const browser = useBotBrowserPresence(botId, revealBrowser);
@@ -72,8 +78,16 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   if (browser.hasTabs && !browserSeen) setBrowserSeen(true);
   const browserShown =
     (browser.workspaceId !== null && (browser.hasTabs || browserSeen)) || (!browser.resolved && storedTab === "browser");
-  const tab: BotPanelTab = storedTab === "browser" && !browserShown ? "activity" : storedTab;
-  const shownTabs = BOT_PANEL_TABS.filter((id) => id !== "browser" || browserShown);
+  const computer = useBotComputer(botId);
+  // Never on a Mac without Bot computers; a stored Computer tab waits for the status before falling back.
+  const computerShown =
+    computer.supported && (computer.computer !== undefined || (!computer.loaded && !computer.failed && storedTab === "computer"));
+  const computerStart = useBotComputerStart({ id: botId, name: bot?.name ?? "this Bot" });
+  const [computerFloating, setComputerFloating] = React.useState(false);
+  if (computerFloating && !computer.computer) setComputerFloating(false);
+  const hidden = (id: BotPanelTab) => (id === "browser" && !browserShown) || (id === "computer" && !computerShown);
+  const tab: BotPanelTab = hidden(storedTab) ? "activity" : storedTab;
+  const shownTabs = BOT_PANEL_TABS.filter((id) => !hidden(id));
   const containerRef = React.useRef<HTMLDivElement>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
@@ -154,12 +168,24 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         return browser.workspaceId === null ? null : (
           <BotBrowserTab workspaceId={browser.workspaceId} botName={bot.name} active={active} />
         );
+      case "computer":
+        return computer.computer ? (
+          <BotComputerTab
+            bot={bot}
+            computer={computer.computer}
+            active={active}
+            floating={computerFloating}
+            onFloat={() => setComputerFloating(true)}
+            onDock={() => setComputerFloating(false)}
+            start={computerStart}
+          />
+        ) : null;
     }
   };
   const views: WorkbenchView[] = shownTabs.map((id) => ({
     id,
     render: ({ presented, selected }) =>
-      id === "browser" ? (
+      id === "browser" || id === "computer" ? (
         // The page owns the whole area: no padding or scroller of its own.
         visited.has(id) ? <div className="flex h-full min-h-0 flex-col">{body(id, presented && selected)}</div> : null
       ) : visited.has(id) ? (
@@ -206,14 +232,31 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}
         tabListLabel="Bot panel views"
-        // At most five fixed tabs, which always fit; there is nothing for an "Open tabs" list to reveal.
-        tabMenu={false}
-        onSelectTab={(entry) => setTab(entry.viewId as BotPanelTab)}
+        // Five tabs always fit; with Browser and Computer both shown, the list reveals any that scroll away.
+        tabMenu={shownTabs.length > 5}
+        onSelectTab={(entry) => {
+          const next = entry.viewId as BotPanelTab;
+          // The person switching to Computer starts a stopped computer; a tab restored at launch never does.
+          if (next === "computer" && tab !== "computer" && computer.computer?.state === "stopped") computerStart.start();
+          setTab(next);
+        }}
         onCloseTab={() => undefined}
         closeLabel="Close Bot panel"
         closeTitle="Close panel"
         onClose={close}
       />
+      {bot && computer.computer && computerFloating ? (
+        <BotComputerFloat
+          bot={bot}
+          computer={computer.computer}
+          start={computerStart}
+          onDock={() => {
+            setComputerFloating(false);
+            show("computer");
+          }}
+          onClose={() => setComputerFloating(false)}
+        />
+      ) : null}
     </div>
   );
 }
