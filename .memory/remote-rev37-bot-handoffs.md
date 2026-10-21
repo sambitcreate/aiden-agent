@@ -1,4 +1,4 @@
-# Remote contract revision 36: Bot hand-offs and pause on phones (P4) — 2026-10-20
+# Remote contract revision 37: Bot hand-offs and pause on phones (P4) — 2026-10-20
 
 Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side). Branch `wp/p4-remote`. Phones (iOS, Android) are P5. Builds on P1 (`.memory/bot-handoffs.md`) and P2 (`.memory/bot-pause.md`).
 
@@ -7,7 +7,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
   - desktop: `AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION` in `main/services/aiden-remote-protocol.ts`, which `AIDEN_REMOTE_CONTRACT_REVISION` aliases;
   - the shared fixture: two `contractRevision` literals in `protocol/aiden-remote/v1/fixtures/contract.json` (top level and `hostHealth`).
 - Desktop tests compare against the constant, never a literal, so renumbering is: the constant, the 2 fixture literals, and the "36" in `docs/aiden-remote-api-v1.md` and the OpenAPI descriptions.
-  - Review dry run (2026-10-21): with the constant and both fixture literals set to 37, every desktop Remote suite passed (`test:aiden-remote` minus the IPv6-bound service test, plus `test:peer-hosts`). That needed one fix: the protocol test's "require contract revision 36" regex now builds from the constant.
+  - Review dry run (2026-10-21): with the constant and both fixture literals set to 37, every desktop Remote suite passed (`test:aiden-remote` minus the IPv6-bound service test, plus `test:peer-hosts`). That needed one fix: the protocol test's "require contract revision 37" regex now builds from the constant.
   - PR #564 merged first and took 36 on `main`, so the integrator renumbers this work to 37 when merging `main`.
 - iOS `AidenRemotePhase0Tests.swift` asserts the fixture revision literally; P5 bumps it.
 
@@ -55,7 +55,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
 
 ## Fixture and OpenAPI
 - `contract.json` `botHandoffs`: a holder and a `legacy` view of one hand-off ("Scout", waitId `4f9c2d1e-…`), its answer, open-on-Mac, pause and unpause, the paused session, summary and detail, and the refusals.
-- The desktop parser checks the legacy view never carries a revision-36 word. The section is refused below revision 36.
+- The desktop parser checks the legacy view never carries a revision-36 word. The section is refused below revision 37.
 - `pausedDetail.instructions` is allowed by the privacy walk. P5 needs the same exception if it adds `botHandoffs` to the Android or iOS fixture roots.
 - OpenAPI: 3 paths after the question answer; schemas `BotHandoff`, `BotHandoffAnswerRequest`, `BotHandoffAnswerReceipt` and `BotHandoffOpenOnMacReceipt`. `BotDetail` also gained the `sessionState` it was missing.
 - BotSession's `allOf` + closed `BotSessionState` can't be validated by plain Ajv, so the Ajv test checks the hand-off on its own.

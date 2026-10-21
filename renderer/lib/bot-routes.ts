@@ -4,8 +4,11 @@
 const BOT_CHAT_ROUTE = /^\/bots\/([^/]+)\/chat\/?$/u;
 const BOT_ROUTE = /^\/bots\/([^/]+)(?:\/chat)?\/?$/u;
 
+const HOST_BOT_ROUTE = /^\/host\/[^/]+\/bots\/[^/]+(?:\/|$)/u;
+
+/** The Bots surface: `/bots`, everything under it, and a paired Mac's Bot chat. */
 export function isBotsPath(pathname: string): boolean {
-  return pathname === "/bots" || pathname.startsWith("/bots/");
+  return pathname === "/bots" || pathname.startsWith("/bots/") || HOST_BOT_ROUTE.test(pathname);
 }
 
 function decodedSegment(segment: string | undefined): string | null {

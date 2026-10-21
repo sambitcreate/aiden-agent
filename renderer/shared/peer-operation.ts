@@ -20,7 +20,9 @@ export type PeerReadOperation =
   | "bots"
   | "bot"
   | "botConversations"
-  | "botCapabilities";
+  | "botCapabilities"
+  /** A Bot's one durable conversation (`GET /bots/{botId}/session`). */
+  | "botSession";
 export type PeerWriteOperation =
   | "createChat"
   | "send"
@@ -44,7 +46,18 @@ export type PeerWriteOperation =
   | "forkChat"
   | "forkSummaryRetry"
   | "forkSummarySkip"
-  | "forkSummaryCancel";
+  | "forkSummaryCancel"
+  // A Bot's durable conversation: the same session the host's own app and phones use.
+  | "botSend"
+  | "botResume"
+  | "botDismiss"
+  | "botStop"
+  /** `itemId` is the question's `waitId`. */
+  | "botAnswerQuestion"
+  | "botConnectionRequest"
+  | "uploadBotAttachment"
+  /** `itemId` is the staged attachment. */
+  | "removeBotAttachment";
 export interface PeerOperation {
   operation: PeerReadOperation | PeerWriteOperation;
   /** The chat, stream, run, Bot or prompt the operation addresses. */

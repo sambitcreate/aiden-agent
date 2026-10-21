@@ -11,6 +11,11 @@ import {
   type PeerRequest,
 } from "./peer-transport.js";
 import {
+  parseAidenRemoteBotConnectionRequestReceipt,
+  parseAidenRemoteBotMessageReceipt,
+  parseAidenRemoteBotQuestionAnswerReceipt,
+  parseAidenRemoteBotSession,
+  parseAidenRemoteBotSessionStateView,
   parseAidenRemoteChatForkResult,
   parseAidenRemoteChatProjection,
   parseAidenRemoteChatSummaryPage,
@@ -38,6 +43,8 @@ const ATTACHMENT_ID = /^[A-Za-z0-9._:-]{1,256}$/u;
 const PUBLIC_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 /** A staged upload's ID, as `POST /chats/{chatId}/attachments` mints it. */
 const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
+/** A Bot question's durable wait id, as the host's answer route accepts it. */
+const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
@@ -58,6 +65,15 @@ export const PEER_CHAT_MUTATIONS: ReadonlySet<string> = new Set([
   "forkSummaryRetry",
   "forkSummarySkip",
   "forkSummaryCancel",
+]);
+
+/** Bot session mutations reconcile with one `GET /bots/{botId}/session`. */
+export const PEER_BOT_SESSION_MUTATIONS: ReadonlySet<string> = new Set([
+  "botSend",
+  "botResume",
+  "botDismiss",
+  "botStop",
+  "botAnswerQuestion",
 ]);
 
 /** A fork names one message to cut at and, optionally, a summary of what followed. */
@@ -136,6 +152,12 @@ export async function peerOperationResult(
   if (name === "forkChat")
     return parseAidenRemoteChatForkResult(value, "Peer chat fork");
   if (name === "forkSummaryCancel") return forkSummaryCancelled(value);
+  if (name === "botSession") return parseAidenRemoteBotSession(value);
+  if (name === "botSend") return parseAidenRemoteBotMessageReceipt(value);
+  if (name === "botResume" || name === "botDismiss" || name === "botStop")
+    return parseAidenRemoteBotSessionStateView(value);
+  if (name === "botAnswerQuestion") return parseAidenRemoteBotQuestionAnswerReceipt(value);
+  if (name === "botConnectionRequest") return parseAidenRemoteBotConnectionRequestReceipt(value);
   return value;
 }
 
@@ -265,6 +287,9 @@ export function peerOperationRequest(
         ["botId", optional(input.botId, () => hostIdentifier(input.botId))],
       ])}`;
       break;
+    case "botSession":
+      path = `/bots/${id()}/session`;
+      break;
     case "createChat":
       path = "/chats";
       method = "POST";
@@ -377,6 +402,41 @@ export function peerOperationRequest(
       if (input.body !== undefined && Object.keys(peerRecord(input.body)).length > 0)
         throw new Error("Invalid peer fork summary request.");
       body = {};
+      break;
+    case "botSend":
+      path = `/bots/${id()}/messages`;
+      method = "POST";
+      needsKey = true;
+      break;
+    case "botResume":
+    case "botDismiss":
+    case "botStop":
+      path = `/bots/${id()}/${operation === "botResume" ? "resume" : operation === "botDismiss" ? "dismiss" : "stop"}`;
+      method = "POST";
+      needsKey = true;
+      if (input.body !== undefined && Object.keys(peerRecord(input.body)).length > 0)
+        throw new Error("Invalid peer Bot session request.");
+      body = {};
+      break;
+    case "botAnswerQuestion":
+      path = `/bots/${id()}/questions/${pattern(input.itemId, BOT_WAIT_ID)}/answer`;
+      method = "POST";
+      needsKey = true;
+      break;
+    case "botConnectionRequest":
+      path = `/bots/${id()}/connection-requests`;
+      method = "POST";
+      needsKey = true;
+      break;
+    case "uploadBotAttachment":
+      // Not keyed, like a chat upload: an unused staged upload expires on the host.
+      path = `/bots/${id()}/attachments`;
+      method = "POST";
+      maxBodyBytes = MAX_PEER_UPLOAD_BYTES;
+      break;
+    case "removeBotAttachment":
+      path = `/bots/${id()}/attachments/${pattern(input.itemId, STAGED_ATTACHMENT_ID)}`;
+      method = "DELETE";
       break;
     default:
       throw new Error("Unsupported peer operation.");

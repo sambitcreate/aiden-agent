@@ -465,6 +465,11 @@ export interface ChatMeta {
    */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  /**
+   * The message at `lastAssistantAt` ended its turn in failure, so an unread
+   * row says Failed instead of showing a new-reply dot. Absent when false.
+   */
+  lastAssistantFailed?: boolean;
   /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
   forkedFrom?: ChatForkLineageV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */

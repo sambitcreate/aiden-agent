@@ -238,14 +238,19 @@ export interface AidenRemoteChatSummaryProjection {
   rowState?: ChatRowState;
   /** Additive (protocol revision 18): assistant output arrived after the last view. */
   unread?: boolean;
+  /**
+   * Additive (protocol revision 36): the newest assistant output is a failed
+   * turn. Present only when true; clients say Failed while the row is unread.
+   */
+  lastRunFailed?: true;
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
 }
 
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
-  "titlePending" | "activity" | "rowState" | "unread"
-> & { lastAssistantAt?: number; lastAssistantSequence?: number };
+  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed"
+> & { lastAssistantAt?: number; lastAssistantSequence?: number; lastAssistantFailed?: boolean };
 
 /** Shared, main-owned read markers used for honest unread summaries. */
 export interface AidenRemoteChatReadMarkers {
@@ -578,7 +583,11 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
     revision: chatSummaryRevision(meta),
     ...(forkedFrom ? { forkedFrom } : {}),
     ...(typeof meta.lastAssistantAt === "number" && Number.isSafeInteger(meta.lastAssistantAt)
-      ? { lastAssistantAt: meta.lastAssistantAt, lastAssistantSequence: meta.lastAssistantSequence }
+      ? {
+          lastAssistantAt: meta.lastAssistantAt,
+          lastAssistantSequence: meta.lastAssistantSequence,
+          ...(meta.lastAssistantFailed === true ? { lastAssistantFailed: true } : {}),
+        }
       : {}),
   };
 }
@@ -1061,6 +1070,10 @@ function requireRevision(expected: string, chat: Chat): void {
   }
 }
 
+/** What an older Mac sees when it sends to a Bot through the workspace chat routes. */
+export const AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE =
+  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the Mac that runs them.";
+
 export class AidenRemoteChatService {
   private readonly idempotency: AidenIdempotencyLedger;
   private readonly attachments: AidenRemoteAttachmentStore;
@@ -1120,6 +1133,13 @@ export class AidenRemoteChatService {
        * retained Bot-chat read and write even when device grants are present.
        */
       retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
+      /**
+       * True while this host serves Bots' durable sessions. Their workspace
+       * chat rows are then kept only for history, and a turn sent to one is
+       * refused: it would run outside the Bot's one conversation, where the
+       * host's app, phones and Telegram never show it.
+       */
+      durableBotSessions?: () => boolean;
       botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
       /**
        * Whether the person paused this Bot (plan §7). A paused Bot's chat
@@ -1300,8 +1320,9 @@ export class AidenRemoteChatService {
     const inputChatIds = new Set(activity?.inputChatIds ?? []);
     // A marker read failure hides unread dots rather than failing the list.
     const markers = await this.options.readMarkers?.snapshot().catch(() => null);
-    return summaries.map(({ lastAssistantAt, lastAssistantSequence, ...summary }) => ({
+    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => ({
       ...summary,
+      ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
       titlePending: this.options.isTitlePending?.(summary.id) === true,
       activity: activeChatIds.has(summary.id) ? "active" : "idle",
       rowState: chatRowState({
@@ -2039,6 +2060,9 @@ export class AidenRemoteChatService {
     message: AidenRemoteMessageProjection;
   }> {
     const parsed = parseTurn(input);
+    if (this.options.durableBotSessions?.() && (await this.chat(chatId)).botId) {
+      throw new AidenRemoteServiceError("invalid_request", AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE, 400);
+    }
     if (
       parsed.skill &&
       (await this.options.deviceSupportsSkillInvocation?.(deviceId)) !== true

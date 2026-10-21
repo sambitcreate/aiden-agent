@@ -305,6 +305,8 @@ test("run state and row hints drive attention, and the open chat is never unread
         summaryRow("open", "w"),
         summaryRow("busy", "w", { activity: "active" }),
         summaryRow("hinted", "w", { rowState: "needs_input", unread: true }),
+        summaryRow("broke", "w", { unread: true, lastRunFailed: true }),
+        summaryRow("broke-seen", "w", { unread: false, lastRunFailed: true }),
         summaryRow("quiet", "w"),
         summaryRow("orphan", "", {}),
       ],
@@ -320,12 +322,16 @@ test("run state and row hints drive attention, and the open chat is never unread
     open: "none",
     busy: "working",
     hinted: "needs_input",
+    broke: "failed",
+    "broke-seen": "none",
     quiet: "none",
   });
+  assert.equal(rows.chats.find((chat) => chat.chatId === "broke")?.lastRunFailed, true);
+  assert.equal(rows.chats.find((chat) => chat.chatId === "quiet")?.lastRunFailed, false);
   const sections = organize(rows.projects, rows.chats, "attention").chatSections;
   assert.deepEqual(
     sections.map((section) => section.id),
-    ["needs_approval", "needs_input", "working", "unread", "none"],
+    ["needs_approval", "needs_input", "failed", "working", "unread", "none"],
   );
 });
 

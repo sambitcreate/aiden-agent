@@ -256,6 +256,7 @@ import type {
   PeerRunTarget,
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
+import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../shared/peer-bot-session";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import type {
   WorkspaceArtifactsChangedEvent,
@@ -322,6 +323,13 @@ export const peerHostsApi = {
     invoke<PeerRunSubscription>("remote:peerRunSubscribe", hostId, target, afterSequence),
   runUnsubscribe: (subscriptionId: string) =>
     invoke<boolean>("remote:peerRunUnsubscribe", subscriptionId),
+  /** Follow a host Bot's durable conversation; frames arrive on `onBotSession`. */
+  botSessionSubscribe: (hostId: string, botId: string) =>
+    invoke<PeerBotSessionSubscription>("remote:peerBotSessionSubscribe", hostId, botId),
+  botSessionUnsubscribe: (subscriptionId: string) =>
+    invoke<boolean>("remote:peerBotSessionUnsubscribe", subscriptionId),
+  onBotSession: (handler: (message: PeerBotSessionMessage) => void) =>
+    onNotification<PeerBotSessionMessage>("remote:peer-bot-session", handler),
   onHostFeed: (handler: (message: PeerHostFeedMessage) => void) =>
     onNotification<PeerHostFeedMessage>("remote:host-feed", handler),
   onRunFrame: (handler: (message: PeerRunFrameMessage) => void) =>

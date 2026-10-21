@@ -77,6 +77,10 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * HTML document for a visual the chat projects, which phones open full screen.
  *
  * Contract revision 36 (provisional; re-claim the next revision after `main`'s
+ * at merge): Chat Summary rows may carry `lastRunFailed: true` when the newest
+ * assistant output is a failed turn, so an unread row can say Failed.
+ *
+ * Contract revision 37 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION`):
  * Bot hand-offs and pause on phones (`bot:handoffs`). A device that negotiates
  * `bot:handoffs` receives the session `handoff` field and frame, the `paused`
@@ -85,7 +89,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * without it see a paused Bot as unavailable, a pending hand-off as an
  * assistant notice, and `operation_stale` for writes to a paused Bot.
  */
-export const AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION = 36 as const;
+export const AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION = 37 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -257,7 +261,7 @@ export type AidenRemoteBotCardCapability = (typeof AIDEN_REMOTE_BOT_CARD_CAPABIL
 export const AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES = ["bot:activity"] as const;
 
 /**
- * Contract revision 36: a device holding `bot:handoffs` receives the session
+ * Contract revision 37: a device holding `bot:handoffs` receives the session
  * `handoff` field and frames, the `paused` session state and Bot `paused`
  * flags, and the `bot_paused` error code; it may call the hand-off answer,
  * open-on-Mac and pause routes. It is an opt-in like `bot:cards`: the routes
@@ -562,7 +566,7 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "memory_over_budget",
   "memory_blocked",
   "routine_proposal_not_found",
-  // Contract revision 36. `bot_paused` reaches only `bot:handoffs` devices;
+  // Contract revision 37. `bot_paused` reaches only `bot:handoffs` devices;
   // `handoff_expired` only answers `bot:handoffs` routes.
   "bot_paused",
   "handoff_expired",
@@ -820,7 +824,7 @@ export const AIDEN_REMOTE_BOT_HEALTH_STATES = [
 /**
  * Durable Bot session state (contract revision 25, `bot-durable-session-v1`).
  * `interrupted` is a turn that stopped part-way and waits for Resume or Dismiss.
- * `paused` (contract revision 36) is a Bot the person paused; only devices
+ * `paused` (contract revision 37) is a Bot the person paused; only devices
  * holding `bot:handoffs` receive it, others see `unavailable`.
  */
 export const AIDEN_REMOTE_BOT_SESSION_STATES = [
@@ -887,7 +891,7 @@ export type AidenRemoteBotSummary = AidenRemoteBotSummaryBase & {
   /** Present when the host advertises `bot-durable-session-v1`. */
   sessionState?: AidenRemoteBotSessionStateKind;
   /**
-   * Contract revision 36, only for `bot:handoffs` devices: whether the person
+   * Contract revision 37, only for `bot:handoffs` devices: whether the person
    * paused the Bot. A summary carries it only as `true`; a detail always
    * carries it for those devices.
    */
@@ -1359,7 +1363,7 @@ export const AIDEN_REMOTE_BOT_HANDOFF_OUTCOMES = ["done", "skipped"] as const;
 export type AidenRemoteBotHandoffOutcome = (typeof AIDEN_REMOTE_BOT_HANDOFF_OUTCOMES)[number];
 
 /**
- * Contract revision 36, only for `bot:handoffs` devices: a step the Bot hands
+ * Contract revision 37, only for `bot:handoffs` devices: a step the Bot hands
  * back to the person ("Your turn: …"), answered once by `waitId` with Done or
  * Skip. A `sign_in` hand-off is finished on the Mac (the Bot's own browser);
  * a phone may only skip it or ask the Mac to open it.
@@ -1414,7 +1418,7 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   activity?: AidenRemoteBotSessionActivity | null;
   /** Revision 30, only for `bot:activity` devices: the person's messages waiting for the turn. */
   queued?: AidenRemoteBotQueuedMessage[];
-  /** Revision 36, only for `bot:handoffs` devices: the hand-off the Bot is waiting on, or null. */
+  /** Revision 37, only for `bot:handoffs` devices: the hand-off the Bot is waiting on, or null. */
   handoff?: AidenRemoteBotHandoff | null;
 }
 
@@ -1699,7 +1703,7 @@ export interface AidenRemoteContractFixture {
   botActivity?: AidenRemoteBotActivityFixture;
   /** Revision 33 (`bot-attachments-v1`): a message carrying staged uploads. */
   botAttachments?: AidenRemoteBotAttachmentsFixture;
-  /** Revision 36 (`bot:handoffs`): hand-offs and pause, for holders and as legacy devices see them. */
+  /** Revision 37 (`bot:handoffs`): hand-offs and pause, for holders and as legacy devices see them. */
   botHandoffs?: AidenRemoteBotHandoffsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -2655,7 +2659,7 @@ export function parseAidenRemoteBotSummary(value: unknown): AidenRemoteBotSummar
   return { ...summary, paused: true };
 }
 
-/** Revision 36: a `paused` flag and a `paused` session state always travel together. */
+/** Revision 37: a `paused` flag and a `paused` session state always travel together. */
 function assertBotPausedAgreesWithState(
   sessionState: AidenRemoteBotSessionStateKind | undefined,
   paused: boolean,
@@ -3369,6 +3373,12 @@ export function parseAidenRemoteChatSummaryProjection(
       ? typeof value.unread === "boolean"
         ? { unread: value.unread }
         : (() => { throw new Error(`${label} unread must be a boolean.`); })()
+      : {}),
+    // Additive in contract revision 36; present only when true.
+    ...(hasOwn(value, "lastRunFailed")
+      ? value.lastRunFailed === true
+        ? { lastRunFailed: true as const }
+        : (() => { throw new Error(`${label} lastRunFailed must be true when present.`); })()
       : {}),
     // Additive in contract revision 21; rows never carry the summary.
     ...(hasOwn(value, "forkedFrom")
@@ -5736,7 +5746,7 @@ export function parseAidenRemoteBotHandoffWaitId(value: unknown, label = "Bot ha
   return parseBotQuestionWaitId(value, label);
 }
 
-/** Revision 36: the hand-off a Bot waits on. `null` in a session means nothing is waiting. */
+/** Revision 37: the hand-off a Bot waits on. `null` in a session means nothing is waiting. */
 export function parseAidenRemoteBotHandoff(value: unknown): AidenRemoteBotHandoff {
   if (!isRecord(value)) throw new Error("Bot hand-off must be an object.");
   assertExactKeys(value, ["waitId", "kind", "action", "why", "open"], "Bot hand-off");
@@ -6000,7 +6010,7 @@ export interface AidenRemoteBotActivityFixture {
 }
 
 /**
- * Revision 36: what a `bot:handoffs` device and a device without it each
+ * Revision 37: what a `bot:handoffs` device and a device without it each
  * receive for one hand-off and one pause.
  */
 export interface AidenRemoteBotHandoffsFixture {
@@ -6071,7 +6081,7 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
     pausedSummary: parseAidenRemoteBotSummary(legacyRecord.pausedSummary),
     pausedError: parseErrorEnvelopeFixture(legacyRecord.pausedError, "Bot hand-offs legacy pausedError"),
   };
-  // A device without `bot:handoffs` never sees a revision-36 word.
+  // A device without `bot:handoffs` never sees a revision-37 word.
   for (const legacySession of [legacy.session, legacy.pausedSession]) {
     if (legacySession.handoff !== undefined || legacySession.state === "paused") {
       throw new Error("A legacy Bot session must not carry hand-off or paused fields.");

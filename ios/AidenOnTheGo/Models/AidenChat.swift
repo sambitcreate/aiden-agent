@@ -1831,11 +1831,13 @@ enum AidenChatRowState: String, Codable, Equatable, Sendable {
 /// Moves chats that need the user, then working chats, ahead of idle ones.
 /// Ties keep the incoming (recency) order, so rows do not jitter between
 /// refreshes.
+/// Unseen failures sit between chats blocked on the user and working chats,
+/// like the desktop Needs attention tiers.
 func aidenNeedsAttentionFirst(_ chats: [AidenChatSummary]) -> [AidenChatSummary] {
     chats.enumerated()
         .sorted { left, right in
-            let leftRank = left.element.displayRowState.attentionRank
-            let rightRank = right.element.displayRowState.attentionRank
+            let leftRank = left.element.attentionRank
+            let rightRank = right.element.attentionRank
             return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
         }
         .map(\.element)
@@ -1854,6 +1856,9 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     var rowState: AidenChatRowState?
     /// True only when assistant output arrived after the chat was last viewed.
     var unread: Bool
+    /// Additive in contract revision 36: the newest assistant output is a
+    /// failed turn. Older Macs omit it, which reads as false.
+    var lastRunFailed: Bool
     /// Additive in contract revision 21: lineage for the fork glyph. Rows
     /// never carry the summary.
     var forkedFrom: AidenChatForkLineage?
@@ -1869,6 +1874,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         activity: AidenChatSummaryActivity,
         rowState: AidenChatRowState? = nil,
         unread: Bool = false,
+        lastRunFailed: Bool = false,
         forkedFrom: AidenChatForkLineage? = nil
     ) {
         self.id = id
@@ -1881,7 +1887,26 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         self.activity = activity
         self.rowState = rowState
         self.unread = unread
+        self.lastRunFailed = lastRunFailed
         self.forkedFrom = forkedFrom?.withoutSummary
+    }
+
+    /// Failed replaces the unread dot only while the failed output is unseen,
+    /// so opening the chat clears it together with the dot.
+    var showsFailed: Bool { unread && lastRunFailed }
+
+    /// Triage rank for the whole row: approval, input, an idle chat whose
+    /// unseen output is a failed turn, working, then everything else.
+    var attentionRank: Int {
+        let state = displayRowState
+        switch state {
+        case .needsApproval, .needsInput:
+            return state.attentionRank
+        case .idle where showsFailed:
+            return 2
+        default:
+            return state.attentionRank + 1
+        }
     }
 
     /// The row state to render. The local activity signal is authoritative for
@@ -1926,6 +1951,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         rowState = try values.decodeIfPresent(String.self, forKey: .rowState)
             .flatMap(AidenChatRowState.init(rawValue:))
         unread = try values.decodeIfPresent(Bool.self, forKey: .unread) ?? false
+        lastRunFailed = try values.decodeIfPresent(Bool.self, forKey: .lastRunFailed) ?? false
         forkedFrom = (try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom))?
             .withoutSummary
 
@@ -2015,7 +2041,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
-        case rowState, unread, forkedFrom
+        case rowState, unread, lastRunFailed, forkedFrom
     }
 }
 

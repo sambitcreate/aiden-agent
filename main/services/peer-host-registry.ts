@@ -37,6 +37,7 @@ import {
   type PeerTrust,
 } from "./peer-transport.js";
 import {
+  AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
   AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
@@ -103,8 +104,10 @@ export interface PeerClient {
 
 /**
  * Grants a desktop controller asks for after pairing, each gated by the
- * feature that proves the host serves it. Bot grants stay pairing-bound
- * (contract revision 19) and are never negotiated.
+ * feature that proves the host serves it. Bot authority (`bot:read`,
+ * `bot:write`) stays pairing-bound (contract revision 19) and is never
+ * negotiated; `bot:activity` is an opt-in that only adds the session's
+ * activity and queued frames to what this Mac is sent.
  */
 const NEGOTIATED_GRANTS: ReadonlyArray<readonly [string, string]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
@@ -114,9 +117,16 @@ const NEGOTIATED_GRANTS: ReadonlyArray<readonly [string, string]> = [
   ["host:events", AIDEN_REMOTE_HOST_EVENTS_FEATURE],
   ["runs:observe", AIDEN_REMOTE_RUN_STREAMS_FEATURE],
   ["runs:control", AIDEN_REMOTE_RUN_CONTROL_FEATURE],
+  ["bot:activity", AIDEN_REMOTE_BOT_ACTIVITY_FEATURE],
 ];
 
 /** Unary requests and streams (feed plus live runs) have separate budgets. */
+/**
+ * The most `/server.features` tokens this client accepts. Hosts send at most
+ * `AIDEN_REMOTE_MAX_SERVER_FEATURES` (32); the headroom keeps a host that
+ * announces a few more from making this Mac refuse the whole connection.
+ */
+export const PEER_MAX_SERVER_FEATURES = 64;
 export const PEER_UNARY_PER_HOST = 8;
 export const PEER_UNARY_TOTAL = 32;
 export const PEER_STREAMS_PER_HOST = 17;
@@ -189,7 +199,7 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
       name: storedPeerName(record.name),
       deviceId: hostIdentifier(record.deviceId),
       capabilities: peerStrings(record.capabilities),
-      features: peerStrings(record.features, 32),
+      features: peerStrings(record.features, PEER_MAX_SERVER_FEATURES),
       ...(record.routes === undefined ? {} : { routes: parsePeerRoutes(record.routes) }),
       ...(record.suppressedRoutes === undefined ? {} : { suppressedRoutes: peerStrings(record.suppressedRoutes, 2) }),
     };
@@ -437,16 +447,25 @@ export class PeerHostRegistry {
       throw mismatch;
     }
     const capabilities = peerStrings(server.capabilities);
-    const features = peerStrings(server.features ?? [], 32);
+    const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
     const advertised = Array.isArray(server.serverCapabilities)
       ? peerStrings(server.serverCapabilities)
       : undefined;
     await this.refreshGrants(host.id, capabilities, features, current);
     if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined) {
-      const routes = parsePeerRoutes(server.peerRoutes).map((route) => route.endpoint === host.endpoint
-        ? { ...route, serverSpkiSha256: host.serverSpkiSha256, caCertificateDerBase64: host.caCertificateDerBase64 }
-        : route);
-      await this.learnRoutes(host.id, routes, current);
+      // Route hints are optional: a malformed one is ignored, never a reason to drop the host.
+      let hinted: ReturnType<typeof parsePeerRoutes> | undefined;
+      try {
+        hinted = parsePeerRoutes(server.peerRoutes);
+      } catch {
+        hinted = undefined;
+      }
+      if (hinted) {
+        const routes = hinted.map((route) => route.endpoint === host.endpoint
+          ? { ...route, serverSpkiSha256: host.serverSpkiSha256, caCertificateDerBase64: host.caCertificateDerBase64 }
+          : route);
+        await this.learnRoutes(host.id, routes, current);
+      }
     }
     this.verified.add(verificationKey);
     if (this.negotiated.has(host.id)) return;
@@ -625,7 +644,7 @@ export class PeerHostRegistry {
           ? { caCertificateDerBase64: input.trust.caCertificateDerBase64 }
           : {}),
         capabilities: input.grants.filter((grant) => serverGrants.includes(grant)),
-        features: peerStrings(server.features ?? [], 32),
+        features: peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES),
       },
     ])[0]!;
     return this.locked(async () => {
@@ -931,10 +950,17 @@ export class PeerHostRegistry {
     if (server.protocolVersion !== 1) throw new PeerTransportError("unsupported_protocol");
     if (server.instanceId !== id) throw new PeerTransportError("identity_changed");
     const current = () => !signal?.aborted && !this.closed && this.hosts?.some((host) => host.id === id && host.deviceId === credentialIdentity) === true;
-    const features = peerStrings(server.features ?? [], 32);
+    const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
     await this.refreshGrants(id, peerStrings(server.capabilities), features, current);
-    if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined)
-      await this.learnRoutes(id, parsePeerRoutes(server.peerRoutes), current);
+    if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined) {
+      let hinted: ReturnType<typeof parsePeerRoutes> | undefined;
+      try {
+        hinted = parsePeerRoutes(server.peerRoutes);
+      } catch {
+        // A malformed hint must not drop a host whose identity just checked out.
+      }
+      if (hinted) await this.learnRoutes(id, hinted, current);
+    }
   }
 
   /** A fallback checks a better route at most once per 30 seconds; failures do not disturb it. */

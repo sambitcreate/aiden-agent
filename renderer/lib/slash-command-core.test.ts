@@ -197,8 +197,25 @@ test("slash trigger requires the first non-whitespace token and a collapsed care
     argument: " task",
     sessionKey: "1:$review",
   });
-  assert.ok(deriveSlashSession(input("\n\t/Users/private")));
+  assert.ok(deriveSlashSession(input("\n\t/model")));
   assert.equal(deriveSlashSession(input("ordinary prose")), null);
+});
+
+test("a typed path never opens the command or skill palette", () => {
+  assert.equal(deriveSlashSession(input("/tmp/x")), null);
+  assert.equal(deriveSlashSession(input("\n\t/Users/private")), null);
+  assert.equal(deriveSlashSession(input("/etc/hosts is missing")), null);
+  // The caret before the second slash still sits in a path word.
+  assert.equal(deriveSlashSession(input("/etc/hosts", 3)), null);
+  assert.equal(deriveSlashSession(input("$HOME/notes")), null);
+  assert.equal(parseSubmittedSlashCommand("/btw/notes.md"), null);
+  // Typing toward a path closes the palette once the second slash lands.
+  assert.ok(deriveSlashSession(input("/tmp")));
+  assert.equal(deriveSlashSession(input("/tmp/")), null);
+  // A lone slash and ordinary commands still open it.
+  assert.ok(deriveSlashSession(input("/")));
+  // Only the first word counts, so an argument may still hold a path.
+  assert.equal(deriveSlashSession(input("/model openai/gpt", 3))?.query, "model");
 });
 
 test("escape remains sticky through caret and leading-space changes but a changed or retyped token resets it", () => {

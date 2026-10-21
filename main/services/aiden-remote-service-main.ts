@@ -555,6 +555,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             ...(botsSupported
               ? {
                   retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
+                  durableBotSessions: () => activeBotSessions !== undefined,
                   botTurnAuthorityPreflight: preflightBotTurnAuthority,
                   // A Bot the person paused takes no turns from the legacy chat route either.
                   botPaused: async (botId: string) =>

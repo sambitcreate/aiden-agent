@@ -232,7 +232,7 @@ Agent access to an SSH host uses the local `agent-device` CLI through the PATH s
 
 ### The viewer
 
-`renderer/lib/device-stream.ts` decodes the iOS AVCC stream with WebCodecs. Simulators encode H.264 High 5.1, which some decoders reject, so the viewer probes `isConfigSupported` and falls back to MJPEG. Input goes over the hub's binary input WebSocket (`/vendor/serve-sim/helper/ws?device=<udid>`).
+`renderer/lib/device-stream.ts` decodes the iOS AVCC stream with WebCodecs. Simulators encode H.264 High 5.1, which some decoders reject, so the viewer probes `isConfigSupported` and falls back to MJPEG. A browser paints a `multipart/x-mixed-replace` part only when the next part begins, and serve-sim sends a frame only when the screen changes, so the device hub proxy (`main/services/devices/mjpeg-still-frame.ts`) re-sends the latest complete MJPEG part once after 100 ms without a new frame. A still screen then paints instead of timing out, and the last frame of a change shows straight away. A helper left over from an earlier session can therefore show a frozen frame rather than an error; reconnect or reboot the simulator if the screen never changes. The phone viewers parse parts themselves and do not need this. Input goes over the hub's binary input WebSocket (`/vendor/serve-sim/helper/ws?device=<udid>`).
 
 serve-sim keeps one stream helper per simulator and reuses it, even after its simulator was shut down, erased or restarted; such a helper streams one stale frame and then nothing. Before Aiden boots an iOS simulator it reads `/vendor/serve-sim/readyz`, which makes serve-sim close the helpers of simulators that are no longer booted.
 

@@ -2270,7 +2270,7 @@
           "bot:write",
           "bot:handoffs"
         ],
-        "description": "Contract revision 36. Done or Skip on the Bot's waiting hand-off. The Idempotency-Key is the request UUID: a repeat with the same key returns the same receipt. A hand-off that is no longer waiting returns 409 handoff_expired; an answer it does not accept returns 400 invalid_request, as does done on a sign_in hand-off, which is finished on the Mac. A host without the hand-off routes answers not_found; a device without bot:handoffs gets capability_denied.",
+        "description": "Contract revision 37. Done or Skip on the Bot's waiting hand-off. The Idempotency-Key is the request UUID: a repeat with the same key returns the same receipt. A hand-off that is no longer waiting returns 409 handoff_expired; an answer it does not accept returns 400 invalid_request, as does done on a sign_in hand-off, which is finished on the Mac. A host without the hand-off routes answers not_found; a device without bot:handoffs gets capability_denied.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -2332,7 +2332,7 @@
           "bot:write",
           "bot:handoffs"
         ],
-        "description": "Contract revision 36. Brings the Bot's waiting hand-off forward on the Mac: its chat, and for a sign-in the Bot's own browser. The body is an empty object. Idempotent per Idempotency-Key: a repeat returns the same receipt and never opens it twice. A hand-off that is no longer waiting returns 409 handoff_expired.",
+        "description": "Contract revision 37. Brings the Bot's waiting hand-off forward on the Mac: its chat, and for a sign-in the Bot's own browser. The body is an empty object. Idempotent per Idempotency-Key: a repeat returns the same receipt and never opens it twice. A hand-off that is no longer waiting returns 409 handoff_expired.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -2384,7 +2384,7 @@
           "bot:write",
           "bot:handoffs"
         ],
-        "description": "Contract revision 36. Pauses the Bot: it takes no new turns, routines skip, and a running turn is closed and left interrupted. The body is an empty object. Idempotent per Idempotency-Key; pausing a paused Bot keeps the first pause. Writes to a paused Bot then return 409 bot_paused to devices holding bot:handoffs and 409 operation_stale to every other device.",
+        "description": "Contract revision 37. Pauses the Bot: it takes no new turns, routines skip, and a running turn is closed and left interrupted. The body is an empty object. Idempotent per Idempotency-Key; pausing a paused Bot keeps the first pause. Writes to a paused Bot then return 409 bot_paused to devices holding bot:handoffs and 409 operation_stale to every other device.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -2426,7 +2426,7 @@
           "bot:write",
           "bot:handoffs"
         ],
-        "description": "Contract revision 36. Clears the pause. No body. An interrupted turn then waits for Resume. Idempotent per Idempotency-Key.",
+        "description": "Contract revision 37. Clears the pause. No body. An interrupted turn then waits for Resume. Idempotent per Idempotency-Key.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -7416,7 +7416,7 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 36 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation.",
             "minItems": 1,
             "maxItems": 14,
             "items": {
@@ -9465,7 +9465,7 @@
             "maxLength": 128
           },
           "sessionState": {
-            "description": "Contract revision 36: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
+            "description": "Contract revision 37: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
             "enum": [
               "idle",
               "running",
@@ -9476,7 +9476,7 @@
             ]
           },
           "paused": {
-            "description": "Contract revision 36, only for devices holding bot:handoffs and only while the person paused the Bot (sessionState is then paused).",
+            "description": "Contract revision 37, only for devices holding bot:handoffs and only while the person paused the Bot (sessionState is then paused).",
             "const": true
           }
         },
@@ -10005,7 +10005,7 @@
             "$ref": "#/components/schemas/BotChatActivity"
           },
           "sessionState": {
-            "description": "Present when the host advertises bot-durable-session-v1. Contract revision 36: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
+            "description": "Present when the host advertises bot-durable-session-v1. Contract revision 37: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
             "enum": [
               "idle",
               "running",
@@ -10016,7 +10016,7 @@
             ]
           },
           "paused": {
-            "description": "Contract revision 36, always present for devices holding bot:handoffs and never for others: whether the person paused the Bot.",
+            "description": "Contract revision 37, always present for devices holding bot:handoffs and never for others: whether the person paused the Bot.",
             "type": "boolean"
           },
           "createdAt": {
@@ -10453,6 +10453,13 @@
           "unread": {
             "description": "Additive in contract revision 18. True only when assistant output was persisted after the chat was last viewed on any surface (desktop or a paired device). Output older than the host's read-tracking baseline is never unread. Always false on hosts that do not advertise chat-read-state-v1.",
             "type": "boolean"
+          },
+          "lastRunFailed": {
+            "description": "Additive in contract revision 36. Present, and true, only when the chat's newest assistant output is a failed turn (a provider failure or a failed generation timeline; a Stop is not a failure). Clients show Failed in place of the unread dot while unread is true. Older servers omit it.",
+            "type": "boolean",
+            "enum": [
+              true
+            ]
           },
           "forkedFrom": {
             "description": "Additive in contract revision 21: lineage for the sidebar fork glyph. Rows never carry the summary.",
@@ -15014,7 +15021,7 @@
         ],
         "properties": {
           "state": {
-            "description": "interrupted is a turn that stopped part-way and waits for Resume or Dismiss. Contract revision 36: paused (the person paused the Bot) reaches only devices holding bot:handoffs; every other device sees unavailable.",
+            "description": "interrupted is a turn that stopped part-way and waits for Resume or Dismiss. Contract revision 37: paused (the person paused the Bot) reaches only devices holding bot:handoffs; every other device sees unavailable.",
             "enum": [
               "idle",
               "running",
@@ -15355,7 +15362,7 @@
             }
           },
           "handoff": {
-            "description": "Contract revision 36, always present for devices holding bot:handoffs and never for others: the hand-off the Bot is waiting on, or null. Other devices get an assistant message with id handoff-notice:<waitId> as the newest entry instead.",
+            "description": "Contract revision 37, always present for devices holding bot:handoffs and never for others: the hand-off the Bot is waiting on, or null. Other devices get an assistant message with id handoff-notice:<waitId> as the newest entry instead.",
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BotHandoff"
@@ -15487,7 +15494,7 @@
             ]
           },
           "payload": {
-            "description": "handoff (contract revision 36, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. At the same seq, other devices get an entry frame with the hand-off's notice when it opens and a no-op state frame when it settles.",
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. At the same seq, other devices get an entry frame with the hand-off's notice when it opens and a no-op state frame when it settles.",
             "type": "object"
           }
         },
@@ -16461,7 +16468,7 @@
         "additionalProperties": false
       },
       "BotHandoff": {
-        "description": "Contract revision 36, only for devices holding bot:handoffs: a step the Bot hands back to the person (Your turn: <action>), answered once by waitId with done or skipped. A sign_in hand-off is finished on the Mac; a phone may only skip it or open it on the Mac.",
+        "description": "Contract revision 37, only for devices holding bot:handoffs: a step the Bot hands back to the person (Your turn: <action>), answered once by waitId with done or skipped. A sign_in hand-off is finished on the Mac; a phone may only skip it or open it on the Mac.",
         "type": "object",
         "required": [
           "waitId",

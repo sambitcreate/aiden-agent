@@ -525,7 +525,35 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(page.summaries.map(\.rowState), [.needsApproval, .idle])
         XCTAssertEqual(page.summaries.map(\.displayRowState), [.needsApproval, .idle])
         XCTAssertEqual(page.summaries.map(\.unread), [false, true])
+        XCTAssertEqual(page.summaries.map(\.lastRunFailed), [false, true])
+        XCTAssertEqual(page.summaries.map(\.showsFailed), [false, true])
         XCTAssertNotNil(page.nextCursor)
+    }
+
+    func testChatSummaryFailedRunIsAdditiveAndSaysFailedOnlyWhileUnread() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        // A pre-revision-36 Mac omits the hint: an unread row keeps its dot.
+        summaries[1].removeValue(forKey: "lastRunFailed")
+        object["summaries"] = summaries
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let page = try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data)
+        let legacy = try XCTUnwrap(page.summaries.last)
+        XCTAssertTrue(legacy.unread)
+        XCTAssertFalse(legacy.lastRunFailed)
+        XCTAssertFalse(legacy.showsFailed)
+
+        let fixture: AidenRemoteContractFixture = try botFixtureValue(at: [])
+        var failed = try XCTUnwrap(
+            fixture.chatSummaries.summaries.first { $0.id == "chat_fixture_summary_01" }
+        )
+        XCTAssertTrue(failed.showsFailed)
+        // Viewing the chat clears unread, and Failed goes with the dot.
+        failed.unread = false
+        XCTAssertTrue(failed.lastRunFailed)
+        XCTAssertFalse(failed.showsFailed)
     }
 
     func testChatSummaryRowStateIsAdditiveAndLocalActivityOutranksAStaleServerState() throws {

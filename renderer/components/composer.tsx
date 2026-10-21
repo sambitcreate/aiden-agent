@@ -1,5 +1,6 @@
 import { readCachedAppearance } from "../lib/appearance-runtime";
-import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
+import { compactionEngineFrom, compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
+import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
 // current branch. The input
@@ -89,6 +90,7 @@ import {
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
 import { claimCompactionCommand } from "../lib/compaction-command-admission";
+import { useExpiredCacheReturn } from "../lib/use-expired-cache-return";
 import {
   loadComposerDraft,
   markComposerSubmission,
@@ -209,6 +211,11 @@ interface ComposerProps {
   thinkingControl?: React.ReactNode;
   /** Next-request context-pressure indicator, rendered next to the model picker. */
   contextMeter?: React.ReactNode;
+  /**
+   * This chat's context reading without the draft, when the surface compacts
+   * on return to an expired prompt cache. Null while it loads.
+   */
+  contextHistoryPressure?: ChatContextPressureV1 | null;
   /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
   onDraftChange?: (text: string, attachments: Attachment[]) => void;
   currentChatTitle?: string;
@@ -384,6 +391,7 @@ export function Composer({
   modelPicker,
   thinkingControl,
   contextMeter,
+  contextHistoryPressure,
   onDraftChange,
   currentChatTitle,
   latestAssistantResponse,
@@ -877,8 +885,9 @@ export function Composer({
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
 
+  const settleExpiredCacheRef = React.useRef<() => void>(() => {});
   const compactChat = React.useCallback(
-    async (engine?: CompactionEngine) => {
+    async (engine?: CompactionEngine, options?: { cacheExpired?: boolean }) => {
       if (
         !onCompactChat ||
         !claimCompactionCommand(sessionCommandBusyRef, sessionCommandBusy, compactionActive)
@@ -886,11 +895,17 @@ export function Composer({
         return;
       }
       setCompactionBusy(true);
+      let ran = false;
       setSessionCommandStatus(
-        engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
+        options?.cacheExpired && engine
+          ? `The prompt cache expired, so Aiden is compacting with ${compactionEngineLabel(engine)}…`
+          : engine
+            ? `Compacting with ${compactionEngineLabel(engine)}…`
+            : "Compacting chat…",
       );
       try {
         const result = await onCompactChat(engine);
+        ran = result.compacted || result.reason !== "busy";
         if (result.compacted) {
           const label = compactionEngineLabel(result.engine ?? engine ?? "llm");
           const size =
@@ -900,7 +915,8 @@ export function Composer({
           const duration =
             result.durationMs !== undefined ? ` · ${(result.durationMs / 1000).toFixed(1)}s` : "";
           toast.success(`${label} compaction complete${duration}${size}`);
-        } else {
+        } else if (!options?.cacheExpired || result.reason === "compaction_failed") {
+          // A compaction the user didn't ask for stays quiet unless it failed.
           const copy = {
             already_compact: "This chat is already compact enough.",
             busy: "Finish the current response or approval first.",
@@ -914,14 +930,56 @@ export function Composer({
           toast.info(copy[result.reason]);
         }
       } finally {
+        // Any compaction answers an expired cache window, so it is not offered again.
+        if (ran) settleExpiredCacheRef.current();
         sessionCommandBusyRef.current = false;
         setCompactionBusy(false);
         setSessionCommandStatus(null);
-        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+        // An automatic compaction never pulls focus from wherever the user went.
+        if (!options?.cacheExpired) requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
     [compactionActive, inputRef, onCompactChat, sessionCommandBusy],
   );
+
+  // Returning to a large chat whose prompt cache expired: pi-vcc compacts on
+  // its own, LLM compaction is offered as "Compact first?".
+  const expiredCacheReturn = useExpiredCacheReturn({
+    chatId,
+    pressure: contextHistoryPressure,
+    engine:
+      contextHistoryPressure !== undefined && settings.data ? compactionEngineFrom(settings.data.compactionEngine) : undefined,
+    idle:
+      Boolean(onCompactChat) &&
+      ready &&
+      !isGenerating &&
+      !hasQueuedMessages &&
+      !compactionActive &&
+      !sessionCommandBusy &&
+      !forkSummaryHold &&
+      !sending &&
+      !firstSendPending &&
+      !attaching &&
+      !voice.recording &&
+      !voice.transcribing &&
+      !configurationBusy &&
+      !permissionSaving &&
+      !gitOperationBusy,
+    compact: (engine, automatic) => {
+      // The IPC failing outright leaves nothing to report for a compaction nobody asked for.
+      void compactChat(engine, automatic ? { cacheExpired: true } : undefined).catch(() => {
+        if (!automatic) toast.error("Compaction failed.");
+      });
+    },
+  });
+  settleExpiredCacheRef.current = expiredCacheReturn.settle;
+  const typedRef = React.useRef(false);
+  React.useEffect(() => {
+    // Starting to type is a return too, unless it is a slash command.
+    const typed = text.trim().length > 0;
+    if (typed && !typedRef.current && !text.trimStart().startsWith("/")) expiredCacheReturn.markReturned();
+    typedRef.current = typed;
+  }, [expiredCacheReturn.markReturned, text]);
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -2210,6 +2268,28 @@ export function Composer({
                   : "The fork's summary didn't finish. Retry it or continue without it."}
                 {queueForForkSummary ? " Messages you send now wait until it's settled." : null}
               </Text>
+            ) : expiredCacheReturn.offer ? (
+              <div className="composer-context-chip-enter flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-1.5 pb-1">
+                <Text as="p" variant="small" color="tertiary" className="min-w-0 text-pretty">
+                  The prompt cache expired, so the next message resends ~
+                  {formatContextTokenCount(expiredCacheReturn.offer.contextTokens)} tokens.
+                </Text>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button type="button" variant="muted" size="small" onClick={expiredCacheReturn.accept}>
+                    Compact first?
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="transparent"
+                    size="small"
+                    iconOnly
+                    aria-label="Dismiss compaction suggestion"
+                    onClick={expiredCacheReturn.dismiss}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+              </div>
             ) : null}
             <Text
               as="p"
