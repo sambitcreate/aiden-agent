@@ -435,6 +435,42 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertEqual(transport.sessionRequests, 1, "Ordered and stale frames never refetch.")
     }
 
+    func testABurstOfStreamedTextIsRevealedOverSeveralTicksAndTheAnswerReplacesItAtOnce() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 4, entries: [message("m1", .user, "Hi")]))
+        let burst = (0..<40).map { "word\($0)" }.joined(separator: " ")
+
+        _ = await model.apply(event(seq: 5, .partial(burst)))
+        XCTAssertEqual(model.partial, burst)
+        XCTAssertNotEqual(model.revealedPartial, burst, "a burst is not drawn all at once")
+        var steps: Set<String> = []
+        for _ in 0..<400 where model.revealedPartial != burst {
+            if let shown = model.revealedPartial, !shown.isEmpty {
+                XCTAssertTrue(burst.hasPrefix(shown))
+                steps.insert(shown)
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(model.revealedPartial, burst)
+        XCTAssertGreaterThan(steps.count, 1, "the burst is drawn over more than one tick")
+
+        _ = await model.apply(event(seq: 6, .entry(message("m2", .assistant, burst))))
+        XCTAssertNil(model.partial)
+        XCTAssertNil(model.revealedPartial, "the answer replaces the streamed text in the same update")
+    }
+
+    func testAStreamedPartialFromASnapshotIsShownAtOnce() async throws {
+        let transport = FakeBotSessionTransport()
+        let reopened = try session(
+            seq: 4,
+            state: .running,
+            partial: "Already streaming when the chat opened",
+            entries: [message("m1", .user, "Hi")]
+        )
+        let model = await loadedModel(transport, reopened)
+        XCTAssertEqual(model.revealedPartial, "Already streaming when the chat opened")
+    }
+
     func testGapRefetchesTheSessionAndAdoptsItsCursor() async throws {
         let transport = FakeBotSessionTransport()
         let model = await loadedModel(transport, try session(seq: 4, entries: [message("m1", .user, "Hi")]))

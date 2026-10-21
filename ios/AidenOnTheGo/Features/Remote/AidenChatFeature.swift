@@ -1378,11 +1378,27 @@ final class AidenChatViewModel {
     /// Whether the last reveal tick held a trailing fragment back; the next
     /// tick releases it even without new whitespace.
     @ObservationIgnored private var heldStreamingFragmentLastTick = false
+    /// Whether reveal ticks pace a burst out. Off under Reduce Motion, where
+    /// each tick shows every whole word received.
+    @ObservationIgnored private var pacesStreamingReveal = true
+    /// The run is done: drain the remaining backlog in a few ticks while the
+    /// settled transcript is read.
+    @ObservationIgnored private var finishesStreamingReveal = false
     @ObservationIgnored private var pendingStreamingRevealTask: Task<Void, Never>?
     @ObservationIgnored private let streamingRevealTick: @Sendable () async throws -> Void
     /// Generations whose image this phone watched being generated; their
     /// settled image plays the arrival reveal once.
     private(set) var imageArrivalRevealGenerationIDs: Set<String> = []
+    /// Row identity for messages whose ID changed while on screen: the Mac's
+    /// ID for a sent message maps to the local ID its optimistic row was
+    /// drawn with, so accepting the turn keeps that row (and its attachment
+    /// thumbnails) instead of removing it and inserting a new one.
+    private(set) var messageRenderIDs: [String: String] = [:]
+
+    /// The ID the transcript draws a message's row with.
+    func renderID(forMessageID id: String) -> String {
+        messageRenderIDs[id] ?? id
+    }
     private var approvalSnapshotGeneration: UInt64 = 0
     private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
@@ -1655,6 +1671,7 @@ final class AidenChatViewModel {
         cancelPendingStreamingReveal()
         pendingLiveText = ""
         heldStreamingFragmentLastTick = false
+        finishesStreamingReveal = false
         receivedLiveTextUTF8Count = text.utf8.count
         liveText = text
     }
@@ -1689,12 +1706,27 @@ final class AidenChatViewModel {
     private func revealStreamingTick() {
         let (shown, held) = AidenStreamingRevealGate.cut(
             pendingLiveText,
-            heldPreviousTick: heldStreamingFragmentLastTick
+            heldPreviousTick: heldStreamingFragmentLastTick,
+            paced: pacesStreamingReveal,
+            finishing: finishesStreamingReveal
         )
         pendingLiveText = held
         heldStreamingFragmentLastTick = !held.isEmpty
         if !shown.isEmpty { liveText += shown }
         if heldStreamingFragmentLastTick { scheduleStreamingReveal() }
+    }
+
+    /// Keeps revealing what is buffered, faster, without a final dump.
+    private func finishStreamingReveal() {
+        guard !pendingLiveText.isEmpty else { return }
+        finishesStreamingReveal = true
+        // A held fragment is final now; nothing more will complete it.
+        heldStreamingFragmentLastTick = true
+        scheduleStreamingReveal()
+    }
+
+    func setPacesStreamingReveal(_ paces: Bool) {
+        pacesStreamingReveal = paces
     }
 
     private func cancelPendingStreamingReveal() {
@@ -1707,6 +1739,22 @@ final class AidenChatViewModel {
         return coordinator.connectionState == .connected
     }
     var isStreaming: Bool { streamState.map { !$0.isTerminal } ?? false }
+    /// Whether the transcript draws the live reply. It stays up after the
+    /// run ends until the settled transcript replaces it in the same update,
+    /// so a reply with only tools or reasoning never blinks out while the
+    /// final transcript is read.
+    var showsLiveResponse: Bool {
+        if isStreaming || !liveText.isEmpty { return true }
+        guard activeStreamID != nil || foreignRunIsLive else { return false }
+        return !reasoning.isEmpty || !tools.isEmpty || activityTimeline != nil
+    }
+    /// The live reply has not been replaced by the settled one yet. Its
+    /// placeholders, visual cards and streaming Markdown stay as they are
+    /// until then, so nothing shrinks between the run ending and the
+    /// settled transcript arriving.
+    var isLiveReplyUnsettled: Bool {
+        isStreaming || activeStreamID != nil || foreignRunIsLive
+    }
     var canSend: Bool {
         guard !isReadOnlyPresentation, !isRemoved, pendingSend == nil, sendRecoveryError == nil else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
@@ -3022,6 +3070,9 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
             turnAttempts.reset()
+            if chat.messages.contains(where: { $0.id == optimisticID }) {
+                messageRenderIDs[response.message.id] = optimisticID
+            }
             chat = acceptedChat
             if retryAttempt == nil { selectedSkill = nil }
             if retryAttempt != nil, draft == text || draft.hasPrefix(text + "\n\n") { consumeRunInputDraft(text) }
@@ -4308,7 +4359,12 @@ final class AidenChatViewModel {
               event.shouldApply else { return }
         // Text received before any other event is shown before it lands, so
         // tools, approvals and terminal states never overtake the reply.
-        if event.type != .textDelta, event.type != .heartbeat {
+        // `done` drains faster instead: the settled reply replaces the live
+        // one with the whole text, so dumping the backlog would only make the
+        // end of the reply jump.
+        if event.type == .done {
+            finishStreamingReveal()
+        } else if event.type != .textDelta, event.type != .heartbeat {
             flushPendingStreamingContent()
         }
         if event.type == .questionRequired {
@@ -4995,6 +5051,9 @@ final class AidenChatViewModel {
         transcriptGeneration &+= 1
         guard await reconcileChat(context: context) else { return false }
         guard activeStreamID == stream.streamId else { return false }
+        // The published transcript now holds the reply; the Live Activity
+        // updates below suspend, so drop the live copy first.
+        clearLiveOutput()
         let resolution = AidenMissingStreamResolution.resolve(messages: chat.messages)
         if let event = AidenStreamFeedbackDecision.terminalEvent(
             for: resolution,
@@ -5082,6 +5141,10 @@ final class AidenChatViewModel {
     private func clearFinishedStream(expectedStreamID: String) async {
         guard activeStreamID == expectedStreamID else { return }
         transcriptGeneration &+= 1
+        // The reconciled transcript holding the reply was published in this
+        // same main-actor turn. Drop the live copy now, before the cache hop
+        // below, so no frame draws the reply twice (settled and live).
+        clearLiveOutput()
         _ = await cache.removeActiveStream(
             instanceId: instanceId,
             chatId: chat.id,
@@ -5090,13 +5153,18 @@ final class AidenChatViewModel {
         // A failed initial cache write must not keep a reconciled stream alive.
         // Conditional removal still preserves another owner's newer record.
         guard activeStreamID == expectedStreamID else { return }
+        clearLiveOutput()
+        pendingApproval = nil
+        pendingQuestion = nil
+        activeStreamID = nil
+    }
+
+    /// Clears the live reply: its text, reasoning, tools and timeline.
+    private func clearLiveOutput() {
         replaceLiveText("")
         reasoning = ""
         tools = []
         activityTimeline = nil
-        pendingApproval = nil
-        pendingQuestion = nil
-        activeStreamID = nil
     }
 }
 
@@ -5391,6 +5459,9 @@ struct AidenChatDetailView: View {
         .onChange(of: effectiveAllowsMutations, initial: true) { _, allowed in
             model.setAllowsMutations(allowed)
         }
+        .onChange(of: reduceMotion, initial: true) { _, reduce in
+            model.setPacesStreamingReveal(!reduce)
+        }
         .onChange(of: botToolsModel?.bot?.visionModelSelection, initial: true) { _, selection in
             model.setBotVisionModelSelection(selection)
         }
@@ -5646,6 +5717,7 @@ struct AidenChatDetailView: View {
                 presentationStyle: presentationStyle,
                 readAloudCandidateID: model.readAloudCandidateID,
                 readAloudActiveID: model.readAloud.activeMessageID,
+                renderIDs: model.messageRenderIDs,
                 imageArrivalRevealIDs: model.imageArrivalRevealGenerationIDs,
                 appControlsAvailable: model.canReadAppControls,
                 onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
@@ -5667,7 +5739,7 @@ struct AidenChatDetailView: View {
                 }
             )
             .equatable()
-            if model.isStreaming || !model.liveText.isEmpty {
+            if model.showsLiveResponse {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
             Color.clear
@@ -6015,7 +6087,7 @@ struct AidenChatDetailView: View {
             await model.loadEarlierMessages()
             guard let anchorID, model.chat.messages.first?.id != anchorID,
                   model.chat.messages.contains(where: { $0.id == anchorID }) else { return }
-            proxy.scrollTo(anchorID, anchor: .top)
+            proxy.scrollTo(model.renderID(forMessageID: anchorID), anchor: .top)
         }
     }
 
@@ -6141,6 +6213,30 @@ private struct AidenComposerHeightPreferenceKey: PreferenceKey {
     }
 }
 
+/// One settled transcript row: the ID its view is keyed by, and where its
+/// message sits in the chat.
+struct AidenTranscriptRowIdentity: Identifiable, Equatable {
+    let id: String
+    let index: Int
+
+    /// Rows keyed by `renderIDs[message.id] ?? message.id`. A render ID that
+    /// another message already uses is ignored, so row IDs stay unique.
+    static func rows(for messages: [AidenChatMessage], renderIDs: [String: String]) -> [Self] {
+        guard !renderIDs.isEmpty else {
+            return messages.indices.map { Self(id: messages[$0].id, index: $0) }
+        }
+        var used = Set(messages.map(\.id))
+        return messages.indices.map { index in
+            let messageID = messages[index].id
+            guard let alias = renderIDs[messageID], alias != messageID, !used.contains(alias) else {
+                return Self(id: messageID, index: index)
+            }
+            used.insert(alias)
+            return Self(id: alias, index: index)
+        }
+    }
+}
+
 private struct AidenSettledMessageRows: View, Equatable {
     let model: AidenChatViewModel
     let chat: AidenChat
@@ -6149,6 +6245,9 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// change re-evaluates the rows even though `model` compares equal.
     let readAloudCandidateID: String?
     let readAloudActiveID: String?
+    /// `AidenChatViewModel.messageRenderIDs`: rows keep the identity they
+    /// were first drawn with when the Mac assigns a message its ID.
+    var renderIDs: [String: String] = [:]
     /// Generations whose settled image plays the arrival reveal.
     var imageArrivalRevealIDs: Set<String> = []
     var appControlsAvailable = false
@@ -6180,6 +6279,7 @@ private struct AidenSettledMessageRows: View, Equatable {
         lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
             lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
             lhs.readAloudActiveID == rhs.readAloudActiveID &&
+            lhs.renderIDs == rhs.renderIDs &&
             lhs.imageArrivalRevealIDs == rhs.imageArrivalRevealIDs &&
             lhs.appControlsAvailable == rhs.appControlsAvailable
     }
@@ -6189,7 +6289,9 @@ private struct AidenSettledMessageRows: View, Equatable {
             AidenChatForkEligibility.actions(for: chat.messages, supportsSummary: $0.supportsSummary)
         } ?? [:]
         let forkSummary = chat.forkedFrom?.summary
-        ForEach(Array(chat.messages.enumerated()), id: \.element.id) { index, message in
+        ForEach(AidenTranscriptRowIdentity.rows(for: chat.messages, renderIDs: renderIDs)) { row in
+            let index = row.index
+            let message = chat.messages[index]
             messageRow(message, at: index, forkActions: forkActions[message.id] ?? [])
             // The summary sits in model context right after the last copied message.
             if let forkSummary, forkSummary.afterMessageId == message.id {
@@ -7581,7 +7683,9 @@ struct AidenMarkdownView: View {
     /// While true, a chunk whose text was entirely off screen in the previous
     /// render fades in once. Text already on screen never fades (including a
     /// line that moves into its own chunk when its block seals), and nothing
-    /// animates under Reduce Motion or Low Power Mode.
+    /// animates under Reduce Motion or Low Power Mode. The open tail is also
+    /// drawn through `AidenStreamingMarkdownTail`, so half-received Markdown
+    /// never flashes as raw syntax.
     var isStreaming = false
     @State private var renderedLength = AidenRenderedMarkdownLength()
 
@@ -7596,7 +7700,7 @@ struct AidenMarkdownView: View {
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                let chunks = AidenMarkdownContentCache.shared.chunks(for: content)
+                let chunks = AidenMarkdownContentCache.shared.chunks(for: content, streaming: isStreaming)
                 let fading = isStreaming && !reduceMotion && !lowPowerMode
                     ? AidenMarkdownChunkReveal.newChunkIndices(
                         chunks,
@@ -7730,7 +7834,7 @@ private struct AidenLiveResponseView: View {
     }
 
     private var visualizingLabel: String? {
-        guard model.isStreaming else { return nil }
+        guard model.isLiveReplyUnsettled else { return nil }
         return AidenAgentActivityPresentation.visualizingLabel(model.activityTimeline)
     }
 
@@ -7758,7 +7862,26 @@ private struct AidenLiveResponseView: View {
         let chronologicalRows = chronologicalRows
         let visibleText = botReply?.finalText ?? model.liveText
         let visibleActivitySteps = chronologicalRows == nil ? visibleActivitySteps : []
-        VStack(alignment: .leading, spacing: 12) {
+        // Laid out like a settled message (content, then a footer row), so
+        // the hand-off to the settled reply swaps the footer's text in place
+        // instead of moving the reply.
+        VStack(alignment: .leading, spacing: 2) {
+            content(
+                botReply: botReply,
+                chronologicalRows: chronologicalRows,
+                visibleText: visibleText,
+                visibleActivitySteps: visibleActivitySteps
+            )
+            liveFooter
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "Working for" sits where the settled footer will, at the footer's
+    /// height. Once the run ends the row stays, empty, until the settled
+    /// reply (whose footer shows "Worked for") replaces this view.
+    private var liveFooter: some View {
+        HStack(spacing: 0) {
             if model.isStreaming,
                let start = AidenTurnElapsed.liveStart(
                    timeline: model.activityTimeline,
@@ -7766,6 +7889,20 @@ private struct AidenLiveResponseView: View {
                ) {
                 AidenLiveElapsedLabel(start: start)
             }
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: AidenMessageFooter.minimumHeight)
+    }
+
+    @ViewBuilder
+    private func content(
+        botReply: AidenBotReplyProjection?,
+        chronologicalRows: [AidenChronologicalRow]?,
+        visibleText: String,
+        visibleActivitySteps: [AidenAgentStep]
+    ) -> some View {
+        // The settled message's spacing, so rows don't shift when it settles.
+        VStack(alignment: .leading, spacing: 10) {
             if model.isStreaming && model.isWaitingForNetwork {
                 HStack(spacing: 8) {
                     Image(systemName: "wifi.slash")
@@ -7827,7 +7964,7 @@ private struct AidenLiveResponseView: View {
             }
 
             if let chronologicalRows {
-                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isStreaming)
+                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isLiveReplyUnsettled)
                     .contextMenu {
                         if !visibleText.isEmpty {
                             Button {
@@ -7846,7 +7983,7 @@ private struct AidenLiveResponseView: View {
                     }
             }
 
-            if model.isStreaming {
+            if model.isLiveReplyUnsettled {
                 ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
                     AidenImageGenerationPlaceholderView(item: item)
                         .transition(.opacity)
@@ -7879,7 +8016,7 @@ private struct AidenLiveResponseView: View {
             }
 
             if chronologicalRows == nil && !visibleText.isEmpty {
-                AidenMarkdownView(content: visibleText, isStreaming: model.isStreaming)
+                AidenMarkdownView(content: visibleText, isStreaming: model.isLiveReplyUnsettled)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
                         if presentationStyle == .botMessages {
@@ -7905,7 +8042,6 @@ private struct AidenLiveResponseView: View {
                     }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -9702,6 +9838,7 @@ extension AidenChatViewModel {
             replaceLiveText("")
             reasoning = ""
             tools = []
+            activityTimeline = nil
             pendingApproval = nil
             pendingQuestion = nil
         }
