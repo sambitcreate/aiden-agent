@@ -86,7 +86,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P5. Branch `wp/
   - `aidenBotSessionFeedGrants(installation)` + `AidenBotSessionModel.reopenFeed()` (the chat view's `onChange` of the held grants): the feed is wrapped in a reopenable `AsyncThrowingStream`, and a reopen skips the backoff (mirrors Android's 25ec0fc8).
   - `answerHandoffFromComposer(_:connected:)`: Send-as-Done needs the connection (as the card's Done and Skip), and staged photos or files keep the draft with "Send photos/files after you answer the card." (the desktop's copy).
   - Hand-off alert: `aidenBotSessionDeepLinkPath(botID:hostFeatures:)` sends `.botChat` on a durable-session Mac to the Bots area with the durable chat pushed (`setCompactBotPath`). Android already routed it.
-- Android: `aidenBotPausedChatOffersResume(canWriteBots, ui)` gates the paused card's Resume on `canWriteBots` and a connection.
+- Android: `aidenBotPausedChatOffersResume(canWriteBots, ui)` gates the paused card's Resume on `canWriteBots` and a connection. iOS's paused card already used `canAct: canWrite`. The desktop's `BotPausedNotice` is disabled only while its own pause or unpause is on its way: it stays enabled while the stream reconnects, because the call is a plain request (`docs/aiden-remote-api-v1.md` says so).
 - The host normalises `open.url` (see `.memory/remote-rev37-bot-handoffs.md`), so Android's strict `isOpenUrl` and iOS's check accept every page the host sends; neither client changed for it.
 
 ## Validating Android without the SDK (container recipe)
