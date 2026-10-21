@@ -62,7 +62,7 @@ test("every rule says what the Bot does; locked rules say Always and can't be ch
   const purchase = row(list, "Make a purchase or booking");
   assert.ok(within(purchase).getByText("Ask first"));
   assert.ok(!within(purchase).queryByText("Always"));
-  assert.ok(screen.getByText("Rules don’t cover shell commands; the Shell setting does."));
+  assert.ok(screen.getByText("Rules don’t cover shell commands; the Shell setting does, and commands in a Bot’s own computer follow its Bot computer access."));
 });
 
 test("a built-in rule switches to Hand off to me from its menu, which has no Edit or Delete", async () => {

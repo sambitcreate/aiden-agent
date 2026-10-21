@@ -32,7 +32,7 @@ export function renderBotRulesSection(name: string, rules: readonly BotRule[]): 
     "When a step falls under a Hand off rule, don't attempt it: call hand_off, when you have it, with exactly what the person needs to do, then continue from what they tell you. Without hand_off (a routine or Telegram turn), say in your reply what the person needs to do.",
     "When a step falls under an Ask first rule, Aiden shows the person an approval card before it runs.",
     "Never ask the person to tell you a password, code or card number; they enter those themselves.",
-    "Rules don't cover shell commands; the Shell setting does.",
+    "Rules don't cover shell commands; the Shell setting does, and commands in a Bot's own computer follow its Bot computer access.",
     "</bot_rules>",
   );
   return lines.join("\n");

@@ -29,7 +29,7 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 - Treats the desktop host as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
 - Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
 - Bots ask you to sign in in their own browser; the model never sees your password.
-- Bot computers (Apple silicon): an opt-in macOS VM per Bot. See [docs/bot-computers.md](docs/bot-computers.md).
+- Bot computers (Apple silicon): an opt-in macOS VM per Bot, which the Bot sees and uses with its own `computer` tool (screenshots and clicks, each step with a stated intent the rules read) and `computer_shell` tool, on routine runs too. The Bot panel's Computer tab shows it live with the Bot's avatar where it last pointed; the person's first click or key, or Take over, stops the Bot's current action until Give back, and Float over chat keeps the screen in view. See [docs/bot-computers.md](docs/bot-computers.md).
 
 ## Brand Commitments
 

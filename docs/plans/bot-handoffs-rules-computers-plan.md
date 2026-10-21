@@ -278,6 +278,7 @@ Cross-version decoding: a paused Bot's snapshot, frames, list and detail respons
   - (a) noVNC (MPL-2.0) in the renderer over a main-process WebSocket↔TCP bridge to the loopback port;
   - (b) a small RFB client in main that turns frames into the existing flat device viewer's MJPEG path.
   - *Lean: (b)*, because it keeps the VNC password and socket in main and reuses the device viewer, floating player and phone viewer pipeline later.
+  - *Shipped (2026-10-21, PR #559): (b).* A main-side RFB client feeds a loopback viewer hub behind its own device hub proxy, and the Computer tab uses the existing `createDeviceStreamClient` with `preferMjpeg`.
 - **VNC binding.** E0 must confirm Lume's VNC listener binds only to loopback. If it doesn't, Aiden must not use it.
 - **Take over.** It interrupts the Bot's current `computer` call (the turn stays alive and waits), switches the viewer to interactive, and shows **Give back**. Giving back resumes with a tool result note: `The person used the computer; take a fresh capture first.` Any physical input in the viewer also counts as Take over. While the person has control, `computer` captures are refused, so the model never sees a sign-in in progress. After Give back, macOS secure fields show only dots, but a plaintext one-time code left on screen is not masked in the VNC lane. That gap is listed in §13.
 - **Pointer avatar.** Draw the Bot's avatar at the last action point the Bot used (from the action arguments). That needs no guest cursor query.

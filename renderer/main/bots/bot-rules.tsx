@@ -140,7 +140,7 @@ export function BotRules({ bot }: { bot: RuleBot }) {
         </button>
       </div>
       <Text as="p" variant="small" color="secondary" className="mt-2 px-4 text-pretty">
-        Rules don’t cover shell commands; the Shell setting does.
+        Rules don’t cover shell commands; the Shell setting does, and commands in a Bot’s own computer follow its Bot computer access.
       </Text>
       {botComputers ? (
         // The VNC lane's known gap (plan §8.7): clicks are coordinates, so rules read the Bot's own words.

@@ -6,9 +6,8 @@ opt-in, run only on a Mac with Apple silicon, and are built and managed with
 [Lume](https://github.com/trycua/cua/tree/lume-v0.6.1/libs/lume) 0.6.1, which
 ships inside Aiden.
 
-This page covers setting up, sizing, limiting and removing Bot computers. The
-tools a Bot uses inside its computer and the live view are documented here as
-they ship.
+This page covers setting up, sizing, limiting and removing Bot computers,
+seeing and taking over a Bot's computer, and the tools a Bot uses inside it.
 
 ## Where they are available
 
