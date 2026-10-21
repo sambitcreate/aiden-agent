@@ -119,6 +119,9 @@ final class AidenScheduledTasksModel {
     private(set) var hasCurrentMcpInventory = false
     private(set) var isLoading = false
     private(set) var isMutating = false
+    /// Pause and Resume flipped before the Mac answered, by task id. Rows read
+    /// `isEnabled(_:)`; the entry is dropped when the answer, or a failure, lands.
+    private(set) var pendingEnabled: [String: Bool] = [:]
     var presentedError: String?
     var outcomeMessage: String?
 
@@ -360,7 +363,16 @@ final class AidenScheduledTasksModel {
         }
     }
 
+    /// Whether a task shows as Active: the flip the person just made, until the Mac answers, else the stored value.
+    func isEnabled(_ task: AidenScheduledTask) -> Bool {
+        pendingEnabled[task.id] ?? task.enabled
+    }
+
+    /// The row flips at once; a failed request puts it back (the reload after a failure restores the stored task).
     func pauseOrResume(_ task: AidenScheduledTask) async {
+        guard pendingEnabled[task.id] == nil else { return }
+        pendingEnabled[task.id] = !task.enabled
+        defer { pendingEnabled[task.id] = nil }
         await mutate(successEvent: .selection) {
             task.enabled
                 ? try await $0.pauseScheduledTask(id: task.id, revision: task.revision)
@@ -720,7 +732,7 @@ struct AidenScheduledTasksView: View {
                                             Text(task.name).font(.headline)
                                             if task.running { ProgressView().controlSize(.small) }
                                             Spacer()
-                                            Text(task.enabled ? "Active" : "Paused")
+                                            Text(model.isEnabled(task) ? "Active" : "Paused")
                                                 .font(.caption).foregroundStyle(.secondary)
                                         }
                                         Text(AidenScheduledTaskPresentation.cadence(schedule: task.schedule))
@@ -734,7 +746,7 @@ struct AidenScheduledTasksView: View {
                                 }
                                 .swipeActions(edge: .trailing) {
                                     if model.canManageSchedules {
-                                        Button(task.enabled ? "Pause" : "Resume") {
+                                        Button(model.isEnabled(task) ? "Pause" : "Resume") {
                                             Task { await model.pauseOrResume(task) }
                                         }
                                         .tint(.orange)
@@ -828,7 +840,7 @@ private struct AidenScheduledTaskDetailView: View {
                 .listRowBackground(Color.clear)
             } else if let task {
                 Section("Task") {
-                    LabeledContent("Status", value: task.running ? "Running" : (task.enabled ? "Active" : "Paused"))
+                    LabeledContent("Status", value: task.running ? "Running" : (model.isEnabled(task) ? "Active" : "Paused"))
                     LabeledContent(
                         "Schedule",
                         value: AidenScheduledTaskPresentation.cadence(schedule: task.schedule)
@@ -844,7 +856,7 @@ private struct AidenScheduledTaskDetailView: View {
                 if model.canWriteSchedules {
                     Section("Actions") {
                         Button("Run Now", systemImage: "play.fill") { isConfirmingRun = true }
-                        Button(task.enabled ? "Pause" : "Resume", systemImage: task.enabled ? "pause" : "play") {
+                        Button(model.isEnabled(task) ? "Pause" : "Resume", systemImage: model.isEnabled(task) ? "pause" : "play") {
                             Task { await model.pauseOrResume(task) }
                         }
                         Button("Edit", systemImage: "pencil") { isEditing = true }

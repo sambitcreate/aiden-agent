@@ -3730,6 +3730,62 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testInstallationKeepsTheLastServerFeaturesForGatesWhileConnecting() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-features",
+            deviceId: "device-features",
+            credential: String(repeating: "F", count: 43),
+            capabilities: [.serverRead, .botRead]
+        )
+        let paired = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Feature Mac")
+        XCTAssertEqual(paired.serverFeatures, [], "A pairing that never heard /server has no features to go on.")
+
+        let coordinator = AidenRemoteCoordinator(installationStore: store)
+        XCTAssertNil(coordinator.server)
+        XCTAssertNil(coordinator.knownServerFeatures)
+        XCTAssertFalse(AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator))
+
+        try store.updateServer(AidenServer(
+            protocolVersion: 1,
+            instanceId: "instance-features",
+            name: "Feature Mac",
+            appVersion: "1.0",
+            capabilities: [.serverRead, .botRead],
+            serverCapabilities: [.serverRead, .workspaceRead, .botRead],
+            connectionMode: .lan,
+            minimumClientVersion: nil,
+            serverTime: Date(),
+            features: [AidenBotHostFeature.durableSession, "chat-summaries-v1"]
+        ))
+        XCTAssertEqual(
+            store.activeInstallation?.serverFeatures,
+            [AidenBotHostFeature.durableSession, "chat-summaries-v1"]
+        )
+        // Until this connection's /server answers, the saved features decide the Bot chat route.
+        XCTAssertNil(coordinator.server)
+        XCTAssertEqual(coordinator.knownServerFeatures, [AidenBotHostFeature.durableSession, "chat-summaries-v1"])
+        XCTAssertTrue(AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator))
+        if case .durableSession = AidenBotChatRoute.resolve(botID: "bot-1", hostFeatures: coordinator.knownServerFeatures) {} else {
+            XCTFail("A durable-session Mac must open the durable route while the phone is still connecting.")
+        }
+
+        // The features survive a relaunch with the pairing.
+        let restored = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertEqual(restored.serverFeatures, [AidenBotHostFeature.durableSession, "chat-summaries-v1"])
+
+        // Pairings saved before the features were kept decode with none.
+        let saved = try XCTUnwrap(keychain.values[.remoteInstallations])
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(saved.utf8)) as? [String: Any])
+        var rows = try XCTUnwrap(payload["installations"] as? [[String: Any]])
+        rows[0].removeValue(forKey: "serverFeatures")
+        payload["installations"] = rows
+        keychain.values[.remoteInstallations] = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        XCTAssertEqual(AidenInstallationStore(keychain: keychain).activeInstallation?.serverFeatures, [])
+    }
+
+    @MainActor
     func testNegotiatedProgressPersistenceRejectsUnconfirmedSupportAndRollsBackFailedWrites() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)

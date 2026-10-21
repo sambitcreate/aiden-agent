@@ -960,6 +960,19 @@ final class AidenWorkspaceChatsModel {
         let instanceId = context.instanceId
         isMutating = true
         defer { isMutating = false }
+        // The new title shows in this list, Recents and the open chat at once,
+        // as a local override the admitted receipt replaces; a failed PATCH
+        // puts the stored row back unless another owner published since.
+        var optimistic = chat
+        optimistic.localTitleOverride = cleaned
+        upsert(optimistic)
+        onChatUpdated(optimistic)
+        let optimisticGeneration = presentationGenerations[chat.id] ?? 0
+        let rollBackTitle = { [self] in
+            guard coordinator.isCurrent(context), optimisticGeneration == (presentationGenerations[chat.id] ?? 0) else { return }
+            upsert(chat)
+            onChatUpdated(chat)
+        }
         do {
             let canonical: AidenChat
             let pendingRename = await cache.needsRenameRefresh(instanceId: instanceId, chatId: chat.id)
@@ -1006,10 +1019,12 @@ final class AidenWorkspaceChatsModel {
                 if await coordinator.handleCredentialRevocation(error, context: context) { return }
             }
         } catch let error where aidenIsCancellation(error) {
+            rollBackTitle()
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
+            rollBackTitle()
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
         }
@@ -1023,6 +1038,8 @@ final class AidenWorkspaceChatsModel {
         defer { isMutating = false }
         presentationGenerations[chat.id, default: 0] &+= 1
         chats.removeAll { $0.id == chat.id }
+        // The row leaves this list and Recents at once; a failed DELETE puts it back.
+        onChatRemoved(chat.id)
         do {
             let canonical: AidenChat
             let pendingRename = await cache.needsRenameRefresh(instanceId: instanceId, chatId: chat.id)
@@ -1040,9 +1057,11 @@ final class AidenWorkspaceChatsModel {
         } catch let error where aidenIsCancellation(error) {
             guard coordinator.isCurrent(context) else { return }
             upsert(chat)
+            onChatUpdated(chat)
         } catch {
             guard coordinator.isCurrent(context) else { return }
             upsert(chat)
+            onChatUpdated(chat)
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -3546,6 +3565,16 @@ final class AidenChatViewModel {
         lastRunInputAttempt = attempt
         isSubmittingRunInput = true
         defer { isSubmittingRunInput = false }
+        // The draft clears the moment the input leaves, like a sent message; it
+        // comes back if the Mac rejects or never confirms it and nothing new was
+        // typed meanwhile. A retry resends the saved text, not the draft.
+        let draftBeforeSend = draft
+        let draftAfterSend = retry ? draft : AidenRunInputPresentation.consumedDraft(submitted: text, current: draft)
+        if !retry { consumeRunInputDraft(text) }
+        let restoreDraft = { [self] in
+            guard !retry else { return }
+            restoreRunInputDraft(draftBeforeSend, consumedTo: draftAfterSend)
+        }
         do {
             let session: AidenChatDraftStore.Session
             if let existing = draftSession { session = existing }
@@ -3564,7 +3593,8 @@ final class AidenChatViewModel {
             // submission left; a mismatched receipt is never trusted.
             guard result.streamId == streamID, result.chatId == chat.id, result.mode == mode else {
                 guard coordinator.isCurrent(context) else { return }
-                presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
+                restoreDraft()
+                presentedError = String(localized: "The run input was not confirmed. Your draft is back — check the chat before trying again.")
                 return
             }
             let retained = await coordinator.withRetainedInstallationData(for: context) {
@@ -3575,7 +3605,7 @@ final class AidenChatViewModel {
             pendingSend = nil
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {
-                consumeRunInputDraft(text)
+                if retry { consumeRunInputDraft(text) }
                 if let receipt = AidenRunInputPresentation.receipt(for: result) {
                     showRunInputReceipt(receipt)
                 }
@@ -3584,13 +3614,15 @@ final class AidenChatViewModel {
                 // into the transcript without waiting for the next turn.
                 _ = await reconcileChat(context: context)
             } else {
+                restoreDraft()
                 presentedError = AidenRunInputPresentation.rejectionMessage(result.reason)
                 coordinator.haptics.play(.error, scope: hapticScope)
             }
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
-            presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
+            restoreDraft()
+            presentedError = String(localized: "The run input was not confirmed. Your draft is back — check the chat before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
@@ -3827,6 +3859,23 @@ final class AidenChatViewModel {
             Task { [weak self] in
                 guard let self, draftGeneration == clearedDraftGeneration, draft == remaining else { return }
                 _ = try? await draftStore.save(remaining, session: draftSession)
+            }
+        }
+    }
+
+    /// Puts a draft back after a run input the Mac rejected or never confirmed,
+    /// unless the person typed since it was cleared.
+    private func restoreRunInputDraft(_ previous: String, consumedTo remaining: String) {
+        guard draft == remaining, previous != remaining else { return }
+        draftPersistenceTask?.cancel()
+        suppressesDraftPersistence = true
+        draft = previous
+        suppressesDraftPersistence = false
+        let restoredDraftGeneration = draftGeneration
+        if let draftSession {
+            Task { [weak self] in
+                guard let self, draftGeneration == restoredDraftGeneration, draft == previous else { return }
+                _ = try? await draftStore.save(previous, session: draftSession)
             }
         }
     }

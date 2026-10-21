@@ -130,6 +130,9 @@ struct AidenBotRoutinesSection: View {
 
     @Environment(\.aidenPalette) private var palette
     @State private var routines: [AidenBotRoutine] = []
+    /// Switches flipped before the Mac answered, by routine id; the row shows
+    /// this value, and it is dropped once the answer (or a failure) lands.
+    @State private var pendingEnabled: [String: Bool] = [:]
     @State private var isLoaded = false
     @State private var editing: AidenBotRoutineEditorTarget?
     @State private var errorMessage: String?
@@ -212,11 +215,11 @@ struct AidenBotRoutinesSection: View {
             .buttonStyle(.plain)
             .disabled(!canWrite)
             Toggle(routine.name, isOn: Binding(
-                get: { routine.enabled },
+                get: { pendingEnabled[routine.id] ?? routine.enabled },
                 set: { enabled in Task { await setEnabled(routine, enabled) } }
             ))
             .labelsHidden()
-            .disabled(!canWrite)
+            .disabled(!canWrite || pendingEnabled[routine.id] != nil)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -270,11 +273,16 @@ struct AidenBotRoutinesSection: View {
         }
     }
 
+    /// The switch flips at once and stays put while the Mac answers; a failure
+    /// puts it back and says so.
     @MainActor
     private func setEnabled(_ routine: AidenBotRoutine, _ enabled: Bool) async {
-        guard let context = try? coordinator.requestContext(),
+        guard pendingEnabled[routine.id] == nil,
+              let context = try? coordinator.requestContext(),
               let client = try? coordinator.remoteClient(for: context),
               let request = try? AidenBotRoutineUpdateRequest(enabled: enabled) else { return }
+        pendingEnabled[routine.id] = enabled
+        defer { pendingEnabled[routine.id] = nil }
         do {
             let updated = try await client.updateBotRoutine(
                 botId: botID,

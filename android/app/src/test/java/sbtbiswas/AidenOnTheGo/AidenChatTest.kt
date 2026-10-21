@@ -148,6 +148,57 @@ class AidenChatTest {
     }
 
     @Test
+    fun chatKeepsLoadingWithThePairingsRefreshedClient() {
+        val root = kotlin.io.path.createTempDirectory("aiden-client-refresh").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val owners = ViewModelStore()
+        val server = MockWebServer()
+        val initial = sampleChat()
+        val chatReads = java.util.concurrent.atomic.AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.requestUrl!!.encodedPath == "/api/aiden/v1/chats/${initial.id}") {
+                    chatReads.incrementAndGet()
+                    MockResponse().setBody(json.encodeToString(initial))
+                } else MockResponse().setResponseCode(404)
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(root, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(instanceId = "refresh", deviceId = "device-refresh", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)), null)
+                val cache = AidenChatCache(root)
+                val drafts = AidenChatDraftStore(root)
+                val coordinator = AidenRemoteCoordinator(installations, root, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                owners.put("chat", model)
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                withTimeout(5_000) { while (chatReads.get() < 1) yield() }
+                val before = chatReads.get()
+                assertTrue(model.isConnected)
+
+                // Retry after a failed connection gives the same pairing a new client object.
+                coordinator.refreshClient()
+                withTimeout(5_000) { while (chatReads.get() <= before) yield() }
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                assertTrue("the chat sends and loads with the pairing's new client", model.isConnected)
+                assertNull(model.presentedError.value)
+
+                // A removed pairing still takes the client away.
+                installations.setActiveInstallation(null)
+                coordinator.refreshClient()
+                assertFalse(model.isConnected)
+            }
+        } finally {
+            runBlocking(dispatcher) { owners.clearAndJoin() }
+            Dispatchers.resetMain(); dispatcher.close(); server.shutdown(); root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun corruptPendingSendFailsClosedAndCannotOverwriteAnUnresolvedKey() {
         val root = kotlin.io.path.createTempDirectory("aiden-corrupt-attempt").toFile()
         try {

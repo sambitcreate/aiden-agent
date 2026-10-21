@@ -181,6 +181,9 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?, offersSug
     var suggestions by remember(botId) { mutableStateOf<List<AidenBotRoutineSuggestion>>(emptyList()) }
     var addingDraft by remember(botId) { mutableStateOf<AidenBotRoutineDraft?>(null) }
     val togglingIds = remember(botId) { mutableStateListOf<String>() }
+    // The flip the person just made, shown until the Mac answers; a failure drops it so the row
+    // goes back to the stored value.
+    val pendingEnabled = remember(botId) { mutableStateMapOf<String, Boolean>() }
     val hasNoRoutines = routines?.isEmpty() == true
 
     LaunchedEffect(botId, client, offersSuggestions, hasNoRoutines) {
@@ -240,11 +243,13 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?, offersSug
                             }
                         }
                         Switch(
-                            checked = routine.enabled,
-                            enabled = client != null && routine.id !in togglingIds,
+                            checked = pendingEnabled[routine.id] ?: routine.enabled,
+                            enabled = client != null,
                             onCheckedChange = { checked ->
                                 val cl = client ?: return@Switch
+                                if (routine.id in togglingIds) return@Switch
                                 togglingIds.add(routine.id)
+                                pendingEnabled[routine.id] = checked
                                 scope.launch {
                                     try {
                                         replace(cl.updateBotRoutine(botId, routine.id, routine.revision, AidenBotRoutineUpdateRequest(enabled = checked)))
@@ -257,6 +262,7 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?, offersSug
                                         if (failure.reload) reload(cl, keepError = true)
                                     } finally {
                                         togglingIds.remove(routine.id)
+                                        pendingEnabled.remove(routine.id)
                                     }
                                 }
                             },

@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.OkHttpClient
 import java.io.File
@@ -151,6 +152,19 @@ class AidenRemoteCoordinator(
 
     private val _client = MutableStateFlow<AidenRemoteClient?>(null)
     val client: StateFlow<AidenRemoteClient?> = _client.asStateFlow()
+
+    /**
+     * The Mac's feature tokens: this connection's `/server` answer, else those the active pairing
+     * saved from its last answer, else null for a pairing that never heard `/server`. Gates read
+     * these so a connecting or cold open behaves like the last connected one instead of falling
+     * to a legacy path.
+     */
+    fun knownServerFeatures(server: AidenServer? = _serverInfo.value): List<String>? =
+        server?.features ?: installationStore.activeInstallation?.serverFeatures
+
+    /** Revision 25: Bots open their durable session, read from [knownServerFeatures]. */
+    fun supportsBotDurableSession(server: AidenServer? = _serverInfo.value): Boolean =
+        knownServerFeatures(server)?.contains(AidenRemoteProtocol.BOT_DURABLE_SESSION_FEATURE) == true
     /** The client [refreshClient] last made, with the pairing it was made for. */
     @Volatile
     private var clientOwner: Pair<AidenPairingIdentity, AidenRemoteClient>? = null

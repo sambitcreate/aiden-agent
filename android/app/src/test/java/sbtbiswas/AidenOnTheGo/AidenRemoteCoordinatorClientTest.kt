@@ -16,6 +16,8 @@ import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenPairingExchange
+import sbtbiswas.AidenOnTheGo.models.AidenServer
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspacePermission
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
@@ -48,6 +50,36 @@ class AidenRemoteCoordinatorClientTest {
         credential = "secret-$instance",
         capabilities = listOf(AidenRemoteCapability.CHAT_READ)
     )
+
+    @Test
+    fun botDurableSessionGateReadsThePairingsSavedFeaturesUntilServerAnswers() {
+        val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        val grants = listOf(AidenRemoteCapability.CHAT_READ)
+        val coordinator = AidenRemoteCoordinator(
+            installationStore = installations,
+            storageDir = tempFolder.root,
+            scope = CoroutineScope(Dispatchers.Unconfined + Job().apply { cancel() })
+        )
+
+        // A pairing that never heard /server has no features to go on.
+        installations.addInstallation(exchange("fresh", "sha256/fresh"), null)
+        coordinator.refreshClient()
+        assertNull(coordinator.serverInfo.value)
+        assertNull(coordinator.knownServerFeatures())
+        assertFalse(coordinator.supportsBotDurableSession())
+
+        // The last /server answer stands in while this connection is still on its way.
+        installations.updateServerCapabilities(
+            "fresh", grants, "Mac", grants,
+            serverFeatures = listOf(AidenRemoteProtocol.BOT_DURABLE_SESSION_FEATURE)
+        )
+        assertNull(coordinator.serverInfo.value)
+        assertTrue(coordinator.supportsBotDurableSession())
+
+        // This connection's own answer wins over what the pairing saved.
+        val legacy = AidenServer(instanceId = "fresh", name = "Mac", capabilities = grants, serverCapabilities = grants, features = emptyList())
+        assertFalse(coordinator.supportsBotDurableSession(legacy))
+    }
 
     @Test
     fun reconnectingTheSameInstallationReusesItsPinnedHttpClient() {

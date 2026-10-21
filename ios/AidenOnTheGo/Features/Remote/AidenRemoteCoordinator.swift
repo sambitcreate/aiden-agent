@@ -168,6 +168,15 @@ final class AidenRemoteCoordinator {
     private(set) var connectionIssue: AidenConnectionIssue?
     private(set) var connectionState: AidenRemoteConnectionState
     private(set) var server: AidenServer?
+    /// The Mac's feature tokens: this connection's `/server` answer, else what
+    /// the active pairing saved from its last answer, else nil for a pairing
+    /// that never heard `/server`. Gates read this so a cold or connecting open
+    /// behaves like the last connected one instead of falling to legacy paths.
+    var knownServerFeatures: [String]? {
+        if let server { return server.features }
+        let saved = installationStore.activeInstallation?.serverFeatures ?? []
+        return saved.isEmpty ? nil : saved
+    }
     private(set) var workspaces: [AidenWorkspace] = []
     private(set) var workspaceSnapshotRevision = 0
     private(set) var isMutating = false
