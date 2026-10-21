@@ -9,13 +9,15 @@
 // secure text field reads as credentials. Typed text never reaches the
 // classifier.
 //
-// A key chord that only types a character is typing; any other chord
-// (Return, Command-S, Delete) presses something, so its intent can make any
+// A key chord that only edits text at the caret (a character, or a plain
+// Backspace or Delete erasing one) is typing, so an intent such as "Delete the
+// extra letter" never reads as deleting something. Any other chord (Return,
+// Command-S, Command-Delete) presses something, so its intent can make any
 // class a click's can: pressing Return to send a message is sending.
 
 import type { BotComputerDriverFacts, BotComputerElement } from "../bot-computers/computer-elements.js";
 import { BOT_COMPUTER_MUTATING_ACTIONS, botComputerIntentOf, isBotComputerAction } from "../bot-computers/computer-schema.js";
-import { botComputerChordIsPrintable } from "../bot-computers/computer-keystrokes.js";
+import { botComputerChordEditsText } from "../bot-computers/computer-keystrokes.js";
 import type { BotToolCallCheck } from "./bot-extension.js";
 import type { BotLiveApproval } from "./bot-tool-assembly.js";
 
@@ -55,7 +57,7 @@ export function botComputerAction(call: Pick<BotToolCallCheck, "args">, facts?: 
   // A mutating call without an intent never runs: the tool refuses it before acting.
   if (intent === undefined) return { approval: null };
   const classified =
-    action === "key" && typeof args.keys === "string" && !botComputerChordIsPrintable(args.keys) ? "press" : action;
+    action === "key" && typeof args.keys === "string" && !botComputerChordEditsText(args.keys) ? "press" : action;
   return {
     approval: null,
     action: { surface: "computer", action: classified, intent, ...elementFacts(action, args, facts) },

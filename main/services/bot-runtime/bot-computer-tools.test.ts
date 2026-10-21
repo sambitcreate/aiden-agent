@@ -132,6 +132,15 @@ test("the rules read a computer step's stated intent; looking and invalid calls 
     action: "key",
     intent: "Type A",
   });
+  // Backspace or Delete erases a character the Bot typed: editing text, not deleting something, whatever the intent says.
+  const classesOf = (args: Record<string, unknown>) => [...classifyBotAction(botComputerAction({ args }).action!, []).classes];
+  for (const keys of ["backspace", "Delete", "forwarddelete", "shift+backspace"]) {
+    assert.deepEqual(classesOf({ action: "key", keys, intent: "Delete the extra letter" }), [], keys);
+  }
+  assert.deepEqual(classesOf({ action: "key", keys: "backspace", intent: "Delete the old password" }), ["credentials"]);
+  // With Command, Delete is a command (Finder's Move to Trash), and a click that deletes still deletes.
+  assert.deepEqual(classesOf({ action: "key", keys: "cmd+backspace", intent: "Delete the file" }), ["delete"]);
+  assert.deepEqual(classesOf({ action: "click", coordinate: [1, 2], intent: "Delete the file" }), ["delete"]);
   assert.deepEqual(botComputerAction({ args: { action: "capture" } }), { approval: null });
   assert.deepEqual(botComputerAction({ args: { action: "click", coordinate: [1, 2] } }), { approval: null });
   assert.deepEqual(botComputerAction({ args: { action: "format_disk", intent: "Erase it" } }), { approval: null });
@@ -202,6 +211,8 @@ test("on the guest driver lane the rules read the clicked element, its app and w
     assert.equal(classifyBotAction(botComputerAction(click).action!, []).classes.has("delete"), false, "the VNC lane has only the intent");
 
     assert.equal((await run("c2", { action: "click", element: 0, intent: "Click the field" })).isError, undefined);
+    // Clearing the field first keeps it focused, so what's typed next still reads as going into a password field.
+    assert.equal((await run("c3", { action: "key", keys: "backspace", intent: "Clear the field" })).isError, undefined);
     const typing = botComputerAction({ args: { action: "type", text: "hunter2", intent: "Type it in" } }, state.driverFacts(BOT));
     assert.deepEqual(typing.action && "element" in typing.action ? typing.action.element : undefined, {
       role: "AXSecureTextField",
