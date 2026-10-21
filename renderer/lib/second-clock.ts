@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 
 // Display-only time. Running Bots, subagents, and image slots share one wakeup;
 // model requests, timeouts, expiry enforcement, and animation keep their own clocks.
@@ -33,12 +33,14 @@ export const secondClock = {
   },
 };
 
-const inactiveSubscribe = () => () => {};
-
+/** Freeze this reader's value while disabled, even if another reader keeps ticking. */
 export function useNowSecond(enabled = true): number {
-  return useSyncExternalStore(
-    enabled ? secondClock.subscribe : inactiveSubscribe,
-    secondClock.getSnapshot,
-    secondClock.getSnapshot,
-  );
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    const unsubscribe = secondClock.subscribe(() => setNow(secondClock.getSnapshot()));
+    setNow(Date.now());
+    return unsubscribe;
+  }, [enabled]);
+  return now;
 }
