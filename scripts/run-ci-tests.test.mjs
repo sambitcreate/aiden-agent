@@ -1,7 +1,7 @@
 /* global console */
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -77,7 +77,8 @@ test("a failing lane fails the run without skipping its sibling or running prese
 
 // A real node:test file in a one-lane plan, with the runner's output captured.
 async function runFixtureLane(directory, source) {
-  const file = path.join(directory, "fixture.test.mjs");
+  // node:test reports the resolved path (macOS's tmpdir is under the /var -> /private/var link).
+  const file = path.join(await realpath(directory), "fixture.test.mjs");
   await writeFile(file, source);
   const plan = buildPlan({ lanes: [{ name: "fixture", files: [file] }], prerequisites: [], preserved: [] }, parseArguments(["--lane", "fixture", "--parallel"]));
   const output = [];
