@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { request as httpRequest } from "node:http";
 import { BROWSER_PREVIEW_AUTH_HEADER, BrowserFileService, browserPreviewRequestHeaders, type BrowserFileWorkspace } from "./files.js";
+import { forgetBotBrowserWorkspace, registerBotBrowserWorkspace } from "./bot-workspaces.js";
 
 async function fixture(beforeRead?: () => Promise<void>, beforeDiscoveryRead?: (filePath: string) => Promise<void>) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-browser-files-"));
@@ -928,5 +929,18 @@ test("literal URL punctuation in filenames is encoded and each workspace closure
     await assert.rejects(f.open("workspace", "docs/index.html"), /closed/);
   } finally {
     await f.close();
+  }
+});
+
+test("a Bot's managed workspace never previews local files, even with a folder", async () => {
+  const preview = await fixture();
+  try {
+    // The same folder previews while it is the person's workspace.
+    assert.match(await preview.open("workspace", "docs/index.html"), /^http:\/\/127\.0\.0\.1:/u);
+    registerBotBrowserWorkspace("workspace", "bot:files");
+    await assert.rejects(preview.open("workspace", "docs/index.html"), /A Bot's browser can't open local files/u);
+  } finally {
+    forgetBotBrowserWorkspace("bot:files");
+    await preview.close();
   }
 });

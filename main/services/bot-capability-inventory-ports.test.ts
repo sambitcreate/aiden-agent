@@ -343,3 +343,35 @@ test("a server switched off for the model is listed for Bots as unavailable, wit
   assert.equal(connection?.description, "Turned off for the model in Aiden");
   assert.notEqual(connection?.connectionFingerprint, HASH);
 });
+
+test("the Browser capability is available exactly while Browser settings let agents browse", async () => {
+  const unused = async (): Promise<never> => {
+    throw new Error("not read by inspectOtherCapabilities");
+  };
+  let access = true;
+  const ports = createBotCapabilityInventoryPorts({
+    loadOpaqueSelectionKey: unused,
+    loadNoticeStatus: unused,
+    listProviders: unused,
+    providerCredentialSignature: unused,
+    listMcpServers: unused,
+    inspectMcpScopes: unused,
+    listSkills: unused,
+    listApprovedLocations: unused,
+    incarnations: { reconcileNamespace: unused },
+    getSettings: async () => ({}),
+    webSearchAvailability: async () => ({ ready: false }),
+    subagentsAvailable: () => false,
+    browserAgentAccess: async () => access,
+  });
+  const signal = new AbortController().signal;
+  const browserOf = async () => (await ports.inspectOtherCapabilities(signal)).find(({ kind }) => kind === "browser")!;
+  const allowed = await browserOf();
+  assert.equal(allowed.available, true);
+  assert.match(allowed.description ?? "", /its own browser/u);
+  access = false;
+  const off = await browserOf();
+  assert.equal(off.available, false);
+  // Bots holding the capability re-check it: its fingerprint moves with access.
+  assert.notEqual(off.capabilityFingerprint, allowed.capabilityFingerprint);
+});

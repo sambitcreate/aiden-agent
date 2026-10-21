@@ -2,6 +2,7 @@ import { shell } from "electron";
 import { ipcMain } from "../platform.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { browserService } from "../services/browser/service.js";
+import { botIdForBrowserWorkspace } from "../services/browser/bot-workspaces.js";
 import { configStore } from "../services/config-store.js";
 import { externalUrl } from "../services/browser/core.js";
 import type { BrowserCommand } from "../../renderer/shared/browser.js";
@@ -12,7 +13,15 @@ export function registerBrowserHandlers(): void {
       event,
       () => new Error("Browser access requires the active application document."),
     );
-    if (typeof workspaceId !== "string" || !(await configStore.getWorkspace(workspaceId)))
+    if (typeof workspaceId !== "string" || !workspaceId)
+      throw new Error("A valid workspace is required for the browser.");
+    // A Bot's managed workspace is admitted once main registered it, and its
+    // browser moves to whichever window now shows that Bot.
+    if (botIdForBrowserWorkspace(workspaceId) !== undefined) {
+      browserService.transferOwner(workspaceId, owner);
+      return browserService.getState(workspaceId);
+    }
+    if (!(await configStore.getWorkspace(workspaceId)))
       throw new Error("A valid workspace is required for the browser.");
     browserService.attachOwner(workspaceId, owner);
     return browserService.getState(workspaceId);

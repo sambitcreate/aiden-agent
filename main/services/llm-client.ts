@@ -1509,6 +1509,9 @@ async function prepareGeneration(
     { approval: BrowserToolApproval; args: Record<string, unknown> }
   >();
   const browserSelection: { initialized: boolean; tabId?: string } = { initialized: false };
+  // Legacy Bot generations stay without browser tools: a Bot's browser (its
+  // own profile, masked snapshots, no scripts) is offered only on durable Bot
+  // turns, through `bot-runtime/bot-browser-tools.ts`.
   const browserEligible =
     workspace &&
     canUseBrowserTools({ permission, rendererOwner, assistantMode, bot: Boolean(botContext) });

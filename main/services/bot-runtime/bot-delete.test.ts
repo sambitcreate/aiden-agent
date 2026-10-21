@@ -61,10 +61,15 @@ function png(width: number, height: number): Buffer {
 
 const normalizer: BotAvatarNormalizer = { async normalize() { return png(512, 512); } };
 
+/** Stands in for the Bot's browser partition on disk (Electron's `Partitions/aiden-bot-<dir>`). */
+function browserPartitionPath(profile: string, botId: string): string {
+  return path.join(profile, "Partitions", `aiden-bot-${botDirectoryName(botId)}`);
+}
+
 /** One process's view of the profile: fresh store instances, as after a restart. */
 function openProfile(
   profile: string,
-  options: { wipe?: boolean; failPhotoDeleteOnce?: boolean } = {},
+  options: { wipe?: boolean; failPhotoDeleteOnce?: boolean; failBrowserClearOnce?: boolean } = {},
 ) {
   const service = path.join(profile, "bot-service");
   const botStore = createBotStore({ root: () => profile });
@@ -103,6 +108,7 @@ function openProfile(
   const avatars = createFileBotAvatarStore({ root: () => path.join(profile, "bot-avatar-store"), normalizer });
   const clearedJournals: string[] = [];
   let photoFailures = options.failPhotoDeleteOnce ? 1 : 0;
+  let browserFailures = options.failBrowserClearOnce ? 1 : 0;
   const app = createBotApplicationService({
     botStore,
     chatStore,
@@ -119,6 +125,13 @@ function openProfile(
       }
       await avatars.deleteBot(botId);
     },
+    deleteBotBrowserProfile: async (botId) => {
+      if (browserFailures > 0) {
+        browserFailures -= 1;
+        throw new Error("Aiden quit while clearing the Bot's browser.");
+      }
+      await fs.rm(browserPartitionPath(profile, botId), { recursive: true, force: true });
+    },
     ...(options.wipe === false
       ? {}
       : {
@@ -128,7 +141,7 @@ function openProfile(
           },
         }),
   });
-  return { app, botStore, capabilityStore, managedWorkspace, chatStore, avatars, clearedJournals };
+  return { profile, app, botStore, capabilityStore, managedWorkspace, chatStore, avatars, clearedJournals };
 }
 
 type Profile = ReturnType<typeof openProfile>;
@@ -173,7 +186,11 @@ async function createBotWithData(opened: Profile, name: string) {
   });
   const home = await opened.app.resolveManagedWorkspace(bot.id);
   await fs.writeFile(path.join(home.homePath, "memory.md"), `${name} remembers.`);
-  return { bot, chat, homePath: home.homePath };
+  // The Bot signed in to a site in its own browser.
+  const partition = browserPartitionPath(opened.profile, bot.id);
+  await fs.mkdir(partition, { recursive: true });
+  await fs.writeFile(path.join(partition, "Cookies"), `${name}-session=1`);
+  return { bot, chat, homePath: home.homePath, partition };
 }
 
 /** Everything a deleted Bot must no longer have, checked against the stores on disk. */
@@ -189,6 +206,7 @@ async function assertErased(profile: string, botId: string, homePath: string, ch
   assert.equal(await fresh.chatStore.get(chatId), null, "chat row");
   assert.deepEqual(await fresh.chatStore.listByBot(botId), [], "chat rows");
   assert.equal(await fresh.avatars.metadata(OWNER, botId), null, "photo");
+  assert.equal(existsSync(browserPartitionPath(profile, botId)), false, "browser sign-ins");
   assert.equal(existsSync(path.join(profile, "bots", botDirectoryName(botId))), false, "session directory");
 }
 
@@ -224,6 +242,7 @@ test("deleting a Bot mid-turn stops the provider and erases its session, photo, 
     // The other Bot keeps everything.
     assert.equal(routines.has(survivor.bot.id), true);
     assert.equal(await fs.readFile(path.join(survivor.homePath, "memory.md"), "utf8"), "Survivor remembers.");
+    assert.equal(await fs.readFile(path.join(survivor.partition, "Cookies"), "utf8"), "Survivor-session=1");
     assert.notEqual(await opened.avatars.metadata(OWNER, survivor.bot.id), null);
     assert.equal((await opened.app.getCanonicalChat(survivor.bot.id))?.id, survivor.chat.id);
   } finally {
@@ -262,6 +281,32 @@ test("a delete interrupted between steps leaves the Bot listed and finishes on r
   await assert.rejects(crashed.app.deleteBot({ botId: second.bot.id }), /quit while erasing the photo/u);
   assert.equal((await crashed.app.list()).length, 1);
 
+  const restarted = openProfile(profile);
+  await restarted.app.initialize();
+  assert.deepEqual(await restarted.app.list(), []);
+  await assertErased(profile, second.bot.id, second.homePath, second.chat.id);
+});
+
+test("a delete that stops while clearing the Bot's browser keeps the Bot listed and clears its sign-ins on retry or restart", async () => {
+  const profile = await tempProfile();
+  const opened = openProfile(profile, { failBrowserClearOnce: true });
+  await opened.app.initialize();
+  const first = await createBotWithData(opened, "First");
+  const second = await createBotWithData(opened, "Second");
+
+  await assert.rejects(opened.app.deleteBot({ botId: first.bot.id }), /clearing the Bot's browser/u);
+  assert.equal((await opened.app.list()).some(({ id }) => id === first.bot.id), true, "the Bot stays listed");
+  assert.equal(existsSync(first.partition), true, "its sign-ins are still there to clear");
+
+  // Retry in the same process.
+  await opened.app.deleteBot({ botId: first.bot.id });
+  await assertErased(profile, first.bot.id, first.homePath, first.chat.id);
+  assert.equal(existsSync(second.partition), true, "another Bot keeps its sign-ins");
+
+  // Interrupted again, then the app restarts instead of retrying.
+  const crashed = openProfile(profile, { failBrowserClearOnce: true });
+  await crashed.app.initialize();
+  await assert.rejects(crashed.app.deleteBot({ botId: second.bot.id }), /clearing the Bot's browser/u);
   const restarted = openProfile(profile);
   await restarted.app.initialize();
   assert.deepEqual(await restarted.app.list(), []);

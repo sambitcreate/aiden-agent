@@ -1,11 +1,13 @@
 // The Bot side panel (spec §8) on the C1 workbench shell, beside a Bot's chat:
-// fixed Activity, Files, Memory and Routines tabs. A tab's body mounts the first
+// fixed Activity, Files, Memory and Routines tabs, and Browser once the Bot's
+// own browser has a tab (a stored Browser tab shows Activity until then; a tab
+// the Bot or a hand-off opens to show reveals it). A tab's body mounts the first
 // time it is shown, then stays mounted like the workspace views. The panel has
 // its own state, id, surface name, width key, focus hand-off and Escape, so the
 // workspace Environment panel (suppressed on Bots pages) is never touched.
 
 import * as React from "react";
-import { CalendarClock, Files, ListChecks } from "lucide-react";
+import { CalendarClock, Files, Globe, ListChecks } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
 import { BOT_PANEL_WIDTH_BOUNDS, resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
@@ -13,6 +15,7 @@ import { useBot } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
 import { useBotLive } from "../../lib/use-bot-live";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
+import { BotBrowserTab, useBotBrowserPresence } from "./bot-browser-tab";
 import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
 import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type BotPanelTab } from "./bot-panel-context";
@@ -24,6 +27,7 @@ const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{
   files: { label: "Files", icon: Files },
   memory: { label: "Memory", icon: MemoryCardIcon },
   routines: { label: "Routines", icon: CalendarClock },
+  browser: { label: "Browser", icon: Globe },
 };
 
 /**
@@ -59,8 +63,17 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
  * subscription for as long as it is shown; the Activity tab shares it.
  */
 export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
-  const { open, tab, fileRequest, focusRequest, close, consumeFocusRequest, setTab } = useBotPanel();
+  const { open, tab: storedTab, fileRequest, focusRequest, close, consumeFocusRequest, setTab, reveal } = useBotPanel();
   const bot = useBot(botId).data ?? null;
+  const revealBrowser = React.useCallback(() => reveal("browser"), [reveal]);
+  const browser = useBotBrowserPresence(botId, revealBrowser);
+  // Once shown, Browser stays while this chat is open, so closing the last tab doesn't move the panel.
+  const [browserSeen, setBrowserSeen] = React.useState(false);
+  if (browser.hasTabs && !browserSeen) setBrowserSeen(true);
+  const browserShown =
+    (browser.workspaceId !== null && (browser.hasTabs || browserSeen)) || (!browser.resolved && storedTab === "browser");
+  const tab: BotPanelTab = storedTab === "browser" && !browserShown ? "activity" : storedTab;
+  const shownTabs = BOT_PANEL_TABS.filter((id) => id !== "browser" || browserShown);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
@@ -118,7 +131,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open, close]);
 
-  const tabs: WorkbenchTab[] = BOT_PANEL_TABS.map((id) => ({
+  const tabs: WorkbenchTab[] = shownTabs.map((id) => ({
     id,
     viewId: id,
     label: TAB_META[id].label,
@@ -137,12 +150,19 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         return <BotMemoryContent bot={bot} compact />;
       case "routines":
         return <BotRoutines bot={bot} compact />;
+      case "browser":
+        return browser.workspaceId === null ? null : (
+          <BotBrowserTab workspaceId={browser.workspaceId} botName={bot.name} active={active} />
+        );
     }
   };
-  const views: WorkbenchView[] = BOT_PANEL_TABS.map((id) => ({
+  const views: WorkbenchView[] = shownTabs.map((id) => ({
     id,
     render: ({ presented, selected }) =>
-      visited.has(id) ? (
+      id === "browser" ? (
+        // The page owns the whole area: no padding or scroller of its own.
+        visited.has(id) ? <div className="flex h-full min-h-0 flex-col">{body(id, presented && selected)}</div> : null
+      ) : visited.has(id) ? (
         <div
           // The log has no controls of its own, so its scroller takes a tab stop to scroll by
           // keyboard. The tab panel around it already carries the "Activity" name.
@@ -186,7 +206,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}
         tabListLabel="Bot panel views"
-        // Four fixed tabs always fit; there is nothing for an "Open tabs" list to reveal.
+        // At most five fixed tabs, which always fit; there is nothing for an "Open tabs" list to reveal.
         tabMenu={false}
         onSelectTab={(entry) => setTab(entry.viewId as BotPanelTab)}
         onCloseTab={() => undefined}

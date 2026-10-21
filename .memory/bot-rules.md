@@ -15,7 +15,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 ## Classifier (`main/services/bot-rules/classify.ts`, `words.ts`)
 - Input: `BotClassifiableAction` for one of four surfaces.
   - `computer_use`: built from the Computer Use approval descriptor in `bot-computer-use-approval.ts`. It never carries typed text or a field value.
-  - `browser` and `computer`: shapes only. Nothing feeds them until the Bot browser and computer packages land.
+  - `browser`: fed by `bot-runtime/bot-browser-approval.ts` (P6) from an isolated-world probe of the targeted element; see `.memory/bot-browser.md`. `browserSendKey` makes Enter (Control/Command-Enter on mail hosts) on an editable message composer or a messaging host `communicate`; search boxes, Shift-Enter and unknown boxes are not.
+  - `computer`: shape only. Nothing feeds it until the Bot computer package lands.
   - `mcp`: `describeMcpAction`, for granted mutating tools only.
 - Strong signals:
   - credentials: a secure text role on the element or the focused field; `secureFieldInCapture` while typing; `type=password`; autocomplete `current-password`, `new-password` or `one-time-code`.
@@ -29,7 +30,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - Custom rules match when every content word of the rule appears among the action's words. The window title, URL host and app are used for custom rules only.
 - Passive actions (scroll, wait, focus_app, set_window_frame, move …) match no rule at all, custom ones included: a custom "book a flight" must not stop a scroll in a window titled "Book a flight".
 - `describeMcpAction` (`mcp-action.ts`) reads the live tools/list entry through `facts.mcpToolDescriptor` (the same live inventory the grant was checked against), so a tool's server title, description and `destructiveHint` count, not only its name. `mcp-action.test.ts` covers it, and `bot-tool-assembly.test.ts` checks it end to end.
-- Oracle: `fixtures/actions.json` (144 rows; password, one-time-code and card rows on all four surfaces). The test reports precision and recall per class. Locked classes must have zero misses and precision ≥ 0.9; the others need ≥ 0.85.
+- Oracle: `fixtures/actions.json` (158 rows, 14 of them P6's browser send-key rows; password, one-time-code and card rows on all four surfaces). The test reports precision and recall per class. Locked classes must have zero misses and precision ≥ 0.9; the others need ≥ 0.85.
 
 ## Store (`store.ts`, singleton `store-main.ts`)
 - File: `<userData>/bots/<dir>/rules.json`, `{version:1, revision, behaviors, custom}`, parsed strictly. A missing or invalid file reads as the defaults at revision 0. An unreadable file throws, and enforcement then fails closed with "This Bot's rules couldn't be read…".
@@ -88,5 +89,5 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 
 ## Not yet
 - Phones show no rules. A read-only list needs a Bot-detail field (Remote revision 37+).
-- The browser and computer surfaces have no live descriptors until the Bot browser and computer packages land.
+- The computer surface has no live descriptor until the Bot computer package lands (the browser one landed with P6).
 - The shell is outside rules by design. Under Full access, a shell command could edit `rules.json`; the locked rules still hold because they come from code.

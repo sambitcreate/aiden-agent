@@ -238,6 +238,9 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
     },
     subagentsAvailable: () => subagentsEnabled(),
     computerUseSupported: () => hostPlatformCapabilities().computerUse,
+    // Loaded lazily: the browser service pulls in Electron's web contents.
+    browserAgentAccess: async () =>
+      (await import("./browser/service.js")).browserService.agentAccessDefaultAllowed(),
   }),
   {
     onRuntimeSnapshot: (botId, snapshot) => {
