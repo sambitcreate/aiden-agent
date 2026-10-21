@@ -232,6 +232,43 @@ deployment target for the launch-requirement API used by this fail-closed helper
 The rest of Aiden may continue to run on its broader macOS range with Computer
 Use unavailable.
 
+## Guest lane in Bot computers
+
+Bot computers (`docs/bot-computers.md`, "Guest driver lane") run the same
+pinned `cua-driver` 0.36.0 inside a Bot's own macOS virtual machine, for
+element reads and element clicks there. It is the same executable and pin, not
+a second artifact:
+
+- Set up and Update base copy only the upstream-signed `cua-driver`
+  executable from the vendored helper into the base over Aiden's SSH. The
+  guest checks its SHA-256 against the compiled pin and its signature against
+  the pinned Cua identifier and Team ID before it is put in place. The guest
+  never downloads a driver, never resolves one from `PATH`, and never runs the
+  installer or the self-updater.
+- Aiden's broker stays on the Mac and is not copied: inside the guest the
+  virtual machine is the boundary. A LaunchAgent in the guest's logged-in
+  session runs `cua-driver serve --socket <guest socket> --no-overlay
+  --no-permissions-gate` with the Mac driver's fixed environment (telemetry
+  and update checks off, `DO_NOT_TRACK=1`, `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`)
+  but without the broker's host bundle identifier, since the guest driver
+  holds its own grants. The grants of Accessibility and Screen
+  Recording are made by the person in the base's live view and copied into
+  every Bot computer made from it.
+- Each session is one SSH child running `cua-driver mcp --embedded --socket
+  <guest socket>`. `CuaDriverSession` checks the exact 0.36.0 catalog,
+  Aiden's allowlist and every required tool before any call, and
+  `ComputerUseController` keeps the same denied tools, safety refusals and
+  element-token binding as on the Mac. Its per-action access cards don't
+  apply: the Bot's rules classify each call first, and the controller then
+  authorizes it for that one call.
+- A driver error or Take over ends that controller's generation; the next
+  call starts a fresh session.
+- A computer uses the guest lane only when the base's probe (a list of apps
+  and a screenshot) passed for this exact pin. A new pin arrives only with an
+  Aiden release; until the base is set up again with it (Update base or Set up
+  element control) and a Bot's computer is Reset, that computer stays on the
+  screen lane.
+
 ## Phased delivery and review gates
 
 1. **Foundation:** compiled artifact pins and vendor verification; absolute

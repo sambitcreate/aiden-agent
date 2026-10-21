@@ -301,3 +301,99 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   shifted characters, Command shortcuts work, Take over during a long `type`
   stops it and leaves no key held, and a `computer_shell` `ls ~/Shared` lists
   the Bot's `Computer` folder.
+
+## Guest driver lane
+
+The screen (VNC) lane above is the default. On a base that has **element
+control**, a Bot's `computer` tool can also read an app's buttons and fields
+and click them by number, through Aiden's own pinned `cua-driver` 0.36.0
+running inside the guest. Where element control is missing, failed or was
+skipped, everything above applies unchanged.
+
+- **Installed during Set up and Update base.** After it prepares the base over
+  SSH, Aiden copies the upstream-signed `cua-driver` executable from its own
+  vendored helper (the same pin Computer Use uses,
+  `resources/computer-use/cua-driver-artifact.json`) into the base at
+  `~/Library/Application Support/Aiden/cua-driver/cua-driver`. The guest checks
+  the copy's SHA-256 against Aiden's compiled pin and its code signature
+  against Cua's identifier and Team ID before it is put in place. Nothing is
+  downloaded in the guest, no driver is ever found on `PATH`, and the driver is
+  updated only with an Aiden release.
+- **Runs in the logged-in session.** A LaunchAgent
+  (`com.aiden.bot-computer.cua-driver`) runs `cua-driver serve` on a socket in
+  the guest user's Library, with telemetry, update checks and `run_script` off.
+  It is loaded into the guest's GUI session with the guest password, which only
+  Aiden holds.
+- **Allowing Accessibility and Screen Recording.** While setup shows "Waiting
+  for permissions in the base computer", Settings → Bot computers shows the
+  base computer's live screen, the state of both permissions, **Check again**
+  and **Skip**. Choose Open System Settings on each prompt in the base (or go
+  to Privacy & Security) and turn on cua-driver for both. The screen is lent
+  only while setup waits, through the same loopback-only viewer as the Computer
+  tab. Aiden checks every few seconds for up to 30 minutes, then restarts the
+  driver and probes it (a list of apps and a screenshot). Only a passing probe
+  turns element control on.
+- **Skip or failure keeps the screen lane.** Skipping, running out of time, a
+  failed install or a failed probe never fails setup: the base is ready with
+  screen-only Bots, and Settings says why. A ready base without element control
+  offers **Set up element control**, which starts the base once, installs the
+  driver and waits for the permissions again.
+- **Clones inherit it.** Every Bot computer made from a base with element
+  control copies the grants with the disk. A computer given before element
+  control was set up stays on the screen lane until you **Reset** it.
+- **What the Bot gets.** `capture` with `app` (such as "Safari") adds that
+  app's numbered elements after the screenshot: role and label only, at most
+  100, never a field's value. `click`, `double_click` and `right_click` take
+  `element` in place of `coordinate`; the numbers last until anything acts.
+  Screenshots, `type`, `key`, `drag` and `scroll` stay on the screen lane. The
+  driver is reached over Aiden's own SSH, one `cua-driver mcp --embedded`
+  bridge per session, and the exact 0.36.0 tool catalog is checked before any
+  call, as for Computer Use on the Mac. If the driver can't be reached, the
+  call says so and the Bot can act with coordinates instead.
+- **Rules see more.** An element click gives the rules its app, window, role
+  and label, and typing gives the element the last element click focused, so a
+  secure text field reads as credentials. Typed text still never reaches the
+  rules or the model.
+- **Take over still wins.** Taking over stops the element action in progress,
+  and every element number from before is dropped, so the Bot captures again
+  after Give back.
+- **Confirming on a Mac.** The driver's CLI shape (`serve --socket`,
+  `mcp --embedded --socket`, `--no-permissions-gate`), loading the agent from
+  SSH with `sudo launchctl bootstrap gui/<uid>`, the guest's TCC prompts in the
+  live view, the probe, and clones inheriting the grants are unproven until
+  they are run on an Apple-silicon Mac: `launchctl print
+  gui/501/com.aiden.bot-computer.cua-driver` shows the agent, its socket exists,
+  and a `capture` with `app` lists elements that an element click then
+  presses.
+
+## Signing in on a Bot's computer
+
+A Bot with a computer can ask the person to sign in to a site there: the
+`sign_in` tool takes `where: "computer"` (a Bot with only a computer gets it
+by default; one with the Browser too gets the Browser by default). It needs
+Bot computers on this Mac, a computer given to the Bot, and an attended turn.
+
+- **The card.** The sign-in card reads **Open Ada's computer** and says the
+  page opens on Ada's own computer with you in control, that Ada can't see the
+  screen until you answer, and never sees your password.
+- **Open.** Aiden starts the computer if it is stopped, takes it over for you
+  before anything shows on its screen, stops the guest driver (removing its
+  "enabled" file and ending every process signed as `cua-driver`, including a
+  copy the Bot made), opens the site in Safari there, and brings the Computer
+  tab forward. If any of that fails, nothing opens and the Bot gets its
+  computer back.
+- **While you sign in.** The Bot's `computer` and `computer_shell` calls wait
+  and capture nothing, as for any Take over. The model never sees the screen
+  or the password.
+- **Answering.** I'm signed in, Skip, or the card being withdrawn (the Bot was
+  stopped or paused) gives the computer back, unless you already gave it back
+  or took it again from the viewer, which keeps it with you. The Bot then takes
+  a fresh capture. The guest driver starts again on the Bot's next element
+  step.
+- **From a phone.** Aiden Remote keeps the card's **Finish on your Mac**: Open
+  from the phone opens the page on the Bot's computer on the Mac, where the
+  person signs in. No new remote fields are involved.
+- **Confirming on a Mac.** Open from the card takes the computer over, Safari
+  opens at the site (`/usr/bin/open -b com.apple.Safari` over SSH reaching the
+  logged-in session), the driver's processes are gone, and answering gives the
+  computer back.
