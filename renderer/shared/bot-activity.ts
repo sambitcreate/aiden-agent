@@ -82,9 +82,10 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
   ["web_search", "searching"],
   ["computer_use", "computer"],
   ["form_fill", "computer"],
-  // The Bot's own computer is not the person's Mac: it reads as an app.
+  // The Bot's own computer and browser are not the person's Mac: they read as apps.
   ["computer", "app"],
   ["computer_shell", "command"],
+  ["browser", "app"],
   ["inspect_image", "photo"],
   ["subagent", "helper"],
   ["bot_memory", "remembering"],
@@ -120,11 +121,17 @@ const MCP_PREFIX_COLLISION = /_[0-9a-f]{6}$/u;
 const MCP_PREFIX_DIGIT_LEAD = /^mcp_(?=[0-9])/u;
 
 /** Aiden's own tools that read as using an app ("Using its computer"). */
-const TOOL_APPS: ReadonlyMap<string, string> = new Map<string, string>([["computer", "its computer"]]);
+const TOOL_APPS: ReadonlyMap<string, string> = new Map<string, string>([
+  ["computer", "its computer"],
+  ["browser", "its browser"],
+]);
 
-/** The app label of a tool: the Bot's own computer, or an MCP or Composio tool's connection; else undefined. */
+/** The Bot browser's tools (`browser_snapshot`, `browser_click`, …) behind its `browser` gateway. */
+const BROWSER_TOOL = /^browser_[a-z_]+$/u;
+
+/** The app label of a tool: the Bot's own computer or browser, or an MCP or Composio tool's connection; else undefined. */
 export function botToolApp(toolName: string): string | undefined {
-  const fixed = TOOL_APPS.get(toolName);
+  const fixed = TOOL_APPS.get(BROWSER_TOOL.test(toolName) ? "browser" : toolName);
   if (fixed) return fixed;
   const prefix = MCP_AGENT_TOOL.exec(toolName)?.[1];
   if (!prefix) return undefined;
@@ -142,7 +149,7 @@ export function botToolApp(toolName: string): string | undefined {
 
 /** The phase an active tool puts its Bot in (§5.1). */
 export function botToolPhase(toolName: string, app?: string): BotToolPhase {
-  return TOOL_PHASES.get(toolName) ?? (app ? "app" : "working");
+  return TOOL_PHASES.get(BROWSER_TOOL.test(toolName) ? "browser" : toolName) ?? (app ? "app" : "working");
 }
 
 /** The status line's word for a phase; `app` fills "Using {app}". */

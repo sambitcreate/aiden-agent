@@ -25,6 +25,9 @@ const SPEC_TOOL_PHASES: ReadonlyArray<[string, string]> = [
   ["form_fill", "computer"],
   ["computer", "app"],
   ["computer_shell", "command"],
+  ["browser", "app"],
+  ["browser_snapshot", "app"],
+  ["browser_click", "app"],
   ["inspect_image", "photo"],
   ["subagent", "helper"],
   ["bot_memory", "remembering"],
@@ -69,6 +72,9 @@ test("the Bot's own computer reads as Using its computer, never as the person's 
   assert.equal(botStepInfinitive("app", app), "use its computer");
   assert.equal(botActivityDisplay(botToolPhase("computer_use"), "follows").word, "Using your Mac");
   assert.equal(botActivityDisplay(botToolPhase("computer_shell"), "follows").word, "Running a command");
+  // The Bot's own browser likewise, rather than a bare "Working".
+  assert.equal(botActivityDisplay(botToolPhase("browser_click", botToolApp("browser_click")), "follows", botToolApp("browser_click")).word, "Using its browser");
+  assert.equal(botStepPhrase("app", 2, botToolApp("browser_snapshot")), "Used its browser 2 times");
 });
 
 test("when tools run in parallel, the most recently started one wins", () => {
