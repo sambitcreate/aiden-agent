@@ -6,6 +6,7 @@ import {
   boundaryRefusalOf,
   BROWSER_IMAGE_OMITTED,
   BROWSER_SENSITIVE_TYPING_REFUSED,
+  BROWSER_STATE_SELECTOR_REFUSED,
   BROWSER_VALUE_SELECTOR_REFUSED,
   BROWSER_XPATH_SELECTOR_REFUSED,
   browserKeyInsertsText,
@@ -226,7 +227,7 @@ test("only keys that put text into a field count as typing", () => {
   }
 });
 
-test("a Bot can't find a field by what is typed in it, or use XPath", () => {
+test("a Bot can't find a field by what is typed in it or its state, or use XPath", () => {
   for (const selector of ['input[value^="a"]', "input[ VALUE$='1']", "[*|value]", 'internal:attr=[value="x"]', "input[/**/value^='a']", "input[v\\61lue]"]) {
     assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_VALUE_SELECTOR_REFUSED }, selector);
   }
@@ -247,9 +248,38 @@ test("a Bot can't find a field by what is typed in it, or use XPath", () => {
   ]) {
     assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_XPATH_SELECTOR_REFUSED }, selector);
   }
-  // Quoted text that starts like XPath is only text.
+  // A field's state, wherever it is tested: as written, behind a comment, in
+  // another case, inside `:is()`, `:not()` or `:has()`, or in a nested selector's body.
+  for (const selector of [
+    "select[autocomplete=cc-exp-month] option:nth-child(5):checked",
+    "option:/**/checked",
+    "option:CHECKED",
+    "select:has(option:nth-child(5):checked)",
+    "input:not(:placeholder-shown)",
+    "form >> internal:has=\"option:nth-child(5):checked\"",
+    "form >> internal:has-not=\"#csc:empty\"",
+    ":is(#pw:valid)",
+    "#pw:invalid",
+    "#pw:user-valid",
+    "#pw:user-invalid",
+    "#year:in-range",
+    "#year:out-of-range",
+    "#pw:autofill",
+    "#pw:-webkit-autofill",
+    "#otp:blank",
+    "input:indeterminate",
+    "option:default",
+    "#pw:dir(rtl)",
+    "card-field:state(complete)",
+  ]) {
+    assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_STATE_SELECTOR_REFUSED }, selector);
+  }
+  // Quoted text that starts like XPath is only text. States that don't depend
+  // on what a field holds, and a role's own checked and selected states, stay.
   for (const selector of ["role=textbox[name='Password']", "#password", "input[name=otp]", "text=Value proposition", "button.value-chip", "text=Open https://example.com/docs", "text=Signed in as sam@example.com", "a[href^='https://example.com']",
-    'role=button[name="..."]', 'button:has-text("...more")', 'internal:role=button[name="...more"i]', 'a[href^="//cdn.example.com"]', 'text="//comment"', "text=Loading..."]) {
+    'role=button[name="..."]', 'button:has-text("...more")', 'internal:role=button[name="...more"i]', 'a[href^="//cdn.example.com"]', 'text="//comment"', "text=Loading...",
+    "input:required", "input:optional", "input:read-write", "button:enabled", "input:focus", "li:nth-child(2)", "button:visible",
+    "internal:role=checkbox[checked=true]", "internal:role=option[selected]", "text=Status: valid", "form:has(input:required)"]) {
     assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
   }
 });

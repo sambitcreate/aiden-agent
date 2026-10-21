@@ -85,6 +85,12 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
         <button id="show" onclick="const f=document.getElementById('secret');f.type=f.type==='password'?'text':'password'" style="position:absolute;left:320px;top:20px;width:120px;height:44px">Show</button>
         <div id="control" style="position:absolute;left:20px;top:100px;width:240px;height:44px;background:rgb(255,0,0)"></div>
         <script>const after=Number(new URLSearchParams(location.search).get("show"));if(after>0)setTimeout(()=>document.getElementById("show").click(),after);</script>`);
+    case "/reveal-table":
+      // A table-layout sign-in row and a password field inside a role=button, both with no
+      // sensitive autocomplete; "Show" turns them into plain text.
+      return html(`<table><tr><td>Password</td><td><input id="secret" type="password"></td></tr></table>
+        <div role="button" tabindex="0"><input id="pin" type="password"></div>
+        <button id="show" type="button" onclick="for(const f of document.querySelectorAll('#secret,#pin'))f.type='text'">Show</button>`);
     default:
       response.writeHead(404).end();
   }
@@ -315,6 +321,41 @@ void app.whenReady().then(async () => {
   // What an approval and the rules read about the field.
   const probedType = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
   const reveal = { shownByBot, probedShownByBot, typingShownByBot, shownByPerson, pressingShownByPerson, typingShownByPerson, shownType, probedType };
+  // A remembered field is marked before any Bot locator runs, not only before
+  // typing: a wait, a scroll's target and the snapshot's own locators. Each is
+  // checked on a page nothing has marked yet: the Bot reads it while the fields
+  // are password fields, then the person types the password and presses Show.
+  step("5 remembered fields and locators");
+  const shownTable = async () => {
+    await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal-table`);
+    await snapshot(botTab);
+    const shown = await user(BOT_WORKSPACE, {
+      action: "evaluate", tabId: botTab,
+      expression: "for(const f of document.querySelectorAll('#secret,#pin'))f.value='hunter2xyz';document.getElementById('show').click();document.getElementById('secret').type",
+    });
+    return shown.value;
+  };
+  const rowNamed = (prefix: string) => `internal:role=row[name=/Password ${prefix}/]`;
+  // A scroll's target waits 15 s for its element; the call is cut short instead.
+  const scrollTo = (locator: string) =>
+    outcome(browser.command(BOT_WORKSPACE, { action: "scroll", tabId: botTab, locator, deltaX: 0, deltaY: 10 }, {
+      source: "agent", credentialBoundary: true, signal: AbortSignal.timeout(800),
+    }));
+  const shownAs = [await shownTable()];
+  const rememberedWait = { right: await waitFor(rowNamed("hunt")), wrong: await waitFor(rowNamed("zzzz")) };
+  shownAs.push(await shownTable());
+  const rememberedScroll = { right: await scrollTo(rowNamed("hunt")), wrong: await scrollTo(rowNamed("zzzz")) };
+  shownAs.push(await shownTable());
+  const shownTableSnapshot = await snapshot(botTab);
+  const remembered = {
+    shownAs,
+    wait: rememberedWait,
+    scroll: rememberedScroll,
+    snapshot: {
+      leaked: JSON.stringify([shownTableSnapshot.text, shownTableSnapshot.elements, shownTableSnapshot.accessibilityTree]).includes("hunter2xyz"),
+      found: await Promise.all(shownTableSnapshot.elements.map((element) => waitFor(element.selector))),
+    },
+  };
 
   // 6. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
   step("6 delete");
@@ -334,6 +375,7 @@ void app.whenReady().then(async () => {
         isolation, masking, typing, noteTyping, pressing, navigationKey, refused, textLocators, roleLocators, tableSeen, covered, frame,
         hold: { heldState, held, personMayUse, afterRelease, heldTraces },
         reveal,
+        remembered,
         cleared,
         expected: {
           heldRefusal: boundary.BROWSER_HELD_TAB_REFUSED,

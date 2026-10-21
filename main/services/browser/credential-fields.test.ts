@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import playwright, { type Browser } from "playwright";
+import playwright, { type Browser, type Page } from "playwright";
 import {
   autocompleteFieldTokens,
   isSensitiveField,
@@ -18,10 +18,13 @@ import {
 import {
   assertBoundarySelector,
   boundaryRefusalOf,
+  BROWSER_BOUNDARY_AUTHOR_NAMED_ROLES,
+  BROWSER_LOCATOR_UNCHECKED_REFUSED,
   BROWSER_OPAQUE_TYPING_REFUSED,
   BROWSER_RECALL_FIELD_FUNCTION,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
+  BROWSER_STATE_SELECTOR_REFUSED,
   BROWSER_VALUE_SELECTOR_REFUSED,
   BROWSER_XPATH_SELECTOR_REFUSED,
   browserBoundaryLocatorExpression,
@@ -46,6 +49,40 @@ function element(localName: string, attributes: Record<string, string> = {}, chi
 }
 function documentNode(children: CdpDomNode[]): CdpDomNode {
   return { backendNodeId: nextId++, nodeType: 9, nodeName: "#document", children };
+}
+
+/**
+ * The bundled Playwright runtime installed in an isolated world of `page`,
+ * as the browser service does, with Playwright's own matches (`plain`) and
+ * the whole path a Bot's locator takes (`bot`: main's check, then the page),
+ * each as the matched elements' ids.
+ */
+async function boundaryWorld(page: Page) {
+  const options = { isUnderTest: false, sdkLanguage: "javascript", testIdAttributeName: "data-testid", stableRafCount: 1, browserName: "chromium", shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] };
+  const session = await page.context().newCDPSession(page);
+  const frame = (await session.send("Page.getFrameTree")).frameTree.frame.id;
+  const { executionContextId: contextId } = await session.send("Page.createIsolatedWorld", { frameId: frame, worldName: "aiden-browser", grantUniveralAccess: false });
+  const run = async (expression: string): Promise<string> => {
+    const result = await session.send("Runtime.evaluate", { expression, contextId, returnByValue: true });
+    if (result.exceptionDetails) {
+      const refused = boundaryRefusalOf(new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text));
+      return `error: ${(refused as Error).message}`;
+    }
+    return String(result.result.value);
+  };
+  await run(`(() => { const module = {exports:{}}; ${playwrightInjectedSource}\n globalThis.__aidenPlaywright = new (module.exports.InjectedScript())(globalThis, ${JSON.stringify(options)}); })()`);
+  const elementId = (element: string) => `(()=>{const e=${element};return e?e.id||e.localName:"none";})()`;
+  const plain = (selector: string) =>
+    run(`(()=>{const p=globalThis.__aidenPlaywright;return p.querySelectorAll(p.parseSelector(${JSON.stringify(selector)}),document).map(e=>e.id||e.localName).join(",")||"none";})()`);
+  const bot = async (selector: string): Promise<string> => {
+    try {
+      assertBoundarySelector(selector);
+    } catch (error) {
+      return `refused: ${(error as Error).message}`;
+    }
+    return run(elementId(browserBoundaryLocatorExpression(selector)));
+  };
+  return { session, contextId, run, plain, bot, elementId };
 }
 
 test("password inputs and credential, one-time code and card autocomplete fields are sensitive", () => {
@@ -253,7 +290,7 @@ test("Chromium: a password field the page turns into plain text stays sensitive 
   }
 });
 
-test("Chromium: every selector that can tell a field's value apart is refused; ordinary locators still work", { timeout: 30_000 }, async () => {
+test("Chromium: every selector that can tell a field's value or state apart is refused; ordinary locators still work", { timeout: 30_000 }, async () => {
   // Frameworks that mirror a controlled input into its `value` attribute let a
   // selector test what the person typed. Chromium is the oracle: each refused
   // selector really matches with the field's prefix and not with another one.
@@ -285,6 +322,48 @@ test("Chromium: every selector that can tell a field's value apart is refused; o
       assert.ok((await matches(selector)) >= 1, `${selector} finds its element`);
       assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
     }
+
+    // A field's state says what it holds too: the month a card-expiry list
+    // has chosen, whether a field is empty, valid against the page's own
+    // rules or in range, and which way its text runs. Each of these matches
+    // differently once the person has filled the form in; states that don't
+    // depend on the value match the same, and stay a Bot's to use.
+    await page.setContent(`<form>
+      <input id="pw" type="password" placeholder="Password" required minlength="4">
+      <select id="exp" autocomplete="cc-exp-month">${Array.from({ length: 12 }, (_, month) => `<option>${String(month + 1).padStart(2, "0")}</option>`).join("")}</select>
+      <input id="year" type="number" autocomplete="cc-exp-year" min="2024" max="2040">
+      <div id="otp" contenteditable autocomplete="one-time-code"></div>
+      <input id="name" autocomplete="cc-name" dir="auto"></form>`);
+    const states = [
+      "#exp option:nth-child(5):checked",
+      "#exp option:nth-child(5):/**/checked",
+      "#exp:has(option:nth-child(5):checked)",
+      'form >> internal:has="#exp option:nth-child(5):checked"',
+      "#pw:placeholder-shown",
+      "#pw:not(:placeholder-shown)",
+      "#pw:valid",
+      "#pw:invalid",
+      "#year:in-range",
+      "#year:out-of-range",
+      "#year:user-invalid",
+      "#otp:empty",
+      "#name:dir(rtl)",
+    ];
+    const steady = ["#pw:required", "#year:read-write", "#exp:enabled", "form:has(#pw:required)"];
+    const before = await Promise.all([...states, ...steady].map(matches));
+    await page.fill("#pw", "hunter2");
+    await page.selectOption("#exp", "05");
+    await page.fill("#year", "2050");
+    await page.fill("#otp", "482913");
+    await page.fill("#name", "שרה לוי");
+    for (const [index, selector] of states.entries()) {
+      assert.notEqual(await matches(selector), before[index], `${selector} tells what the field holds`);
+      assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_STATE_SELECTOR_REFUSED }, selector);
+    }
+    for (const [index, selector] of steady.entries()) {
+      assert.equal(await matches(selector), before[states.length + index], `${selector} doesn't depend on the value`);
+      assert.doesNotThrow(() => assertBoundarySelector(selector), selector);
+    }
   } finally {
     await browser?.close();
   }
@@ -298,7 +377,9 @@ test("Chromium: a Bot's locator can't tell what a password, card or code field h
   // field's text into the description of a button that points at it. The
   // bundled runtime, installed as the browser service does in an isolated
   // world, is the oracle: each form below finds the field, or an element
-  // around it, with the right prefix and nothing with a wrong one.
+  // around it, with the right prefix and nothing with a wrong one. A dialog
+  // or group named by its heading or legend still matches by that name when
+  // it holds a field, unless the legend itself holds one.
   const reads = (prefix: string) => [
     `xpath=//textarea[starts-with(.,'${prefix}')]`,
     `//form[contains(.,'${prefix}')]`,
@@ -320,6 +401,7 @@ test("Chromium: a Bot's locator can't tell what a password, card or code field h
     `form >> internal:has="internal:role=cell[name=/^${prefix}/]"`,
     `internal:role=button[name=/^${prefix}/]`,
     `internal:role=button[description=/${prefix}/]`,
+    `internal:role=group[name=/Expiry ${prefix}/]`,
   ];
   const ordinary: Array<[selector: string, id: string]> = [
     ['internal:role=textbox[name="Card number"i]', "card"],
@@ -334,8 +416,10 @@ test("Chromium: a Bot's locator can't tell what a password, card or code field h
     ['internal:role=cell[name="Password"i]', "pwlabel"],
     ["internal:role=checkbox", "remember"],
     ['internal:role=button[name="Help"i]', "help"],
+    ['internal:role=dialog[name="Billing"i]', "billing"],
+    ['internal:role=dialog[name="Billing"i] >> internal:role=button[name="Confirm"i]', "confirm"],
+    ['internal:role=group[name="Card details"i]', "cardset"],
   ];
-  const options = { isUnderTest: false, sdkLanguage: "javascript", testIdAttributeName: "data-testid", stableRafCount: 1, browserName: "chromium", shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] };
   let browser: Browser | undefined;
   try {
     browser = await playwright.chromium.launch({ headless: true });
@@ -352,38 +436,19 @@ test("Chromium: a Bot's locator can't tell what a password, card or code field h
       <button id="pay">Pay</button></form>
       <div role="button" id="wrap" tabindex="0"><input id="cc3" autocomplete="cc-number"></div>
       <p id="account">Signed in as sam@example.com</p>
+      <div role="dialog" id="billing" aria-labelledby="billing-title"><h2 id="billing-title">Billing</h2>
+        <input id="cc4" autocomplete="cc-number"><button id="confirm" type="button">Confirm</button></div>
+      <fieldset id="cardset"><legend>Card details</legend><input id="cc5" autocomplete="cc-number"></fieldset>
+      <fieldset id="expset"><legend>Expiry <input id="exp" autocomplete="cc-exp"></legend></fieldset>
       <script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<textarea id="csc" autocomplete="cc-csc">737</textarea>';</script>`);
     // Typed live, as the person would: the value is a property, never an attribute.
-    for (const [selector, value] of [["#pw", "hunter2xyz"], ["#otp2", "550071"], ["#cc", "4000123412341234"], ["#cc2", "5555444433332222"], ["#cc3", "6011000990139424"]] as const) {
+    for (const [selector, value] of [["#pw", "hunter2xyz"], ["#otp2", "550071"], ["#cc", "4000123412341234"], ["#cc2", "5555444433332222"], ["#cc3", "6011000990139424"], ["#cc4", "378282246310005"], ["#cc5", "3530111333300000"], ["#exp", "1229"]] as const) {
       await page.fill(selector, value);
     }
-    const session = await page.context().newCDPSession(page);
-    const frame = (await session.send("Page.getFrameTree")).frameTree.frame.id;
-    const { executionContextId: contextId } = await session.send("Page.createIsolatedWorld", { frameId: frame, worldName: "aiden-browser", grantUniveralAccess: false });
-    const run = async (expression: string): Promise<string> => {
-      const result = await session.send("Runtime.evaluate", { expression, contextId, returnByValue: true });
-      if (result.exceptionDetails) {
-        const refused = boundaryRefusalOf(new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text));
-        return `error: ${(refused as Error).message}`;
-      }
-      return String(result.result.value);
-    };
-    await run(`(() => { const module = {exports:{}}; ${playwrightInjectedSource}\n globalThis.__aidenPlaywright = new (module.exports.InjectedScript())(globalThis, ${JSON.stringify(options)}); })()`);
-    const elementId = (element: string) => `(()=>{const e=${element};return e?e.id||e.localName:"none";})()`;
-    const plain = (selector: string) =>
-      run(`(()=>{const p=globalThis.__aidenPlaywright;return p.querySelectorAll(p.parseSelector(${JSON.stringify(selector)}),document).map(e=>e.id||e.localName).join(",")||"none";})()`);
-    // The whole path a Bot's locator takes: main's check, then the page.
-    const bot = async (selector: string): Promise<string> => {
-      try {
-        assertBoundarySelector(selector);
-      } catch (error) {
-        return `refused: ${(error as Error).message}`;
-      }
-      return run(elementId(browserBoundaryLocatorExpression(selector)));
-    };
+    const { session, contextId, run, plain, bot, elementId } = await boundaryWorld(page);
 
     const told = new Set<number>();
-    for (const [prefix, other] of [["4111", "9999"], ["4829", "9999"], ["737", "999"], ["hunt", "zzzz"], ["5500", "9999"], ["4000", "9999"], ["5555", "9999"], ["6011", "9999"]] as const) {
+    for (const [prefix, other] of [["4111", "9999"], ["4829", "9999"], ["737", "999"], ["hunt", "zzzz"], ["5500", "9999"], ["4000", "9999"], ["5555", "9999"], ["6011", "9999"], ["1229", "9999"]] as const) {
       const right = reads(prefix), wrong = reads(other);
       for (const [index, selector] of right.entries()) {
         const [matched, missed] = [await plain(selector), await plain(wrong[index]!)];
@@ -412,6 +477,15 @@ test("Chromium: a Bot's locator can't tell what a password, card or code field h
       assert.equal(await bot(selector), id, `${selector} still finds it for a Bot`);
     }
 
+    // A runtime with a selector engine the boundary doesn't know (one that
+    // reads what a field holds, here) runs no Bot locator at all.
+    await run(`globalThis.__aidenPlaywright._engines.set("value",{queryAll:(root,body)=>[...root.querySelectorAll("input")].filter((e)=>e.value.startsWith(body))})`);
+    assert.equal(await plain("value=hunt"), "pw", "the new engine reads the password");
+    assert.equal(await bot("value=hunt"), `error: ${BROWSER_LOCATOR_UNCHECKED_REFUSED}`);
+    assert.equal(await bot("text=Pay"), `error: ${BROWSER_LOCATOR_UNCHECKED_REFUSED}`);
+    await run(`globalThis.__aidenPlaywright._engines.delete("value")`);
+    assert.equal(await bot("text=Pay"), "pay");
+
     // The snapshot's locators: Playwright's generator names the button around
     // a card field by its number; in a Bot's view no locator carries a value,
     // and each still finds its element for the Bot.
@@ -426,6 +500,27 @@ test("Chromium: a Bot's locator can't tell what a password, card or code field h
     const bounded = await generated(browserBoundarySelectorsExpression(list));
     assert.doesNotMatch(JSON.stringify(bounded), values);
     for (const [index, selector] of bounded.entries()) assert.equal(await bot(selector), listed[index], `${selector} finds #${listed[index]} for a Bot`);
+  } finally {
+    await browser?.close();
+  }
+});
+
+test("Chromium: a Bot's role locators leave out only names that could read a field", { timeout: 30_000 }, async () => {
+  let browser: Browser | undefined;
+  try {
+    browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    // A page without password, code or card fields: nothing is left out, however large it is.
+    await page.setContent(`<table><tr id="order"><td>Order 42</td><td id="lines"></td></tr></table>
+      <script>const lines = document.getElementById("lines"); for (let i = 0; i < 25000; i += 1) lines.append(document.createElement("span"));</script>`);
+    const { run, plain, bot } = await boundaryWorld(page);
+    assert.equal(await plain("internal:role=row[name=/Order 42/]"), "order");
+    assert.equal(await bot("internal:role=row[name=/Order 42/]"), "order");
+    // The roles whose content a Bot's role locator doesn't follow: Playwright
+    // never names an element with one of them from its text or the value of a
+    // field inside it.
+    const namedFromContent = await run(`(()=>{const u=globalThis.__aidenPlaywright.utils;return ${JSON.stringify(BROWSER_BOUNDARY_AUTHOR_NAMED_ROLES)}.filter((role)=>{const e=document.createElement("div");e.setAttribute("role",role);const field=document.createElement("input");field.value="4242";e.append("Text ",field);document.body.append(e);const seen=u.getAriaRole(e);const name=u.getElementAccessibleNameText(e,false);e.remove();return seen!==role||/Text|4242/.test(name);}).join(",")||"none";})()`);
+    assert.equal(namedFromContent, "none");
   } finally {
     await browser?.close();
   }

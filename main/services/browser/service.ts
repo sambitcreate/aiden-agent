@@ -1555,6 +1555,9 @@ export class BrowserService {
     credentialBoundary = false,
   ): Promise<BrowserSnapshot> {
     const generation = ++tab.referenceGeneration;
+    // A field the tab remembers as a password field is marked first, so the
+    // element locators, generated in a Bot's view of the page, treat it as one.
+    if (credentialBoundary) await this.recallSensitiveFields(tab, signal);
     const data = await this.evaluate(
       tab,
       `(() => {
@@ -1620,8 +1623,10 @@ export class BrowserService {
   /**
    * Read the page's sensitive fields into the tab's memory. With `mark`, a
    * field only memory knows (a password field the page turned into plain
-   * text) is marked in Aiden's isolated world, so the typing guard and the
-   * field probe treat it as what it was.
+   * text) is marked in Aiden's isolated world, so the typing guard, the field
+   * probe and a Bot's locators (a wait, a click, type or scroll target, the
+   * snapshot's generated locators) treat it as what it was. Called before
+   * each of them.
    */
   private async recallSensitiveFields(tab: LiveTab, signal?: AbortSignal, mark = true): Promise<void> {
     const wc = tab.view.webContents;
@@ -1732,6 +1737,8 @@ export class BrowserService {
     boundary = false,
   ): Promise<{ x: number; y: number }> {
     const target = this.target(tab, command, boundary);
+    // Before a Bot's locator runs, as before it types: see `recallSensitiveFields`.
+    if (boundary && !command.ref) await this.recallSensitiveFields(tab, signal);
     const end =
       Date.now() + browserBoundedNumber(command.timeoutMs ?? 15000, 1, 60000, "Action timeout");
     let failure: unknown;
@@ -2920,6 +2927,8 @@ export class BrowserService {
     )
       throw new Error("Provide at least one browser wait condition.");
     const target = input.selector || input.locator ? this.target(tab, input, boundary) : undefined;
+    // Before a Bot's locator runs, as before it types: see `recallSensitiveFields`.
+    if (target && boundary) await this.recallSensitiveFields(tab, signal);
     while (Date.now() < end) {
       check();
       browserAbort(signal);

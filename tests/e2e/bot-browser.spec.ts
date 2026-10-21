@@ -146,6 +146,16 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.reveal.typingShownByPerson).toBe(result.expected.typingRefusal);
   expect(result.reveal.probedShownByBot, "approvals and rules still read a password field").toBe("password");
   expect(result.reveal.probedType, "also after the person showed it").toBe("password");
+  // A remembered field the person showed as plain text: a Bot's wait and
+  // scroll can't tell its value apart through the row around it, and the
+  // snapshot's locators don't quote it, each on a page nothing marked first.
+  expect(result.remembered.shownAs, "the person showed the fields as text").toEqual(["text", "text", "text"]);
+  expect(result.remembered.wait).toEqual({ right: timedOut, wrong: timedOut });
+  expect(result.remembered.scroll.right).not.toBe("ran");
+  expect(result.remembered.scroll.right).toBe(result.remembered.scroll.wrong);
+  expect(result.remembered.snapshot.leaked).toBe(false);
+  expect(result.remembered.snapshot.found.length).toBeGreaterThan(0);
+  expect(result.remembered.snapshot.found.every((found: string) => found === "ran"), JSON.stringify(result.remembered.snapshot.found)).toBe(true);
 
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
   expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });

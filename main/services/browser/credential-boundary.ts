@@ -336,7 +336,13 @@ export const BROWSER_VALUE_SELECTOR_REFUSED =
   "A Bot can't find fields by what is typed in them. Use a role, label or text locator.";
 export const BROWSER_XPATH_SELECTOR_REFUSED =
   "A Bot can't use XPath locators. Use a role, label, text or CSS locator.";
-/** Only if the bundled Playwright runtime no longer has the text cache a Bot's locator relies on. */
+export const BROWSER_STATE_SELECTOR_REFUSED =
+  "A Bot can't find fields by their state (checked, empty, valid or in range). Use a role locator, such as internal:role=checkbox[checked=true].";
+/**
+ * Only if the bundled Playwright runtime no longer has what a Bot's locator
+ * relies on: its text cache and role engines, and no selector engine or CSS
+ * function the boundary doesn't know.
+ */
 export const BROWSER_LOCATOR_UNCHECKED_REFUSED =
   "Aiden couldn't check this locator against password, code or card fields. Use the page snapshot's element references.";
 
@@ -393,20 +399,54 @@ const VALUE_ATTRIBUTE = /\[\s*(?:[\w*-]*\|)?value\b|\\/iu;
 const XPATH_SELECTOR = /(?:^|>>|\*?\s*(?:internal:(?:has|has-not|and|or|chain)|left-of|right-of|above|below|near)\s*=\s*")\s*\*?\s*(?:xpath(?::light)?\s*=|\(*\/\/|\.\.)/iu;
 /** CSS comments, which a selector parser skips, so a comment can hide `[value`. */
 const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/gu;
+/**
+ * CSS pseudo-classes whose match depends on what a field holds: the option a
+ * card-expiry list has chosen (`:checked`, and `:default` where a framework
+ * mirrors the choice into `selected`), whether a field is empty
+ * (`:placeholder-shown`, `:empty`, `:blank`), valid or in range against the
+ * page's own pattern, length and limits (`:valid`, `:user-invalid`,
+ * `:in-range`…), whether a choice was made (`:indeterminate`), autofill, the
+ * direction of its text (`:dir()`, which `dir=auto` takes from the value) and
+ * a custom element's own states (`:state()`). Matched anywhere in the
+ * selector, so also inside `:is()`, `:not()`, `:has()` and a nested
+ * selector's body (`internal:has="…"`). `:required`, `:optional`,
+ * `:read-write`, `:enabled` and `:focus` don't depend on the value and stay.
+ */
+const STATE_PSEUDO_CLASS =
+  /:(?:(?:-webkit-|-internal-)?autofill|(?:checked|indeterminate|default|placeholder-shown|(?:user-)?(?:in)?valid|in-range|out-of-range|empty|blank)(?![\w-])|(?:state|dir)\s*\()/iu;
 
 /**
  * Refuse a selector that could tell what a field holds before the page runs
- * it: one testing a `value` attribute, directly or behind a CSS comment, and
- * any XPath, whose string tests read the text inside a field and every
- * element around it. `browserBoundaryLocatorExpression` refuses XPath again
- * with Playwright's own parser.
+ * it: one testing a `value` attribute or a field's state
+ * (`STATE_PSEUDO_CLASS`), directly or behind a CSS comment, and any XPath,
+ * whose string tests read the text inside a field and every element around
+ * it. `browserBoundaryLocatorExpression` refuses XPath again with
+ * Playwright's own parser.
  */
 export function assertBoundarySelector(selector: string | undefined): void {
   if (selector === undefined) return;
   const uncommented = selector.replace(CSS_COMMENT, "");
   if (VALUE_ATTRIBUTE.test(selector) || VALUE_ATTRIBUTE.test(uncommented)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
+  if (STATE_PSEUDO_CLASS.test(selector) || STATE_PSEUDO_CLASS.test(uncommented)) throw new Error(BROWSER_STATE_SELECTOR_REFUSED);
   if (XPATH_SELECTOR.test(selector) || XPATH_SELECTOR.test(uncommented)) throw new Error(BROWSER_XPATH_SELECTOR_REFUSED);
 }
+
+/**
+ * Roles Playwright's accessible name never takes from an element's own
+ * content: only from `aria-labelledby`, `aria-label`, its labels, its title
+ * or a native caption (a fieldset's legend, a table's caption, a figure's
+ * figcaption). A dialog or group whose name comes from a heading or legend
+ * still matches by name when it holds a card or password field. Any role not
+ * listed is treated as named from its content, so a runtime that names more
+ * roles from content is still covered.
+ */
+export const BROWSER_BOUNDARY_AUTHOR_NAMED_ROLES: readonly string[] = Object.freeze([
+  "alert", "alertdialog", "application", "article", "banner", "blockquote", "combobox", "complementary", "contentinfo",
+  "dialog", "document", "feed", "figure", "form", "grid", "group", "img", "list", "listbox", "listitem", "log", "main",
+  "marquee", "math", "menu", "menubar", "meter", "navigation", "note", "progressbar", "radiogroup", "region", "rowgroup",
+  "scrollbar", "search", "searchbox", "separator", "slider", "spinbutton", "status", "table", "tablist", "tabpanel",
+  "textbox", "timer", "toolbar", "tree", "treegrid",
+]);
 
 /**
  * Whether an element's accessible name (or description) could include what
@@ -422,6 +462,9 @@ const inside=(e)=>{for(let a=parent(e);a;a=parent(a))if(__aidenSensitive(a))retu
 const children=(e)=>[...e.children,...(e.shadowRoot?e.shadowRoot.children:[]),...(e.localName==="slot"&&typeof e.assignedElements==="function"?e.assignedElements({flatten:true}):[])];
 const refs=(e,name)=>{const value=e.getAttribute(name);const root=e.getRootNode();const found=[];if(!value||!root||typeof root.querySelector!=="function")return found;for(const id of new Set([...value.split(" "),...value.split(/\\s+/)])){if(!id)continue;const target=root.querySelector("#"+CSS.escape(id));if(target)found.push(target);}return found;};
 const reaches=(c,from,self)=>{const seen=new Set(self?[]:[c]);const queue=[...from];let budget=20000;while(queue.length>0){const e=queue.pop();if(seen.has(e))continue;seen.add(e);if(--budget<0||__aidenSensitive(e))return true;queue.push(...children(e),...refs(e,"aria-owns"),...refs(e,"aria-labelledby"),...(e.labels||[]));}return false;};
+const authored=new Set(${JSON.stringify(BROWSER_BOUNDARY_AUTHOR_NAMED_ROLES)});
+const captions=new Set(["legend","caption","figcaption","title"]);
+const own=(c)=>{const role=String(globalThis.__aidenPlaywright.utils.getAriaRole(c)||"");const all=children(c);return authored.has(role)&&String(c.localName).toLowerCase()!=="summary"?all.filter((e)=>captions.has(String(e.localName).toLowerCase())):all;};
 return (c,body)=>{
 if(inside(c))return true;
 const named=/name|\\\\/i.test(body),described=/description|\\\\/i.test(body);
@@ -431,9 +474,29 @@ if(described&&reaches(c,refs(c,"aria-describedby"),true))return true;
 if(!named)return false;
 const label=c.getAttribute("aria-label");
 if(!c.hasAttribute("aria-labelledby")&&label&&label.trim())return false;
-return reaches(c,refs(c,"aria-labelledby"),true)||reaches(c,[...children(c),...refs(c,"aria-owns"),...(c.labels||[])],false);};
+return reaches(c,refs(c,"aria-labelledby"),true)||reaches(c,[...own(c),...refs(c,"aria-owns"),...(c.labels||[])],false);};
 })();
 const __aidenBoundaryName=(e)=>__aidenNameReadsField(e,"name")?"":String(globalThis.__aidenPlaywright.utils.getElementAccessibleNameText(e,false)||"");`;
+
+/**
+ * The selector engines of the bundled runtime (`playwright-source.generated.ts`,
+ * `InjectedScript._engines`) and the CSS functions its evaluator implements
+ * (`_evaluator._engines`). A Bot's locator runs only while the runtime has
+ * no others: a new one could read a field's text or a name the boundary
+ * doesn't cover. Update them with a Playwright upgrade, after checking what
+ * each new engine reads.
+ */
+const BOUNDARY_SELECTOR_ENGINES: readonly string[] = [
+  "xpath", "xpath:light", "role", "text", "text:light", "id", "id:light", "data-testid", "data-testid:light",
+  "data-test-id", "data-test-id:light", "data-test", "data-test:light", "css", "nth", "visible", "internal:control",
+  "internal:has", "internal:has-not", "internal:and", "internal:or", "internal:chain", "internal:label", "internal:text",
+  "internal:has-text", "internal:has-not-text", "internal:attr", "internal:testid", "internal:role", "internal:describe",
+  "aria-ref",
+];
+const BOUNDARY_CSS_FUNCTIONS: readonly string[] = [
+  "not", "is", "where", "has", "scope", "light", "visible", "text", "text-is", "text-matches", "has-text",
+  "right-of", "left-of", "above", "below", "near", "nth-match",
+];
 
 /**
  * A Bot's view of the page for Playwright's selector engines, in Aiden's
@@ -450,32 +513,38 @@ const __aidenBoundaryName=(e)=>__aidenNameReadsField(e,"name")?"":String(globalT
  *   too) into the name of a cell, row, checkbox label or button around it.
  *   Their matches leave out any element whose name or description, when the
  *   role tests one, could read a field: through its content (children,
- *   shadow tree, slotted elements), `aria-owns`, `<label>` elements or
+ *   shadow tree, slotted elements; for a role in
+ *   `BROWSER_BOUNDARY_AUTHOR_NAMED_ROLES` only its legend, caption,
+ *   figcaption or title), `aria-owns`, `<label>` elements or
  *   `aria-labelledby` (`aria-describedby` for a description), followed from
- *   element to element. A field's own label doesn't count, unless it is an
- *   element it names by `aria-labelledby`, whose content Playwright reads
- *   with the field's value in it. An element named by its own `aria-label`
- *   alone keeps its name, as does a field named only by its label. Elements
- *   inside a field (a card-expiry list's options) never match, and a field
- *   that isn't an input, textarea or select (a contenteditable code field)
- *   never matches by name.
+ *   element to element (everything below those, whatever its role). A
+ *   field's own label doesn't count, unless it is an element it names by
+ *   `aria-labelledby`, whose content Playwright reads with the field's value
+ *   in it. An element named by its own `aria-label` alone keeps its name, as
+ *   does a field named only by its label. Elements inside a field (a
+ *   card-expiry list's options) never match, and a field that isn't an
+ *   input, textarea or select (a contenteditable code field) never matches by
+ *   name. On a page with none of these fields, role engines run as they are.
  *
  * So a field's contents never decide a match, for the field or any element
- * around it. Without the cache or the engines (another Playwright runtime),
- * nothing runs.
+ * around it. Without the cache or the engines, or with a selector engine or
+ * CSS function the boundary doesn't know (another Playwright runtime, which
+ * could read text or names some other way), nothing runs.
  */
 const BROWSER_BOUNDARY_SCOPE_SOURCE = `const __aidenBoundaryScope=(run)=>{
 const p=globalThis.__aidenPlaywright;const evaluator=p&&p._evaluator;const cache=evaluator&&evaluator._cacheText;const engines=p&&p._engines;
+const known=(map,names)=>map instanceof Map&&[...map.keys()].every((name)=>names.includes(name));
 const roles=engines instanceof Map?["role","internal:role"].map((name)=>[name,engines.get(name)]):[];
-if(!(cache instanceof Map)||typeof evaluator.begin!=="function"||typeof evaluator.end!=="function"||roles.length===0||roles.some(([,engine])=>!engine||typeof engine.queryAll!=="function"))throw new Error(${JSON.stringify(BROWSER_LOCATOR_UNCHECKED_REFUSED)});
+if(!(cache instanceof Map)||typeof evaluator.begin!=="function"||typeof evaluator.end!=="function"||!known(engines,${JSON.stringify(BOUNDARY_SELECTOR_ENGINES)})||!known(evaluator._engines,${JSON.stringify(BOUNDARY_CSS_FUNCTIONS)})||roles.length===0||roles.some(([,engine])=>!engine||typeof engine.queryAll!=="function"))throw new Error(${JSON.stringify(BROWSER_LOCATOR_UNCHECKED_REFUSED)});
 evaluator.begin();
 try{
 for(const key of Object.keys(evaluator)){const value=evaluator[key];if(key.startsWith("_cache")&&value instanceof Map)value.clear();}
 const blank=(node)=>cache.set(node,{full:"",normalized:"",immediate:[]});
 const blankAll=(root)=>{for(const e of root.querySelectorAll("*")){blank(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}};
-const hide=(root)=>{for(const e of root.querySelectorAll("*")){if(__aidenSensitive(e)){blank(e);blankAll(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}else if(e.shadowRoot)hide(e.shadowRoot);}};
+let fields=0;
+const hide=(root)=>{for(const e of root.querySelectorAll("*")){if(__aidenSensitive(e)){fields+=1;blank(e);blankAll(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}else if(e.shadowRoot)hide(e.shadowRoot);}};
 hide(document);
-for(const [name,engine] of roles)engines.set(name,{queryAll:(root,body)=>engine.queryAll(root,body).filter((e)=>!__aidenNameReadsField(e,String(body)))});
+if(fields>0)for(const [name,engine] of roles)engines.set(name,{queryAll:(root,body)=>engine.queryAll(root,body).filter((e)=>!__aidenNameReadsField(e,String(body)))});
 return run();
 }finally{for(const [name,engine] of roles)engines.set(name,engine);evaluator.end();}};`;
 
