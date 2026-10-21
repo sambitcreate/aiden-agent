@@ -1,4 +1,4 @@
-import { PiVerificationStore, verificationIdentity, verificationSnapshot } from "./pi-verification-store.js";
+import { PiVerificationStore, VERIFICATION_RETENTION_MS, verificationIdentity, verificationSnapshot } from "./pi-verification-store.js";
 import { WorkflowEvidenceStore } from "./workflow-evidence-store.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { DataStore } from "./data-store.js";
@@ -135,6 +135,7 @@ export class PiRuntimeEffectStore {
   private readonly localUnknown = new Map<string, DurablePiRuntimeEffect>();
   private initialized = false;
   private initialization?: Promise<void>;
+  private receiptCatchUp: Promise<void> = Promise.resolve();
 
   constructor(options: PiRuntimeEffectStoreOptions) {
     this.now = options.now ?? Date.now;
@@ -213,12 +214,22 @@ export class PiRuntimeEffectStore {
       });
       if (changed) database.revision += 1;
     });
-    // Terminal operations are the durable publication outbox. Retry any receipt
-    // lost after the effect journal committed, including a previous startup retry.
-    for (const operation of (await this.data.load()).operations) {
-      if (operation.state !== "running") await this.recordOperationVerification(operation);
-    }
     this.initialized = true;
+    // Terminal operations are the durable publication outbox. Retry receipts
+    // lost after the effect journal committed, off the startup path: receipts
+    // are private evidence and must never delay or fail runtime recovery.
+    // Operations past receipt retention would only be pruned again.
+    const retainedSince = this.currentTime() - VERIFICATION_RETENTION_MS;
+    const pending = (await this.data.load()).operations
+      .filter((operation) => operation.state !== "running" && operation.updatedAt > retainedSince);
+    this.receiptCatchUp = (async () => {
+      for (const operation of pending) await this.recordOperationVerification(operation);
+    })();
+  }
+
+  /** Resolves once startup receipt catch-up has finished; failures are already absorbed. */
+  settleVerificationReceipts(): Promise<void> {
+    return this.receiptCatchUp;
   }
 
   async startOperation(value: unknown): Promise<DurablePiRuntimeOperation> {
@@ -311,7 +322,16 @@ export class PiRuntimeEffectStore {
     return finished;
   }
 
+  /** Best effort: the effect journal is authoritative, so a receipt failure never fails the run. */
   private async recordOperationVerification(finished: DurablePiRuntimeOperation): Promise<void> {
+    try {
+      await this.publishOperationVerification(finished);
+    } catch {
+      // A missing receipt reads as "no evidence"; startup catch-up retries it.
+    }
+  }
+
+  private async publishOperationVerification(finished: DurablePiRuntimeOperation): Promise<void> {
     await this.verification.check(finished.chatId, toolOutputScope({ runId: finished.runId, sessionId: finished.sessionId }), {
       checkId: verificationIdentity("check", finished.operationId), runId: verificationIdentity("run", finished.runId), turnId: verificationIdentity("turn", finished.operationId),
       artifactId: verificationIdentity("artifact", finished.operationId), kind: "response_ended",

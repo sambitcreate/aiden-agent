@@ -36,6 +36,9 @@ test("changed arguments remain bounded and denied actions terminate immediately"
     assert.equal(state.shouldStop, i === 7);
   }
   assert.equal(advanceAttendedToolErrorState(undefined, [{ isError: true, content: [{ type: "text", text: "The user denied this action." }] }]).shouldStop, true);
+  // A filesystem or HTTP permission error is not a user denial; the model may still try another path.
+  const eacces = [{ isError: true, toolName: "read", toolCallId: "call", content: [{ type: "text", text: "EACCES: permission denied, open '/etc/shadow'" }] }];
+  assert.equal(advanceAttendedToolErrorState(undefined, eacces, [{ id: "call", name: "read", arguments: { path: "/etc/shadow" } }]).shouldStop, false);
 });
 
 test("repeated attended tool errors recover with one host-directed text-only turn", () => {

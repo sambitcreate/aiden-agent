@@ -52,7 +52,7 @@ export function advanceAttendedToolErrorState(
     const call = calls.find((item) => item.id === result.toolCallId);
     const text = Array.isArray(result.content) ? result.content.filter((item) => item?.type === "text").map((item) => item.text).join(" ").slice(0, 4096) : "";
     // Closed categories only. Denial is terminal even if a provider changes arguments.
-    const terminal = /user denied this action|user declined this automation|action was cancelled before approval|permission denied|authority.*revoked|approval.*cancelled|operation aborted/iu.test(text);
+    const terminal = /user denied this action|user declined this automation|action was cancelled before approval|authority.*revoked|approval.*cancelled|operation aborted/iu.test(text);
     const category = terminal ? "denied" : /invalid|validation|malformed/iu.test(text) ? "invalid" : "failed";
     const digest = call ? (executedArguments.has(call) ? executedArguments.get(call) : argumentDigest(call.arguments)) : "unknown";
     if (terminal || totalFailures >= MAX_ATTENDED_TOOL_FAILURES) shouldStop = true;

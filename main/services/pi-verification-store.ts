@@ -35,7 +35,8 @@ const KINDS: VerificationKind[] = ["response_ended", "tool_execution", "artifact
 const RESULTS: VerificationResult[] = ["passed", "failed", "not_run", "inconclusive"];
 const ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,159}$/u;
 const HASH = /^[a-f0-9]{64}$/u;
-const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const VERIFICATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const RETENTION_MS = VERIFICATION_RETENTION_MS;
 const MAX_RECEIPTS = 512;
 export function verificationSnapshot(bytes: string | Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");

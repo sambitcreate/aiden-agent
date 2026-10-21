@@ -1,6 +1,6 @@
 # Aiden harness quality and reliability upgrade
 
-Status: Active (2026-10-19). Implementation authorized, with fresh-context GPT-6.1 Sol/medium review after each phase. PR and exact-head CI required; do not merge. Live evaluation and release acceptance remain separate gates.
+Status: Foundation merged (2026-10-21) in [PR #553](https://github.com/sambitcreate/aiden-agent/pull/553) for 0.60.0: H0, H1a–d, H2a–b, H3, H4a–b and H5a. Still active: the H2c live pilot (awaiting the owner's provider/model and spend cap) and H5b, which depends on it. Live evaluation and release acceptance remain separate gates. (2026-10-19 status: implementation authorized with fresh-context review after each phase; PR and exact-head CI required; do not merge until the owner decided.)
 
 ## Objective and Pi decision
 
@@ -255,3 +255,5 @@ H2a child follow-up: a real-harness cap-three reproduction previously dispatched
 Integration refreshed through origin/main4eb306584 (merge d1ff95802); only documentation/comment changes arrived. Root test-chain union is preserved, no Remote revision change is required. Broader local gates: compaction545, MCP290, Assistant automations239 passed.
 
 H4: older settled text rows use browser containment; artifact/interactive rows and the latest 32 remain normal. Three paired production-package runs improved 2,000-message median opening 18.3% (1,282→1,047 ms), with 50-message regression 2.1% (139→142 ms); declared 15%/20%-or-25 ms targets pass. Active-stream input 42–49 ms with measured server-emitted deltas passes 100 ms target. Fresh review corrections and Electron find/keyboard/copy/scroll/handoff/wide-artifact checks are recorded in [the performance report](../research/harness-transcript-performance.md). All rows remain mounted; no heap/battery benefit claimed.43 renderer tests and initial-JS budget pass; signed release acceptance stays separate.
+
+Merge (2026-10-21): merged `origin/main` (#560–#566, #568, #572, #576) into the branch. Pre-merge review fixes: lifecycle receipt publication is best effort (an unreadable receipt file, a deleted chat or a failed write no longer fails startup or turns a finished run into a host failure) and startup receipt catch-up runs in the background, limited to operations within receipt retention; the attended tool guard no longer treats a filesystem/HTTP "permission denied" error as a terminal user denial. Merged at the owner's request without waiting for H2c, which stays open with H5b.

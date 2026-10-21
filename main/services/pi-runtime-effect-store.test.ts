@@ -70,13 +70,19 @@ async function withTempDirectory(run: (directory: string) => Promise<void>): Pro
   try {
     await run(directory);
   } finally {
+    // Startup receipt catch-up runs in the background; let it finish before cleanup.
+    await Promise.all([...openedStores].map((store) => store.settleVerificationReceipts()));
+    openedStores.clear();
     await rm(directory, { recursive: true, force: true });
   }
 }
 
+const openedStores = new Set<PiRuntimeEffectStore>();
 function makeStore(directory: string, startAt = 1_000): PiRuntimeEffectStore {
   let clock = startAt;
-  return new PiRuntimeEffectStore({ root: () => directory, now: () => clock++ });
+  const store = new PiRuntimeEffectStore({ root: () => directory, now: () => clock++ });
+  openedStores.add(store);
+  return store;
 }
 
 test("replay metadata is closed and defaults every non-safe declaration to never", () => {
@@ -938,12 +944,30 @@ test("restart retries lifecycle receipt publication after effect recovery alread
       if (fail) { fail = false; return Promise.reject(new Error("receipt publication failed")); }
       return publish(...args);
     };
-    await assert.rejects(restarted.initialize(), /receipt publication failed/);
+    // A failed receipt never blocks startup; the next restart retries it.
     await restarted.initialize();
-    const receipts = await restarted.verification.list(input.chatId, toolOutputScope({ runId: input.runId, sessionId: input.sessionId }));
+    await restarted.settleVerificationReceipts();
+    const scope = toolOutputScope({ runId: input.runId, sessionId: input.sessionId });
+    assert.equal((await restarted.verification.list(input.chatId, scope)).length, 0);
+    assert.equal((await restarted.listOperationsByChat(input.chatId))[0]?.state, "interrupted");
+    const again = makeStore(directory); await again.initialize(); await again.settleVerificationReceipts();
+    const receipts = await again.verification.list(input.chatId, scope);
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0]?.result, "inconclusive");
-    assert.equal((await restarted.listOperationsByChat(input.chatId))[0]?.state, "interrupted");
+  });
+});
+
+test("unreadable verification receipts never block startup or fail a finished run", async () => {
+  await withTempDirectory(async (directory) => {
+    const first = makeStore(directory); await first.initialize();
+    const interrupted = operation("before-corruption"); await first.startOperation(interrupted);
+    await writeFile(path.join(directory, "pi-verification-receipts.json"), "{not json");
+    const restarted = makeStore(directory);
+    await restarted.initialize();
+    await restarted.settleVerificationReceipts();
+    assert.equal((await restarted.listOperationsByChat(interrupted.chatId))[0]?.state, "interrupted");
+    const next = operation("after-corruption"); await restarted.startOperation(next);
+    assert.equal((await restarted.finishOperation(next.operationId, "completed")).state, "completed");
   });
 });
 
