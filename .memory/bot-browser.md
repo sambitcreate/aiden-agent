@@ -18,7 +18,9 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - Sensitive: `input[type=password]`, autocomplete `current-password`, `new-password`, `one-time-code`, `cc-*` (section-, shipping, billing, home, work … prefixes ignored). The walker reads `DOM.getDocument({depth:-1, pierce:true})` through `CdpPort.call` (renamed from `send` so the IPC contract test doesn't read `port.send("DOM.…")` as a notification).
 - Text: `scrubBrowserSnapshot` drops a sensitive field's AX value and its subtree; the element entry keeps label and placeholder.
 - Image: boxes read before and after capture, union painted gray (0x8a) in main, then `redactBrowserData`. The image is dropped with a `BROWSER_IMAGE_OMITTED` note when a **visible** opaque frame (cross-site iframe; OOPIF masking is not supported), pinch zoom, a navigation or a scroll change happened.
-- Selectors: `assertBoundarySelector` refuses CSS/Playwright `[value…]`, XPath `@value` and `attribute::value`, and backslash escapes, in main and in `bot-browser-approval.ts` before the probe runs the selector.
+- Selectors: `assertBoundarySelector` refuses CSS/Playwright `[value…]` (checked as written and with CSS comments removed), any XPath attribute step that isn't one plain non-`value` name (`@*`, `attribute::*`, `@node()`, namespaced), and backslash escapes, in main and in `bot-browser-approval.ts` before the probe runs the selector. The Chromium oracle test in `credential-fields.test.ts` proves each refused form really distinguishes a value.
+- `scrubBrowserSnapshot` also replaces a sensitive element's text-engine selector (`internal:text="…"`, which Playwright generates for a textarea with content) with a structural one.
+- Held tabs: `Network.responseReceived` and `console-message` are not recorded while `tab.hold` is set, so a released tab's snapshot never replays the person's sign-in (e2e `heldTraces`).
 - Typing guard: `browserTypingGuardSource` refuses a sensitive named target and a sensitive or opaque focused target (through shadow roots and same-origin frames); `browser_press` of a printable key (`browserKeyInsertsText`) runs the same guard. Page-world errors come back with the page stack; `boundaryRefusalOf` turns them into the bare sentence.
 - The probe role uses Playwright's `getAriaRole`, falling back to `textbox` for contenteditable.
 
@@ -56,5 +58,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Bran
 - No setter for the `takeover` hold reason yet.
 - Contenteditable secrets in `innerText` are not scrubbed (only form fields are sensitive).
 - Ownership follows the last window that read the Bot's browser state.
+- `browser_status` and the gateway still list a held tab's URL and title (the Bot's turn is waiting on the card meanwhile, so it can't poll them).
+- Sensitivity is by `type`/`autocomplete` only: a "show password" toggle that turns a field into `type=text` without a credential `autocomplete` unmasks it.
 - `sign-in-origin.ts` is for P7; nothing uses it yet.
 - Real-site sign-in and visual masking in a real window are owner-Mac checks.

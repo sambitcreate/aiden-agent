@@ -106,6 +106,8 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   for (const field of ["password", "otp", "card"]) expect(painted(afterRelease[field]), `${field} after release`).toBe(true);
   expect(afterRelease.control).toEqual(RED);
   expect(afterRelease.leaked).toEqual([]);
+  // The pages the person loaded and what they logged while holding the tab never reach the Bot.
+  expect(result.hold.heldTraces).toBe(false);
 
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
   expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });

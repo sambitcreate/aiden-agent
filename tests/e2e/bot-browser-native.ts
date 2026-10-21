@@ -46,6 +46,9 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
         <input id="otp" autocomplete="one-time-code" value="481516" aria-label="Code" style="left:20px;top:100px;${FIELD}">
         <input id="card" autocomplete="cc-number" value="4242424242424242" aria-label="Card" style="left:20px;top:180px;${FIELD}">
         <input id="note" aria-label="Note" style="position:absolute;left:320px;top:20px;width:240px;height:44px">`);
+    case "/callback":
+      // A sign-in's last step: a one-time code in the address, which the page logs.
+      return html(`<p>Signing you in…</p><script>console.log("sign-in code", ${JSON.stringify(url.searchParams.get("code") ?? "")})</script>`);
     case "/framed":
       return html(`<p>Payment</p><iframe title="Pay" src="http://localhost:${port}/inner" style="width:300px;height:200px;border:0"></iframe>`);
     case "/inner":
@@ -177,8 +180,13 @@ void app.whenReady().then(async () => {
   const heldState = browser.getState(BOT_WORKSPACE).tabs.find((tab) => tab.id === botTab)?.heldForPerson;
   const held = await snapshot(botTab).then(() => "read", (error: Error) => error.message);
   const personMayUse = await user(BOT_WORKSPACE, { action: "snapshot", tabId: botTab }).then(() => true, () => false);
+  // What the person's own steps on the held tab load and log stays theirs.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/callback?code=held-sign-in-code`);
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
   browser.release(BOT_WORKSPACE, "wait-1");
-  const afterRelease = await snapshot(botTab).then(loginAsSeen, (error: Error) => error.message);
+  const released = await snapshot(botTab).catch((error: Error) => error.message);
+  const afterRelease = typeof released === "string" ? released : loginAsSeen(released);
+  const heldTraces = typeof released === "string" ? null : JSON.stringify(released).includes("held-sign-in-code");
 
   // 5. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
   await browser.clearBotProfile(BOT, BOT_WORKSPACE);
@@ -195,7 +203,7 @@ void app.whenReady().then(async () => {
       {
         electron: process.versions.electron, platform: process.platform,
         isolation, masking, typing, noteTyping, pressing, navigationKey, refused, frame,
-        hold: { heldState, held, personMayUse, afterRelease },
+        hold: { heldState, held, personMayUse, afterRelease, heldTraces },
         cleared,
         expected: {
           heldRefusal: boundary.BROWSER_HELD_TAB_REFUSED,

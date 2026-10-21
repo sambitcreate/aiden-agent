@@ -921,6 +921,9 @@ export class BrowserService {
         humanInput(input.type, undefined, undefined, input.button, (input as typeof input & { _modifiers?: number })._modifiers);
     });
     wc.on("console-message", (details) => {
+      // What a page logs while the person holds the tab (signing in) is
+      // theirs: the Bot's later snapshots never replay it.
+      if (tab.hold) return;
       tab.diagnostics.push({
         level: details.level,
         message: browserFileService.redactText(details.message).slice(0, 4_000),
@@ -1020,7 +1023,8 @@ export class BrowserService {
       window.once("closed", () => wc.removeListener("destroyed", destroyPopup));
     });
     wc.debugger.on("message", (_event, method, params) => {
-      if (method === "Network.responseReceived") {
+      // Nor the pages and requests a held tab loads (a sign-in's redirects).
+      if (method === "Network.responseReceived" && !tab.hold) {
         const response = params.response;
         tab.network.push({
           url: browserDisplayUrl(String(response?.url ?? "")).slice(0, 4_000),
