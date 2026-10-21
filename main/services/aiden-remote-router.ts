@@ -1,5 +1,6 @@
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
+import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
 import { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, type AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -40,6 +41,7 @@ import {
   AIDEN_REMOTE_BOT_MEMORY_FEATURE,
   AIDEN_REMOTE_BOT_PROACTIVE_FEATURE,
   AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -314,6 +316,12 @@ export interface AidenRemoteRouterDependencies {
         | "uploadAttachment"
         | "removeAttachment"
         | "supportsAttachments"
+        // Contract revision 36 (`bot:handoffs`).
+        | "answerHandoff"
+        | "openHandoffOnMac"
+        | "pause"
+        | "unpause"
+        | "supportsHandoffs"
       >
     >;
   /**
@@ -381,6 +389,9 @@ export type AidenRemoteRouteLabel =
   | "botAttachment"
   | "botSessionEvents"
   | "botQuestionAnswer"
+  | "botHandoffAnswer"
+  | "botHandoffOpenOnMac"
+  | "botPause"
   | "botRoutines"
   | "botConnectionRequests"
   | "botMemory"
@@ -467,6 +478,9 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botAttachment: ["/bots/:botId/attachments", "/bots/:botId/attachments/:attachmentId"],
   botSessionEvents: ["/bots/:botId/session/events"],
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
+  botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
+  botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
+  botPause: ["/bots/:botId/pause"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
   botConnectionRequests: ["/bots/:botId/connection-requests"],
   botMemory: ["/bots/:botId/memory", "/bots/:botId/memory/edits"],
@@ -1564,6 +1578,39 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
   return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
 }
 
+/**
+ * Revision 36: the hand-off answer, open-on-Mac and pause routes and the
+ * holder projection ship together, or not at all.
+ */
+function botHandoffsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const sessions = dependencies.botSessions;
+  return sessions?.supportsHandoffs === true &&
+    typeof sessions.answerHandoff === "function" &&
+    typeof sessions.openHandoffOnMac === "function" &&
+    typeof sessions.pause === "function" &&
+    typeof sessions.unpause === "function";
+}
+
+/** Whether this device is sent revision-36 hand-off and pause shapes. */
+function holdsBotHandoffs(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:handoffs") && botHandoffsWired(dependencies);
+}
+
+/** A revision-36 route: not_found where unwired, capability_denied without `bot:handoffs`. */
+function requireBotHandoffs(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): NonNullable<AidenRemoteRouterDependencies["botSessions"]> {
+  if (!botHandoffsWired(dependencies)) {
+    throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+  }
+  requireDeviceCapabilities(device, ["bot:read", "bot:handoffs"]);
+  return dependencies.botSessions!;
+}
+
 /** Revision 33: uploads, removals and `attachmentIds` ship together, or not at all. */
 function botAttachmentsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
@@ -1574,20 +1621,23 @@ function botAttachmentsWired(dependencies: AidenRemoteRouterDependencies): boole
 
 /**
  * The one place a Bot detail leaves the router (create, get, PATCH, avatar
- * DELETE): `chatActivity` only for `bot:activity` holders, so an older
- * phone never sees the field whichever route returned the detail.
+ * DELETE): `chatActivity` only for `bot:activity` holders, and `paused` (with
+ * the `paused` session state) only for `bot:handoffs` holders, so an older
+ * phone never sees either field whichever route returned the detail.
  */
 function writeBotDetail(
   response: ServerResponse,
   status: number,
   detail: AidenRemoteBotDetail,
   device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
 ): void {
+  const projected = projectBotDetailForAudience(detail, { handoffs: holdsBotHandoffs(device, dependencies) });
   if (device.capabilities.has("bot:activity")) {
-    writeJson(response, status, detail);
+    writeJson(response, status, projected);
     return;
   }
-  const { chatActivity: _hidden, ...visible } = detail;
+  const { chatActivity: _hidden, ...visible } = projected;
   writeJson(response, status, visible);
 }
 
@@ -1607,6 +1657,10 @@ function advertisedServerCapabilities(
       : []),
     ...(device.acceptsBotCapabilities === true && botActivityWired(dependencies)
       ? AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES
+      : []),
+    // Revision 36: offered only while the hand-off and pause routes are wired.
+    ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
+      ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
@@ -2036,6 +2090,11 @@ export function createAidenRemoteRequestHandler(
             if (!botActivityWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot chat activity is unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 36: an opt-in to hand-off and pause shapes, offered only while their routes are wired.
+            if (!botHandoffsWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
+            }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
             if (device.type !== "mac" && device.type !== "linux") {
@@ -2106,7 +2165,12 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         requireNoQuery(query);
-        writeJson(response, 200, await dependencies.bots.list());
+        const list = await dependencies.bots.list();
+        const audience = { handoffs: holdsBotHandoffs(device, dependencies) };
+        writeJson(response, 200, {
+          ...list,
+          bots: list.bots.map((summary) => projectBotSummaryForAudience(summary, audience)),
+        });
         return;
       }
       if (path === "/bots" && request.method === "POST") {
@@ -2120,7 +2184,7 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeBotDetail(response, 201, await dependencies.bots.create(device.id, key, body), device);
+        writeBotDetail(response, 201, await dependencies.bots.create(device.id, key, body), device, dependencies);
         return;
       }
       if (path === "/bot-capabilities" && request.method === "GET") {
@@ -2273,6 +2337,7 @@ export function createAidenRemoteRequestHandler(
           200,
           await dependencies.bots.deleteAvatar(botAvatarMatch[1]!, revision),
           device,
+          dependencies,
         );
         return;
       }
@@ -2293,7 +2358,10 @@ export function createAidenRemoteRequestHandler(
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         const result = await botSessionsOrNotFound(dependencies).createFromPreset(device.id, key, body);
-        writeJson(response, result.created ? 201 : 200, result);
+        writeJson(response, result.created ? 201 : 200, {
+          ...result,
+          bot: projectBotSummaryForAudience(result.bot, { handoffs: holdsBotHandoffs(device, dependencies) }),
+        });
         return;
       }
       const botSessionMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session$/u.exec(path);
@@ -2310,6 +2378,7 @@ export function createAidenRemoteRequestHandler(
           await botSessionsOrNotFound(dependencies).session(botSessionMatch[1]!, {
             cards: device.capabilities.has("bot:cards"),
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
+            handoffs: holdsBotHandoffs(device, dependencies),
           }),
         );
         return;
@@ -2327,7 +2396,11 @@ export function createAidenRemoteRequestHandler(
           botSessionEventsMatch[1]!,
           response,
           admitDevice(device.id),
-          { cards: device.capabilities.has("bot:cards"), activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies) },
+          {
+            cards: device.capabilities.has("bot:cards"),
+            activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
+            handoffs: holdsBotHandoffs(device, dependencies),
+          },
         );
         return;
       }
@@ -2343,7 +2416,9 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await botSessionsOrNotFound(dependencies).send(device.id, botMessagesMatch[1]!, key, body),
+          await botSessionsOrNotFound(dependencies).send(device.id, botMessagesMatch[1]!, key, body, {
+            handoffs: holdsBotHandoffs(device, dependencies),
+          }),
         );
         return;
       }
@@ -2381,7 +2456,9 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await botSessionsOrNotFound(dependencies).resume(device.id, botResumeMatch[1]!, key, body));
+        writeJson(response, 200, await botSessionsOrNotFound(dependencies).resume(device.id, botResumeMatch[1]!, key, body, {
+          handoffs: holdsBotHandoffs(device, dependencies),
+        }));
         return;
       }
       const botDismissMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/dismiss$/u.exec(path);
@@ -2393,7 +2470,9 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await botSessionsOrNotFound(dependencies).dismiss(device.id, botDismissMatch[1]!, key, body));
+        writeJson(response, 200, await botSessionsOrNotFound(dependencies).dismiss(device.id, botDismissMatch[1]!, key, body, {
+          handoffs: holdsBotHandoffs(device, dependencies),
+        }));
         return;
       }
       const botQuestionAnswerMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/questions\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
@@ -2414,7 +2493,61 @@ export function createAidenRemoteRequestHandler(
             botQuestionAnswerMatch[2]!,
             key,
             body,
+            { handoffs: holdsBotHandoffs(device, dependencies) },
           ),
+        );
+        return;
+      }
+      const botHandoffAnswerMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/handoffs\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
+      if (botHandoffAnswerMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botHandoffAnswer";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const sessions = requireBotHandoffs(device, dependencies);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await sessions.answerHandoff!(device.id, botHandoffAnswerMatch[1]!, botHandoffAnswerMatch[2]!, key, body, {
+            handoffs: true,
+          }),
+        );
+        return;
+      }
+      const botHandoffOpenOnMacMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/handoffs\/([A-Za-z0-9-]{1,64})\/open-on-mac$/u.exec(path);
+      if (botHandoffOpenOnMacMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botHandoffOpenOnMac";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const sessions = requireBotHandoffs(device, dependencies);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await sessions.openHandoffOnMac!(device.id, botHandoffOpenOnMacMatch[1]!, botHandoffOpenOnMacMatch[2]!, key, body),
+        );
+        return;
+      }
+      const botPauseMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/pause$/u.exec(path);
+      if (botPauseMatch && (request.method === "POST" || request.method === "DELETE")) {
+        requireNoQuery(query);
+        route = "botPause";
+        // Pause takes `{}` like Resume; unpausing is a body-less DELETE.
+        const body = request.method === "POST" ? await readJsonBody(request) : undefined;
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const sessions = requireBotHandoffs(device, dependencies);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          request.method === "POST"
+            ? await sessions.pause!(device.id, botPauseMatch[1]!, key, body, { handoffs: true })
+            : await sessions.unpause!(device.id, botPauseMatch[1]!, key, { handoffs: true }),
         );
         return;
       }
@@ -2427,7 +2560,9 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await botSessionsOrNotFound(dependencies).stop(device.id, botStopMatch[1]!, key, body));
+        writeJson(response, 200, await botSessionsOrNotFound(dependencies).stop(device.id, botStopMatch[1]!, key, body, {
+          handoffs: holdsBotHandoffs(device, dependencies),
+        }));
         return;
       }
       const botRoutinesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routines$/u.exec(path);
@@ -2637,7 +2772,7 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeBotDetail(response, 200, await dependencies.bots.get(botMatch[1]!, device.id), device);
+        writeBotDetail(response, 200, await dependencies.bots.get(botMatch[1]!, device.id), device, dependencies);
         return;
       }
       if (botMatch && request.method === "PATCH") {
@@ -2656,6 +2791,7 @@ export function createAidenRemoteRequestHandler(
           200,
           await dependencies.bots.updateIdentity(botMatch[1]!, revision, body, device.id),
           device,
+          dependencies,
         );
         return;
       }

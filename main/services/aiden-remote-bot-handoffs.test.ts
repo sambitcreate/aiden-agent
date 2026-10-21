@@ -1,0 +1,121 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import test from "node:test";
+import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import {
+  LEGACY_AUDIENCE,
+  legacyHandoffNotice,
+  projectBotDetailForAudience,
+  projectBotSummaryForAudience,
+  stateViewForAudience,
+  toRemoteBotHandoff,
+} from "./aiden-remote-bot-handoffs.js";
+import {
+  AIDEN_REMOTE_BOT_SESSION_STATES,
+  parseAidenRemoteContractFixture,
+  type AidenRemoteBotHandoffsFixture,
+} from "./aiden-remote-protocol.js";
+
+const HOLDER = { handoffs: true };
+
+async function section(): Promise<AidenRemoteBotHandoffsFixture> {
+  const raw = JSON.parse(
+    await readFile(path.resolve(process.cwd(), "protocol/aiden-remote/v1/fixtures/contract.json"), "utf8"),
+  ) as unknown;
+  return parseAidenRemoteContractFixture(raw).botHandoffs!;
+}
+
+/** The card the shared fixture describes, as the Mac's hand-off bridge holds it. */
+function prompt(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
+  return {
+    botId: "bot_fixture_01",
+    waitId: "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+    toolCallId: "call_fixture_36",
+    kind: "action",
+    action: "Enter the 2FA code your bank sent you",
+    why: "The bank asks for a code only you can see.",
+    open: { url: "https://bank.example.com/verify" },
+    source: "tool",
+    ...overrides,
+  };
+}
+
+test("a holder receives the waiting card exactly as the shared fixture shows it", async () => {
+  const fixture = await section();
+  assert.deepEqual(toRemoteBotHandoff(prompt()), fixture.session.handoff);
+});
+
+test("a hand-off link that is not a plain https page, and a blank reason, never reach a phone", () => {
+  for (const url of [
+    "http://bank.example.com/verify",
+    "https://person:secret@bank.example.com/verify",
+    " https://bank.example.com/verify",
+    "file:///Users/person/secrets.txt",
+  ]) {
+    const card = toRemoteBotHandoff(prompt({ open: { url } }));
+    assert.equal("open" in card, false, url);
+    assert.equal(card.action, "Enter the 2FA code your bank sent you", "the card itself still arrives");
+  }
+  assert.equal("why" in toRemoteBotHandoff(prompt({ why: "   " })), false);
+  const signIn = toRemoteBotHandoff(prompt({
+    kind: "sign_in",
+    action: "Sign in to bank.example.com",
+    why: undefined,
+    open: { url: "https://bank.example.com" },
+    origin: "https://bank.example.com",
+    target: "browser",
+  }));
+  assert.deepEqual(signIn, {
+    waitId: "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+    kind: "sign_in",
+    action: "Sign in to bank.example.com",
+    open: { url: "https://bank.example.com" },
+  }, "the sign-in target and origin stay on the Mac");
+});
+
+test("a legacy device reads a waiting hand-off as one assistant line that names the Bot", async () => {
+  const fixture = await section();
+  const notice = fixture.legacy.session.entries[fixture.legacy.session.entries.length - 1];
+  assert.deepEqual(legacyHandoffNotice("Scout", prompt()), notice);
+  assert.equal(notice && "createdAt" in notice, false, "the notice never moves a chat's preview or unread state");
+
+  const spaced = legacyHandoffNotice("  Ada \n Lovelace ", prompt({ action: "Approve the  transfer.\n" }));
+  assert.equal(spaced.type === "message" && spaced.text, "Ada Lovelace needs you on your Mac: Approve the transfer");
+  const unnamed = legacyHandoffNotice(" ", prompt());
+  assert.equal(unnamed.type === "message" && unnamed.text, "Your Bot needs you on your Mac: Enter the 2FA code your bank sent you");
+});
+
+test("only a person's pause reads differently to a legacy device", () => {
+  for (const state of AIDEN_REMOTE_BOT_SESSION_STATES) {
+    const view = { state, interrupted: state === "interrupted" };
+    assert.deepEqual(stateViewForAudience(view, HOLDER), view, `${state} for a holder`);
+    const legacy = stateViewForAudience(view, LEGACY_AUDIENCE);
+    if (state === "paused") assert.deepEqual(legacy, { state: "unavailable", interrupted: false });
+    else assert.deepEqual(legacy, view, `${state} for a legacy device`);
+  }
+  // An interrupted turn the person then paused is still a paused Bot to a holder.
+  assert.deepEqual(
+    stateViewForAudience({ state: "paused", interrupted: true }, LEGACY_AUDIENCE),
+    { state: "unavailable", interrupted: false },
+  );
+});
+
+test("a paused Bot's summary and detail project to the fixture's two views", async () => {
+  const fixture = await section();
+  assert.deepEqual(projectBotSummaryForAudience(fixture.pausedSummary, LEGACY_AUDIENCE), fixture.legacy.pausedSummary);
+  assert.deepEqual(projectBotSummaryForAudience(fixture.pausedSummary, HOLDER), fixture.pausedSummary);
+
+  const legacyDetail = projectBotDetailForAudience(fixture.pausedDetail, LEGACY_AUDIENCE);
+  assert.equal("paused" in legacyDetail, false);
+  assert.equal(legacyDetail.sessionState, "unavailable");
+  assert.deepEqual(projectBotDetailForAudience(fixture.pausedDetail, HOLDER), fixture.pausedDetail);
+
+  // A Bot that is not paused: a holder's detail always says so, a summary stays quiet.
+  const { paused: _summaryFlag, ...idleSummary } = { ...fixture.pausedSummary, sessionState: "idle" as const };
+  assert.deepEqual(projectBotSummaryForAudience(idleSummary, HOLDER), idleSummary);
+  assert.deepEqual(projectBotSummaryForAudience(idleSummary, LEGACY_AUDIENCE), idleSummary);
+  const { paused: _detailFlag, ...idleDetail } = { ...fixture.pausedDetail, sessionState: "idle" as const };
+  assert.equal(projectBotDetailForAudience(idleDetail, HOLDER).paused, false);
+  assert.equal("paused" in projectBotDetailForAudience(idleDetail, LEGACY_AUDIENCE), false);
+});

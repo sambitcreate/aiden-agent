@@ -23,9 +23,18 @@
 //   routine's or the self-intro's prompt never reaches a phone. The person's
 //   own messages also carry the `submissionId` they were sent as, so a phone
 //   settles its optimistic bubble exactly; other devices never see the key.
+// - Contract revision 36 (`bot:handoffs`): devices holding it also get the
+//   waiting hand-off (`handoff`, published after `approval`), the `paused`
+//   state and the `bot_paused` refusal, and may answer a hand-off, open it on
+//   the Mac, and pause or unpause the Bot. Other devices keep the revision-35
+//   view: a paused Bot reads as unavailable (writes are `operation_stale`), and
+//   a waiting hand-off is an assistant line asking them to go to the Mac,
+//   replaced by a no-op state frame when it settles. The person's answer is
+//   their message for everyone. Idempotent results are stored in the holder
+//   view and projected per device after the ledger returns.
 // - Routines, connection requests and starter presets call their main services.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView, EntryRecord } from "@earendil-works/pi-durable";
@@ -35,6 +44,7 @@ import {
   type ConnectCardStatus,
 } from "../../renderer/shared/bot-connections.js";
 import type { BotPreset } from "../../renderer/shared/bot-presets.js";
+import { botHandoffResultLine } from "../../renderer/shared/bot-handoffs.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
 import { botRoutineCron } from "../../renderer/shared/bot-routine-schedule.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
@@ -79,9 +89,14 @@ import {
   parseAidenRemoteBotPresetCreateRequest,
   parseAidenRemoteBotPresetList,
   parseAidenRemoteBotQuestionAnswerRequest,
+  parseAidenRemoteBotHandoffAnswerRequest,
+  parseAidenRemoteBotHandoffWaitId,
   parseAidenRemoteBotSession,
   parseAidenRemoteEmptyRequest,
   type AidenRemoteBotApproval,
+  type AidenRemoteBotHandoff,
+  type AidenRemoteBotHandoffAnswerReceipt,
+  type AidenRemoteBotHandoffOpenOnMacReceipt,
   type AidenRemoteBotConnectionRequestReceipt,
   type AidenRemoteBotMessageReceipt,
   type AidenRemoteBotPresetCreateResult,
@@ -100,6 +115,16 @@ import {
 import { openCursorSse, sseFrame, type CursorSseHandle } from "./aiden-remote-sse.js";
 import type { BotApprovals } from "./bot-runtime/bot-approvals.js";
 import type { BotQuestions } from "./bot-runtime/bot-questions.js";
+import type { BotHandoffs } from "./bot-runtime/bot-handoffs.js";
+import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
+import type { BotPauseOrigin } from "./bot-pause-store.js";
+import {
+  LEGACY_AUDIENCE,
+  legacyHandoffNotice,
+  stateViewForAudience,
+  toRemoteBotHandoff,
+  type AidenRemoteBotHandoffAudience,
+} from "./aiden-remote-bot-handoffs.js";
 import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
 import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
 import { BotSessionError, type BotSessionErrorReason, type BotSessionState } from "./bot-runtime/bot-session-service.js";
@@ -164,6 +189,10 @@ export interface AidenRemoteBotSessionRuntime {
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   /** Ends a running turn (serialized with send/resume/dismiss); a paused turn is left for Dismiss. */
   stop(botId: string): Promise<BotSessionState>;
+  /** Revision 36: pause the Bot (idempotent; the first pause's time and origin stay). */
+  pause(botId: string, by: BotPauseOrigin): Promise<BotSessionState>;
+  /** Revision 36: clear the pause; an interrupted turn then waits for Resume. */
+  unpause(botId: string): Promise<BotSessionState>;
   state(botId: string): Promise<BotSessionState>;
   conversation(botId: string): Promise<Conversation>;
   /**
@@ -198,6 +227,20 @@ export interface AidenRemoteBotSessionServiceOptions {
   questions?: Pick<BotQuestions, "pending" | "answer" | "onChange">;
   /** The Bot's waiting tool approvals (the same bridge the desktop answers through). */
   approvals?: Pick<BotApprovals, "pending" | "decide" | "onChange">;
+  /**
+   * Revision 36: the Bot's waiting hand-off cards (the same bridge the desktop
+   * answers through). With it the host announces `bot:handoffs`.
+   */
+  handoffs?: Pick<BotHandoffs, "pending" | "get" | "answer" | "onChange">;
+  /** Revision 36: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
+  openHandoffOnMac?(botId: string, waitId: string): Promise<BotHandoffOpened>;
+  /**
+   * Hear a Bot's session state change on any surface (`onBotSessionStateChange`);
+   * returns the unsubscribe. A pause or unpause on the Mac commits nothing to the
+   * conversation, so without it an open stream reads the change only at its next
+   * refresh (a holder of `bot:handoffs` as `paused`, any other device as `unavailable`).
+   */
+  stateChanges?(listener: (botId: string) => void): () => void;
   /**
    * Stop and Resume from any surface (`botTurnIntents`). A phone's Stop is
    * announced here, and taken back if it fails, so open desktop chats read
@@ -295,6 +338,19 @@ function isoOf(timestamp: number | undefined): string | undefined {
 }
 
 const wireEntryId = (id: string) => `entry_${id}`;
+const WIRE_ENTRY_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+
+/**
+ * A hand-off answer's row is `handoff:<toolCallId>`, and a provider's call id
+ * may hold characters (or a length) the wire id grammar refuses. Such an id
+ * gets a stable digest instead, so a phone still keys the bubble the same way
+ * on every snapshot.
+ */
+function handoffResultEntryId(rowId: string): string {
+  const id = wireEntryId(rowId);
+  if (WIRE_ENTRY_ID.test(id)) return id;
+  return `entry_handoff_${createHash("sha256").update(rowId).digest("hex").slice(0, 32)}`;
+}
 
 /**
  * Displayable wire entries of a conversation, oldest first. Derived from the
@@ -366,6 +422,20 @@ export function projectBotSessionEntries(
         // The person's choice on a quick-reply card reads as their message.
         const createdAt = isoOf(entry.at);
         output.push({ type: "message", id, role: "user", text: bounded(entry.text), ...(createdAt ? { createdAt } : {}) });
+        break;
+      }
+      case "handoff_result": {
+        // Revision 36, for every device: Done or Skip on a hand-off card reads
+        // as the person's message ("You did this: …"), with their note under it.
+        const createdAt = isoOf(entry.at);
+        const note = entry.note?.trim();
+        output.push({
+          type: "message",
+          id: handoffResultEntryId(entry.id),
+          role: "user",
+          text: bounded(note ? `${botHandoffResultLine(entry)}\n\n${note}` : botHandoffResultLine(entry)),
+          ...(createdAt ? { createdAt } : {}),
+        });
         break;
       }
       case "notice":
@@ -535,7 +605,14 @@ function memberBytes(key: string, value: unknown): number {
   return Buffer.byteLength(JSON.stringify({ [key]: value }), "utf8") - 1;
 }
 
-export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSessionStateView {
+/**
+ * A session state on the wire. Revision 36: a device holding `bot:handoffs`
+ * sees a person's pause as `paused`; every other device as `unavailable`.
+ */
+export function projectBotSessionState(
+  state: BotSessionState,
+  audience: AidenRemoteBotHandoffAudience = LEGACY_AUDIENCE,
+): AidenRemoteBotSessionStateView {
   if (state.kind === "interrupted") {
     return { state: "interrupted", interrupted: true, ...(state.blocked ? { blocked: state.blocked } : {}) };
   }
@@ -544,7 +621,9 @@ export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSe
   if (state.kind === "model_error") return { state: "unavailable", interrupted: false };
   // Shipped phones decode a closed set of states: a Bot the person paused
   // reads as unavailable to them (plan §7.2), and its writes are refused.
-  if (state.kind === "paused") return { state: "unavailable", interrupted: false };
+  if (state.kind === "paused") {
+    return audience.handoffs ? { state: "paused", interrupted: false } : { state: "unavailable", interrupted: false };
+  }
   return { state: state.kind as AidenRemoteBotSessionStateKind, interrupted: false };
 }
 
@@ -578,6 +657,8 @@ interface Audience {
   cards: boolean;
   /** `bot:activity`: the `activity` and `queued` frames and snapshot keys (revision 30). */
   activity: boolean;
+  /** `bot:handoffs`: the `handoff` frame and snapshot key, and the `paused` state (revision 36). */
+  handoffs: boolean;
 }
 
 interface Subscriber extends Audience {
@@ -588,6 +669,14 @@ interface Subscriber extends Audience {
 
 /** Frames only `bot:activity` devices can parse. */
 const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set(["activity", "queued"]);
+
+/** The Bot's waiting hand-off for both kinds of device (revision 36). */
+interface ProjectedHandoff {
+  /** What a `bot:handoffs` device is sent. */
+  handoff: AidenRemoteBotHandoff;
+  /** What every other device shows instead: an assistant line pointing to the Mac. */
+  notice: AidenRemoteBotSessionEntry;
+}
 
 /** What a projector needs to project revision 30; absent on hosts without `bot-activity-v1`. */
 interface ProjectorActivity {
@@ -607,9 +696,12 @@ class BotLiveProjector {
   seq = 0;
   entries: AidenRemoteBotSessionEntry[] = [];
   partial: string | undefined;
+  /** The state as a `bot:handoffs` device sees it; other devices get `stateViewForAudience` of it. */
   state: AidenRemoteBotSessionStateView = { state: "idle", interrupted: false };
   question: AidenRemoteBotQuestion | null = null;
   approval: AidenRemoteBotApproval | null = null;
+  /** The waiting hand-off (revision 36), with the line devices without `bot:handoffs` show for it. */
+  handoff: ProjectedHandoff | null = null;
   /** What the running turn is doing, in the §11 shape; null while no turn runs. */
   activity: AidenRemoteBotSessionActivity | null = null;
   /** The person's messages waiting for the running turn. */
@@ -659,6 +751,8 @@ class BotLiveProjector {
     private readonly readApproval: () => AidenRemoteBotApproval | null = () => null,
     /** Revision 30; without it nothing is derived and no activity or queued frame is ever sent. */
     private readonly activityDeps?: ProjectorActivity,
+    /** Revision 36; without it no hand-off is ever projected. */
+    private readonly readHandoff: () => Promise<ProjectedHandoff | null> = async () => null,
   ) {
     this.classifier = activityDeps
       ? createQueuedInputClassifier({
@@ -688,9 +782,14 @@ class BotLiveProjector {
     this.state = await this.readState();
     this.question = this.readQuestion();
     this.approval = this.readApproval();
+    this.handoff = await this.readHandoff();
     if (this.activityDeps) {
       this.trackRun({ state: "idle", interrupted: false }, this.state, watch.value.docs);
-      this.activity = this.deriveActivity(watch.value, this.state, this.question !== null || this.approval !== null);
+      this.activity = this.deriveActivity(
+        watch.value,
+        this.state,
+        this.question !== null || this.approval !== null || this.handoff !== null,
+      );
       this.queued = await this.queuedFor(watch.value.docs);
     }
     watch.start(async (view) => {
@@ -703,17 +802,20 @@ class BotLiveProjector {
   /**
    * The session as one device sees it, inside the snapshot budget by
    * construction. Parts are allocated in priority order:
-   *  1. identity, state, question, approval and activity ship whole (measured
-   *     first; their protocol maxima sit well under half the budget);
+   *  1. identity, state, question, approval, hand-off and activity ship whole
+   *     (measured first; their protocol maxima sit well under half the budget);
    *  2. the partial, cut to its tail if it no longer fits;
    *  3. the queued list, oldest first, at most `MAX_QUEUED_JSON_BYTES` and what is left;
    *  4. the transcript window, with whatever is left (possibly none).
    */
   snapshot(audience: Audience): AidenRemoteBotSession {
     const showActivity = audience.activity && this.activityDeps !== undefined;
+    const state = stateViewForAudience(this.state, audience);
+    const handoff = this.handoff?.handoff ?? null;
     let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
-    for (const [key, value] of Object.entries(this.state)) used += memberBytes(key, value);
+    for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
     used += memberBytes("question", this.question) + memberBytes("approval", this.approval);
+    if (audience.handoffs) used += memberBytes("handoff", handoff);
     if (showActivity) used += memberBytes("activity", this.activity);
 
     let partial: string | undefined;
@@ -733,18 +835,22 @@ class BotLiveProjector {
     // The transcript's members are reserved empty; `hasOlder` takes its larger, `false`, form.
     const transcriptBudget =
       SNAPSHOT_BUDGET_BYTES - used - memberBytes("entries", []) - memberBytes("hasOlder", false) + 2;
-    const { entries, hasOlder } = windowed(entriesFor(this.entries, audience), transcriptBudget);
+    const shown = entriesFor(this.entries, audience);
+    // Without `bot:handoffs`, a waiting hand-off is the newest line of the chat.
+    if (!audience.handoffs && this.handoff) shown.push(this.handoff.notice);
+    const { entries, hasOlder } = windowed(shown, transcriptBudget);
     return parseAidenRemoteBotSession({
       botId: this.botId,
       epoch: this.epoch,
       seq: this.seq,
-      ...this.state,
+      ...state,
       ...(partial !== undefined ? { partial } : {}),
       entries,
       hasOlder,
       question: this.question,
       approval: this.approval,
       ...(showActivity ? { activity: this.activity, queued } : {}),
+      ...(audience.handoffs ? { handoff } : {}),
     });
   }
 
@@ -769,7 +875,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -781,7 +887,15 @@ class BotLiveProjector {
     }
   }
 
-  private frame(event: Omit<AidenRemoteBotSessionEvent, "protocolVersion" | "botId" | "epoch" | "seq">): void {
+  /**
+   * `notice` (revision 36, `handoff` frames only): what a device without
+   * `bot:handoffs` gets at this seq instead, an entry frame with the hand-off's
+   * line; a settled hand-off (no notice) reaches it as a no-op state frame.
+   */
+  private frame(
+    event: Omit<AidenRemoteBotSessionEvent, "protocolVersion" | "botId" | "epoch" | "seq">,
+    notice?: AidenRemoteBotSessionEntry,
+  ): void {
     this.seq += 1;
     const data = {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -798,17 +912,27 @@ class BotLiveProjector {
         (event.payload as { entry?: { type?: string } }).entry?.type ?? "",
       );
     const activityOnly = ACTIVITY_FRAME_TYPES.has(event.type);
+    const handoffOnly = event.type === "handoff";
     // A frame a device can't parse (a card entry before revision 27, an
-    // activity or queued frame without `bot:activity`) must still reach it as
-    // its seq: clients refetch on any gap. That device gets the state it
-    // already holds under that seq instead, which changes nothing it shows.
-    const noOp = card || activityOnly ? sseFrame(id, "state", { ...data, type: "state", payload: this.state }) : text;
+    // activity or queued frame without `bot:activity`, a hand-off without
+    // `bot:handoffs`) must still reach it as its seq: clients refetch on any
+    // gap. That device gets the state it already holds under that seq
+    // instead, which changes nothing it shows.
+    const noOp = (audience: Audience) =>
+      sseFrame(id, "state", { ...data, type: "state", payload: stateViewForAudience(this.state, audience) });
     // A bubble tagged with its submission id reaches other devices without the key.
     const entry = event.type === "entry" ? (event.payload as { entry: AidenRemoteBotSessionEntry }).entry : undefined;
     const bare = entry && withoutSubmissionId(entry);
     const untagged = bare && bare !== entry ? sseFrame(id, "entry", { ...data, payload: { entry: bare } }) : text;
     this.broadcast((audience) => {
-      if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp;
+      if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
+      if (handoffOnly && !audience.handoffs) {
+        return notice ? sseFrame(id, "entry", { ...data, type: "entry", payload: { entry: notice } }) : noOp(audience);
+      }
+      if (event.type === "state" && !audience.handoffs) {
+        const payload = stateViewForAudience(event.payload as AidenRemoteBotSessionStateView, audience);
+        return payload === event.payload ? text : sseFrame(id, "state", { ...data, payload });
+      }
       return audience.activity ? text : untagged;
     });
   }
@@ -984,12 +1108,13 @@ class BotLiveProjector {
     const state = await this.readState().catch(() => this.state);
     const question = this.readQuestion();
     const approval = this.readApproval();
+    const handoff = await this.readHandoff();
     const queued = this.activityDeps ? await this.queuedFor(view.docs) : [];
     if (this.closed) return;
     let activity: AidenRemoteBotSessionActivity | null = null;
     if (this.activityDeps) {
       this.trackRun(this.state, state, view.docs);
-      activity = this.deriveActivity(view, state, question !== null || approval !== null);
+      activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null);
     }
 
     const previous = this.entries;
@@ -1011,6 +1136,7 @@ class BotLiveProjector {
       this.state = state;
       this.question = question;
       this.approval = approval;
+      this.handoff = handoff;
       this.activity = activity;
       this.queued = queued;
       this.seq += 1;
@@ -1038,6 +1164,10 @@ class BotLiveProjector {
     if (approval?.waitId !== this.approval?.waitId) {
       this.approval = approval;
       this.frame({ type: "approval", payload: { approval } });
+    }
+    if (handoff?.handoff.waitId !== this.handoff?.handoff.waitId) {
+      this.handoff = handoff;
+      this.frame({ type: "handoff", payload: { handoff: handoff?.handoff ?? null } }, handoff?.notice);
     }
     // After the state frame, so a phone never sees a phase for a turn that already ended.
     if (JSON.stringify(activity) !== JSON.stringify(this.activity)) {
@@ -1123,9 +1253,14 @@ async function unlessRefusedBeforeRunning<Result>(call: () => Promise<Result>): 
   }
 }
 
-function mapSessionError(error: unknown): never {
+/**
+ * A session refusal as one device is told it. A person's pause is
+ * `bot_paused` for a device holding `bot:handoffs` (revision 36) and
+ * `operation_stale`, a code shipped clients already know, for every other.
+ */
+function mapSessionError(error: unknown, audience: AidenRemoteBotHandoffAudience = LEGACY_AUDIENCE): never {
   // A ledger always unwraps it; a bare `executeIdempotent` passes it through.
-  if (error instanceof AidenOperationNotExecutedError) return mapSessionError(error.cause);
+  if (error instanceof AidenOperationNotExecutedError) return mapSessionError(error.cause, audience);
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotSessionError) {
     switch (error.reason) {
@@ -1134,12 +1269,13 @@ function mapSessionError(error: unknown): never {
         throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
       case "access_changed":
         throw new AidenRemoteServiceError("capability_denied", error.message, 403);
+      case "paused_by_person":
+        if (audience.handoffs) throw new AidenRemoteServiceError("bot_paused", error.message, 409);
+        throw new AidenRemoteServiceError("operation_stale", error.message, 409);
       case "needs_model":
       case "model_error":
       case "unavailable":
       case "bot_paused":
-      case "paused_by_person":
-        // A person's pause uses a code shipped clients already know.
         throw new AidenRemoteServiceError("operation_stale", error.message, 409);
     }
   }
@@ -1243,6 +1379,25 @@ function routineError(error: unknown): never {
   throw error;
 }
 
+/** The view of a device holding `bot:handoffs`: what the ledger records and the projector holds. */
+const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
+
+/** The opt-ins a route was called with, from the device's grants. */
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean };
+
+/** Ledger route of each session control. */
+const CONTROL_ROUTES = {
+  resume: "POST /bots/{id}/resume",
+  dismiss: "POST /bots/{id}/dismiss",
+  stop: "POST /bots/{id}/stop",
+  pause: "POST /bots/{id}/pause",
+  unpause: "DELETE /bots/{id}/pause",
+} as const;
+
+function handoffExpired(): AidenRemoteServiceError {
+  return new AidenRemoteServiceError("handoff_expired", "This hand-off is no longer waiting.", 409);
+}
+
 function parseOrInvalid<Result>(parser: (value: unknown) => Result, value: unknown, message: string): Result {
   try {
     return parser(value);
@@ -1257,6 +1412,7 @@ export class AidenRemoteBotSessionService {
   /** Bot approval ids answered here recently, so a retried request replays its receipt. */
   private readonly answeredApprovals = new Set<string>();
   private readonly stopIntents: (() => void) | undefined;
+  private readonly stopStateChanges: (() => void) | undefined;
   private readonly runStarts: BotRunStarts;
 
   constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
@@ -1267,6 +1423,9 @@ export class AidenRemoteBotSessionService {
     };
     options.questions?.onChange(refresh);
     options.approvals?.onChange(refresh);
+    options.handoffs?.onChange(refresh);
+    // A pause or unpause on the Mac changes only the state; open streams hear it here.
+    this.stopStateChanges = options.stateChanges?.(refresh);
     // A Stop or Resume from the Mac or any phone reaches every open session stream.
     this.stopIntents = this.supportsActivity
       ? options.turnIntents!.onIntent((botId, intent) => {
@@ -1299,6 +1458,15 @@ export class AidenRemoteBotSessionService {
    */
   get supportsActivity(): boolean {
     return Boolean(this.options.turnIntents) && this.options.bots.supportsChatActivity === true;
+  }
+
+  /**
+   * Hand-offs and pause on phones (revision 36, `bot:handoffs`): the hand-off
+   * bridge and the Mac opener are wired. Without them the host never offers
+   * the capability and every device gets the revision-35 view.
+   */
+  get supportsHandoffs(): boolean {
+    return Boolean(this.options.handoffs && this.options.openHandoffOnMac);
   }
 
   /** Staged image and text uploads for Bot messages (revision 33, `bot-attachments-v1`). */
@@ -1442,8 +1610,26 @@ export class AidenRemoteBotSessionService {
     return routineNotifications.list(sinceMs);
   }
 
+  /** The state as a `bot:handoffs` device sees it; `stateViewForAudience` projects it for the others. */
   private async stateView(botId: string): Promise<AidenRemoteBotSessionStateView> {
-    return projectBotSessionState(await (await this.options.runtime()).state(botId));
+    return projectBotSessionState(await (await this.options.runtime()).state(botId), HOLDER_AUDIENCE);
+  }
+
+  /**
+   * The Bot's oldest waiting hand-off, for both kinds of device. A card the
+   * wire can't carry stays on the Mac.
+   */
+  private async handoffOf(botId: string): Promise<ProjectedHandoff | null> {
+    const prompt = this.options.handoffs?.pending(botId)[0];
+    if (prompt === undefined) return null;
+    let handoff: AidenRemoteBotHandoff;
+    try {
+      handoff = toRemoteBotHandoff(prompt);
+    } catch {
+      return null;
+    }
+    const name = await this.options.bots.bot(botId).then((bot) => bot.name, () => "");
+    return { handoff, notice: legacyHandoffNotice(name, prompt) };
   }
 
   /** The Bot's one waiting question, in the wire shape. */
@@ -1524,6 +1710,7 @@ export class AidenRemoteBotSessionService {
     waitId: string,
     key: string,
     input: unknown,
+    options: { handoffs?: boolean } = {},
   ): Promise<AidenRemoteBotQuestionAnswerReceipt> {
     const questions = this.questionService();
     const parsed = parseOrInvalid(parseAidenRemoteBotQuestionAnswerRequest, input, "The question answer is invalid.");
@@ -1550,8 +1737,84 @@ export class AidenRemoteBotSessionService {
       );
     } catch (error) {
       if (error instanceof AidenRemoteServiceError) throw error;
-      return mapSessionError(error);
+      return mapSessionError(error, this.audience(options));
     }
+  }
+
+  private handoffService() {
+    if (!this.supportsHandoffs) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    return this.options.handoffs!;
+  }
+
+  /**
+   * Revision 36: Done or Skip on the Bot's waiting hand-off. Idempotent per
+   * request UUID: a repeat gets the same receipt. A card that is no longer
+   * waiting is `handoff_expired`; an answer it does not accept is
+   * `invalid_request`. A sign-in is finished on the Mac, so a phone may only skip it.
+   */
+  async answerHandoff(
+    deviceId: string,
+    botId: string,
+    waitId: string,
+    key: string,
+    input: unknown,
+    options: { handoffs?: boolean } = {},
+  ): Promise<AidenRemoteBotHandoffAnswerReceipt> {
+    const handoffs = this.handoffService();
+    const id = parseOrInvalid((value) => parseAidenRemoteBotHandoffWaitId(value), waitId, "The hand-off is invalid.");
+    const parsed = parseOrInvalid(parseAidenRemoteBotHandoffAnswerRequest, input, "The hand-off answer is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    try {
+      return await this.options.bots.executeIdempotent(
+        { deviceId, route: "POST /bots/{id}/handoffs/{waitId}/answer", resourceId: `${bot.id}:${id}`, key },
+        { waitId: id, ...parsed },
+        async () => {
+          const prompt = handoffs.get(bot.id, id);
+          if (!prompt) throw handoffExpired();
+          if (prompt.kind === "sign_in" && parsed.outcome === "done") {
+            throw new AidenRemoteServiceError("invalid_request", "Finish signing in on your Mac, or skip it.", 400);
+          }
+          const outcome = handoffs.answer(bot.id, id, parsed);
+          if (outcome === "invalid") {
+            throw new AidenRemoteServiceError("invalid_request", "The hand-off answer is invalid.", 400);
+          }
+          if (outcome === "not_waiting") throw handoffExpired();
+          return { waitId: id };
+        },
+      );
+    } catch (error) {
+      if (error instanceof AidenRemoteServiceError) throw error;
+      return mapSessionError(error, this.audience(options));
+    }
+  }
+
+  /**
+   * Revision 36: bring the Bot's waiting hand-off forward on the Mac (its
+   * chat, and for a sign-in the Bot's own browser). Idempotent per request
+   * UUID, like a connection request: a repeat never opens it twice.
+   */
+  async openHandoffOnMac(
+    deviceId: string,
+    botId: string,
+    waitId: string,
+    key: string,
+    input: unknown,
+  ): Promise<AidenRemoteBotHandoffOpenOnMacReceipt> {
+    const handoffs = this.handoffService();
+    const id = parseOrInvalid((value) => parseAidenRemoteBotHandoffWaitId(value), waitId, "The hand-off is invalid.");
+    parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot hand-off request"), input ?? {}, "The hand-off request is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    return this.options.bots.executeIdempotent(
+      { deviceId, route: "POST /bots/{id}/handoffs/{waitId}/open-on-mac", resourceId: `${bot.id}:${id}`, key },
+      { waitId: id },
+      async () => {
+        if (!handoffs.get(bot.id, id)) throw handoffExpired();
+        const opened = await this.options.openHandoffOnMac!(bot.id, id);
+        return { waitId: id, opened: opened !== "none" };
+      },
+    );
   }
 
   /** Pending connect cards show what is true now (connected, or Not now). */
@@ -1596,6 +1859,7 @@ export class AidenRemoteBotSessionService {
               report: (error) => this.options.onReport?.(botId, error),
             }
           : undefined,
+        () => this.handoffOf(botId),
       );
       await projector.attach(conversation);
       return projector;
@@ -1622,24 +1886,32 @@ export class AidenRemoteBotSessionService {
     return projector.closed ? this.projector(botId) : projector;
   }
 
-  /** What a device that negotiated these opt-ins is sent; `activity` needs this host's revision 30. */
-  private audience(options: { cards?: boolean; activity?: boolean }): Audience {
-    return { cards: options.cards === true, activity: options.activity === true && this.supportsActivity };
+  /**
+   * What a device that negotiated these opt-ins is sent; `activity` needs this
+   * host's revision 30 and `handoffs` its revision 36.
+   */
+  private audience(options: AudienceOptions): Audience {
+    return {
+      cards: options.cards === true,
+      activity: options.activity === true && this.supportsActivity,
+      handoffs: options.handoffs === true && this.supportsHandoffs,
+    };
   }
 
-  /** `cards`: the device holds `bot:cards`; `activity`: it holds `bot:activity`. */
-  async session(botId: string, options: { cards?: boolean; activity?: boolean } = {}): Promise<AidenRemoteBotSession> {
+  /** `cards`, `activity`, `handoffs`: the device holds `bot:cards`, `bot:activity`, `bot:handoffs`. */
+  async session(botId: string, options: AudienceOptions = {}): Promise<AidenRemoteBotSession> {
     const bot = await this.options.bots.bot(botId);
     const audience = this.audience(options);
     try {
       const raw = await (await this.options.runtime()).state(bot.id);
-      const state = projectBotSessionState(raw);
-      // A paused Bot reads as unavailable but still shows its transcript.
+      const state = projectBotSessionState(raw, audience);
+      // A paused Bot still shows its transcript, whichever way the device names it.
       if (state.state === "unavailable" && raw.kind !== "paused") {
         // Bots are held by another Aiden process: nothing can be opened.
         return parseAidenRemoteBotSession({
           botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false, question: null, approval: null,
           ...(audience.activity ? { activity: null, queued: [] } : {}),
+          ...(audience.handoffs ? { handoff: null } : {}),
         });
       }
       const projector = await this.liveProjector(bot.id);
@@ -1648,7 +1920,7 @@ export class AidenRemoteBotSessionService {
       await projector.refresh();
       return projector.snapshot(audience);
     } catch (error) {
-      return mapSessionError(error);
+      return mapSessionError(error, audience);
     }
   }
 
@@ -1658,14 +1930,14 @@ export class AidenRemoteBotSessionService {
     botId: string,
     response: ServerResponse,
     admit: () => void = () => {},
-    options: { cards?: boolean; activity?: boolean } = {},
+    options: AudienceOptions = {},
   ): Promise<void> {
     const bot = await this.options.bots.bot(botId);
     let projector: BotLiveProjector;
     try {
       projector = await this.liveProjector(bot.id);
     } catch (error) {
-      return mapSessionError(error);
+      return mapSessionError(error, this.audience(options));
     }
     // A new subscriber sees current card statuses and state, not the last commit's.
     await projector.refresh();
@@ -1709,6 +1981,7 @@ export class AidenRemoteBotSessionService {
 
   async close(): Promise<void> {
     this.stopIntents?.();
+    this.stopStateChanges?.();
     for (const deviceId of [...this.subscriptions.keys()]) this.revokeDevice(deviceId);
     const projectors = await Promise.allSettled([...this.projectors.values()]);
     for (const result of projectors) if (result.status === "fulfilled") await result.value.close();
@@ -1720,7 +1993,15 @@ export class AidenRemoteBotSessionService {
     this.options.notifyBotsChanged?.(botId);
   }
 
-  async send(deviceId: string, botId: string, key: string, input: unknown): Promise<AidenRemoteBotMessageReceipt> {
+  /** `handoffs`: the device holds `bot:handoffs` (its receipt and refusals may name a pause). */
+  async send(
+    deviceId: string,
+    botId: string,
+    key: string,
+    input: unknown,
+    options: { handoffs?: boolean } = {},
+  ): Promise<AidenRemoteBotMessageReceipt> {
+    const audience = this.audience(options);
     // `whenBusy` is revision 30 and `attachmentIds` revision 33: a host that
     // does not announce one refuses its key.
     const parsed = parseOrInvalid(
@@ -1763,13 +2044,15 @@ export class AidenRemoteBotSessionService {
             throw error;
           }
           taken?.commit();
-          return { ...sent, ...projectBotSessionState(await runtime.state(bot.id)) };
+          // Recorded in the holder's view; each device's view is projected from it below.
+          return { ...sent, ...projectBotSessionState(await runtime.state(bot.id), HOLDER_AUDIENCE) };
         },
       );
       await this.afterAction(bot.id);
-      return receipt;
+      const { submissionId, deduped, ...state } = receipt;
+      return { submissionId, deduped, ...stateViewForAudience(state, audience) };
     } catch (error) {
-      return mapSessionError(error);
+      return mapSessionError(error, audience);
     }
   }
 
@@ -1793,26 +2076,37 @@ export class AidenRemoteBotSessionService {
   }
 
   private async control(
-    action: "resume" | "dismiss" | "stop",
+    action: "resume" | "dismiss" | "stop" | "pause" | "unpause",
     deviceId: string,
     botId: string,
     key: string,
     input: unknown,
+    options: { handoffs?: boolean },
   ): Promise<AidenRemoteBotSessionStateView> {
+    if (action === "pause" || action === "unpause") this.handoffService();
     parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot request"), input ?? {}, "The Bot request is invalid.");
+    const audience = this.audience(options);
     const bot = await this.options.bots.bot(botId);
     try {
+      // Recorded in the holder's view, so a replay to any device projects the same truth.
       const view = await this.options.bots.executeIdempotent(
-        { deviceId, route: `POST /bots/{id}/${action}`, resourceId: bot.id, key },
+        { deviceId, route: CONTROL_ROUTES[action], resourceId: bot.id, key },
         {},
         async () => {
           const runtime = await this.options.runtime();
           const requestId = `remote:${deviceId}:${key}`;
+          const holderView = (state: BotSessionState) => projectBotSessionState(state, HOLDER_AUDIENCE);
           if (action === "resume") {
-            return projectBotSessionState(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId)));
+            return holderView(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId)));
           }
           if (action === "dismiss") {
-            return projectBotSessionState(await unlessRefusedBeforeRunning(() => runtime.dismiss(bot.id, requestId)));
+            return holderView(await unlessRefusedBeforeRunning(() => runtime.dismiss(bot.id, requestId)));
+          }
+          if (action === "pause") {
+            return holderView(await unlessRefusedBeforeRunning(() => runtime.pause(bot.id, "phone")));
+          }
+          if (action === "unpause") {
+            return holderView(await unlessRefusedBeforeRunning(() => runtime.unpause(bot.id)));
           }
           // Stop ends a running turn; a paused one belongs to Dismiss. Every
           // surface reads "Stopping" until the run ends, or until the Stop fails.
@@ -1820,26 +2114,40 @@ export class AidenRemoteBotSessionService {
           const state = this.options.turnIntents
             ? await stopWithIntents(this.options.turnIntents, bot.id, stop)
             : await stop();
-          return projectBotSessionState(state);
+          return holderView(state);
         },
       );
       await this.afterAction(bot.id);
-      return view;
+      return stateViewForAudience(view, audience);
     } catch (error) {
-      return mapSessionError(error);
+      return mapSessionError(error, audience);
     }
   }
 
-  resume(deviceId: string, botId: string, key: string, input: unknown) {
-    return this.control("resume", deviceId, botId, key, input);
+  resume(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean } = {}) {
+    return this.control("resume", deviceId, botId, key, input, options);
   }
 
-  dismiss(deviceId: string, botId: string, key: string, input: unknown) {
-    return this.control("dismiss", deviceId, botId, key, input);
+  dismiss(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean } = {}) {
+    return this.control("dismiss", deviceId, botId, key, input, options);
   }
 
-  stop(deviceId: string, botId: string, key: string, input: unknown) {
-    return this.control("stop", deviceId, botId, key, input);
+  stop(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean } = {}) {
+    return this.control("stop", deviceId, botId, key, input, options);
+  }
+
+  /**
+   * Revision 36: pause the Bot from a phone (`by: "phone"`). Idempotent per
+   * request UUID; pausing a paused Bot keeps the first pause. A running turn
+   * is closed and left interrupted.
+   */
+  pause(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean } = {}) {
+    return this.control("pause", deviceId, botId, key, input, options);
+  }
+
+  /** Revision 36: clear the pause. An interrupted turn then waits for Resume. */
+  unpause(deviceId: string, botId: string, key: string, options: { handoffs?: boolean } = {}) {
+    return this.control("unpause", deviceId, botId, key, {}, options);
   }
 
   // --- Routines -------------------------------------------------------------
