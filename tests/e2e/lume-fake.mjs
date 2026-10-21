@@ -13,16 +13,20 @@
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit, vncHost, stopDelayMs, stopFails, cloneDelayMs, runReturnDelayMs, runFailsLate,
-// bootDelayMs, hostKey and vncUpstream of a JSON file named by a leading `--fake-config <file>`):
-// - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)";
+// keys log, stale, limit, vncHost, stopDelayMs, stopFails, stopFailsBooting, cloneDelayMs, runReturnDelayMs,
+// runFailsLate, bootDelayMs, hostKey and vncUpstream of a JSON file named by a leading `--fake-config <file>`):
+// - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)"; `run`
+//   refuses them with Lume's "still being provisioned" error before it launches anything;
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
-//   Virtualization VM-limit error (written to the --log-file, as the detached run does);
+//   Virtualization VM-limit error (written to the --log-file, as the detached run does, before
+//   `run` returns: AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS applies);
 //   an unattended `create` boots its VM, so it fails the same way, on stderr;
 // - AIDEN_FAKE_LUME_VNC_HOST: the host `get` reports in vncUrl (default 127.0.0.1);
 // - AIDEN_FAKE_LUME_STOP_DELAY_MS: how long `stop` takes before the VM is off (default 0);
 // - AIDEN_FAKE_LUME_STOP_FAILS: comma-separated VM names whose `stop` (graceful or forced)
 //   fails and leaves the VM running;
+// - AIDEN_FAKE_LUME_STOP_FAILS_BOOTING: comma-separated VM names whose `stop`, while their VM is
+//   still coming up, fails with an error that gives no reason instead of saying it isn't running;
 // - AIDEN_FAKE_LUME_CLONE_DELAY_MS: how long `clone` copies the disk. A source that starts
 //   running meanwhile fails the clone: the real copy would be torn, and the fake says so.
 // - AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS: how long `run --detach` takes to return once it has
@@ -62,6 +66,7 @@ if (args[0] === "--fake-config") {
     vncHost: "AIDEN_FAKE_LUME_VNC_HOST",
     stopDelayMs: "AIDEN_FAKE_LUME_STOP_DELAY_MS",
     stopFails: "AIDEN_FAKE_LUME_STOP_FAILS",
+    stopFailsBooting: "AIDEN_FAKE_LUME_STOP_FAILS_BOOTING",
     cloneDelayMs: "AIDEN_FAKE_LUME_CLONE_DELAY_MS",
     runReturnDelayMs: "AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS",
     runFailsLate: "AIDEN_FAKE_LUME_RUN_FAILS_LATE",
@@ -78,6 +83,7 @@ const logPath = process.env.AIDEN_E2E_FAKE_LUME_LOG;
 const log = (entry) => {
   if (logPath) appendFileSync(logPath, `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
 };
+const listed = (variable, name) => (process.env[variable] ?? "").split(",").includes(name);
 const fail = (message, code = 1) => {
   process.stderr.write(`Error: ${message}\n`);
   process.exit(code);
@@ -188,6 +194,9 @@ function details(storage, name, vm) {
 }
 
 async function vncChild(storage, name, port) {
+  // A stop's SIGTERM is handled on the event loop, so it can't land between registering the VM
+  // as running and logging its `vnc` entry: every VM a stop could see running has that entry.
+  process.on("SIGTERM", () => process.exit(0));
   const bootDelay = Number(process.env.AIDEN_FAKE_LUME_BOOT_DELAY_MS ?? "0");
   if (bootDelay > 0) await sleep(bootDelay);
   const upstream = Number(process.env.AIDEN_FAKE_LUME_VNC_UPSTREAM ?? "0");
@@ -332,6 +341,8 @@ async function main() {
       if (!options["--vnc-password"]) fail("Aiden always sets a VNC password", 77);
       const logFile = options["--log-file"];
       if (isRunning(vm)) fail(`Virtual machine already running: ${name}`);
+      if (staleNames().has(name)) fail(`Virtual machine is still being provisioned: ${name}`);
+      const returnDelay = Number(process.env.AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS ?? "0");
       const limit = Number(process.env.AIDEN_FAKE_LUME_LIMIT ?? "0");
       const running = Object.values(state.vms).filter(isRunning).length;
       if (limit > 0 && running >= limit) {
@@ -340,6 +351,7 @@ async function main() {
           mkdirSync(path.dirname(logFile), { recursive: true });
           appendFileSync(logFile, readFileSync(path.join(fixtures, "lume-error-vm-limit.txt"), "utf8"));
         }
+        if (returnDelay > 0) await sleep(returnDelay);
         process.stdout.write(`Started '${name}' in the background (PID 1).\nLog: ${logFile}\n`);
         return;
       }
@@ -362,9 +374,8 @@ async function main() {
           if (readState(storage).vms[name]?.status === "running") break;
         }
       }
-      const returnDelay = Number(process.env.AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS ?? "0");
       if (returnDelay > 0) await sleep(returnDelay);
-      if ((process.env.AIDEN_FAKE_LUME_RUN_FAILS_LATE ?? "").split(",").includes(name)) {
+      if (listed("AIDEN_FAKE_LUME_RUN_FAILS_LATE", name)) {
         fail(`fake lume: '${name}' was launched, then run failed`);
       }
       process.stdout.write(`Started '${name}' in the background (PID ${child.pid}).\nLog: ${logFile}\n`);
@@ -390,8 +401,11 @@ async function main() {
       const [, name] = positionals;
       const vm = state.vms[name];
       if (!vm) fail(`Virtual machine not found: ${name}`);
-      if (!isRunning(vm)) fail(`Virtual machine not running: ${name}`);
-      if ((process.env.AIDEN_FAKE_LUME_STOP_FAILS ?? "").split(",").includes(name)) fail(`Failed to stop virtual machine: ${name}`);
+      if (!isRunning(vm)) {
+        if (vm.status === "starting" && listed("AIDEN_FAKE_LUME_STOP_FAILS_BOOTING", name)) fail(`Failed to stop virtual machine: ${name}`);
+        fail(`Virtual machine not running: ${name}`);
+      }
+      if (listed("AIDEN_FAKE_LUME_STOP_FAILS", name)) fail(`Failed to stop virtual machine: ${name}`);
       const stopDelay = Number(process.env.AIDEN_FAKE_LUME_STOP_DELAY_MS ?? "0");
       if (stopDelay > 0) await sleep(stopDelay);
       // Re-read: other Lume calls may have changed the state while this one waited.

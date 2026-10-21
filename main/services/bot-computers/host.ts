@@ -146,6 +146,8 @@ const SLOT_STATES: ReadonlySet<BotComputerRunState> = new Set(["starting", "runn
 const ACTIVE_USE_MS = 60_000;
 const START_DISK_BYTES = 5 * 1024 ** 3;
 const VNC_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+/** The line Lume's detached launch writes to its log when it fails: the VM isn't coming up. */
+const LUME_LOG_ERROR = /^Error:/mu;
 
 function vncPassword(): string {
   let value = "";
@@ -319,15 +321,19 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     throw new BotComputerError("lume_failed", "Aiden couldn't delete the computer. Try again.");
   }
 
-  /** Resolves what Lume found: a VM it turned off, one that wasn't running, or none by that name. */
-  async function stopVm(vmName: string, force: boolean): Promise<"stopped" | "not_running" | "not_found"> {
+  /**
+   * Resolves what Lume found: a VM it turned off, one that wasn't running, or none by that name.
+   * `owner` ("Ada's") names the computer when even the forced stop fails, so a start that needed
+   * its place says whose computer it was.
+   */
+  async function stopVm(vmName: string, force: boolean, owner = "the"): Promise<"stopped" | "not_running" | "not_found"> {
     const result = await lume({ op: "stop", name: vmName, force, timeoutSeconds: force ? 0 : 30 }, force ? 30_000 : 75_000);
     if (result.exitCode === 0) return "stopped";
     const kind = failureKind(result);
     if (kind === "not_running" || kind === "not_found") return kind;
-    if (!force) return stopVm(vmName, true);
+    if (!force) return stopVm(vmName, true, owner);
     log(`lume stop failed: ${result.stderr.slice(-600)}`);
-    throw new BotComputerError("lume_failed", "Aiden couldn't stop the computer.");
+    throw new BotComputerError("lume_failed", `Aiden couldn't stop ${owner} computer.`);
   }
 
   async function getVm(vmName: string, signal?: AbortSignal): Promise<LumeVmInfo | undefined> {
@@ -365,23 +371,28 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
   /**
    * Turn off what a failed start may have launched, and resolve whether Lume still runs it.
-   * While the VM `mayComeUp` (Lume's detached run can return, or fail, before the VM it launched
-   * is up), one that isn't running yet is watched for `launchSettleMs` and turned off once it is.
-   * After a forced stop that failed, it counts as off only if Lume says so, and an unreadable
-   * state counts as on.
+   * While the VM may come up (`launchLog` names the log of a launch not known to have failed:
+   * Lume's detached run can return, or fail, before the VM it launched is up), one that isn't
+   * running yet is watched for `launchSettleMs` and turned off once it is, until that log shows
+   * Lume's error. A forced stop that fails counts the VM as off only if Lume says so once the
+   * watch is over, and an unreadable state counts as on.
    */
-  async function stopFailedStart(vmName: string, mayComeUp: boolean): Promise<boolean> {
-    const watchUntil = mayComeUp ? performance.now() + launchSettleMs : 0;
-    try {
-      // Lume turned off what came up, or has no such VM: nothing else this start launched can run.
-      while ((await stopVm(vmName, true)) === "not_running" && performance.now() < watchUntil) await delay(pollMs);
-      return false;
-    } catch (error) {
-      log("Stopping a failed start did not finish.", error);
-      return getVm(vmName).then(
-        (info) => info?.state === "running",
-        () => true,
-      );
+  async function stopFailedStart(vmName: string, launchLog?: string): Promise<boolean> {
+    const watchUntil = launchLog === undefined ? 0 : performance.now() + launchSettleMs;
+    const watching = async () => launchLog !== undefined && performance.now() < watchUntil && !LUME_LOG_ERROR.test(await logTail(launchLog));
+    for (;;) {
+      try {
+        // Lume turned off what came up, or has no such VM: nothing else this start launched can run.
+        if ((await stopVm(vmName, true)) !== "not_running" || !(await watching())) return false;
+      } catch (error) {
+        log("Stopping a failed start did not finish.", error);
+        const running = await getVm(vmName).then(
+          (info) => info?.state === "running",
+          () => true,
+        );
+        if (running || !(await watching())) return running;
+      }
+      await delay(pollMs);
     }
   }
 
@@ -416,8 +427,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const started = await lume({ op: "run", name: vmName, vncPassword: password, sharedDir, logFile }, 60_000, undefined, () => {
         launch = "launching";
       });
+      const refusal = started.exitCode === 0 ? undefined : failureKind(started);
+      // Lume refused this VM (it has none by that name, it is still being made, or macOS's limit
+      // is reached): nothing is coming up. Any other failure may have launched it.
+      if (refusal === "not_found" || refusal === "stale" || refusal === "vm_limit") launch = "ended";
       if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
-      if (started.exitCode !== 0) throw startFailure(failureKind(started), owner);
+      if (refusal !== undefined) throw startFailure(refusal, owner);
       const deadline = now() + startTimeoutMs;
       for (;;) {
         polls += 1;
@@ -435,7 +450,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         }
         if (info.state !== "running" && polls > 1) {
           const tail = await logTail(logFile);
-          if (/^Error:/mu.test(tail)) {
+          if (LUME_LOG_ERROR.test(tail)) {
             // Lume's background launch reported its failure: the VM isn't coming up.
             launch = "ended";
             throw startFailure(classifyLumeError(tail, 1), owner);
@@ -446,7 +461,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }
     } catch (error) {
       // A Lume that never started (missing, or refused by the OS) launched nothing.
-      if (launch !== "none" && (await stopFailedStart(vmName, launch === "launching"))) onLeftRunning?.();
+      if (launch !== "none" && (await stopFailedStart(vmName, launch === "launching" ? logFile : undefined))) onLeftRunning?.();
       throw error;
     }
   }
@@ -695,7 +710,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       let stillRunning = false;
       try {
         // One with no connection is a failed start Lume couldn't turn off: nobody used it, so it is forced.
-        if (vmName) await stopVm(vmName, reason === "quit" || connection === undefined);
+        if (vmName) await stopVm(vmName, reason === "quit" || connection === undefined, await possessive(botId));
       } catch (error) {
         // Even a forced stop failed: count the computer as off only if Lume says it is. One
         // that is still on keeps its place (macOS's limit) and its connection, and its idle

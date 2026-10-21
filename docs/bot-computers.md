@@ -115,16 +115,22 @@ Bot computer that was interrupted while it was being made is marked for
   computer can come up a few moments after Lume has reported back. So a start
   that is cancelled (Pause, Stop, or every caller giving up) or fails can leave
   it on. Aiden lets Lume finish launching it, then turns it off; while Lume
-  says it isn't running yet, Aiden keeps checking for up to about ten seconds
-  and turns it off once it comes up. Until then the computer still reads
-  Starting and keeps its place, so stopping it can take that long. A computer
+  says it isn't running yet, or fails to turn it off without saying why,
+  Aiden keeps checking for up to about ten seconds and turns it off once it
+  comes up. Until then the computer still reads Starting and keeps its place,
+  so stopping it can take that long. Aiden stops checking as soon as Lume's
+  log says the launch failed, and doesn't wait at all when Lume refused the
+  start (no such computer, one still being made, or macOS's limit). A computer
   that comes up even later is turned off by its next start (which then fails
   once) or at Aiden's next launch. If Lume can't turn it off, it stays shown as
   running, keeps its place and has no screen to use: its Computer tab says it
   isn't running. Its idle timer, Stop in the Bot's profile, Pause or quit tries
   again, and the Bot's next computer call turns it off before starting it
-  afresh. A start that fails because Lume itself can't be started launched
-  nothing, so the computer reads Stopped at once.
+  afresh. Until one of them works, a start that needs its place (that Bot's,
+  or another Bot's at the limit) fails with "Aiden couldn't stop Ada's
+  computer.", naming whose computer it is. A start that fails because Lume
+  itself can't be started launched nothing, so the computer reads Stopped at
+  once.
 - **Startup** stops computers an earlier launch left running and marks
   interrupted ones for Reset. It never stops a computer this launch is already
   starting or using, or the base while Set up builds it. A Mac that never chose

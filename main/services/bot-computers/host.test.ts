@@ -39,6 +39,7 @@ interface FakeConfig {
   vncHost?: string;
   stopDelayMs?: number;
   stopFails?: string;
+  stopFailsBooting?: string;
   cloneDelayMs?: number;
   runReturnDelayMs?: number;
   runFailsLate?: string;
@@ -617,11 +618,14 @@ test("a start cancelled or failing after Lume launched the VM turns it off; one 
     assert.equal(context.vmRunning(vmName), true);
     assert.equal((await context.host.computer("ada"))?.state, "running");
     assert.equal(context.host.runningConnection("ada"), undefined);
-    await assert.rejects(context.host.stop("ada", { reason: "pause" }), failsWith("lume_failed"));
+    // Whoever's start meets it, the message says whose computer Aiden couldn't stop.
+    const couldNotStopAdas = (error: unknown) => failsWith("lume_failed")(error) && /couldn't stop Ada's computer/u.test((error as Error).message);
+    await assert.rejects(context.host.stop("ada", { reason: "pause" }), couldNotStopAdas);
     assert.equal((await context.host.computer("ada"))?.state, "running", "a Pause that couldn't turn it off doesn't call it stopped");
+    await assert.rejects(context.host.ensureRunning("ada", { reason: "tool" }), couldNotStopAdas, "Ada's next start turns it off first");
     await context.host.updateSettings({ maxRunning: 1 });
     await context.host.give("ben");
-    await assert.rejects(context.host.ensureRunning("ben", { reason: "tool" }), failsWith("lume_failed"), "Ben's start needs the place Ada's VM still holds");
+    await assert.rejects(context.host.ensureRunning("ben", { reason: "tool" }), couldNotStopAdas, "Ben's start needs the place Ada's VM still holds");
     assert.equal(context.vmRunning(botComputerVmName("ben")), false);
 
     // Once Lume can stop it, Ada's next start turns it off first and starts afresh.
@@ -680,6 +684,24 @@ test("a start cancelled while the VM Lume launched is still coming up turns it o
     await waitFor(() => logged("vnc").length === 2, "the VM to come up");
     assert.equal(context.vmRunning(vmName), false);
     assert.equal((await context.host.computer("ada"))?.state, "stopped");
+
+    // Cancelled while `run` is still returning, and Lume's forced stop of the VM that is still
+    // coming up fails without saying why, while Lume says it isn't running.
+    context.config.stopFailsBooting = vmName;
+    context.config.runReturnDelayMs = 300;
+    context.writeConfig();
+    caller = new AbortController();
+    cancelled = context.host.ensureRunning("ada", { reason: "tool", signal: caller.signal });
+    await waitFor(() => logged("spawned").length === 3, "the VM's process");
+    caller.abort();
+    await assert.rejects(cancelled, failsWith("cancelled"));
+    await context.host.stop("ada", { reason: "pause" });
+    await waitFor(() => logged("vnc").length === 3, "the VM to come up");
+    assert.equal(context.vmRunning(vmName), false, "a stop that failed while the VM was coming up doesn't end the watch");
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+    context.config.stopFailsBooting = undefined;
+    context.config.runReturnDelayMs = undefined;
+    context.writeConfig();
 
     // Started again, it comes up as usual.
     await context.host.ensureRunning("ada", { reason: "tool" });
@@ -906,6 +928,41 @@ test("Lume's VM-limit failure becomes a clear message, and the slot is released"
       (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /two virtual machines/u.test(error.message),
     );
     assert.equal((await context.host.computer("ben"))?.state, "stopped");
+  });
+});
+
+test("a start Lume refused, or whose launch Lume's log says failed, is turned off once without waiting for a VM that can't come up", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    const stopsSince = (from: number) => context.calls().slice(from).filter((call) => call.op === "stop").length;
+
+    // Lume refuses to run a computer it says is still being made, so it launched nothing.
+    context.config.stale = vmName;
+    context.writeConfig();
+    let from = context.calls().length;
+    await assert.rejects(context.host.ensureRunning("ada", { reason: "tool" }), failsWith("stale"));
+    assert.equal(stopsSince(from), 1, "one forced stop, in case anything was left on, and no watching");
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+    context.config.stale = undefined;
+
+    // Another app holds the second place, so Lume's background launch fails and its log says so
+    // while `run` is still returning. The start's only caller has cancelled by then, and Pause follows.
+    await context.host.give("ben");
+    await context.host.ensureRunning("ben", { reason: "tool" });
+    context.config.limit = 1;
+    context.config.runReturnDelayMs = 500;
+    context.writeConfig();
+    from = context.calls().length;
+    const caller = new AbortController();
+    const cancelled = context.host.ensureRunning("ada", { reason: "tool", signal: caller.signal });
+    await waitFor(() => context.calls().slice(from).some((call) => call.op === "run"), "Lume's run");
+    caller.abort();
+    await assert.rejects(cancelled, failsWith("cancelled"));
+    await context.host.stop("ada", { reason: "pause" });
+    assert.equal(stopsSince(from), 1, "the log's error ends the watch at once");
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+    assert.equal((await context.host.computer("ben"))?.state, "running");
   });
 });
 
