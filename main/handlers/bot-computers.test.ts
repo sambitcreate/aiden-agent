@@ -89,7 +89,7 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
       return () => void listeners.delete(listener);
     },
   };
-  return { host, reached, finish: () => finishSetup?.() };
+  return { host, reached, computers, finish: () => finishSetup?.() };
 }
 
 /** A viewer whose grants wait until the test settles them, so cancellation can be seen. */
@@ -242,9 +242,13 @@ test("a grant whose window goes away is cancelled, and a finished one leaves no 
 });
 
 test("Take over interrupts the Bot's action and Give back returns the computer, each replying with who drives it", async () => {
-  const { invoke, control } = setup();
+  const { invoke, control, computers } = setup();
   await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT), /doesn't have a computer/u);
   await invoke(BOT_COMPUTER_CHANNELS.give, BOT);
+  // A stopped computer can't be taken over, so the Bot is never left waiting on one nobody can give back.
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT), /isn't running/u);
+  assert.equal(control.controller(BOT), "bot");
+  computers.set(BOT, { ...computers.get(BOT)!, state: "running" });
   const action = control.run(BOT, undefined, (signal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))));
   const taken = (await invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT)) as BotComputerStatus;
   assert.equal(taken.controller, "person");

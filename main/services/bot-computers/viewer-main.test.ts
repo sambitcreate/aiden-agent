@@ -7,7 +7,9 @@ import type { BotComputerStatus } from "../../../renderer/shared/bot-computers.j
 import { createBotComputerControl } from "./control.js";
 import { connectRfb } from "./rfb-client.js";
 import { FakeRfbServer } from "./rfb-fake-server.js";
+import { createRfbScreenFactory } from "./rfb-screen-main.js";
 import { createRfbScreen, type BotComputerLiveScreen } from "./rfb-screen.js";
+import { createBotComputerSessions } from "./sessions.js";
 import type { BotComputerConnection, BotComputerStartReason } from "./types.js";
 import { createBotComputerViewer, type BotComputerViewerDependencies } from "./viewer-main.js";
 
@@ -173,5 +175,79 @@ test("closing the viewer stops its proxy, and later grants are refused", async (
     await assert.rejects(viewer.grant(BOT, { start: true }), /quitting/u);
   } finally {
     await cleanup();
+  }
+});
+
+test("as main wires them, the Bot's screen and the viewer share one VNC connection per run, and a new run opens a new one", async () => {
+  // Main's composition: P8's sessions with the RFB screen factory, and the viewer reading screens through them.
+  const servers = [new FakeRfbServer({ width: 32, height: 24, password: "run-pass-1" }), new FakeRfbServer({ width: 32, height: 24, password: "run-pass-2" })];
+  const ports = await Promise.all(servers.map((server) => server.listen()));
+  let run = 0;
+  const connection = (): BotComputerConnection => ({
+    vmName: VM,
+    ip: "192.168.64.5",
+    vnc: { host: "127.0.0.1", port: ports[run], password: `run-pass-${run + 1}` },
+    ssh: { host: "192.168.64.5", user: "lume" },
+  });
+  const state: { computer: BotComputerStatus } = {
+    computer: { botId: BOT, vmName: VM, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
+  };
+  const listeners = new Set<(botId: string | undefined) => void>();
+  const host = {
+    computer: async () => ({ ...state.computer }),
+    ensureRunning: async () => {
+      state.computer.state = "running";
+      return connection();
+    },
+    touch: () => undefined,
+    onChange: (listener: (botId: string | undefined) => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+  const emit = () => {
+    for (const listener of listeners) listener(BOT);
+  };
+  const control = createBotComputerControl();
+  const sessions = createBotComputerSessions({ host, control });
+  sessions.setScreenFactory(createRfbScreenFactory({ encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }) }));
+  const viewer = createBotComputerViewer({ host, sessions, control, botName: () => "Ada", allowedOrigins: ["file://"] });
+  try {
+    const lent = await viewer.grant(BOT, { start: true });
+    const stream = await get(streamUrl(lent));
+    assert.equal(stream.response.statusCode, 200);
+    await until(() => stream.body().includes("--frame\r\nContent-Type: image/jpeg"));
+    // The Bot's capture rides the connection the viewer opened.
+    const botScreen = await sessions.screen(BOT, undefined, { reason: "tool" });
+    const shot = await botScreen.capture({ format: "jpeg", maxWidth: 32 });
+    assert.deepEqual([shot.framebufferWidth, shot.framebufferHeight], [32, 24]);
+    assert.equal(servers[0].connections.length, 1, "one VNC connection for the Bot and the viewer");
+    assert.equal(servers[0].connections[0].authenticated, true, "signed in with the run's password");
+
+    // The run ends: its screen closes, and the viewer's stream with it.
+    let ended = false;
+    stream.response.once("close", () => {
+      ended = true;
+    });
+    state.computer.state = "stopped";
+    emit();
+    await until(() => ended);
+    await until(() => (botScreen as BotComputerLiveScreen).closed());
+
+    // The next run has a new port and password; both sides move to it together.
+    run = 1;
+    const next = await viewer.grant(BOT, { start: true });
+    const again = await get(streamUrl(next));
+    assert.equal(again.response.statusCode, 200);
+    await until(() => again.body().includes("--frame\r\nContent-Type: image/jpeg"));
+    const nextScreen = await sessions.screen(BOT, undefined, { reason: "tool" });
+    assert.notEqual(nextScreen, botScreen);
+    await nextScreen.capture({ format: "jpeg", maxWidth: 32 });
+    assert.equal(servers[1].connections.length, 1);
+    assert.equal(servers[0].connections.length, 1, "the old run's server is never dialled again");
+    again.response.destroy();
+  } finally {
+    await viewer.close();
+    await Promise.all(servers.map((server) => server.close()));
   }
 });

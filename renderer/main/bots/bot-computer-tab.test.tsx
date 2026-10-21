@@ -203,6 +203,41 @@ test("while the Bot drives, the screen is read-only with its avatar at the last 
   await waitFor(() => assert.ok(within(panel).getByRole("button", { name: "Give back" })));
 });
 
+test("with Browser and Computer both shown, the six tabs keep their order and Open tabs reaches Computer, which starts it", async () => {
+  openPanelOn("activity");
+  const workspaceId = "bot-home-1";
+  const browserState = {
+    workspaceId, revision: 1, activeTabId: "tab-1", profiles: [], defaults: {}, agentAccessOverride: "inherit", agentAccessAllowed: true, history: [], servers: [],
+    tabs: [{
+      id: "tab-1", workspaceId, profileId: "bot:bot-1", url: "https://example.com/", title: "Example", loading: false, canGoBack: false,
+      canGoForward: false, crashed: false, audible: false, muted: false, viewport: { mode: "fill", width: 1280, height: 720 },
+      appearance: "system", zoom: 1, recording: false, agentControlling: false, floating: false, visible: true,
+    }],
+  };
+  const { calls } = await mountBotChat(
+    { computers: [computer()] },
+    {
+      "bots:browser:workspace": () => ({ workspaceId }),
+      "browser:get-state": () => browserState,
+      "botComputers:viewerGrant": never,
+    },
+  );
+  const panel = botPanel();
+  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer"]));
+  fireEvent.keyDown(within(panel).getByRole("button", { name: "Open tabs" }), { key: "Enter" });
+  const items = await screen.findAllByRole("menuitem");
+  assert.deepEqual(items.map((item) => item.textContent), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Computer" }));
+  await waitFor(() => assert.equal(selectedTab(), "Computer"));
+  await waitFor(() =>
+    assert.deepEqual(
+      computerCalls(calls, "botComputers:viewerGrant").map((call) => call.args),
+      [["bot-1", { start: true }]],
+      "choosing Computer from the list is the person switching to it",
+    ),
+  );
+});
+
 test("a failed start says why and offers Try again", async () => {
   openPanelOn("activity");
   await mountBotChat(

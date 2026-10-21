@@ -9,8 +9,9 @@
 // - `give(botId)`, `reset(botId)`, `remove(botId)`, `stop(botId)`.
 // - The Computer tab (plan §8.5): `viewerGrant(botId, { start })` lends a
 //   device stream target (starting the computer only with `start`, and
-//   cancelled if the asking window goes away), `takeOver` / `giveBack`
-//   switch who drives it, and `pointer` reads the Bot's last action point.
+//   cancelled if the asking window goes away), `takeOver` (a running
+//   computer only) / `giveBack` switch who drives it, and `pointer` reads the
+//   Bot's last action point.
 
 import {
   BOT_COMPUTER_CHANNELS,
@@ -146,7 +147,9 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
 
   deps.handle(BOT_COMPUTER_CHANNELS.takeOver, async (_event, rawBotId): Promise<BotComputerStatus> => {
     const botId = await knownBot(rawBotId);
-    await computerOf(botId);
+    // Only a running computer can be used. Control taken over a stopped one would keep the Bot
+    // waiting for a Give back the tab doesn't offer until the computer runs again.
+    if ((await computerOf(botId)).state !== "running") throw new Error("This Bot's computer isn't running.");
     deps.control.takeOver(botId, "viewer");
     return computerOf(botId);
   });

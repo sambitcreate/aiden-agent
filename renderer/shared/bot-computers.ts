@@ -76,7 +76,7 @@ export const BOT_COMPUTER_CHANNELS = {
   // The Computer tab (plan §8.5). A grant with `start: true` starts the
   // computer (the person opened the tab); without it a stopped computer is refused.
   viewerGrant: "botComputers:viewerGrant", // invoke(botId, { start }) → BotComputerViewerGrant
-  takeOver: "botComputers:takeOver", // invoke(botId) → BotComputerStatus
+  takeOver: "botComputers:takeOver", // invoke(botId) → BotComputerStatus; refused unless the computer is running
   giveBack: "botComputers:giveBack", // invoke(botId) → BotComputerStatus
   pointer: "botComputers:pointer", // invoke(botId) → BotComputerPointer | null
 } as const;
