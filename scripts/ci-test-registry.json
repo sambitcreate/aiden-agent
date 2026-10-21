@@ -1071,6 +1071,7 @@
         "renderer/main/bots/bot-computer-tab.test.tsx",
         "renderer/shared/bot-computers.test.ts",
         "scripts/vendor-lume.test.mjs",
+        "scripts/bot-computers-packaged-acceptance-core.test.mjs",
         "scripts/verify-macos-package.test.mjs",
         "renderer/components/bots/bot-connection-ui.test.tsx",
         "renderer/shared/bot-connections.test.ts",
