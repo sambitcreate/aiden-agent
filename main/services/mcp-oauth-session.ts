@@ -59,6 +59,13 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
     ) {
       throw new Error("MCP OAuth client information is malformed.");
     }
+    const { client_secret: secret, client_secret_expires_at: secretExpiry } = session.clientInformation;
+    if (
+      (secret !== undefined && (typeof secret !== "string" || !secret)) ||
+      (secretExpiry !== undefined && (typeof secretExpiry !== "number" || !Number.isFinite(secretExpiry) || secretExpiry < 0))
+    ) {
+      throw new Error("MCP OAuth client secret is malformed.");
+    }
   }
   if (session.tokens !== undefined) {
     if (
@@ -81,10 +88,6 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
   return session as McpOAuthSession;
 }
 
-/**
- * Start an explicit Settings re-authorization without discarding the dynamic
- * client registration. The caller retains the original snapshot for rollback.
- */
 export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, oauthClientName?: string): string {
   const parsed = new URL(url);
   parsed.hash = "";
@@ -97,18 +100,52 @@ export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: stri
   return session.authorizationBinding === binding;
 }
 
-/** Native PKCE clients are public clients; never retain a DCR client secret. */
-export function publicMcpClientInformation(
-  information: OAuthClientInformationFull,
-): OAuthClientInformationFull {
-  const {
-    client_secret: _clientSecret,
-    client_secret_expires_at: _clientSecretExpiry,
-    ...publicInformation
-  } = information;
-  return publicInformation as OAuthClientInformationFull;
+/**
+ * The stored dynamic client registration, or undefined when the server-issued
+ * client secret has expired (RFC 7591 `client_secret_expires_at`, seconds; 0
+ * means it never expires) so the SDK registers again. Confidential-only
+ * servers (Figma, Vercel, Supabase) need the secret at the token endpoint, so
+ * it stays in the encrypted session and is handed back to the SDK.
+ */
+export function usableMcpClientInformation(
+  information: OAuthClientInformationFull | undefined,
+  nowMs: number = Date.now(),
+): OAuthClientInformationFull | undefined {
+  const expiresAt = information?.client_secret_expires_at;
+  if (information?.client_secret && typeof expiresAt === "number" && expiresAt > 0 && expiresAt * 1000 <= nowMs) {
+    return undefined;
+  }
+  return information;
 }
 
+/** Persist a registration response (including any client secret) into a bound session. */
+export function sessionWithMcpClientInformation(
+  session: McpOAuthSession,
+  binding: string,
+  information: OAuthClientInformationFull,
+): McpOAuthSession {
+  const clientInformation = structuredClone(information);
+  // Public clients sometimes come back with `"client_secret": ""`; keeping it
+  // would read as a secret at the token endpoint and fail the stored parse.
+  if (typeof clientInformation.client_secret !== "string" || !clientInformation.client_secret) {
+    delete clientInformation.client_secret;
+    delete clientInformation.client_secret_expires_at;
+  } else {
+    const expiry: unknown = clientInformation.client_secret_expires_at;
+    if (expiry !== undefined && (typeof expiry !== "number" || !Number.isFinite(expiry) || expiry < 0)) {
+      delete clientInformation.client_secret_expires_at;
+    }
+  }
+  return { ...session, authorizationBinding: binding, clientInformation };
+}
+
+/**
+ * Start an explicit Settings re-authorization. Tokens, the PKCE verifier and
+ * the stored client registration are all left behind: a server may have
+ * dropped the old client_id (and then never calls back), so every interactive
+ * sign-in registers a fresh client. Granted scopes carry over for step-up. The
+ * caller retains the original snapshot for rollback.
+ */
 export function sessionForFreshMcpAuthorization(
   session: McpOAuthSession,
   binding: string,
@@ -117,7 +154,6 @@ export function sessionForFreshMcpAuthorization(
   const grantedScope = session.tokens?.scope || session.grantedScope;
   return {
     authorizationBinding: binding,
-    ...(session.clientInformation ? { clientInformation: publicMcpClientInformation(session.clientInformation) } : {}),
     ...(grantedScope ? { grantedScope } : {}),
   };
 }

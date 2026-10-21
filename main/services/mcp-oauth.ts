@@ -26,12 +26,13 @@ import {
   McpOAuthSessionTransaction,
   McpOAuthAuthorizationFlow,
   mcpAuthorizationBinding,
-  publicMcpClientInformation,
+  sessionWithMcpClientInformation,
   sessionMatchesMcpBinding,
   sessionForMcpAuthorizationAttempt,
   sessionAfterTokenInvalidation,
   sessionWithRefreshedMcpTokens,
   sessionWithSavedMcpTokens,
+  usableMcpClientInformation,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
 import {
@@ -167,19 +168,14 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
-    const information = (await this.boundSession()).clientInformation;
-    return information ? publicMcpClientInformation(information) : undefined;
+    return usableMcpClientInformation((await this.boundSession()).clientInformation);
   }
 
   async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
     this.assertCanMutate();
     const session = await this.boundSession();
     this.assertCanMutate();
-    await this.saveSession({
-      ...session,
-      authorizationBinding: this.binding,
-      clientInformation: publicMcpClientInformation(info),
-    });
+    await this.saveSession(sessionWithMcpClientInformation(session, this.binding, info));
   }
 
   /** The tokens this provider last handed to (or received from) the SDK. */
