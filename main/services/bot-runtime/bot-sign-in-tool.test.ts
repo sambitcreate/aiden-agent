@@ -18,7 +18,9 @@ import {
 } from "../../../renderer/shared/browser.js";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
+import { createBotComputerControl } from "../bot-computers/control.js";
 import { createBotBrowserHandoffOpener, type BotBrowserHandoffService } from "./bot-browser-handoff.js";
+import { createBotComputerHandoffOpener } from "./bot-computer-handoff.js";
 import { BOT_BROWSER_HELD_TAB_TITLE, createBotBrowser, type BotBrowserService } from "./bot-browser-tools.js";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { openBotHandoff } from "./bot-handoff-open.js";
@@ -431,6 +433,68 @@ test("Stop while the person is signing in withdraws the card and gives the Bot i
   }
 });
 
+test("a Bot with its own computer and no browser signs in on the computer: Open hands the person the computer, and I'm signed in gives it back", async () => {
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage(
+      [
+        fauxToolCall(SIGN_IN_TOOL_NAME, { site: "github.com", where: "browser" }, { id: "browser" }),
+        fauxToolCall(SIGN_IN_TOOL_NAME, { site: "github.com", why: "I need your GitHub account." }, { id: "computer" }),
+      ],
+      { stopReason: "toolUse" },
+    ),
+    fauxAssistantMessage("Signed in on my computer."),
+  ]);
+  const handoffs = createBotHandoffs();
+  const control = createBotComputerControl();
+  const guest: string[] = [];
+  const opener = createBotComputerHandoffOpener({
+    host: {
+      computer: async () => ({ state: "stopped" }) as never,
+      ensureRunning: async () => ({ vmName: "aiden-bot-pc", ip: "192.168.64.5", vnc: { host: "127.0.0.1", port: 5901, password: "vnc-secret" }, ssh: { host: "192.168.64.5", user: "lume" } }),
+      runGuestCommand: async (_botId, command) => {
+        guest.push(command);
+        return { exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false };
+      },
+    },
+    control,
+    handoffs,
+    enabled: () => true,
+  });
+  const { harness, root } = await memoryHarness("bot-pc", handoffs, fauxModels, {
+    botName: async () => "Ada",
+    hasBrowser: async () => false,
+    hasComputer: async () => true,
+    targets: { browser: false, computer: true },
+  });
+  try {
+    const settled = (await root.submit({ type: "input", content: "triage my GitHub issues" }, ctx)).wait(ctx);
+    await waitFor(() => handoffs.pending("bot-pc").length === 1, { what: "the sign-in card" });
+    const [card] = handoffs.pending("bot-pc");
+    assert.equal(card!.target, "computer", "a Bot without a browser signs in on its computer");
+
+    const opened = await openBotHandoff(card!, "desktop", {
+      external: async () => assert.fail("a sign-in never opens in the system browser"),
+      focusChat: async () => undefined,
+      botBrowser: async () => assert.fail("not in the Bot's browser"),
+      botComputer: opener,
+    });
+    assert.equal(opened, "computer");
+    assert.equal(control.controller("bot-pc"), "person", "the person has the computer while they sign in");
+    assert.ok(guest.some((command) => command.includes("https://github.com")), "the site opened in the computer");
+
+    assert.equal(handoffs.answer("bot-pc", card!.waitId, { outcome: "done" }), "answered");
+    assert.equal((await settled).status, "done");
+    assert.equal(control.controller("bot-pc"), "bot", "answering gives the computer back");
+    const byId = new Map((await signInResults(root)).map((result) => [result.toolCallId, result]));
+    assert.equal(byId.get("browser")!.isError, true);
+    assert.match(textOf(byId.get("browser")!), /Ada has no browser to sign in in/u);
+    assert.equal(byId.get("computer")!.isError, false);
+    assert.match(textOf(byId.get("computer")!), /Check with a fresh computer capture; never ask for or type their password\./u);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 /* ------------------------------------------------------------------------- */
 /* Who is offered it                                                          */
 /* ------------------------------------------------------------------------- */
@@ -473,6 +537,6 @@ test("sign-in is offered only with the Browser in the Bot's access, and never on
   }
   assert.deepEqual(await assemblyFor([]).checkPolicy("bot-gate", SIGN_IN_TOOL_NAME, { ...call, requestIds: ["desk-1"] }), {
     allowed: false,
-    reason: "Sign-in needs the Browser in this Bot's access.",
+    reason: "Sign-in needs the Browser or a computer in this Bot's access.",
   });
 });

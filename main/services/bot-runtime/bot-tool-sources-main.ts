@@ -466,8 +466,16 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
       tools.push(botHandoffCandidate(botId, botHandoffs));
-      // Needs the Browser in the Bot's access; the verdict keeps it off otherwise.
-      tools.push(signInCandidate(botId, botHandoffs, { ...(deps.botName ? { botName: deps.botName } : {}) }));
+      // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
+      const signInOnComputer = has("computer") && facts.hasComputer;
+      tools.push(
+        signInCandidate(botId, botHandoffs, {
+          ...(deps.botName ? { botName: deps.botName } : {}),
+          targets: { browser: has("browser"), computer: signInOnComputer },
+          hasBrowser: async () => has("browser"),
+          hasComputer: async () => signInOnComputer,
+        }),
+      );
       return {
         tools,
         ...(skillSnapshot === undefined ? {} : { skillSnapshot }),

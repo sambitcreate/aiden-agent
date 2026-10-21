@@ -4,7 +4,7 @@ import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { DEFAULT_BOT_AVATAR } from "../../shared/bots";
 import type { BotHandoffOutcome, BotPendingHandoff } from "../../shared/bot-handoffs";
-import { HandoffCard } from "./handoff-card";
+import { HandoffActions, HandoffCard, handoffSignInComposerText } from "./handoff-card";
 
 afterEach(() => cleanup());
 
@@ -129,4 +129,26 @@ test("a sign-in asks to sign in to one site for the Bot, opens it in the Bot's b
 test("a sign-in card names its site by origin, even when the title text says otherwise", () => {
   mount({ ...SIGN_IN, action: "Sign in to \u202Emoc.buhtig", origin: "https://github.com" });
   screen.getByText("Sign in to github.com for Ada");
+});
+
+test("a sign-in on the Bot's computer opens Ada's computer and says the Bot can't see the screen meanwhile", () => {
+  const onComputer: BotPendingHandoff = { ...SIGN_IN, target: "computer" };
+  const { answers, opens } = mount(onComputer);
+  screen.getByText("Sign in to github.com for Ada");
+  screen.getByText("Opens on Ada’s own computer, with you in control. Ada can’t see the screen until you answer, and never sees your password.");
+  assert.deepEqual(buttonNames(), ["Open Ada’s computer", "Skip", "I’m signed in"]);
+  fireEvent.click(screen.getByRole("button", { name: "Open Ada’s computer" }));
+  fireEvent.click(screen.getByRole("button", { name: "I’m signed in" }));
+  assert.equal(opens(), 1);
+  assert.deepEqual(answers, ["done"]);
+  assert.equal(handoffSignInComposerText("Ada", onComputer), "Sign in for Ada with Open Ada’s computer above, then choose I’m signed in.");
+});
+
+test("the panel's copy of the buttons names the Bot's computer too, and a Bot on another Mac still finishes there", () => {
+  const onComputer: BotPendingHandoff = { ...SIGN_IN, target: "computer" };
+  render(<HandoffActions handoff={onComputer} name="Ada" onOpen={() => undefined} onAnswer={() => undefined} />);
+  assert.deepEqual(buttonNames(), ["Open Ada’s computer", "Skip", "I’m signed in"]);
+  cleanup();
+  render(<HandoffActions handoff={onComputer} name="Ada" finishOn="Studio" onOpen={() => undefined} onAnswer={() => undefined} />);
+  assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip"]);
 });

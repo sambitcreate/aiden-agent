@@ -1,7 +1,8 @@
 // While the Bot panel floats over a narrow chat it covers the hand-off card
 // above the composer, so the panel shows the card's title and buttons at its
-// top: a sign-in the person opened in the panel's Browser tab is answered
-// beside that tab, with no need to close the panel to reach I'm signed in.
+// top: a sign-in the person opened in the panel's Browser or Computer tab is
+// answered beside that tab, with no need to close the panel to reach I'm
+// signed in.
 
 import { BotAvatar } from "../../components/bot-avatar";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
@@ -24,6 +25,7 @@ export function BotPanelHandoff({ botId, name, avatar }: { botId: string; name: 
         actions={
           <HandoffActions
             handoff={handoff}
+            name={name}
             busy={actions.busy}
             onOpen={() => void actions.open(handoff)}
             onAnswer={(outcome) => void actions.answer(handoff, outcome)}

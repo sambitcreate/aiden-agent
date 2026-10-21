@@ -6,13 +6,16 @@
 //
 // A sign-in (plan §5.2) is the same card asking the person to sign in to one
 // site for the Bot: "Sign in to github.com for Ada", with Open sign-in (the
-// site in a new tab of the Bot's own browser), Skip and I'm signed in.
+// site in a new tab of the Bot's own browser), Skip and I'm signed in. A
+// sign-in on the Bot's own computer (`target: "computer"`, plan §8.6) offers
+// "Open Ada's computer" instead: the site opens there with the person in
+// control, and the Bot can't see the screen until the card is answered.
 //
 // A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
 // sign-in happens in its own browser over there, so that card offers
 // "Finish on <Mac>" and Skip instead of Open sign-in and I'm signed in.
 
-import { ExternalLink, Laptop, LogIn } from "lucide-react";
+import { ExternalLink, Laptop, LogIn, Monitor } from "lucide-react";
 import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
@@ -28,7 +31,18 @@ function linkHost(url: string): string | undefined {
   }
 }
 
-type ShownHandoff = Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" | "rule"> & Pick<Partial<BotPendingHandoff>, "origin">;
+type ShownHandoff = Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" | "rule"> &
+  Pick<Partial<BotPendingHandoff>, "origin" | "target">;
+
+function onComputer(handoff: Pick<ShownHandoff, "kind" | "target">): boolean {
+  return handoff.kind === "sign_in" && handoff.target === "computer";
+}
+
+/** The sign-in's Open: in the Bot's browser, or on the Bot's own computer. */
+export function handoffSignInOpenLabel(name: string | undefined, handoff: Pick<ShownHandoff, "kind" | "target">): string {
+  if (!onComputer(handoff)) return "Open sign-in";
+  return name ? `Open ${name}’s computer` : "Open the computer";
+}
 
 /** The site a sign-in names ("github.com"): its origin, else its page, else its title. */
 function signInHost(handoff: ShownHandoff): string {
@@ -43,8 +57,9 @@ function signInHost(handoff: ShownHandoff): string {
  * What the composer says while a sign-in waits: it is answered on the card,
  * never with a note, so a password typed in the chat can't reach the Bot.
  */
-export function handoffSignInComposerText(name: string): string {
-  return `Sign in for ${name} with Open sign-in above, then choose I’m signed in.`;
+export function handoffSignInComposerText(name: string, handoff?: Pick<ShownHandoff, "kind" | "target">): string {
+  const open = handoff ? handoffSignInOpenLabel(name, handoff) : "Open sign-in";
+  return `Sign in for ${name} with ${open} above, then choose I’m signed in.`;
 }
 
 /** The card's title: whose turn it is, or what to sign in to and for whom. */
@@ -53,12 +68,13 @@ export function handoffCardTitle(name: string, handoff: ShownHandoff): string {
 }
 
 /**
- * The card's buttons: Open (or Open sign-in), Skip and Done (or I'm signed in),
- * or "Finish on <Mac>" and Skip for a sign-in on a Bot's other Mac. The Bot
- * panel repeats them when it floats over the card.
+ * The card's buttons: Open (or Open sign-in, or Open <name>'s computer), Skip
+ * and Done (or I'm signed in), or "Finish on <Mac>" and Skip for a sign-in on
+ * a Bot's other Mac. The Bot panel repeats them when it floats over the card.
  */
 export function HandoffActions({
   handoff,
+  name,
   busy = false,
   finishOn,
   onOpen,
@@ -66,6 +82,8 @@ export function HandoffActions({
   onAnswer,
 }: {
   handoff: ShownHandoff;
+  /** The Bot's name, for a sign-in on its computer ("Open Ada's computer"). */
+  name?: string;
   busy?: boolean;
   finishOn?: string;
   onOpen(): void;
@@ -95,8 +113,8 @@ export function HandoffActions({
       <>
         {handoff.open ? (
           <Button variant="filled" size="small" disabled={busy} onClick={onOpen}>
-            <LogIn aria-hidden="true" />
-            Open sign-in
+            {onComputer(handoff) ? <Monitor aria-hidden="true" /> : <LogIn aria-hidden="true" />}
+            {handoffSignInOpenLabel(name, handoff)}
           </Button>
         ) : null}
         {skip}
@@ -166,6 +184,7 @@ export function HandoffCard({
       actions={
         <HandoffActions
           handoff={handoff}
+          name={name}
           busy={busy}
           finishOn={finishOn}
           onOpen={onOpen}
@@ -178,7 +197,11 @@ export function HandoffCard({
       {handoff.rule ? <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p> : null}
       {host ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
       {signIn && !elsewhere ? (
-        <p className="mt-1 text-tertiary">{`Opens in ${name}’s own browser. ${name} never sees your password.`}</p>
+        <p className="mt-1 text-tertiary">
+          {onComputer(handoff)
+            ? `Opens on ${name}’s own computer, with you in control. ${name} can’t see the screen until you answer, and never sees your password.`
+            : `Opens in ${name}’s own browser. ${name} never sees your password.`}
+        </p>
       ) : null}
     </BotNoticeCard>
   );
