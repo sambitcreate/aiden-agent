@@ -204,6 +204,20 @@ function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultS
   return "failed";
 }
 
+/** Counts each tool call id an assistant message issues; a provider may reuse one in every turn. */
+function countIssuedCalls(record: EntryRecord, issued: Map<string, number>): void {
+  const message = firstMessage(record);
+  if (record.kind !== "pi.assistant" || message?.role !== "assistant") return;
+  for (const part of message.content) {
+    if (part.type === "toolCall") issued.set(part.id, (issued.get(part.id) ?? 0) + 1);
+  }
+}
+
+/** A call id as issued for the nth time so far: what an answer or a result pairs with. */
+function callKey(issued: ReadonlyMap<string, number>, toolCallId: string): string {
+  return `${issued.get(toolCallId) ?? 0}:${toolCallId}`;
+}
+
 /**
  * Map raw Pi Durable entries to what a Bot chat shows. Pure: the same entries
  * always give the same view, so a full re-projection can be diffed safely.
@@ -214,8 +228,9 @@ function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultS
  *   reply that ended in an error becomes a `failed_turn` (after any text it
  *   wrote), carrying the turn's typed message for Retry.
  * - A settled `ask_user_question` → `question_answer`; a settled `hand_off` or
- *   `sign_in` → `handoff_result` (id `handoff:<toolCallId>`). Their error
- *   results (stopped, refused) stay tool results.
+ *   `sign_in` → `handoff_result` (id `handoff:<toolCallId>`; a later answer
+ *   for a call id a provider reused gets `handoff:<toolCallId>:<entry id>`).
+ *   Their error results (stopped, refused) stay tool results.
  * - `aiden.connect-card` → a connect card; `aiden.bot-shared-image` → an image.
  * - A successful `bot_memory` result that changed something, or an
  *   `aiden.memory-review` entry that added something → `memory_update`.
@@ -244,30 +259,45 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   /**
    * The person's answer to each rule hand-off, by the call the rule stopped
    * (the last entry for a call wins), and the calls whose blocked result is
-   * in the transcript: the answer reads right after that result.
+   * in the transcript: the answer reads right after that result. Both are
+   * keyed by `callKey`: a provider may reuse a call id in every turn.
    */
   const ruleHandoffs = new Map<string, { record: EntryRecord; result: BotHandoffResultDetails }>();
-  const resultCallIds = new Set<string>();
+  const resultCallKeys = new Set<string>();
   const emittedRuleHandoffs = new Set<string>();
+  const handoffRowIds = new Set<string>();
+  /** The first answer for a call id keeps `handoff:<toolCallId>`; a reused id's later ones add their entry id. */
+  const handoffRowId = (toolCallId: string, record: EntryRecord): string => {
+    const base = `handoff:${toolCallId}`;
+    const rowId = handoffRowIds.has(base) ? `${base}:${String(record.id)}` : base;
+    handoffRowIds.add(rowId);
+    return rowId;
+  };
+  const issued = new Map<string, number>();
   for (const record of entries) {
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = proposalStatusOf(record.data);
       if (status) proposalStatus.set(status.proposalId, status);
     } else if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
       const result = botHandoffResultOf(record.data);
-      if (result?.toolCallId !== undefined && result.rule !== undefined) ruleHandoffs.set(result.toolCallId, { record, result });
+      if (result?.toolCallId !== undefined && result.rule !== undefined) {
+        ruleHandoffs.set(callKey(issued, result.toolCallId), { record, result });
+      }
     } else if (record.kind === "pi.tool-result") {
       const message = firstMessage(record);
-      if (message?.role === "toolResult") resultCallIds.add(message.toolCallId);
+      if (message?.role === "toolResult") resultCallKeys.add(callKey(issued, message.toolCallId));
+    } else {
+      countIssuedCalls(record, issued);
     }
   }
-  const ruleHandoffRow = (toolCallId: string, at: number | undefined): BotTranscriptEntry | undefined => {
-    const found = ruleHandoffs.get(toolCallId);
-    if (found === undefined || emittedRuleHandoffs.has(toolCallId)) return undefined;
-    emittedRuleHandoffs.add(toolCallId);
-    const { result } = found;
+  issued.clear();
+  const ruleHandoffRow = (key: string, at: number | undefined): BotTranscriptEntry | undefined => {
+    const found = ruleHandoffs.get(key);
+    if (found === undefined || emittedRuleHandoffs.has(key)) return undefined;
+    emittedRuleHandoffs.add(key);
+    const { record, result } = found;
     return {
-      id: `handoff:${toolCallId}`,
+      id: handoffRowId(result.toolCallId!, record),
       type: "handoff_result",
       kind: result.kind,
       outcome: result.outcome,
@@ -339,8 +369,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       // Read after the blocked call's result; here only when that result never landed.
       const result = botHandoffResultOf(record.data);
       const toolCallId = result?.toolCallId;
-      if (toolCallId !== undefined && !resultCallIds.has(toolCallId) && ruleHandoffs.get(toolCallId)?.record === record) {
-        const row = ruleHandoffRow(toolCallId, undefined);
+      const key = toolCallId === undefined ? undefined : callKey(issued, toolCallId);
+      if (key !== undefined && !resultCallKeys.has(key) && ruleHandoffs.get(key)?.record === record) {
+        const row = ruleHandoffRow(key, undefined);
         if (row) mapped.push({ entry: row, turn });
       }
       continue;
@@ -368,6 +399,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === "pi.assistant" && message?.role === "assistant") {
+      countIssuedCalls(record, issued);
       const calls = message.content.filter((part): part is ToolCall => part.type === "toolCall");
       for (const call of calls) {
         if (BOT_FILE_CHIP_TOOLS.has(call.name) && (call.arguments as { location?: unknown } | undefined)?.location === undefined) {
@@ -429,7 +461,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       if (handoff !== undefined) {
         mapped.push({
           entry: {
-            id: `handoff:${message.toolCallId}`,
+            id: handoffRowId(message.toolCallId, record),
             type: "handoff_result",
             kind: handoff.kind,
             outcome: handoff.outcome,
@@ -458,7 +490,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         turn,
       });
       // A rule handed this call to the person: their Done or Skip reads next.
-      const ruleRow = ruleHandoffRow(message.toolCallId, at);
+      const ruleRow = ruleHandoffRow(callKey(issued, message.toolCallId), at);
       if (ruleRow) mapped.push({ entry: ruleRow, turn });
       // A file the Bot wrote in its folder, as the tool result confirms it.
       const produced =

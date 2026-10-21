@@ -866,6 +866,21 @@ test("a rule hand-off's answer is written once into the Bot's conversation from 
     );
     assert.deepEqual(lines, ["tool call-1 blocked", `handoff:call-1 done: ${PURCHASE_LABEL} (Ordered the blue one)`]);
     assert.equal(turn.computer.executions.length, 0);
+
+    // A provider that numbers its calls afresh every turn reuses call-1: the next answer is its own row.
+    turn.fauxModels.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("computer_use", { text: "click" }, { id: "call-1" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const again = await root.submit({ type: "input", content: "order another" }, ctx);
+    await waitFor(() => handoffs.pending("bot-1").length === 1, { what: "the second hand-off card" });
+    handoffs.answer("bot-1", handoffs.pending("bot-1")[0]!.waitId, { outcome: "skipped", note: "Not this time" });
+    assert.equal((await again.wait(ctx)).status, "done");
+    assert.deepEqual(writes, [true, false, true, false], "the second turn's answer is written, once");
+    const answers = projectBotTranscript((await root.context(ctx)).entries).flatMap((entry) =>
+      entry.type === "handoff_result" ? [`${entry.outcome} (${entry.note ?? ""})`] : [],
+    );
+    assert.deepEqual(answers, ["done (Ordered the blue one)", "skipped (Not this time)"]);
   } finally {
     await harness.close(ctx);
   }
