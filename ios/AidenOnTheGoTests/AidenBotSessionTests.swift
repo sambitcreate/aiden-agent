@@ -879,7 +879,12 @@ final class AidenBotSessionTests: XCTestCase {
             $0["state"] = "idle"; $0["interrupted"] = false; $0["blocked"] = "access_changed"
         }
         rejects("unknown blocked reason") { $0["blocked"] = "quota" }
-        rejects("unknown state") { $0["state"] = "paused"; $0["interrupted"] = false }
+        rejects("unknown state") { $0["state"] = "hibernating"; $0["interrupted"] = false }
+        XCTAssertTrue(
+            decodes(AidenBotSession.self, base.merging(["state": "paused", "interrupted": false]) { $1 }),
+            "revision 37 knows a paused Bot"
+        )
+        rejects("paused is not interrupted") { $0["state"] = "paused" }
         rejects("too many entries") { session in
             session["entries"] = (0...AidenBotSessionWire.maxEntries).map { index in
                 ["type": "notice", "id": "n\(index)", "notice": "session_reset"]
