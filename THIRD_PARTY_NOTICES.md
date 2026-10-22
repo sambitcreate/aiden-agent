@@ -517,8 +517,9 @@ FluidAudio source: https://github.com/FluidInference/FluidAudio/tree/87a39dfe406
 ## Node.js glob traversal rules
 
 The segment traversal rules in `main/services/coding-tool-glob-worker.ts` are
-adapted from Node.js `lib/internal/fs/glob.js` (Node 22.22.3), with host-owned
-bounded filesystem access. Node.js is licensed under the MIT license:
+adapted from Node.js `lib/internal/fs/glob.js` (Node 22.22.3, plus the Node
+24.22 rule that never follows a symlink after `**`), with host-owned bounded
+filesystem access. Node.js is licensed under the MIT license:
 
 Copyright Node.js contributors. All rights reserved.
 Copyright Joyent, Inc. and other Node contributors. All rights reserved.
