@@ -778,6 +778,8 @@ export interface AppSettings {
   voiceTranslateToEnglish?: boolean;
   /** Trim silence and segment long audio with Silero VAD before on-device decode (default on). */
   voiceTrimSilence?: boolean;
+  /** Load the on-device model at launch and when one is chosen, before the first dictation (default on). */
+  localVoicePreload?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */

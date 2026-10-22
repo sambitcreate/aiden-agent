@@ -43,6 +43,7 @@ import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
 import { WorkspacePicker, type WorkspaceMenuRequest } from "./workspace-picker";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
+import { dictationInsertion } from "../lib/dictation-insertion";
 import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
@@ -660,13 +661,37 @@ export function Composer({
     submissionAllowed &&
     !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
+  const insertDictation = React.useCallback(
+    (transcript: string) => {
+      const input = inputRef?.current;
+      const selection = input ? { start: input.selectionStart, end: input.selectionEnd } : null;
+      const active = document.activeElement;
+      const typingElsewhere =
+        active instanceof HTMLElement &&
+        active !== input &&
+        (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable);
+      if (input?.isConnected && !input.readOnly && !input.disabled && !typingElsewhere) {
+        const insertion = dictationInsertion(input.value, selection, transcript);
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(insertion.start, insertion.end);
+        // A native insert lands on the textarea's undo stack, so ⌘Z takes the dictation back out.
+        if (document.execCommand("insertText", false, insertion.insert)) {
+          input.setSelectionRange(insertion.caret, insertion.caret);
+          updateSelection({ start: insertion.caret, end: insertion.caret });
+          return;
+        }
+      }
+      setText((current) => dictationInsertion(current, selection, transcript).text);
+    },
+    [inputRef, setText, updateSelection],
+  );
   const voice = useVoiceRecorder(
     (heard) => {
       const transcript = applyDictationDictionary(
         heard,
         parseDictationDictionary(dictationDictionaryRef.current),
       );
-      if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+      if (!firstSendPendingRef.current) insertDictation(transcript);
     },
     { model: settings.data?.voiceModel },
   );

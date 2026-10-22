@@ -34,7 +34,7 @@ A separate throwaway spike measures transcribe.cpp with Metal against sherpa-onn
 
 ## Non-goals (for this sub-project)
 
-- Streaming recognition and live preview (sub-project 2).
+- Streaming recognition and live preview (sub-project 2, now planned in [voice dictation speed](voice-dictation-speed-plan.md)).
 - Silero-based silence auto-stop in the pill (sub-project 2). The RMS detector in `renderer/lib/dictation-vad.ts` stays for now.
 - Recognizer biasing from the dictionary (sub-project 2).
 - History, paste, mic picker and cleanup changes (sub-project 3).

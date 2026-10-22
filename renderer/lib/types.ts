@@ -945,6 +945,8 @@ export interface AppSettings {
   voiceLanguage?: string;
   voiceTranslateToEnglish?: boolean;
   voiceTrimSilence?: boolean;
+  /** Load the on-device model at launch and when one is chosen, before the first dictation (default on). */
+  localVoicePreload?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;

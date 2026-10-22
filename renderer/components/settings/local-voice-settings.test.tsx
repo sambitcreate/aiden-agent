@@ -65,3 +65,22 @@ test("Trim silence is on by default and can be turned off", async () => {
     ),
   );
 });
+
+test("Load in advance is on by default and can be turned off", async () => {
+  const calls = mount({});
+  const toggle = await screen.findByRole("switch", { name: "Load in advance" });
+  assert.equal(toggle.getAttribute("aria-checked"), "true");
+  fireEvent.click(toggle);
+  await waitFor(() =>
+    assert.deepEqual(
+      calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]),
+      [{ localVoicePreload: false }],
+    ),
+  );
+});
+
+test("Free memory when idle defaults to 30 minutes", async () => {
+  mount({});
+  const trigger = await screen.findByRole("combobox", { name: "Unload the on-device model" });
+  assert.match(trigger.textContent ?? "", /After 30 minutes/u);
+});

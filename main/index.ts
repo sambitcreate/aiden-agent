@@ -30,6 +30,7 @@ import {
   applyShortcutFromSettings,
   disposeShortcut,
   initShortcutBindingsChanged,
+  isDictationShortcutActive,
 } from "./services/shortcut.js";
 import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
@@ -56,7 +57,7 @@ import { modelPaceRecorder } from "./services/model-pace-runtime.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
-import { disposeDictation, toggleDictation } from "./services/dictation.js";
+import { disposeDictation, prepareDictationPill, toggleDictation } from "./services/dictation.js";
 import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
@@ -2243,6 +2244,12 @@ if (!ownsSingleInstanceLock) {
         );
       }
       refreshFoundationModelsStatus();
+      // Voice warm-up, a few seconds after launch so it never competes with the
+      // first window: the hidden dictation pill and the on-device voice model.
+      setTimeout(() => {
+        if (isDictationShortcutActive()) void prepareDictationPill();
+        void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
+      }, 3_000).unref();
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 
