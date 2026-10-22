@@ -1,6 +1,6 @@
 # Voice dictation: speed and live text (STT sub-project 2)
 
-Status: Active (2026-10-22). Phase 1 merged in [PR #579](https://github.com/sambitcreate/aiden-agent/pull/579) on 2026-10-22 and is not released yet. The phase 2 benchmark ran on the owner's Mac on 2026-10-22 and picked transcribe.cpp on Metal with Parakeet TDT v3; live text is being built on it.
+Status: Active (2026-10-22). Phase 1 merged in [PR #579](https://github.com/sambitcreate/aiden-agent/pull/579) on 2026-10-22 and is not released yet. The phase 2 benchmark ([PR #580](https://github.com/sambitcreate/aiden-agent/pull/580)) ran on the owner's Mac on 2026-10-22 and picked transcribe.cpp on Metal with Parakeet TDT v3. The Metal engine and live words are built on branch `claude/project-thread-6azxgh` (see [Phase 2 build](#phase-2-build)); a packaged-app check and timing on the owner's Mac remain.
 
 Deep dive: [Local voice dictation: speed and live text](https://claude.ai/artifact/JZWtaaWud4cks6WtdjdQBY) (2026-10-21). It compares Aiden's on-device dictation with Handy (`cjpais/handy`, MIT) as of v0.9.x.
 
@@ -80,6 +80,24 @@ Acceptance on the owner's Mac: release-to-text on a warm model under about 400 m
   - Existing Mac users have the sherpa ONNX model. Metal needs the 705 MB GGUF, so keep sherpa working until that model is downloaded.
 - Build live mode on the winner: committed and tentative words in the pill (the Gemini Live path already streams `{committed, tentative}`) and in the composer, with one paste at the end for other apps.
 - Packaging, notarization and the CLI bundle must carry the chosen engine; Remote transcription for phones keeps working.
+
+## Phase 2 build
+
+Desktop only. There is no Remote protocol revision or `LocalModel` field change: phones see one more catalog entry from an Apple silicon Mac, and `transcribePcm16Base64` routes it to the same engine. The CLI keeps the portable sherpa-onnx catalog.
+
+- **Engine.** `transcribe-cpp` 0.4.0 (pinned exactly) runs behind the engine boundary for the new `parakeet-gguf` family (`main/services/local-speech-transcribe-cpp.ts`). The speech worker routes each request by model family, so sherpa-onnx models are unchanged. Loading decodes one second of silence, which pays the cold Metal shader compile before the first dictation. A library that fails to load reports the engine as unavailable with the reason.
+- **Catalog.** `parakeet-v3-metal` is the Parakeet TDT v3 Q8_0 GGUF (739,508,576 bytes) from a fixed Hugging Face revision, pinned by size and SHA-256 and downloaded as a single file. It is listed and recommended only on `darwin`/`arm64` (`speechModelsForHost`); every other host, and the CLI, sees the portable catalog.
+- **Existing users.** Their sherpa Parakeet v3 keeps working. Settings → Voice offers **Faster on this Mac** with **Download and Use** while the Metal build is not downloaded. A chosen model follows the upgrade; Automatic picks the Metal build up on its own because it lists first.
+- **Live preview.** Models marked `livePreview` (only the Metal build) get a preview session in main (`main/services/local-speech-live-core.ts`). The renderer streams 16 kHz PCM in 200 ms batches over `voice:localLiveStart`, `voice:localLivePush` and `voice:localLiveStop`, and main answers with `voice:stream-text` `{sessionId, committed, tentative}`.
+  - It re-decodes the current phrase, never the whole recording. A phrase ends after 600 ms of quiet against an adaptive noise floor, and a phrase with no pause is split at its quietest point after 20 s.
+  - At most one decode runs at a time, spaced by 1.5 times the last decode (at least 400 ms). Words two decodes agree on are committed; the rest are tentative.
+  - Sessions are bound to the document that started them, end on reload, a new start or the final transcription, and are capped at 10 minutes of audio and 10 s per push.
+  - The preview is best effort. When it cannot start or keep up it stops, and the final decode of the whole recording is unchanged.
+- **Pill.** The live words show in the pill as a single right-aligned line that fades at its leading edge. Other apps still get one paste at the end (decision 2a).
+- **Composer.** The live words show in the draft at the caret (Gemini live transcription, which already streamed words, now shows them there too), read-only while they may change, and the final text replaces them in one native insert, so ⌘Z still removes the dictation. Setting the preview value clears Chromium's earlier undo history for that field; edits made before the dictation cannot be undone past it.
+- **Packaging.** The Metal library and koffi's native module are unpacked from the asar on Apple silicon, and the worker points `TRANSCRIBE_LIBRARY` at the unpacked `libtranscribe.dylib`. `scripts/verify-macos-package.mjs` checks the unpacked files; Linux packages exclude transcribe.cpp and koffi, and `scripts/verify-linux-package.mjs` fails if they appear.
+
+Acceptance on the owner's Mac: a packaged build loads the Metal engine from `app.asar.unpacked`; words appear in the pill and the composer within about half a second of speech; release-to-text on a warm model stays near the benchmark's 64 ms decode for a 3.5 s phrase, read from the timing log.
 
 ## Later
 

@@ -19,8 +19,10 @@ import {
   Text,
   toast,
 } from "../ui";
-import { Settings2 } from "lucide-react";
-import { settingsApi } from "../../lib/ipc";
+import { Download, Settings2 } from "lucide-react";
+import { localVoiceApi, onNotification, settingsApi } from "../../lib/ipc";
+import type { ModelDownloadProgress } from "../../lib/ipc";
+import type { LocalVoiceModel } from "../../lib/types";
 import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../lib/queries";
 import { ModelManagerView } from "./model-manager-view";
 import { effectiveLocalModelId } from "../../shared/voice-provider";
@@ -154,6 +156,69 @@ function EngineStatus() {
   );
 }
 
+/** Faster builds of a model that only some hosts list, such as Parakeet on this Mac's GPU. */
+const FASTER_MODEL: Readonly<Record<string, string>> = { "parakeet-v3": "parakeet-v3-metal" };
+
+/**
+ * Offers the faster build of the model dictation uses, when this host lists
+ * it and it is not downloaded. A chosen model follows the upgrade; Automatic
+ * stays Automatic and picks the faster build up on its own.
+ */
+function FasterModelOffer({ inUse, faster, chosen }: { inUse: LocalVoiceModel; faster: LocalVoiceModel; chosen: boolean }) {
+  const qc = useQueryClient();
+  const [percentage, setPercentage] = React.useState<number | null>(null);
+
+  React.useEffect(
+    () =>
+      onNotification<ModelDownloadProgress>("localModels:progress", (progress) => {
+        if (progress.id === faster.id) setPercentage(progress.percentage);
+      }),
+    [faster.id],
+  );
+
+  const upgrade = async () => {
+    setPercentage(0);
+    try {
+      await localVoiceApi.downloadModel(faster.id);
+      if (chosen) await settingsApi.set({ localVoiceModel: faster.id });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.localModels }),
+        qc.invalidateQueries({ queryKey: queryKeys.settings }),
+        qc.invalidateQueries({ queryKey: queryKeys.voiceResolution }),
+      ]);
+      toast.success(`${faster.name} is ready. You can remove ${inUse.name} in Manage Models.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/cancel/i.test(message)) toast.error(message);
+    } finally {
+      setPercentage(null);
+    }
+  };
+
+  return (
+    <Field
+      label="Faster on this Mac"
+      description={`${faster.description} ${faster.sizeLabel} download.`}
+    >
+      {percentage === null ? (
+        <Button variant="filled" onClick={() => void upgrade()}>
+          <Download />
+          Download and Use
+        </Button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Text variant="small" color="secondary" className="tabular-nums">
+            Downloading… {percentage}%
+          </Text>
+          <Button variant="transparent" onClick={() => void localVoiceApi.cancelDownload(faster.id)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+    </Field>
+  );
+}
+
 function ActiveModel({ onManage }: { onManage: () => void }) {
   const qc = useQueryClient();
   const models = useLocalModels();
@@ -167,6 +232,9 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
     ? undefined
     : effectiveLocalModelId(undefined, installed.map((m) => m.id));
   const fallback = installed.find((m) => m.id === fallbackId);
+  const inUse = active ?? fallback;
+  const fasterId = inUse ? FASTER_MODEL[inUse.id] : undefined;
+  const faster = fasterId ? (models.data ?? []).find((m) => m.id === fasterId && !m.installed) : undefined;
 
   React.useEffect(() => {
     if (activeId && models.data && !models.data.some((m) => m.id === activeId && m.installed)) {
@@ -187,6 +255,7 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
           </Text>
         </Field>
       )}
+      {inUse && faster ? <FasterModelOffer inUse={inUse} faster={faster} chosen={active !== undefined} /> : null}
       <Field label="Models" description="Download, remove, and choose your on-device transcription model.">
         <Button variant="filled" onClick={onManage}>
           <Settings2 />

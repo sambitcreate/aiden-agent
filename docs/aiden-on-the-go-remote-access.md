@@ -79,7 +79,7 @@ In the mobile app's speech settings, choose the paired Mac when you want Aiden A
 
 The Mac processes that recording locally. Aiden does not persist the recording or transcript, include either in Remote Access diagnostics, or send them to Aiden's model-provider integrations or an Aiden-operated service. Normal chat submission remains a separate user action.
 
-If the selected local speech model is not installed, the mobile settings can ask the paired Mac to set it up. Aiden downloads only its fixed Parakeet release archive from the k2-fsa GitHub release host, caps that compressed download at 800 MiB, extracts it into staging, validates the required model files, and stores it in Aiden Agent's device-local model directory. The phone cannot provide a model URL or Mac destination. Model setup requires Aiden Agent to remain running and online.
+If the selected local speech model is not installed, the mobile settings can ask the paired Mac to set it up. Aiden downloads only that model's fixed, hash-pinned file: a release archive from the k2-fsa GitHub release host, or, for Parakeet on Metal on an Apple silicon Mac, one GGUF file from a fixed Hugging Face revision. It caps the download at 800 MiB, verifies its exact size and SHA-256, unpacks or moves it into staging, validates the required model files, and stores it in Aiden Agent's device-local model directory. The phone cannot provide a model URL or Mac destination. Model setup requires Aiden Agent to remain running and online.
 
 ## Troubleshooting
 
