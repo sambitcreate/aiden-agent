@@ -116,9 +116,8 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       return { botId, paused: true as const, since: state.kind === "paused" ? state.since : (await pauses.get(botId))!.since };
     }
     const record = await pauses.pause(botId, "cli");
-    for (const chat of await daemon.chatStore.listByBot(botId)) {
-      await daemon.llmClient.cancelChat(chat.id); await daemon.llmClient.waitForChatIdle(chat.id);
-    }
+    // Stopped as the person's Stop (`user_stop`), as Pause does on the Mac.
+    for (const chat of await daemon.chatStore.listByBot(botId)) await daemon.llmClient.stopChatWork(chat.id);
     return { botId, paused: true as const, since: record.since };
   }
   const managedWorkspace = createBotManagedWorkspaceService({ root });

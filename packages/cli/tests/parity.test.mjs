@@ -890,6 +890,10 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
   assert.equal(await runtime.isPaused(bot.id), true);
   const stopped = await running.idle();
   assert.equal(stopped.filter((event) => event.channel === "chat:done").length, 0, "the held reply never finishes");
+  // As on the Mac, the stopped reply is the person's Stop, not a deletion or a failure.
+  const stoppedTimeline = stopped.find((event) => event.channel === "chat:error")?.value.timeline;
+  assert.equal(stoppedTimeline?.status, "cancelled", JSON.stringify(stopped));
+  assert.equal(stoppedTimeline?.cancellationOrigin, "user_stop");
   held.end();
   assert.equal(statSync(join(dir, "bot-service", "bot-pauses.json")).mode & 0o777, 0o600);
   assert.deepEqual(await runtime.command(["pause", bot.id]), paused, "pausing again keeps the first time");
