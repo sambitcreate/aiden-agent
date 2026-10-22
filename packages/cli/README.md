@@ -1,6 +1,6 @@
 # Aiden CLI
 
-A headless Aiden Agent: the full pi coding agent TUI, rebranded and themed as Aiden, deployable on macOS and Linux with Node.js ≥ 22.19, including servers with no display.
+A headless Aiden Agent: the full pi coding agent TUI, rebranded and themed as Aiden, deployable on macOS and Linux with Node.js ≥ 22.19, including servers with no display. Keep Node.js on the newest release of its line: the CLI's network calls run on the installed Node, and the October 21, 2026 Node.js security release (22.23.4, 24.22.1, 26.12.1) fixed a Brotli decoder flaw and HTTPS hostname-check bypasses that any older Node still has.
 
 Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.3.0` — the same line the Aiden desktop app uses). Until the next Pi release, both builds also apply a backport of Pi's [#11142](https://github.com/earendil-works/pi/pull/11142) to pi-ai 1.3.0 (`patches/pi-ai-1.3.0-responses-tool-cache.patch`, applied by `scripts/patch-pi-ai-tool-cache.mjs`), so OpenAI Responses, Codex and Azure models keep their prompt cache when the tool set changes. The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
 
