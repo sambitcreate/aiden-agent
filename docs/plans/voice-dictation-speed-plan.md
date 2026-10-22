@@ -72,7 +72,10 @@ Acceptance on the owner's Mac: release-to-text on a warm model under about 400 m
   - Linux and Intel Macs keep sherpa-onnx. transcribe.cpp on CPU is slower than sherpa on 4 threads and fell behind re-decoding a 27 s clip (136% busy).
   - Nemotron 3.5 streaming stays a later option for long dictations or slower Macs.
 - **Carry into the build:**
-  - The first Metal init on a machine took 4.9 s. Later processes took about 55 ms. The first decode after load was also slow (460 ms for 3.5 s of audio). Preloading must therefore finish with a short warm-up decode.
+  - The first Metal init on a machine took 4.9 s, and the first decode after it was slow (460 ms for 3.5 s of audio). Both came from compiling shaders into a cold Metal cache.
+    - A re-run took 65 ms to init, and its first decode took 87 ms.
+    - Session setup took 0 ms.
+    - A fresh install or update can pay the cold cost once, so preloading should finish with a short warm-up decode.
   - Re-decode cost grows with the recording. Skip a tick while a decode is still running, and on long recordings re-decode only the words not yet settled.
   - Existing Mac users have the sherpa ONNX model. Metal needs the 705 MB GGUF, so keep sherpa working until that model is downloaded.
 - Build live mode on the winner: committed and tentative words in the pill (the Gemini Live path already streams `{committed, tentative}`) and in the composer, with one paste at the end for other apps.

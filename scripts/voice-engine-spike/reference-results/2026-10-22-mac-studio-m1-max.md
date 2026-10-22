@@ -94,3 +94,12 @@ stream = 100 ms chunks into a streaming model. redecode = an offline model re-re
 | sherpa-nemotron35-cpu4 | stream | ls-1 | 100 | 33.6 / 51.2 | 22 | 1100 | 100% | 170 | 0.042 |
 
 Both sherpa Nemotron streams dropped the first word of every TTS phrase ("Please", "I", "Here"). The tcpp Nemotron 3.5 stream misplaced one sentence boundary in tts-30s and heard "broffles" for "brothels".
+
+## Follow-up run, 05:27 UTC, with the fixed script
+
+I re-ran `tcpp-v3-metal` and `tcpp-nemotron35-metal` with `--runs 3`, using the cached models:
+- `sessionMs` was 0 for both. Load time is all model loading: 273 ms and 284 ms.
+- Footprint after load was 888 MB and 937 MB.
+- Metal init took 65 ms and 55 ms. The first decode of tts-3s took 87 ms, against 460 ms in the first run.
+
+The 4.9 s init and the slow first decode in the first run therefore came from compiling Metal shaders on a cold cache. macOS keeps those shaders cached afterwards. Medians matched the first run: tts-3s 65 ms, tts-30s 321 ms, and re-decoding stayed at or under 35% busy.
