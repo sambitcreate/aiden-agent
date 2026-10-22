@@ -342,6 +342,14 @@ export const BROWSER_XPATH_SELECTOR_REFUSED =
  * comment-stripped checks, which can't tell quoted text from code.
  */
 export const BROWSER_COMMENT_SELECTOR_REFUSED = "A Bot's locators can't contain CSS comments. Remove the /* */ part.";
+/**
+ * Playwright's attribute engines (`internal:attr`, `internal:testid` and the
+ * role engines) read a quoted attribute name as the bare one, so
+ * `["checked"]` would pass every check that looks for `[checked`.
+ * Playwright's own locators never quote a name.
+ */
+export const BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED =
+  "A Bot's locators can't put an attribute name in quotes. Write it without them, as in internal:role=button[name=\"Pay\"].";
 export const BROWSER_STATE_SELECTOR_REFUSED =
   "A Bot can't find fields by their state (checked, selected, empty, valid or in range). Use a role locator, such as internal:role=checkbox[checked=true].";
 /**
@@ -387,6 +395,7 @@ export function boundaryRefusalOf(error: unknown): unknown {
     BROWSER_STATE_SELECTOR_REFUSED,
     BROWSER_VALUE_SELECTOR_REFUSED,
     BROWSER_COMMENT_SELECTOR_REFUSED,
+    BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED,
     BROWSER_LOCATOR_UNCHECKED_REFUSED,
   ]) {
     if (message.includes(sentence)) return new Error(sentence);
@@ -409,6 +418,8 @@ const VALUE_ATTRIBUTE = /\[\s*(?:[\w*-]*\|)?value\b|\\/iu;
  * check in main; the page check is exact.
  */
 const XPATH_SELECTOR = /(?:^|>>|\*?\s*(?:internal:(?:has|has-not|and|or|chain)|left-of|right-of|above|below|near)\s*=\s*")\s*\*?\s*(?:xpath(?::light)?\s*=|\(*\/\/|\.\.)/iu;
+/** An attribute name in quotes (`["checked"]`), which Playwright's attribute engines read as the bare name. */
+const QUOTED_ATTRIBUTE = /\[\s*["']/u;
 /** CSS comments, which a selector parser skips, so a comment can hide `[value`. */
 const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/gu;
 /**
@@ -434,6 +445,7 @@ const STATE_PSEUDO_CLASS =
  * inside a field and every element around it. A test behind a CSS comment
  * gets its own refusal; any other comment is refused after these checks,
  * since quoted text before it could hide one from the comment-stripped check.
+ * So is an attribute name in quotes (`BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED`).
  * `browserBoundaryLocatorExpression` refuses XPath again with Playwright's
  * own parser.
  */
@@ -443,6 +455,7 @@ export function assertBoundarySelector(selector: string | undefined): void {
   if (VALUE_ATTRIBUTE.test(selector) || VALUE_ATTRIBUTE.test(uncommented)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
   if (STATE_PSEUDO_CLASS.test(selector) || STATE_PSEUDO_CLASS.test(uncommented)) throw new Error(BROWSER_STATE_SELECTOR_REFUSED);
   if (XPATH_SELECTOR.test(selector) || XPATH_SELECTOR.test(uncommented)) throw new Error(BROWSER_XPATH_SELECTOR_REFUSED);
+  if (QUOTED_ATTRIBUTE.test(selector)) throw new Error(BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED);
   if (selector.includes("/*")) throw new Error(BROWSER_COMMENT_SELECTOR_REFUSED);
 }
 
@@ -560,19 +573,36 @@ const blankAll=(root)=>{for(const e of root.querySelectorAll("*")){blank(e);if(e
 let fields=0;
 const hide=(root)=>{for(const e of root.querySelectorAll("*")){if(__aidenSensitive(e)){fields+=1;blank(e);blankAll(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}else if(e.shadowRoot)hide(e.shadowRoot);}};
 hide(document);
-if(fields>0)for(const [name,engine] of roles)engines.set(name,{queryAll:(root,body)=>{const states=/\\[\\s*(?:checked|selected)\\b/i.test(String(body));return engine.queryAll(root,body).filter((e)=>!__aidenNameReadsField(e,String(body))&&!(states&&__aidenSensitive(e)));}});
+if(fields>0)for(const [name,engine] of roles)engines.set(name,{queryAll:(root,body)=>{const states=/\\[\\s*["']?\\s*(?:checked|selected)\\b/i.test(String(body));return engine.queryAll(root,body).filter((e)=>!__aidenNameReadsField(e,String(body))&&!(states&&__aidenSensitive(e)));}});
 return run();
 }finally{for(const [name,engine] of roles)engines.set(name,engine);evaluator.end();}};`;
 
 /**
+ * The engines whose locators test an element's attributes by name: CSS and
+ * Playwright's attribute engines (`internal:attr`, and `internal:testid`,
+ * which takes any attribute name, not only `data-testid`). A `value`,
+ * `selected` or `checked` test in them reads what a field holds.
+ */
+const BOUNDARY_ATTRIBUTE_TEST_ENGINES: readonly string[] = ["css", "internal:attr", "internal:testid"];
+/**
+ * Those engines and the role engines, which also parse `[name=value]`
+ * attributes (Playwright's `parseAttributeSelector`) and read a quoted name
+ * or an escaped one as the bare name.
+ */
+const BOUNDARY_ATTRIBUTE_NAME_ENGINES: readonly string[] = [...BOUNDARY_ATTRIBUTE_TEST_ENGINES, "role", "internal:role"];
+
+/**
  * Resolves a Bot's locator, after `BROWSER_BOUNDARY_SCOPE_SOURCE`.
  * Playwright's parser finds every part, nested ones included. A selector is
- * refused when any part is XPath, or a CSS or `internal:attr` part tests a
- * `selected` or `checked` attribute: a server-rendered card-expiry list marks
- * the saved month `<option selected>`, the same mirror of the choice as
- * `:default`. Role engines (`internal:role=option[selected]`) stay, since
- * they never match inside a field. Backslashes and comments are refused in
- * those parts too, as main does (`VALUE_ATTRIBUTE`,
+ * refused when any part is XPath, or a part in
+ * `BOUNDARY_ATTRIBUTE_TEST_ENGINES` tests a `value`, `selected` or `checked`
+ * attribute: a server-rendered card-expiry list marks the saved month
+ * `<option selected>`, the same mirror of the choice as `:default`. Role
+ * states (`internal:role=option[selected]`) stay, since they never match a
+ * field or anything inside one. In every part of
+ * `BOUNDARY_ATTRIBUTE_NAME_ENGINES`, backslashes, quoted attribute names and
+ * comments are refused too, as main does (`VALUE_ATTRIBUTE`,
+ * `BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED`,
  * `BROWSER_COMMENT_SELECTOR_REFUSED`). More than one match is refused
  * without Playwright's previews, which quote attributes and text.
  */
@@ -581,13 +611,14 @@ const p=globalThis.__aidenPlaywright;const parsed=p.parseSelector(selector);
 const nested=(part,test)=>Boolean(part.body&&typeof part.body==="object"&&part.body.parsed&&test(part.body.parsed));
 const xpath=(s)=>s.parts.some((part)=>part.name==="xpath"||part.name.startsWith("xpath:")||nested(part,xpath));
 if(xpath(parsed))throw new Error(${JSON.stringify(BROWSER_XPATH_SELECTOR_REFUSED)});
-const attributes=(part)=>(part.name==="css"||part.name==="internal:attr")&&typeof part.source==="string"?part.source.replace(/\\/\\*[\\s\\S]*?(?:\\*\\/|$)/g,""):"";
-const escaped=(s)=>s.parts.some((part)=>attributes(part).includes("\\\\")||nested(part,escaped));
-if(escaped(parsed))throw new Error(${JSON.stringify(BROWSER_VALUE_SELECTOR_REFUSED)});
-const mirrors=(s)=>s.parts.some((part)=>/\\[\\s*(?:[\\w*-]*\\|)?(?:selected|checked)(?![\\w-])/i.test(attributes(part))||nested(part,mirrors));
-if(mirrors(parsed))throw new Error(${JSON.stringify(BROWSER_STATE_SELECTOR_REFUSED)});
-const commented=(s)=>s.parts.some((part)=>((part.name==="css"||part.name==="internal:attr")&&typeof part.source==="string"&&part.source.includes("/*"))||nested(part,commented));
-if(commented(parsed))throw new Error(${JSON.stringify(BROWSER_COMMENT_SELECTOR_REFUSED)});
+const source=(part,names)=>names.includes(part.name)&&typeof part.source==="string"?part.source:"";
+const anyPart=(test)=>{const walk=(s)=>s.parts.some((part)=>test(part)||nested(part,walk));return walk(parsed);};
+const tests=(part)=>source(part,${JSON.stringify(BOUNDARY_ATTRIBUTE_TEST_ENGINES)}).replace(/\\/\\*[\\s\\S]*?(?:\\*\\/|$)/g,"");
+const named=(part)=>source(part,${JSON.stringify(BOUNDARY_ATTRIBUTE_NAME_ENGINES)});
+if(anyPart((part)=>named(part).includes("\\\\")||/\\[\\s*(?:[\\w*-]*\\|)?value\\b/i.test(tests(part))))throw new Error(${JSON.stringify(BROWSER_VALUE_SELECTOR_REFUSED)});
+if(anyPart((part)=>/\\[\\s*["']/.test(named(part))))throw new Error(${JSON.stringify(BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED)});
+if(anyPart((part)=>/\\[\\s*(?:[\\w*-]*\\|)?(?:selected|checked)(?![\\w-])/i.test(tests(part))))throw new Error(${JSON.stringify(BROWSER_STATE_SELECTOR_REFUSED)});
+if(anyPart((part)=>named(part).includes("/*")))throw new Error(${JSON.stringify(BROWSER_COMMENT_SELECTOR_REFUSED)});
 return __aidenBoundaryScope(()=>{
 const found=p.querySelectorAll(parsed,document);
 if(found.length>1){const error=new Error("strict mode violation: this locator matches "+found.length+" elements. Use one that matches exactly one.");delete error.stack;throw error;}

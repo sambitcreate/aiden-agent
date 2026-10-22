@@ -8,6 +8,7 @@ import {
   BROWSER_SENSITIVE_TYPING_REFUSED,
   BROWSER_STATE_SELECTOR_REFUSED,
   BROWSER_COMMENT_SELECTOR_REFUSED,
+  BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED,
   BROWSER_VALUE_SELECTOR_REFUSED,
   BROWSER_XPATH_SELECTOR_REFUSED,
   browserKeyInsertsText,
@@ -285,6 +286,17 @@ test("a Bot can't find a field by what is typed in it or its state, or use XPath
     'form >> internal:has="button /**/"',
   ]) {
     assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_COMMENT_SELECTOR_REFUSED }, selector);
+  }
+  // Playwright's attribute engines read a quoted name as the bare one, so `["checked"]` would slip past every test above.
+  for (const selector of [
+    'internal:role=radio["checked"=true]',
+    "internal:role=radio[ 'selected' ]",
+    '#visa >> internal:and="internal:role=radio[\'checked\'=true]"',
+    'internal:attr=["value"=/^hunt/]',
+    "internal:testid=['value'=/^hunt/]",
+    "#exp >> internal:attr=['selected']",
+  ]) {
+    assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED }, selector);
   }
   // Quoted text that starts like XPath is only text. States that don't depend
   // on what a field holds, and a role's own checked and selected states, stay.

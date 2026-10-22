@@ -22,6 +22,7 @@ import {
   BROWSER_COMMENT_SELECTOR_REFUSED,
   BROWSER_LOCATOR_UNCHECKED_REFUSED,
   BROWSER_OPAQUE_TYPING_REFUSED,
+  BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED,
   BROWSER_RECALL_FIELD_FUNCTION,
   BROWSER_SENSITIVE_FIELD_SOURCE,
   BROWSER_SENSITIVE_TYPING_REFUSED,
@@ -395,7 +396,8 @@ test("Chromium: a Bot can't tell which option a page marked selected or which bo
       <input id="pw" type="password" value="hunter2">
       <label><input id="visa" type="radio" name="kind" autocomplete="cc-type" checked> Visa</label>
       <label><input id="amex" type="radio" name="kind" autocomplete="cc-type"> Amex</label>
-      <label><input id="keep" type="checkbox" checked> Keep me signed in</label></form>`);
+      <label><input id="keep" type="checkbox" checked> Keep me signed in</label>
+      <input id="holder" placeholder="Card holder"><button id="pay" data-testid="pay">Pay</button></form>`);
     const { plain, bot, run, elementId } = await boundaryWorld(page);
     const inPage = (selector: string) => run(elementId(browserBoundaryLocatorExpression(selector)));
     const right = reads(5), wrong = reads(6);
@@ -412,6 +414,25 @@ test("Chromium: a Bot can't tell which option a page marked selected or which bo
     assert.equal(await bot('#exp >> internal:attr=[selected=""s]'), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
     assert.equal(await bot("#keep[checked]"), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
     assert.equal(await bot('internal:attr=[checked=""s]'), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
+    // Playwright's test-id engine reads any attribute, and its attribute
+    // engines read a quoted name as the bare one: each finds the saved month,
+    // the saved card type or a password's prefix, and tells another apart.
+    const engines = (month: number, prefix: string) => [
+      { selector: `#exp option:nth-child(${month}) >> internal:and="internal:testid=[selected=/^$/]"`, main: "", page: BROWSER_STATE_SELECTOR_REFUSED },
+      { selector: `internal:testid=[value=/^${prefix}/]`, main: BROWSER_VALUE_SELECTOR_REFUSED, page: BROWSER_VALUE_SELECTOR_REFUSED },
+      { selector: `#exp option:nth-child(${month}) >> internal:and="internal:attr=['selected'=''s]"`, main: BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED, page: BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED },
+      { selector: `internal:attr=["value"=/^${prefix}/]`, main: BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED, page: BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED },
+      { selector: `#${month === 5 ? "visa" : "amex"} >> internal:and="internal:role=radio['checked'=true]"`, main: BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED, page: BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED },
+    ];
+    for (const [index, { selector, main, page: inThePage }] of engines(5, "hunt").entries()) {
+      assert.notEqual(await plain(selector), "none", `${selector} finds the saved value`);
+      assert.equal(await plain(engines(6, "zzzz")[index]!.selector), "none", `${engines(6, "zzzz")[index]!.selector} tells another value apart`);
+      assert.equal(await inPage(selector), `error: ${inThePage}`, selector);
+      assert.equal(await bot(selector), main ? `refused: ${main}` : `error: ${inThePage}`, selector);
+    }
+    // Playwright's own test-id and placeholder locators still work.
+    assert.equal(await bot('internal:testid=[data-testid="pay"s]'), "pay");
+    assert.equal(await bot('internal:attr=[placeholder="Card holder"i]'), "holder");
     // Quoted text holding a comment opener hides a test from a check that
     // strips comments, so main and the page both refuse any comment.
     const hidden = (month: number, prefix: string) => [
