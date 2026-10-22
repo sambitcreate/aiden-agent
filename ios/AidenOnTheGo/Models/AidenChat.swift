@@ -2641,6 +2641,12 @@ enum AidenApprovalResponseAuthorization: Equatable, Sendable {
     }
 }
 
+/// Why an approval card cannot be fully answered on this device, with its SF Symbol.
+struct AidenApprovalLimit: Equatable {
+    let text: String
+    let symbol: String
+}
+
 enum AidenApprovalPresentation {
     static func title(for kind: AidenApprovalKind) -> String {
         switch kind {
@@ -2656,6 +2662,27 @@ enum AidenApprovalPresentation {
         case .scheduledTask:
             String(localized: "Check the exact schedule and unattended access before Aiden saves it.")
         }
+    }
+
+    /// A reason the card cannot be fully answered here, shown in place of the note.
+    static func limit(
+        kind: AidenApprovalKind,
+        canRespond: Bool,
+        hasRequiredWriteCapability: Bool,
+        canAllow: Bool
+    ) -> AidenApprovalLimit? {
+        if !canRespond {
+            return AidenApprovalLimit(text: String(localized: "This paired device can review approvals but cannot respond."), symbol: "lock.fill")
+        }
+        if kind == .scheduledTask && !hasRequiredWriteCapability {
+            return AidenApprovalLimit(text: String(localized: "Schedule write access is required to approve this task."), symbol: "lock.fill")
+        }
+        if !canAllow {
+            return kind == .scheduledTask
+                ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired desktop."), symbol: "desktopcomputer")
+                : AidenApprovalLimit(text: String(localized: "Allow this on your Mac. You can deny it here."), symbol: "desktopcomputer")
+        }
+        return nil
     }
 
     static func denyTitle(for kind: AidenApprovalKind) -> String {

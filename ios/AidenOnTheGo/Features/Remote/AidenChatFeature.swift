@@ -8082,20 +8082,13 @@ struct AidenApprovalCard: View {
         request.count > 320 || request.split(whereSeparator: \.isNewline).count > collapsedLines
     }
 
-    /// A reason the card cannot be fully answered here, shown in place of the note.
-    private var limit: (text: String, symbol: String)? {
-        if !canRespond {
-            return (String(localized: "This paired device can review approvals but cannot respond."), "lock.fill")
-        }
-        if kind == .scheduledTask && !hasRequiredWriteCapability {
-            return (String(localized: "Schedule write access is required to approve this task."), "lock.fill")
-        }
-        if !canAllow {
-            return kind == .scheduledTask
-                ? (String(localized: "This task must be approved on your paired desktop."), "desktopcomputer")
-                : (String(localized: "Allow this on your Mac. You can deny it here."), "desktopcomputer")
-        }
-        return nil
+    private var limit: AidenApprovalLimit? {
+        AidenApprovalPresentation.limit(
+            kind: kind,
+            canRespond: canRespond,
+            hasRequiredWriteCapability: hasRequiredWriteCapability,
+            canAllow: canAllow
+        )
     }
 
     var body: some View {

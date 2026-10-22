@@ -8041,6 +8041,21 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testApprovalCardSaysWhyItCannotBeAnsweredHere() {
+        func limit(_ kind: AidenApprovalKind, respond: Bool = true, write: Bool = true, allow: Bool = true) -> AidenApprovalLimit? {
+            AidenApprovalPresentation.limit(kind: kind, canRespond: respond, hasRequiredWriteCapability: write, canAllow: allow)
+        }
+        XCTAssertNil(limit(.action), "An approval this phone can answer shows the paused note instead.")
+        XCTAssertEqual(limit(.action, allow: false), AidenApprovalLimit(text: "Allow this on your Mac. You can deny it here.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.scheduledTask, allow: false), AidenApprovalLimit(text: "This task must be approved on your paired desktop.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.scheduledTask, write: false), AidenApprovalLimit(text: "Schedule write access is required to approve this task.", symbol: "lock.fill"))
+        XCTAssertEqual(
+            limit(.scheduledTask, respond: false, write: false, allow: false),
+            AidenApprovalLimit(text: "This paired device can review approvals but cannot respond.", symbol: "lock.fill"),
+            "A review-only device says so before any other limit."
+        )
+    }
+
     func testRememberedApprovalsSayWhatTheyCover() {
         // The Mac remembers a command exactly, but a file by its path, whatever the change.
         XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "run_command"), "This exact command, until Aiden quits")
