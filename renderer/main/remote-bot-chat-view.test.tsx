@@ -8,7 +8,10 @@ import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  delete document.documentElement.dataset.reduceMotion;
+});
 
 const HOST: PeerHostView = {
   id: "host_a",
@@ -145,6 +148,8 @@ test("Retry on a failed reply from another Mac resends the person's words there,
 });
 
 test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
+  // The streaming reveal holds an unfinished line for a second, as long as findByText waits; Reduce Motion shows it at once.
+  document.documentElement.dataset.reduceMotion = "true";
   const { peerCalls } = await mount();
   await screen.findByText("Two meetings and a dentist.");
   await act(async () => {
