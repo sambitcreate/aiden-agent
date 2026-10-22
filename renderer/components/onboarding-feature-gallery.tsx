@@ -292,6 +292,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     size: "standard",
   },
   {
+    id: "peerProjects",
+    group: "control",
+    title: "Projects on paired computers",
+    description: "Clone a local repository onto a paired computer from the new-chat machine menu. Choose an approved destination and optionally copy selected environment files. Git credentials stay on each computer; environment files are never selected automatically.",
+    icon: FolderGit2,
+    size: "standard",
+  },
+  {
     id: "usage",
     group: "control",
     title: "Private Usage Profile",

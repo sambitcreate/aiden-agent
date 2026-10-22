@@ -14,6 +14,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuLabel,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -39,11 +40,13 @@ export function RemoteMachinePicker({
   selected,
   disabled,
   onSelect,
+  onAddProject,
 }: {
   machines: readonly NewChatMachine[];
   selected: NewChatMachineId;
   disabled?: boolean;
   onSelect(machine: NewChatMachineId): void;
+  onAddProject?(): void;
 }) {
   const current = machines.find((machine) => machine.id === selected);
   const label = current?.label ?? LOCAL_MACHINE_LABEL;
@@ -92,6 +95,7 @@ export function RemoteMachinePicker({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        {onAddProject ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={onAddProject}>Add this project to another machine…</DropdownMenuItem></> : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

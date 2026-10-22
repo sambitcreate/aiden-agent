@@ -27,7 +27,7 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
   workspaceOperationRegistry,
   createScratchWorkspaceDirectory,
   realpath: (value) => fs.realpath(value),
-  stat: (value) => fs.stat(value),
+  stat: (value) => fs.stat(value, { bigint: true }),
   removeEmptyDirectory: (value) => fs.rmdir(value),
   createId: defaultWorkspaceId,
   now: Date.now,

@@ -73,6 +73,28 @@ If a computer reached over the local network presents a different identity, Aide
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.
 
+## Add a local project to a paired computer
+
+In a new chat with a repository-root project selected, open the machine menu and
+choose **Add this project to another machine…**. Pick a connected desktop that
+supports project cloning, then browse its approved folders and choose the parent
+folder for the new repository. The target uses its own Git authentication.
+
+Environment files may contain secrets. All choices start unchecked. Select only
+files you want on that computer. Aiden offers ignored root-level `.env*` and
+`.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
+the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+project becomes available after the selected files arrive. The new chat opens on
+the destination; a typed prompt and attachments carry over when that computer has
+no saved draft. An existing remote draft is retained, with the local prompt still
+saved here.
+
+The flow clones committed history from the remote. Local edits and unpushed commits
+stay here. Nested project folders must first be opened as repository-root projects.
+A clone can run for up to 90 seconds. **Stop** requests cancellation; if the
+connection is interrupted, check the destination project list before trying again.
+Phones and CLI daemons do not offer this desktop setup action.
+
 ## Paired-Mac voice input
 
 In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit microphone action. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.

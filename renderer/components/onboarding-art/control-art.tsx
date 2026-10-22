@@ -621,3 +621,15 @@ export function ChatControlsArt() {
     </>
   );
 }
+
+
+/** The paired-project clone dialog, cropped to its destination and explicit file choices. */
+export function PeerProjectsArt() {
+  return <ArtWindow raised className="oa-otg-card" style={{ left: 14, top: 12, width: 172 }}>
+    <span className="oa-row" style={{ gap: 6 }}><ArtIcon icon={Folder} /><span className="oa-mono">Add project</span></span>
+    <div className="oa-row" style={{ gap: 5, marginTop: 5 }}><ArtChip icon={Monitor}>This Mac</ArtChip><ArtIcon icon={ChevronRight} /><ArtChip icon={Monitor}>Studio</ArtChip></div>
+    <div className="oa-row" style={{ gap: 5, marginTop: 6 }}><ArtIcon icon={Folder} /><Bar width="70%" tone="soft" /></div>
+    <div className="oa-stack" style={{ gap: 5, marginTop: 6 }}><span className="oa-row" style={{ gap: 5 }}><Radio /><span className="oa-mono">.env</span><Bar width="40%" tone="soft" /></span><span className="oa-row" style={{ gap: 5 }}><Radio /><Bar width="55%" tone="soft" /></span></div>
+    <ArtButton variant="primary" style={{ marginTop: 7, justifySelf: "end" }}>Clone project</ArtButton>
+  </ArtWindow>;
+}

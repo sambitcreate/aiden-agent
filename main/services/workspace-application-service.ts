@@ -104,7 +104,16 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         permission,
         createdAt: now,
         updatedAt: now,
-      });
+      }, options.assertCurrent ? async () => {
+        // Revalidate after list/save admission awaits, inside the storage mutation.
+        const currentPath = await deps.realpath(folderPath);
+        const current = await deps.stat(currentPath);
+        if (!current.isDirectory() || currentPath !== canonicalPath) throw new Error("The workspace folder changed before registration.");
+        await options.assertCurrent!({ canonicalPath: currentPath,
+          ...(current.dev === undefined ? {} : { filesystemDevice: String(current.dev) }),
+          ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
+        });
+      } : undefined);
     });
   };
 

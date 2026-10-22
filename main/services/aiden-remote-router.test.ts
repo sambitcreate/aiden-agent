@@ -4417,7 +4417,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 36,
+      contractRevision: 37,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -5653,6 +5653,7 @@ test("a fully wired host tells every device type at most the server feature budg
       `${type} hears ${features.length} feature tokens; shipped clients refuse more than ${AIDEN_REMOTE_MAX_SERVER_FEATURES}`,
     );
     assert.equal(new Set(features).size, features.length, type);
+    assert.equal(features.includes("workspace-clone-v1"), type === "mac" || type === "linux");
   }
   // Trimming the desktop list must not take away anything a paired Mac can do.
   const allTokens = new Set(

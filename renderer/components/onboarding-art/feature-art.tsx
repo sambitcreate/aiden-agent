@@ -28,6 +28,7 @@ import {
 import {
   AidenLiveArt,
   AidenOnTheGoArt,
+  PeerProjectsArt,
   BotsArt,
   ChatControlsArt,
   CommandPaletteArt,
@@ -79,6 +80,7 @@ export const FEATURE_ART = {
   chatControls: { tint: "plum", Art: ChatControlsArt },
   telegram: { tint: "sky", Art: TelegramArt },
   aidenOnTheGo: { tint: "lime", Art: AidenOnTheGoArt },
+  peerProjects: { tint: "lilac", Art: PeerProjectsArt },
   usage: { tint: "sun", Art: UsageProfileArt },
   permissions: { tint: "aqua", Art: PermissionsArt },
   themes: { tint: "rose", Art: ThemesArt },

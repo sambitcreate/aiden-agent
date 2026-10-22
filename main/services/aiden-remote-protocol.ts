@@ -73,7 +73,10 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * at merge): Chat Summary rows may carry `lastRunFailed: true` when the newest
  * assistant output is a failed turn, so an unread row can say Failed.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 36 as const;
+/** Contract revision 37, provisional until merge: paired desktops can clone a
+ * repository into a selected approved folder with optional bounded environment files.
+ * `workspace-clone-v1` is never advertised to phones. */
+export const AIDEN_REMOTE_CONTRACT_REVISION = 37 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
