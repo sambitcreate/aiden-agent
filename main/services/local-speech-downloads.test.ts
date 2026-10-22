@@ -242,9 +242,54 @@ test("listModels projects catalog metadata and derived size labels", () => {
   const manager = createSpeechModelManager({ root: () => root });
   const v3 = manager.listModels().find((m) => m.id === "parakeet-v3");
   assert.equal(v3?.sizeLabel, "487 MB");
+  assert.equal(v3?.quant, "int8");
   assert.equal(v3?.installed, false);
   assert.equal(v3?.capabilities.autoDetect, true);
   assert.equal(v3?.languages.length, 25);
+  // The default catalog is the portable one, so the CLI never offers the Metal model.
+  assert.equal(manager.listModels().some((m) => m.id === "parakeet-v3-metal"), false);
+});
+
+test("a host catalog recommends only its first recommended model", () => {
+  const root = mkdtempSync(join(tmpdir(), "speech-root-"));
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [
+      { ...spec("http://127.0.0.1:1/a", 10, "0".repeat(64)), id: "gpu", quant: "Q8_0" },
+      { ...spec("http://127.0.0.1:1/b", 10, "0".repeat(64)), id: "cpu" },
+    ],
+  });
+  assert.deepEqual(
+    manager.listModels().map((m) => [m.id, m.recommended, m.quant]),
+    [["gpu", true, "Q8_0"], ["cpu", false, "int8"]],
+  );
+});
+
+test("a single-file model installs the verified download as its one file", async (t) => {
+  const bytes = Buffer.alloc(300_000, 9);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const state = { mode: "cut-after-half" as Mode, requests: [] as Array<string | undefined> };
+  const { server, url } = await serve(bytes, state);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const root = mkdtempSync(join(tmpdir(), "speech-root-"));
+  const single: SpeechModelSpec = {
+    ...spec(url, bytes.length, sha256),
+    family: "parakeet-gguf",
+    archive: { url, bytes: bytes.length, sha256, format: "file" },
+    files: { model: "model-Q8_0.gguf" },
+  };
+  const manager = createSpeechModelManager({ root: () => root, catalog: [single] });
+  // The first attempt is cut off; the second resumes and publishes the file.
+  await assert.rejects(manager.downloadModel("fixture"));
+  assert.equal(manager.isModelInstalled("fixture"), false);
+  state.mode = "normal";
+  await manager.downloadModel("fixture");
+  assert.match(state.requests[state.requests.length - 1] ?? "", /^bytes=\d+-$/);
+  assert.equal(manager.isModelInstalled("fixture"), true);
+  assert.deepEqual(readdirSync(join(root, "fixture")), ["model-Q8_0.gguf"]);
+  assert.ok(readFileSync(join(root, "fixture", "model-Q8_0.gguf")).equals(bytes));
+  assert.equal(existsSync(join(root, ".partial", "fixture.tar.bz2.part")), false);
+  assert.equal(existsSync(join(root, "fixture.extracting")), false);
 });
 
 test("cancel keeps the partial and the next download resumes from it", async (t) => {

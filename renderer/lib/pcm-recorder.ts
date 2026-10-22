@@ -20,6 +20,8 @@ const FLUSH_TIMEOUT_MS = 500;
 export class PcmRecorder {
   state: "inactive" | "recording" = "inactive";
   onstop: (() => void) | null = null;
+  /** Each 100 ms PCM16 LE chunk as it is captured, for live dictation text. */
+  onchunk: ((chunk: Uint8Array) => void) | null = null;
   private readonly chunks: Uint8Array[] = [];
   private readonly encoder: Pcm16ChunkEncoder;
   private finished = false;
@@ -34,8 +36,11 @@ export class PcmRecorder {
     this.encoder = new Pcm16ChunkEncoder(context.sampleRate);
     worklet.port.onmessage = (event: MessageEvent<Float32Array | { type?: string }>) => {
       if (this.finished) return;
-      if (event.data instanceof Float32Array) this.chunks.push(...this.encoder.push(event.data));
-      else if (event.data?.type === "flushed") this.finish();
+      if (event.data instanceof Float32Array) {
+        const chunks = this.encoder.push(event.data);
+        this.chunks.push(...chunks);
+        if (this.state === "recording") for (const chunk of chunks) this.onchunk?.(chunk);
+      } else if (event.data?.type === "flushed") this.finish();
     };
   }
 
@@ -77,24 +82,14 @@ export class PcmRecorder {
 
   /** The recording as 16 kHz mono PCM16, sized exactly to its samples. */
   takePcm(): Int16Array<ArrayBuffer> {
-    const bytes = this.chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-    const pcm = new Int16Array(bytes / 2);
-    let sample = 0;
-    for (const chunk of this.chunks) {
-      // The encoder writes little-endian; read it back as such on any host.
-      const source = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-      for (let index = 0; index < chunk.byteLength; index += 2) {
-        pcm[sample] = source.getInt16(index, true);
-        sample += 1;
-      }
-    }
-    return pcm;
+    return pcm16FromChunks(this.chunks);
   }
 
   /** Stop capturing without delivering anything. Safe to call more than once. */
   dispose(): void {
     this.state = "inactive";
     this.onstop = null;
+    this.onchunk = null;
     this.release();
   }
 
@@ -118,6 +113,22 @@ export class PcmRecorder {
     this.silentGain.disconnect();
     void this.context.close().catch(() => {});
   }
+}
+
+/** Joins PCM16 LE chunks into native-order samples, as main's on-device IPC expects. */
+export function pcm16FromChunks(chunks: readonly Uint8Array[]): Int16Array<ArrayBuffer> {
+  const bytes = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const pcm = new Int16Array(bytes / 2);
+  let sample = 0;
+  for (const chunk of chunks) {
+    // The encoder writes little-endian; read it back as such on any host.
+    const source = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    for (let index = 0; index < chunk.byteLength; index += 2) {
+      pcm[sample] = source.getInt16(index, true);
+      sample += 1;
+    }
+  }
+  return pcm;
 }
 
 /** The stop hangover a recorder needs: the worklet buffer for PCM, the encoder flush otherwise. */

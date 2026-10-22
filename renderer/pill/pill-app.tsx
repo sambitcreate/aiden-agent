@@ -37,6 +37,8 @@ import {
 import { startPillAppearanceSync } from "../lib/pill-appearance";
 import { createVoiceRecorder, PcmRecorder, recorderStopTailMs } from "../lib/pcm-recorder";
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "../lib/live-pcm-capture";
+import { LocalLivePreview } from "../lib/local-live-preview";
+import { LiveTranscriptTail } from "./live-transcript-tail";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
 import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "../lib/gemini-recorded-retry";
 
@@ -64,6 +66,8 @@ interface ActiveRecording {
   cancelled: boolean;
   transcriptionController: AbortController;
   liveStart?: Promise<GeminiLiveCapture | undefined>;
+  /** Live words from an on-device model fast enough to decode while you speak. */
+  localPreview?: LocalLivePreview;
   batchOperationId?: string;
   batchProvider?: "openai" | "gemini" | "local";
   /** performance.now() when capture started; sizes the transcription budget. */
@@ -142,6 +146,7 @@ export function PillApp() {
   const releaseRecording = React.useCallback(
     (active: ActiveRecording) => {
       stopWaveform();
+      active.localPreview?.stop();
       if (active.recorder instanceof PcmRecorder) active.recorder.dispose();
       active.stream.getTracks().forEach((track) => track.stop());
       void active.audioContext.close().catch(() => {});
@@ -257,12 +262,18 @@ export function PillApp() {
             () => undefined,
           );
         }
+        if (recorder instanceof PcmRecorder && voice.provider === "local") {
+          const preview = LocalLivePreview.start(voice.modelId, publishLiveTranscript);
+          active.localPreview = preview;
+          recorder.onchunk = (chunk) => preview.push(chunk);
+        }
         if (!(recorder instanceof PcmRecorder)) {
           recorder.ondataavailable = (event) => {
             if (event.data.size > 0) active.chunks.push(event.data);
           };
         }
         recorder.onstop = () => {
+          active.localPreview?.stop();
           const pcm = recorder instanceof PcmRecorder ? recorder.takePcm() : null;
           const blob = new Blob(active.chunks, {
             type: recorder instanceof PcmRecorder ? "" : recorder.mimeType || "audio/webm",
@@ -577,10 +588,7 @@ export function PillApp() {
                   {recordingHint}
                 </span>
               ) : liveTranscript.committed || liveTranscript.tentative ? (
-                <span className="max-w-48 truncate text-small" aria-label="Live transcription">
-                  <span className="text-primary">{liveTranscript.committed}</span>{" "}
-                  <span className="text-tertiary">{liveTranscript.tentative}</span>
-                </span>
+                <LiveTranscriptTail transcript={liveTranscript} />
               ) : (
                 <div className="flex h-[22px] items-center gap-[3px]" aria-hidden="true">
                   {Array.from({ length: WAVEFORM_BARS }, (_, i) => (

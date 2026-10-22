@@ -73,6 +73,16 @@ const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY = "build/main/subagent-inference-
 const PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY = "build/main/subagent-inference-worker-runtime.js";
 const PACKAGED_LOCAL_SPEECH_WORKER_ENTRY = "build/main/local-speech-worker.js";
 const PACKAGED_SILERO_VAD_RESOURCE = path.join("speech", "silero_vad.onnx");
+// transcribe.cpp (Parakeet on Metal) loads these with dlopen, which cannot read
+// inside app.asar, so each must be an unpacked regular file.
+export const PACKAGED_METAL_SPEECH_ENTRIES = Object.freeze([
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libtranscribe.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml-base.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml-cpu.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml-metal.dylib",
+  "node_modules/@koromix/koffi-darwin-arm64/darwin_arm64/koffi.node",
+]);
 const MAX_SUBAGENT_INFERENCE_WORKER_BYTES = 16 * 1024 * 1024;
 const MAX_LOCAL_SPEECH_WORKER_BYTES = 4 * 1024 * 1024;
 const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
@@ -431,6 +441,22 @@ export async function verifyPackagedLocalSpeechWorker(appAsar) {
     throw new Error(
       "Packaged on-device transcription worker must be a bounded packed regular file.",
     );
+  }
+}
+
+/** The Metal speech engine's native libraries ship unpacked beside app.asar. */
+export async function verifyPackagedMetalSpeechEngine(appAsar) {
+  await assertRegularFile(appAsar);
+  for (const entryPath of PACKAGED_METAL_SPEECH_ENTRIES) {
+    const entry = statFile(appAsar, entryPath, false);
+    if (!entry || entry.unpacked !== true || "files" in entry || "link" in entry) {
+      throw new Error(`Packaged Metal speech library must be ASAR-unpacked: ${entryPath}`);
+    }
+    const file = path.join(`${appAsar}.unpacked`, entryPath);
+    const info = await assertRegularFile(file);
+    if (info.size === 0) {
+      throw new Error(`Packaged Metal speech library is empty: ${file}`);
+    }
   }
 }
 
@@ -985,6 +1011,7 @@ export async function verifyMacPackage(appPath) {
   await verifyPackagedSlimness(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);
   await verifyPackagedLocalSpeechWorker(appAsar);
+  await verifyPackagedMetalSpeechEngine(appAsar);
   await verifyPackagedVccWorker(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
   await verifyPackagedGenerativeUiLibraries(paths.app);

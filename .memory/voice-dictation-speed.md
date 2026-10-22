@@ -27,7 +27,7 @@ Plan: `docs/plans/voice-dictation-speed-plan.md`. Deep dive (Claude Doc): https:
 - No Remote/iOS/Android/CLI change. Tests: local-voice-preload, settings-application-effects-core, pcm-recorder,
   dictation-insertion, use-voice-recorder (new), plus coordinator/paste/pill/core extensions.
 
-## Phase 2 (benchmark run 2026-10-22; engine picked; live text next)
+## Phase 2 (benchmark PR #580 merged 2026-10-22 as dca19fba; engine and live text in PR #581)
 
 Owner chose 1a (spike transcribe.cpp Metal vs sherpa CPU 2/4 threads vs sherpa streaming on the Mac via Remote
 Control, then live mode on the winner) and 2a (live words in the pill, one paste at the end in other apps).
@@ -54,3 +54,40 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
 - Decision: transcribe.cpp 0.4.0 Metal + Parakeet v3 Q8_0 GGUF on Apple Silicon; live text by re-decoding v3; Linux
   and Intel keep sherpa. First Metal init per machine 4.9 s (then ~55 ms) and first decode after load slow, so the
   preload must do a warm-up decode. Existing users need the 705 MB GGUF; keep sherpa until it's downloaded.
+
+## Phase 2 build (PR #581, branch claude/project-thread-6azxgh, 2026-10-22)
+
+- Engine: `transcribe-cpp` 0.4.0 exact pin (ESM, koffi 3.3.3 FFI) in `main/services/local-speech-transcribe-cpp.ts`
+  (`createTranscribeCppEngine`, `EngineUnavailableError`, `unpackedTranscribeLibrary`). No static import of
+  `transcribe-cpp`: the desktop worker (`local-speech-worker.ts`) dynamic-imports it and routes by family with
+  `createRoutedSpeechEngine` (worker-core), so the CLI bundle never pulls it. Load decodes 1 s of silence (Metal
+  shader warm-up). Packaged: `TRANSCRIBE_LIBRARY` = app.asar.unpacked libtranscribe.dylib (setting it skips the
+  binding's contract check). asarUnpack: @transcribe-cpp/darwin-arm64-metal and @koromix/koffi-darwin-arm64.
+  Root `build.files` excludes `@transcribe-cpp/linux-*` (a 64 MB Vulkan build) and `@koromix/koffi-linux-*`; the small
+  JS packages still ship on Linux, unused. Never add `build.linux.files`: electron-builder then drops the root list and
+  packs the whole repo (CI caught it: .d.mts, docs, .memory in app.asar). Verifiers: verify-macos-package `verifyPackagedMetalSpeechEngine`, verify-linux-package
+  `assertNoMetalSpeechEngine` (native prebuilds only).
+- Catalog: `parakeet-v3-metal` (family `parakeet-gguf`, host darwin/arm64, `livePreview`, quant Q8_0, archive format
+  "file", 739,508,576 bytes, HF revision 85ac09ea). Listed first and recommended only via `speechModelsForHost`;
+  `PORTABLE_SPEECH_MODELS` (default for `createSpeechModelManager`, so the CLI) excludes it. Automatic picks it once
+  installed because installed ids follow catalog order. No LocalModel field or Remote revision change.
+- Live preview: `main/services/local-speech-live-core.ts` (`LivePreviewSession`, `LivePreviewManager`), wired in
+  `local-speech-live.ts`; IPC `voice:localLiveStart/Push/Stop` (pill preload allowlist too), answers on
+  `voice:stream-text`. Re-decodes the current phrase (600 ms quiet after >= 200 ms speech ends it; 20 s forced split
+  at the quietest frame of the last 1.5 s), noise floor = 10th percentile frame RMS over 5 s, speech = RMS >
+  max(300, 3x floor). One decode in flight, interval max(400 ms, 1.5x last), >= 300 ms new audio. Committed = stable
+  prefix of two decodes. Caps 600 s total, 10 s per push. `voice:transcribeLocal` stops the owner's preview first.
+- Renderer: `renderer/lib/local-live-preview.ts` (2-chunk batches, gives up after 100 unsent), `PcmRecorder.onchunk`,
+  `pcm16FromChunks`; started by `use-voice-recorder.ts` and `pill-app.tsx` for local + PcmRecorder. Pill line
+  `renderer/pill/live-transcript-tail.tsx`. Composer shows live words in the draft at the caret (read-only,
+  `dictationInsertion`), final insert after `flushSync` clears the preview; applies to Gemini live too. Trade-off:
+  programmatic value clears earlier undo history; the dictation insert stays undoable.
+- Readiness per engine: status frame takes an optional `family`; `engineStatus(modelId?)` caches "metal" and "sherpa"
+  separately and defaults to the effective model; the resolver's `usableLocalModels` skips models whose engine can't
+  load unless the model was chosen. Composer blocks Enter/Send while live words show (Pullfrog P2s on #581).
+- Settings: `FasterModelOffer` ("Faster on this Mac", Download and Use) in local-voice-settings.tsx via
+  `FASTER_MODEL` {parakeet-v3 -> parakeet-v3-metal}; a chosen model follows, Automatic stays Automatic.
+- Tests: local-speech-transcribe-cpp, local-speech-live-core, composer-dictation (new, registered in test:voice and
+  scripts/ci-test-registry.json), plus catalog/downloads/protocol/worker-core/remote-speech/hook/pill/settings.
+- Pending: packaged-app check on the Mac (dylib + koffi from asar.unpacked), timing and live words by hand; then
+  delete ~/.cache/aiden-voice-spike (3.5 GB) on the Mac.
