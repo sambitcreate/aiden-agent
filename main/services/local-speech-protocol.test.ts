@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { speechModel } from "./local-speech-catalog.js";
+import { SPEECH_MODELS, speechModel } from "./local-speech-catalog.js";
 import {
   isLocalSpeechParentMessage,
   isLocalSpeechWorkerMessage,
@@ -76,6 +76,12 @@ test("language must be a short lowercase code or null", () => {
 test("translate and trimSilence must be booleans", () => {
   assert.equal(isLocalSpeechParentMessage(transcribe({ translate: "yes" })), false);
   assert.equal(isLocalSpeechParentMessage(transcribe({ trimSilence: 1 })), false);
+});
+
+test("every catalog model, the Metal GGUF one included, is a valid request spec", () => {
+  for (const model of SPEECH_MODELS) {
+    assert.equal(isLocalSpeechParentMessage(transcribe({ modelId: model.id, spec: model })), true, model.id);
+  }
 });
 
 test("the spec must describe the requested model", () => {

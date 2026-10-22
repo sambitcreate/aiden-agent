@@ -184,6 +184,7 @@
         "main/services/local-speech-engine.test.ts",
         "main/services/local-speech-vad.test.ts",
         "main/services/local-speech-worker-core.test.ts",
+        "main/services/local-speech-transcribe-cpp.test.ts",
         "main/services/pi-agent-runtime-harness.test.ts",
         "main/services/pi-verification-store.test.ts",
         "main/services/task-quality-adapter.test.ts",

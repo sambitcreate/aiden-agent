@@ -5,6 +5,7 @@ import { effectiveTask } from "../../renderer/shared/voice-language.js";
 import { speechEngine, type EngineTranscribeRequest, type EngineTranscribeResult } from "./local-speech-engine.js";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
 import { decodeOggOpusToPcm16k, OggOpusTooLongError } from "./local-speech-opus.js";
+import { EngineUnavailableError } from "./local-speech-transcribe-cpp.js";
 import {
   isLocalSpeechParentMessage,
   LOCAL_SPEECH_PROTOCOL_VERSION,
@@ -15,11 +16,42 @@ import {
   type LocalSpeechWorkerMessage,
 } from "./local-speech-protocol.js";
 
+type MaybePromise<T> = T | Promise<T>;
+
 export interface LocalSpeechWorkerEngine {
-  status(): { ready: boolean; error: string | null };
-  load(spec: SpeechModelSpec, dir: string, language?: string | null): { loadMs: number };
-  transcribe(request: EngineTranscribeRequest): EngineTranscribeResult;
+  status(): MaybePromise<{ ready: boolean; error: string | null }>;
+  load(spec: SpeechModelSpec, dir: string, language?: string | null): MaybePromise<{ loadMs: number }>;
+  transcribe(request: EngineTranscribeRequest): MaybePromise<EngineTranscribeResult>;
   release(): void;
+}
+
+/**
+ * Routes each model to the engine that runs it: GGUF models to transcribe.cpp
+ * (when this worker has it), everything else to sherpa-onnx. Loading a model
+ * on one engine releases the other, so one model is held at a time.
+ */
+export function createRoutedSpeechEngine(
+  sherpa: LocalSpeechWorkerEngine,
+  gguf: LocalSpeechWorkerEngine | null,
+): LocalSpeechWorkerEngine {
+  const pick = (spec: SpeechModelSpec): LocalSpeechWorkerEngine => {
+    if (spec.family !== "parakeet-gguf") {
+      gguf?.release();
+      return sherpa;
+    }
+    if (!gguf) throw new EngineUnavailableError(`${spec.name} needs the Metal voice engine, which this build doesn't include.`);
+    sherpa.release();
+    return gguf;
+  };
+  return {
+    status: () => sherpa.status(),
+    load: (spec, dir, language) => pick(spec).load(spec, dir, language),
+    transcribe: (request) => pick(request.spec).transcribe(request),
+    release: () => {
+      sherpa.release();
+      gguf?.release();
+    },
+  };
 }
 
 export interface LocalSpeechWorkerOptions {
@@ -57,14 +89,15 @@ async function decodeAudio(audio: LocalSpeechAudio, options: LocalSpeechWorkerOp
   return samples;
 }
 
-function failureCode(
+async function failureCode(
   error: unknown,
   engine: LocalSpeechWorkerEngine,
   kind: LocalSpeechParentMessage["kind"],
-): LocalSpeechFailureCode | undefined {
+): Promise<LocalSpeechFailureCode | undefined> {
   if (error instanceof Error && error.name === "ModelMissingError") return "model-missing";
   if (error instanceof UnsupportedAudioError) return "unsupported-audio";
-  if (!engine.status().ready) return "engine-unavailable";
+  if (error instanceof Error && error.name === "EngineUnavailableError") return "engine-unavailable";
+  if (!(await engine.status()).ready) return "engine-unavailable";
   return kind === "transcribe" ? "decode-failed" : undefined;
 }
 
@@ -77,19 +110,19 @@ export function createLocalSpeechMessageHandler(
     try {
       switch (message.kind) {
         case "status":
-          return { ...base, kind: "result", ...engine.status() };
+          return { ...base, kind: "result", ...(await engine.status()) };
         case "load":
           return {
             ...base,
             kind: "result",
-            loadMs: engine.load(message.spec, message.modelDirectory, message.language ?? null).loadMs,
+            loadMs: (await engine.load(message.spec, message.modelDirectory, message.language ?? null)).loadMs,
           };
         case "release":
           engine.release();
           return { ...base, kind: "result" };
         case "transcribe": {
           const samples = await decodeAudio(message.audio, options);
-          const result = engine.transcribe({
+          const result = await engine.transcribe({
             spec: message.spec,
             modelDirectory: message.modelDirectory,
             samples,
@@ -102,7 +135,7 @@ export function createLocalSpeechMessageHandler(
         }
       }
     } catch (error) {
-      const code = failureCode(error, engine, message.kind);
+      const code = await failureCode(error, engine, message.kind);
       return {
         ...base,
         kind: "failure",

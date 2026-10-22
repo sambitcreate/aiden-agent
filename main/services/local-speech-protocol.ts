@@ -63,7 +63,7 @@ export type LocalSpeechWorkerMessage =
     }
   | { version: V; kind: "failure"; requestId: string; message: string; code?: LocalSpeechFailureCode };
 
-const FAMILIES: readonly SpeechModelFamily[] = ["nemo-transducer", "nemo-canary", "whisper", "sense-voice", "moonshine-v2"];
+const FAMILIES: readonly SpeechModelFamily[] = ["nemo-transducer", "nemo-canary", "whisper", "sense-voice", "moonshine-v2", "parakeet-gguf"];
 const FAILURE_CODES: readonly LocalSpeechFailureCode[] = [
   "model-missing",
   "engine-unavailable",

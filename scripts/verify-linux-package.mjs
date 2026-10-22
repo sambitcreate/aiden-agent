@@ -160,6 +160,20 @@ async function verifyActiveNodePty(resources, architecture) {
   );
 }
 
+/**
+ * transcribe.cpp runs Parakeet on Metal and only Apple silicon offers it; its
+ * Linux prebuild is a 64 MB Vulkan library, so Linux packages leave the engine
+ * and its FFI binding out.
+ */
+export function assertNoMetalSpeechEngine(entries) {
+  const shipped = entries
+    .map((entry) => entry.replaceAll("\\", "/"))
+    .find((entry) => /\/node_modules\/(?:transcribe-cpp|@transcribe-cpp|koffi|@koromix)(?:\/|$)/u.test(entry));
+  if (shipped) {
+    throw new Error(`Linux packages must not ship the Metal speech engine: ${shipped}`);
+  }
+}
+
 export function assertLinuxBuildConfiguration(packageJson) {
   const build = packageJson?.build;
   const linux = build?.linux;
@@ -297,6 +311,7 @@ export async function verifyLinuxPackage(appDirectory) {
   if (!entries.has("/build/main/index.js")) {
     throw new Error("Packaged app.asar is missing /build/main/index.js.");
   }
+  assertNoMetalSpeechEngine([...entries]);
   await verifyPackagedModelCatalogResources(asar);
   await verifyPackagedSlimness(asar);
   await verifyPackagedSubagentInferenceWorker(asar);
