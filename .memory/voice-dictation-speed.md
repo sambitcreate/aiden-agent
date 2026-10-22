@@ -82,6 +82,9 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   `renderer/pill/live-transcript-tail.tsx`. Composer shows live words in the draft at the caret (read-only,
   `dictationInsertion`), final insert after `flushSync` clears the preview; applies to Gemini live too. Trade-off:
   programmatic value clears earlier undo history; the dictation insert stays undoable.
+- Readiness per engine: status frame takes an optional `family`; `engineStatus(modelId?)` caches "metal" and "sherpa"
+  separately and defaults to the effective model; the resolver's `usableLocalModels` skips models whose engine can't
+  load unless the model was chosen. Composer blocks Enter/Send while live words show (Pullfrog P2s on #581).
 - Settings: `FasterModelOffer` ("Faster on this Mac", Download and Use) in local-voice-settings.tsx via
   `FASTER_MODEL` {parakeet-v3 -> parakeet-v3-metal}; a chosen model follows, Automatic stays Automatic.
 - Tests: local-speech-transcribe-cpp, local-speech-live-core, composer-dictation (new, registered in test:voice and

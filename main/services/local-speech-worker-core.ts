@@ -3,7 +3,7 @@
 
 import { effectiveTask } from "../../renderer/shared/voice-language.js";
 import { speechEngine, type EngineTranscribeRequest, type EngineTranscribeResult } from "./local-speech-engine.js";
-import type { SpeechModelSpec } from "./local-speech-catalog.js";
+import type { SpeechModelFamily, SpeechModelSpec } from "./local-speech-catalog.js";
 import { decodeOggOpusToPcm16k, OggOpusTooLongError } from "./local-speech-opus.js";
 import { EngineUnavailableError } from "./local-speech-transcribe-cpp.js";
 import {
@@ -19,7 +19,8 @@ import {
 type MaybePromise<T> = T | Promise<T>;
 
 export interface LocalSpeechWorkerEngine {
-  status(): MaybePromise<{ ready: boolean; error: string | null }>;
+  /** Whether the engine that runs `family` (or the sherpa-onnx engine) can load. */
+  status(family?: SpeechModelFamily): MaybePromise<{ ready: boolean; error: string | null }>;
   load(spec: SpeechModelSpec, dir: string, language?: string | null): MaybePromise<{ loadMs: number }>;
   transcribe(request: EngineTranscribeRequest): MaybePromise<EngineTranscribeResult>;
   release(): void;
@@ -34,17 +35,21 @@ export function createRoutedSpeechEngine(
   sherpa: LocalSpeechWorkerEngine,
   gguf: LocalSpeechWorkerEngine | null,
 ): LocalSpeechWorkerEngine {
+  const missingMetal = (name: string) => `${name} needs the Metal voice engine, which this build doesn't include.`;
   const pick = (spec: SpeechModelSpec): LocalSpeechWorkerEngine => {
     if (spec.family !== "parakeet-gguf") {
       gguf?.release();
       return sherpa;
     }
-    if (!gguf) throw new EngineUnavailableError(`${spec.name} needs the Metal voice engine, which this build doesn't include.`);
+    if (!gguf) throw new EngineUnavailableError(missingMetal(spec.name));
     sherpa.release();
     return gguf;
   };
   return {
-    status: () => sherpa.status(),
+    status: (family) => {
+      if (family !== "parakeet-gguf") return sherpa.status();
+      return gguf ? gguf.status(family) : { ready: false, error: missingMetal("Parakeet on Metal") };
+    },
     load: (spec, dir, language) => pick(spec).load(spec, dir, language),
     transcribe: (request) => pick(request.spec).transcribe(request),
     release: () => {
@@ -93,11 +98,12 @@ async function failureCode(
   error: unknown,
   engine: LocalSpeechWorkerEngine,
   kind: LocalSpeechParentMessage["kind"],
+  family: SpeechModelFamily | undefined,
 ): Promise<LocalSpeechFailureCode | undefined> {
   if (error instanceof Error && error.name === "ModelMissingError") return "model-missing";
   if (error instanceof UnsupportedAudioError) return "unsupported-audio";
   if (error instanceof Error && error.name === "EngineUnavailableError") return "engine-unavailable";
-  if (!(await engine.status()).ready) return "engine-unavailable";
+  if (!(await engine.status(family)).ready) return "engine-unavailable";
   return kind === "transcribe" ? "decode-failed" : undefined;
 }
 
@@ -110,7 +116,7 @@ export function createLocalSpeechMessageHandler(
     try {
       switch (message.kind) {
         case "status":
-          return { ...base, kind: "result", ...(await engine.status()) };
+          return { ...base, kind: "result", ...(await engine.status(message.family)) };
         case "load":
           return {
             ...base,
@@ -135,7 +141,8 @@ export function createLocalSpeechMessageHandler(
         }
       }
     } catch (error) {
-      const code = await failureCode(error, engine, message.kind);
+      const family = message.kind === "load" || message.kind === "transcribe" ? message.spec.family : undefined;
+      const code = await failureCode(error, engine, message.kind, family);
       return {
         ...base,
         kind: "failure",

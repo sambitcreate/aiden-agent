@@ -108,6 +108,11 @@ test("version 1 frames are rejected", () => {
   assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "release", requestId: "x1" }), true);
 });
 
+test("a status frame may name the family whose engine to check, and only a known one", () => {
+  assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1", family: "parakeet-gguf" }), true);
+  assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1", family: "llama" }), false);
+});
+
 test("worker results and failures are validated", () => {
   assert.equal(
     isLocalSpeechWorkerMessage({ version: 2, kind: "result", requestId: "r1", text: "hello", language: "en", decodeMs: 12 }),

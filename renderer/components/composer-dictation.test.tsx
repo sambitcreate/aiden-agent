@@ -15,6 +15,7 @@ import type { Chat, Workspace } from "../lib/types";
 
 let queryClient: QueryClient;
 let finishTranscription: (text: string) => void = () => {};
+let sent: string[] = [];
 
 const WORKSPACE: Workspace = {
   id: "ws-1",
@@ -61,6 +62,7 @@ let calls: ReturnType<typeof installBotTestIpc> = [];
 
 beforeEach(() => {
   localStorage.clear();
+  sent = [];
   calls = installBotTestIpc({
     "settings:get": () => null,
     "shortcut:get": () => null,
@@ -109,7 +111,9 @@ function Harness() {
             sessionChat={DRAFT}
             workspace={WORKSPACE}
             onRenameChat={() => undefined}
-            onSend={async () => undefined}
+            onSend={async (text) => {
+              sent.push(text);
+            }}
             onStop={() => undefined}
             isGenerating={false}
           />
@@ -147,9 +151,22 @@ test("live dictation words appear in the draft at the caret and the final text r
   assert.equal(textbox.readOnly, true);
   assert.equal(textbox.value, "Fix the bug on safari in login");
 
+  // What shows is not yet the draft, so neither Enter nor Send sends it.
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  await act(async () => {
+    fireEvent.keyDown(textbox, { key: "Enter" });
+  });
+  assert.deepEqual(sent, []);
+  assert.equal(textbox.value, "Fix the bug on safari in login");
+
   await act(async () => {
     finishTranscription("on Safari");
   });
   await waitFor(() => assert.equal(textbox.value, "Fix the bug on Safari in login"));
   assert.equal(textbox.readOnly, false);
+
+  await act(async () => {
+    fireEvent.keyDown(textbox, { key: "Enter" });
+  });
+  await waitFor(() => assert.deepEqual(sent, ["Fix the bug on Safari in login"]));
 });

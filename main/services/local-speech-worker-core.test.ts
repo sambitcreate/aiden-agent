@@ -303,21 +303,26 @@ test("GGUF models run on transcribe.cpp and every other model on sherpa-onnx, on
 
 test("a GGUF model on a worker without transcribe.cpp fails as engine-unavailable", async () => {
   const sherpa = fakeEngine();
-  const reply = await createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, null))(transcribe(metal));
+  const handle = createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, null));
+  const reply = await handle(transcribe(metal));
   assert.equal(reply.kind === "failure" && reply.code, "engine-unavailable");
   assert.equal(sherpa.requests.length, 0);
+  const status = await handle({ version: 2, kind: "status", requestId: "s3", family: "parakeet-gguf" });
+  assert.equal(status.kind === "result" && status.ready, false);
 });
 
-test("a transcribe.cpp engine that fails to load fails as engine-unavailable while sherpa stays ready", async () => {
+test("a transcribe.cpp engine that fails to load reports unavailable for Metal models while sherpa stays ready", async () => {
   const sherpa = fakeEngine();
   const gguf = fakeEngine({
+    status: () => ({ ready: false, error: "The Metal voice engine failed to load: dlopen" }),
     load: async () => {
       const error = new Error("The Metal voice engine failed to load: dlopen");
       error.name = "EngineUnavailableError";
       throw error;
     },
   });
-  const reply = await createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, gguf.engine))({
+  const handle = createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, gguf.engine));
+  const reply = await handle({
     version: 2,
     kind: "load",
     requestId: "l2",
@@ -326,4 +331,10 @@ test("a transcribe.cpp engine that fails to load fails as engine-unavailable whi
     spec: metal,
   });
   assert.equal(reply.kind === "failure" && reply.code, "engine-unavailable");
+
+  const metalStatus = await handle({ version: 2, kind: "status", requestId: "s1", family: "parakeet-gguf" });
+  assert.equal(metalStatus.kind === "result" && metalStatus.ready, false);
+  assert.match(metalStatus.kind === "result" ? (metalStatus.error ?? "") : "", /dlopen/);
+  const sherpaStatus = await handle({ version: 2, kind: "status", requestId: "s2", family: "nemo-transducer" });
+  assert.equal(sherpaStatus.kind === "result" && sherpaStatus.ready, true);
 });

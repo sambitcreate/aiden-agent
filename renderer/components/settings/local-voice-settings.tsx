@@ -185,6 +185,7 @@ function FasterModelOffer({ inUse, faster, chosen }: { inUse: LocalVoiceModel; f
         qc.invalidateQueries({ queryKey: queryKeys.localModels }),
         qc.invalidateQueries({ queryKey: queryKeys.settings }),
         qc.invalidateQueries({ queryKey: queryKeys.voiceResolution }),
+        qc.invalidateQueries({ queryKey: queryKeys.engineStatus }),
       ]);
       toast.success(`${faster.name} is ready. You can remove ${inUse.name} in Manage Models.`);
     } catch (error) {

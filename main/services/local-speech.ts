@@ -7,13 +7,14 @@ import { fileURLToPath } from "node:url";
 import type { UtilityProcess } from "electron";
 import { localVoiceIdleUnloadMs } from "../../renderer/shared/dictation-preferences.js";
 import { effectiveLanguage } from "../../renderer/shared/voice-language.js";
+import { effectiveLocalModelId } from "../../renderer/shared/voice-provider.js";
 import { voiceTrimSilenceEnabled } from "../../renderer/shared/voice-preferences.js";
 import { decodeAidenRemotePcm16ToInt16 } from "./aiden-remote-speech-codec.js";
-import type { SpeechModelSpec } from "./local-speech-catalog.js";
+import type { SpeechModelFamily, SpeechModelSpec } from "./local-speech-catalog.js";
 import { speechEngine } from "./local-speech-engine.js";
 import { LocalSpeechIdleUnloader } from "./local-speech-idle-unload.js";
 import { LocalSpeechLane } from "./local-speech-lane.js";
-import { isModelInstalled, modelDir, specFor } from "./local-speech-models.js";
+import { isModelInstalled, listModels, modelDir, specFor } from "./local-speech-models.js";
 import {
   LocalSpeechWorkerError,
   runWithCrashRetry,
@@ -145,21 +146,45 @@ async function inProcess(
   return { text: reply.text ?? "", language: reply.language ?? null, decodeMs: reply.decodeMs ?? 0 };
 }
 
-// Whether the native engine loads is fixed for the life of the app, so the
-// first answer from the engine is reused. Settings polls this, and asking
-// again would fork the speech worker (and hold a model lease) every time.
-let knownEngineStatus: { ready: boolean; error: string | null } | null = null;
+type EngineStatus = { ready: boolean; error: string | null };
 
-export async function engineStatus(): Promise<{ ready: boolean; error: string | null }> {
-  if (knownEngineStatus) return knownEngineStatus;
+// Whether a native engine loads is fixed for the life of the app, so the
+// first answer from each engine is reused. Settings polls this, and asking
+// again would fork the speech worker (and hold a model lease) every time.
+const knownEngineStatus = new Map<"metal" | "sherpa", EngineStatus>();
+
+/** The family of `modelId`, or of the model dictation would use now. */
+async function statusFamily(modelId: string | undefined): Promise<SpeechModelFamily | undefined> {
+  if (modelId) return specFor(modelId)?.family;
+  const { configStore } = await import("./config-store.js");
+  const installed = listModels().filter((model) => model.installed).map((model) => model.id);
+  const effective = effectiveLocalModelId((await configStore.getSettings()).localVoiceModel || undefined, installed);
+  return effective ? specFor(effective)?.family : undefined;
+}
+
+/**
+ * Whether the engine that runs `modelId` can load; without one, the engine
+ * for the model dictation would use now. Parakeet on Metal and the sherpa-onnx
+ * models load different native libraries, so one can fail while the other works.
+ */
+export async function engineStatus(modelId?: string): Promise<EngineStatus> {
+  const family = await statusFamily(modelId);
+  const metal = family === "parakeet-gguf";
+  const key = metal ? "metal" : "sherpa";
+  const known = knownEngineStatus.get(key);
+  if (known) return known;
   return withModelLease(async () => {
     try {
-      knownEngineStatus = await (await host.acquire()).status();
-      return knownEngineStatus;
+      const status = await (await host.acquire()).status(metal ? family : undefined);
+      knownEngineStatus.set(key, status);
+      return status;
     } catch (error) {
       if (isolationUnavailable(error)) {
-        knownEngineStatus = speechEngine.status();
-        return knownEngineStatus;
+        const status = metal
+          ? { ready: false, error: "The Metal voice engine runs only in the speech worker." }
+          : speechEngine.status();
+        knownEngineStatus.set(key, status);
+        return status;
       }
       // A failed launch may be transient; do not remember it.
       return { ready: false, error: errorMessage(error) };

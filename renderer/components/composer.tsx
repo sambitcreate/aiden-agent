@@ -657,11 +657,6 @@ export function Composer({
       skillScopeId,
     ],
   );
-  const canSend =
-    (text.trim().length > 0 || attachments.length > 0) &&
-    submissionAllowed &&
-    !composing &&
-    (!selectedSkillState || selectedSkillState.state === "valid");
   /**
    * Where dictation lands, fixed when recording starts. Live words show at this
    * spot in a read-only draft until the final text replaces them.
@@ -718,6 +713,14 @@ export function Composer({
   const dictationPreviewing =
     dictationAnchor !== null && liveDictation.length > 0 && !firstSendPending && (voice.recording || voice.transcribing);
   const composerValue = dictationPreviewing ? dictationInsertion(text, dictationAnchor, liveDictation).text : text;
+  // While live words show, the draft on screen is not the draft that would be
+  // sent, so sending waits for the final text.
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) &&
+    submissionAllowed &&
+    !composing &&
+    !dictationPreviewing &&
+    (!selectedSkillState || selectedSkillState.state === "valid");
 
   React.useLayoutEffect(() => {
     slashPaletteBlockedRef.current = slashPaletteBlocked;
@@ -1761,6 +1764,10 @@ export function Composer({
 
   const submit = async (busyModeOverride?: BusySendMode) => {
     if (sendPendingRef.current || composing) return;
+    if (dictationPreviewing) {
+      blockSend("Wait for dictation to finish before sending.");
+      return;
+    }
     if (attachmentOperationRef.current.isBusy || attaching) {
       blockSend("Wait for the selected attachments to finish loading before sending.");
       return;
