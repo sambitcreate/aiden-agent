@@ -876,14 +876,18 @@ struct AidenBotSessionChatView: View {
 
     /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
     /// finished on the Mac or skipped, so the composer waits for either.
+    /// Revision 38: so does a password-or-code card, which takes no note.
     private func composerIsHeld(_ model: AidenBotSessionModel) -> Bool {
-        model.isPaused || model.handoff?.kind == .signIn
+        model.isPaused || model.handoff?.kind == .signIn || model.composerHeldForNoNote
     }
 
     private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
         if model.isPaused { return AidenBotSessionCopy.pausedPlaceholder(bot?.name ?? "This Bot") }
         switch model.handoff?.kind {
-        case .action: return AidenBotSessionCopy.handoffNotePlaceholder
+        case .action:
+            return model.composerHeldForNoNote
+                ? AidenBotSessionCopy.handoffNoNotePlaceholder
+                : AidenBotSessionCopy.handoffNotePlaceholder
         case .signIn: return AidenBotSessionCopy.signInPlaceholder
         case nil: return "Message"
         }
@@ -1010,8 +1014,9 @@ struct AidenBotSessionChatView: View {
     @ViewBuilder
     private func composerControls(_ model: AidenBotSessionModel) -> some View {
         if model.isRunning {
-            if model.composerAnswersHandoff {
-                // A waiting step's note goes with a plain Send, never Steer or Queue.
+            if model.composerAnswersHandoff || composerIsHeld(model) {
+                // A waiting step's note goes with a plain Send, never Steer or Queue,
+                // and a held composer offers neither.
                 sendButton(model)
             } else if model.offersBusyModes {
                 busyPill(model)

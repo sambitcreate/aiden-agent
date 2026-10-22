@@ -1,5 +1,5 @@
 {
-  "contractRevision": 37,
+  "contractRevision": 38,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1539,7 +1539,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 37,
+    "contractRevision": 38,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2402,6 +2402,12 @@
   },
   "botHandoffs": {
     "capability": "bot:handoffs",
+    "noNoteHandoff": {
+      "waitId": "8a1d3c5e-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "kind": "action",
+      "action": "Enter the code your bank texted you",
+      "takesNote": false
+    },
     "session": {
       "botId": "bot_fixture_01",
       "epoch": "epoch_fixture_36",

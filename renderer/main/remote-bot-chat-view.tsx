@@ -8,7 +8,7 @@ import { skipToken, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Ellipsis, Pause, Play, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { HandoffCard } from "../components/bots/handoff-card";
+import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
 import { Composer } from "../components/composer";
 import { MessageAttachmentPreviewProvider } from "../components/message-attachments";
 import {
@@ -30,7 +30,7 @@ import { browserApi, peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
 import type { AskUserQuestionResponseV1 } from "../shared/ask-user-question";
 import { DEFAULT_BOT_AVATAR, isBotAvatar, resolveBotChatActivity, type BotAvatar } from "../shared/bots";
-import { BOT_HANDOFF_NOTE_MAX_CHARS, type BotHandoffOutcome } from "../shared/bot-handoffs";
+import { BOT_HANDOFF_NOTE_MAX_CHARS, botHandoffTakesNote, type BotHandoffOutcome } from "../shared/bot-handoffs";
 import type { BotPendingQuestion } from "../shared/bot-live";
 import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, type PeerOperationOutcome } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
@@ -311,6 +311,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const handoff = view.handoff && view.handoff !== settledHandoff ? view.handoff : null;
   // A sign-in happens in the Bot's own browser on its Mac: typing here can't finish it.
   const signInElsewhere = handoff?.kind === "sign_in";
+  // A password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
+  const noteRefused = handoff !== null && !botHandoffTakesNote(handoff);
 
   const send = async (text: string, attachments: Attachment[], whenBusy?: "steer" | "followUp"): Promise<void> => {
     const images = attachments.filter((attachment) => attachment.kind === "image" && attachment.data);
@@ -457,6 +459,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
    * shows the error's message.
    */
   const answerHandoffWithNote = async (pending: AidenRemoteBotHandoff, text: string, attachments: Attachment[]) => {
+    if (!botHandoffTakesNote(pending)) throw new Error(handoffNoNoteComposerText(name));
     if (attachments.length > 0) {
       throw new Error(
         attachments.some((attachment) => attachment.kind === "image")
@@ -592,19 +595,21 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       ) : (
         <Composer
           key={`remote-bot:${hostId}:${botId}`}
-          ready={state?.kind !== "unavailable" && !isPaused && !signInElsewhere}
+          ready={state?.kind !== "unavailable" && !isPaused && !signInElsewhere && !noteRefused}
           readinessMessage={
             isPaused
               ? botPausedText(name)
               : signInElsewhere
                 ? `Finish signing in on ${hostName}, or skip it.`
-                : state?.kind === "unavailable"
-                  ? `${name} can’t take messages on ${hostName} right now.`
-                  : undefined
+                : noteRefused
+                  ? handoffNoNoteComposerText(name)
+                  : state?.kind === "unavailable"
+                    ? `${name} can’t take messages on ${hostName} right now.`
+                    : undefined
           }
           hasMessages={snapshot.entries.length > 0}
           chatId={`remote-bot:${hostId}:${botId}`}
-          placeholder={handoff ? "Add a note and send to mark it done" : `Ask ${name}`}
+          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${name}`}
           onSend={(text, attachments) => (handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments))}
           {...(steerAndQueue && !handoff
             ? {

@@ -233,6 +233,10 @@ the screen keeps working.
   `lume run` process's arguments could also open the screen on `127.0.0.1`.
   Whether macOS shows those arguments to other accounts is checked under
   "Confirming on a Mac"; passing the password another way needs a Lume change.
+  This is an accepted limit (owner decision, 2026-10-22): a program that can
+  already read this Mac's process list runs as you, and the password lasts
+  only until the computer stops. Aiden revisits it when a pinned Lume can take
+  the password another way.
 - **SSH.** Aiden reaches the guest with its own key, kept in Aiden's data
   folder, and the guest's pinned host key (one per base Aiden built; a Bot
   computer presents the key of the base it was copied from). Password login is turned off in the

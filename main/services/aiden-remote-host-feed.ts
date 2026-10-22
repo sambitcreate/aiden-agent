@@ -38,7 +38,14 @@ export interface AidenRemoteHostFeedState {
   /** Bot-owned chats; their run states reach `bot:read` desktops only. */
   botChatIds: ReadonlySet<string>;
   workspaces: readonly AidenRemoteHostFeedWorkspace[];
+  /** Bot rows as a desktop without `bot:handoffs` reads them (revision 35: no `paused`). */
   bots: readonly AidenRemoteHostFeedBot[];
+  /**
+   * The same Bots as a `bot:handoffs` desktop reads them (revision 37: a
+   * paused Bot is `sessionState: "paused"` with `paused: true`). Absent means
+   * every device reads `bots`.
+   */
+  handoffBots?: readonly AidenRemoteHostFeedBot[];
 }
 
 export interface AidenRemoteHostFeedSource {
@@ -48,6 +55,8 @@ export interface AidenRemoteHostFeedSource {
 export interface AidenRemoteHostFeedDevice {
   id: string;
   capabilities: ReadonlySet<AidenRemoteCapability>;
+  /** The device is sent revision-37 Bot rows: it holds `bot:handoffs` and the host serves it. */
+  botHandoffs?: boolean;
 }
 
 export interface AidenRemoteHostFeedOptions {
@@ -76,11 +85,15 @@ export interface AidenRemoteHostFeedEvent {
   payload: Record<string, unknown>;
 }
 
+/** Which desktops read an entry: every one, or only those with or without `bot:handoffs`. */
+type Audience = "all" | "legacy" | "handoffs";
+
 interface JournalEntry {
   sequence: number;
   frame: string;
   bytes: number;
   botOnly: boolean;
+  audience: Audience;
 }
 
 interface RunStateChange {
@@ -172,6 +185,7 @@ export class AidenRemoteHostFeedService {
     await this.refresh();
     admit();
     const botVisible = device.capabilities.has("bot:read");
+    const audience: Audience = device.botHandoffs === true ? "handoffs" : "legacy";
     let position = this.resumePosition(cursor);
     /** Remaining frames of a snapshot being delivered one frame per pull. */
     let snapshot: string[] = [];
@@ -179,7 +193,7 @@ export class AidenRemoteHostFeedService {
       if (snapshot.length > 0) return { frames: [snapshot.shift()!] };
       if (position === undefined || position < this.floor) {
         position = this.head;
-        snapshot = this.snapshotFrames(botVisible);
+        snapshot = this.snapshotFrames(botVisible, audience);
         return { frames: [snapshot.shift()!] };
       }
       const frames: string[] = [];
@@ -191,6 +205,7 @@ export class AidenRemoteHostFeedService {
         const entry = this.journal[index]!;
         position = entry.sequence;
         if (entry.botOnly && !botVisible) continue;
+        if (entry.audience !== "all" && entry.audience !== audience) continue;
         frames.push(entry.frame);
       }
       return { frames };
@@ -265,7 +280,7 @@ export class AidenRemoteHostFeedService {
     if (previous) {
       this.diff("chat", previous.summaries, next.summaries, false);
       this.diff("workspace", previous.workspaces, next.workspaces, false);
-      this.diff("bot", previous.bots, next.bots, true);
+      this.diffBots(previous, next);
     }
     const runs = [...this.pendingRuns.values()];
     this.pendingRuns.clear();
@@ -288,7 +303,7 @@ export class AidenRemoteHostFeedService {
   }
 
   private diff(
-    kind: "chat" | "workspace" | "bot",
+    kind: "chat" | "workspace",
     previous: readonly { id: string }[],
     next: readonly { id: string }[],
     botOnly: boolean,
@@ -306,15 +321,49 @@ export class AidenRemoteHostFeedService {
     }
   }
 
+  /**
+   * Bot rows differ by audience only while a Bot is paused, so a change both
+   * audiences read alike is one entry; otherwise each audience whose row
+   * changed gets its own.
+   */
+  private diffBots(previous: AidenRemoteHostFeedState, next: AidenRemoteHostFeedState): void {
+    const rows = (bots: readonly AidenRemoteHostFeedBot[]) =>
+      new Map(bots.map((bot) => [bot.id, { bot, json: JSON.stringify(bot) }]));
+    const before = { legacy: rows(previous.bots), handoffs: rows(previous.handoffBots ?? previous.bots) };
+    const after = { legacy: rows(next.bots), handoffs: rows(next.handoffBots ?? next.bots) };
+    const ids = new Set([...after.legacy.keys(), ...after.handoffs.keys(), ...before.legacy.keys(), ...before.handoffs.keys()]);
+    for (const id of ids) {
+      const changes = (["legacy", "handoffs"] as const).flatMap((audience) => {
+        const was = before[audience].get(id);
+        const now = after[audience].get(id);
+        if (was?.json === now?.json) return [];
+        return [{ audience, row: now }];
+      });
+      const [first, second] = changes;
+      if (!first) continue;
+      if (second && first.row?.json === second.row?.json) {
+        this.appendBot(id, first.row?.bot, "all");
+        continue;
+      }
+      for (const change of changes) this.appendBot(id, change.row?.bot, change.audience);
+    }
+  }
+
+  private appendBot(id: string, bot: AidenRemoteHostFeedBot | undefined, audience: Audience): void {
+    if (bot) this.append("bot.upsert", bot as unknown as Record<string, unknown>, true, audience);
+    else this.append("bot.remove", { id }, true, audience);
+  }
+
   private append(
     type: Exclude<AidenRemoteHostFeedEventType, "snapshot">,
     payload: Record<string, unknown>,
     botOnly: boolean,
+    audience: Audience = "all",
   ): void {
     this.head += 1;
     const frame = this.frame(this.head, type, payload);
     const bytes = Buffer.byteLength(frame);
-    this.journal.push({ sequence: this.head, frame, bytes, botOnly });
+    this.journal.push({ sequence: this.head, frame, bytes, botOnly, audience });
     this.journalBytes += bytes;
     while (
       this.journal.length > this.maxEvents ||
@@ -339,13 +388,14 @@ export class AidenRemoteHostFeedService {
    * carries the `<epoch>:<sequence>` id. A host that fits in one chunk sends
    * exactly one frame without `partial`.
    */
-  private snapshotFrames(botVisible: boolean): string[] {
+  private snapshotFrames(botVisible: boolean, audience: Audience): string[] {
     const state = this.state!;
+    const bots = audience === "handoffs" ? (state.handoffBots ?? state.bots) : state.bots;
     const budget = this.options.snapshotChunkBytes ?? AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES;
     const sections = {
       summaries: state.summaries,
       workspaces: state.workspaces,
-      bots: botVisible ? state.bots : [],
+      bots: botVisible ? bots : [],
     } as const;
     type Section = keyof typeof sections;
     const empty = (): Record<Section, unknown[]> => ({ summaries: [], workspaces: [], bots: [] });

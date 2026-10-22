@@ -2192,6 +2192,13 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card))
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.filter { $0.key != "why" && $0.key != "open" }), "why and open are optional")
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.merging(["kind": "sign_in"]) { $1 }))
+        // Revision 38: a password-or-code card says it takes no note, and only ever as false.
+        let noNote = try XCTUnwrap(raw["noNoteHandoff"] as? [String: Any])
+        let decodedNoNote = try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: noNote))
+        XCTAssertFalse(decodedNoNote.takesNote)
+        XCTAssertTrue(try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: card)).takesNote)
+        let reencoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedNoNote)) as? [String: Any])
+        XCTAssertEqual(reencoded["takesNote"] as? Bool, false)
         // The Mac stores a page as its WHATWG `href`, which keeps characters
         // such as `[`, `]` and `|` unescaped; the phone shows that card too.
         let jiraPage = "https://jira.example.com/browse?filter[status]=open&q=a|b"
@@ -2199,6 +2206,9 @@ final class AidenBotContractTests: XCTestCase {
         let refused: [(String, [String: Any])] = [
             ("an unknown key", card.merging(["origin": "https://bank.example.com"]) { $1 }),
             ("an unknown kind", card.merging(["kind": "approve"]) { $1 }),
+            ("takesNote as true", card.merging(["takesNote": true]) { $1 }),
+            ("takesNote as text", card.merging(["takesNote": "false"]) { $1 }),
+            ("takesNote as null", card.merging(["takesNote": NSNull()]) { $1 }),
             ("a blank action", card.merging(["action": "   "]) { $1 }),
             ("a long action", card.merging(["action": String(repeating: "a", count: 161)]) { $1 }),
             ("a long why", card.merging(["why": String(repeating: "a", count: 401)]) { $1 }),

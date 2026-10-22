@@ -87,10 +87,10 @@ export function BotRules({ bot }: { bot: RuleBot }) {
           </Text>
         </Callout>
       ) : rules.data?.unreadable ? (
-        // Main fails closed on a rules file it can't parse; the next change replaces it.
+        // Main fails closed on a rules file it can't parse; the next change keeps a copy and replaces it.
         <Callout color="red" role="alert" className="mb-3">
           <Text variant="small-strong" color="red">
-            {bot.name}’s saved rules couldn’t be read, so {bot.name} won’t take any step its rules check. Change a rule below to start again from these defaults.
+            {bot.name}’s saved rules couldn’t be read, so {bot.name} won’t take any step its rules check. Change a rule below to start again from these defaults. Aiden keeps a copy of the damaged file, rules.json.unreadable, in {bot.name}’s folder.
           </Text>
         </Callout>
       ) : null}

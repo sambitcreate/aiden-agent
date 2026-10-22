@@ -344,6 +344,68 @@ test("Bots and Bot-chat run states reach only devices that also hold bot:read", 
   }
 });
 
+test("a paused Bot reads as paused only on desktops that hold bot:handoffs", async () => {
+  const { feed, state } = harness();
+  const idle = { id: "bot-1", name: "Planner", sessionState: "idle" };
+  state.current = { ...state.current, bots: [idle], handoffBots: [idle] };
+  const legacy = await open(feed, desktop("device-legacy", ["bot:read"]));
+  const holderDevice = { ...desktop("device-holder", ["bot:read", "bot:handoffs"]), botHandoffs: true };
+  const holder = await open(feed, holderDevice);
+  const botEvents = (response: RecordingResponse) =>
+    response.frames().slice(1).map((frame) => [frame.event, frame.data.payload]);
+  const lastId = (response: RecordingResponse) => response.frames().slice(-1)[0]!.id;
+  try {
+    const beforePause = lastId(holder);
+    state.current = {
+      ...state.current,
+      bots: [{ ...idle, sessionState: "unavailable" }],
+      handoffBots: [{ ...idle, sessionState: "paused", paused: true }],
+    };
+    feed.invalidate();
+    await feed.refresh();
+    assert.deepEqual(botEvents(legacy), [["bot.upsert", { ...idle, sessionState: "unavailable" }]]);
+    assert.deepEqual(botEvents(holder), [["bot.upsert", { ...idle, sessionState: "paused", paused: true }]]);
+
+    // A Bot both audiences read alike is one change for each, not two.
+    const renamed = { ...idle, name: "Renamed" };
+    state.current = { ...state.current, bots: [renamed], handoffBots: [renamed] };
+    feed.invalidate();
+    await feed.refresh();
+    assert.deepEqual(botEvents(legacy).slice(1), [["bot.upsert", renamed]]);
+    assert.deepEqual(botEvents(holder).slice(1), [["bot.upsert", renamed]]);
+
+    // A holder resuming from before the pause replays only its own rows.
+    const resumed = await open(feed, holderDevice, beforePause);
+    assert.deepEqual(
+      resumed.frames().map((frame) => [frame.event, frame.data.payload]),
+      botEvents(holder),
+    );
+
+    state.current = {
+      ...state.current,
+      bots: [{ ...renamed, sessionState: "unavailable" }],
+      handoffBots: [{ ...renamed, sessionState: "paused", paused: true }],
+    };
+    feed.invalidate();
+    await feed.refresh();
+    const snapshotBots = (response: RecordingResponse) => (response.frames()[0]!.data.payload as { bots: unknown[] }).bots;
+    assert.deepEqual(snapshotBots(await open(feed, holderDevice)), [{ ...renamed, sessionState: "paused", paused: true }]);
+    assert.deepEqual(
+      snapshotBots(await open(feed, desktop("device-legacy-2", ["bot:read"]))),
+      [{ ...renamed, sessionState: "unavailable" }],
+    );
+
+    state.current = { ...state.current, bots: [], handoffBots: [] };
+    feed.invalidate();
+    await feed.refresh();
+    assert.deepEqual(botEvents(legacy).slice(-1)[0], ["bot.remove", { id: "bot-1" }]);
+    assert.deepEqual(botEvents(holder).slice(-1)[0], ["bot.remove", { id: "bot-1" }]);
+    assert.equal(botEvents(holder).filter(([event]) => event === "bot.remove").length, 1);
+  } finally {
+    feed.close();
+  }
+});
+
 test("revocation closes only the revoked device's feeds", async () => {
   const { feed, state } = harness();
   const revoked = await open(feed, desktop("device-revoked"));

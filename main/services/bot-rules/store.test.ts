@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
@@ -165,6 +165,34 @@ test("a file that doesn't parse exactly fails closed: calls can't read it, and t
   assert.equal(view.revision, 3);
   assert.equal(byId(view.rules, "default.delete")?.behavior, "hand_off");
   assert.equal(byId(await p.store.rules(BOT), id)?.text, "book a flight");
+});
+
+test("replacing a damaged rules file keeps each damaged version beside it, and deleting the Bot removes them", async () => {
+  const p = profile();
+  const directory = path.dirname(p.file);
+  const first = '{"version":1,"revision":4,"custom":[{"text":"never book flights over 500 dollars"';
+  handWrite(p.file, first);
+  const saved = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "default.purchase", behavior: "hand_off" });
+  assert.equal(saved.ok, true);
+  assert.equal(readFileSync(path.join(directory, "rules.json.unreadable"), "utf8"), first);
+
+  // A refused change on a damaged file keeps nothing; the next saved one keeps the new damage without touching the first copy.
+  const second = "{also broken";
+  handWrite(p.file, second);
+  const refused = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "locked.money", behavior: "ask" });
+  assert.equal(refused.ok, false);
+  assert.equal(existsSync(path.join(directory, "rules.json.unreadable.2")), false);
+  assert.equal((await p.store.update(BOT, 0, { type: "add_custom", text: "order food", behavior: "ask" })).ok, true);
+  assert.equal(readFileSync(path.join(directory, "rules.json.unreadable"), "utf8"), first);
+  assert.equal(readFileSync(path.join(directory, "rules.json.unreadable.2"), "utf8"), second);
+
+  // A readable file is replaced without a copy.
+  assert.equal((await p.store.update(BOT, 1, { type: "add_custom", text: "book a flight", behavior: "ask" })).ok, true);
+  assert.equal(existsSync(path.join(directory, "rules.json.unreadable.3")), false);
+
+  writeFileSync(path.join(directory, "notes.txt"), "kept");
+  await p.store.forgetBot(BOT);
+  assert.deepEqual(readdirSync(directory), ["notes.txt"]);
 });
 
 test("an unreadable rules file throws instead of reading as the defaults", async () => {
