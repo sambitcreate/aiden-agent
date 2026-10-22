@@ -50,7 +50,7 @@
 //   guest's screen (it reads the run's `--vnc-password` from the fake state).
 //   Unset, the listener only greets and hangs up.
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -154,7 +154,11 @@ function readState(storage) {
 
 function writeState(storage, state) {
   mkdirSync(storage, { recursive: true });
-  writeFileSync(statePath(storage), JSON.stringify(state, null, 2));
+  // Written aside and renamed into place, so a call reading at the same moment sees the old
+  // state or the new one, never a torn file it would read as no VMs at all.
+  const pending = `${statePath(storage)}.${process.pid}.tmp`;
+  writeFileSync(pending, JSON.stringify(state, null, 2));
+  renameSync(pending, statePath(storage));
 }
 
 function alive(pid) {
