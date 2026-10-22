@@ -1,6 +1,6 @@
 # Voice dictation: speed and live text (STT sub-project 2)
 
-Status: Active (2026-10-22). Phase 1 merged in [PR #579](https://github.com/sambitcreate/aiden-agent/pull/579) on 2026-10-22 and is not released yet. The phase 2 benchmark ([PR #580](https://github.com/sambitcreate/aiden-agent/pull/580)) ran on the owner's Mac on 2026-10-22 and picked transcribe.cpp on Metal with Parakeet TDT v3. The Metal engine and live words are built on branch `claude/project-thread-6azxgh` (see [Phase 2 build](#phase-2-build)); a packaged-app check and timing on the owner's Mac remain.
+Status: Active (2026-10-22). Phase 1 merged in [PR #579](https://github.com/sambitcreate/aiden-agent/pull/579) on 2026-10-22 and is not released yet. The phase 2 benchmark ([PR #580](https://github.com/sambitcreate/aiden-agent/pull/580)) ran on the owner's Mac on 2026-10-22 and picked transcribe.cpp on Metal with Parakeet TDT v3. The Metal engine and live words are built in [PR #581](https://github.com/sambitcreate/aiden-agent/pull/581) (see [Phase 2 build](#phase-2-build)); a packaged-app check and timing on the owner's Mac remain.
 
 Deep dive: [Local voice dictation: speed and live text](https://claude.ai/artifact/JZWtaaWud4cks6WtdjdQBY) (2026-10-21). It compares Aiden's on-device dictation with Handy (`cjpais/handy`, MIT) as of v0.9.x.
 

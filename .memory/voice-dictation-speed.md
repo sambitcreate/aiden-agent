@@ -27,7 +27,7 @@ Plan: `docs/plans/voice-dictation-speed-plan.md`. Deep dive (Claude Doc): https:
 - No Remote/iOS/Android/CLI change. Tests: local-voice-preload, settings-application-effects-core, pcm-recorder,
   dictation-insertion, use-voice-recorder (new), plus coordinator/paste/pill/core extensions.
 
-## Phase 2 (benchmark PR #580 merged 2026-10-22 as dca19fba; engine and live text built on claude/project-thread-6azxgh)
+## Phase 2 (benchmark PR #580 merged 2026-10-22 as dca19fba; engine and live text in PR #581)
 
 Owner chose 1a (spike transcribe.cpp Metal vs sherpa CPU 2/4 threads vs sherpa streaming on the Mac via Remote
 Control, then live mode on the winner) and 2a (live words in the pill, one paste at the end in other apps).
@@ -55,7 +55,7 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   and Intel keep sherpa. First Metal init per machine 4.9 s (then ~55 ms) and first decode after load slow, so the
   preload must do a warm-up decode. Existing users need the 705 MB GGUF; keep sherpa until it's downloaded.
 
-## Phase 2 build (branch claude/project-thread-6azxgh, 2026-10-22)
+## Phase 2 build (PR #581, branch claude/project-thread-6azxgh, 2026-10-22)
 
 - Engine: `transcribe-cpp` 0.4.0 exact pin (ESM, koffi 3.3.3 FFI) in `main/services/local-speech-transcribe-cpp.ts`
   (`createTranscribeCppEngine`, `EngineUnavailableError`, `unpackedTranscribeLibrary`). No static import of
