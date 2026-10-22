@@ -8054,6 +8054,7 @@ struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var isExpanded = false
+    @State private var hasMoreBelow = false
 
     let summary: String
     var toolName: String = ""
@@ -8115,6 +8116,16 @@ struct AidenApprovalCard: View {
                     ViewThatFits(in: .vertical) {
                         requestText
                         ScrollView { requestText }
+                            .scrollIndicators(.visible)
+                            .scrollIndicatorsFlash(onAppear: true)
+                            // Only an overflowing request gets here, and it opens at the top.
+                            .onAppear { hasMoreBelow = true }
+                            .onDisappear { hasMoreBelow = false }
+                            .onScrollGeometryChange(for: Bool.self) { geometry in
+                                geometry.visibleRect.maxY < geometry.contentSize.height - 1
+                            } action: { _, more in
+                                hasMoreBelow = more
+                            }
                     }
                     .frame(maxHeight: expandedMaxHeight, alignment: .top)
                 } else {
@@ -8122,14 +8133,25 @@ struct AidenApprovalCard: View {
                 }
 
                 if isLong {
-                    Button(isExpanded ? "Show less" : "Show all") {
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                            isExpanded.toggle()
+                    HStack(spacing: 8) {
+                        Button(isExpanded ? "Show less" : "Show all") {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                                isExpanded.toggle()
+                            }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .buttonStyle(.plain)
+
+                        Spacer(minLength: 0)
+
+                        // The end of a long request must never sit hidden without a cue.
+                        if isExpanded && hasMoreBelow {
+                            Label("Scroll for more", systemImage: "arrow.down")
+                                .font(.footnote)
+                                .foregroundStyle(palette.secondary)
                         }
                     }
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(palette.secondary)
-                    .buttonStyle(.plain)
                 }
             }
             .padding(14)
@@ -8169,8 +8191,12 @@ struct AidenApprovalCard: View {
             }
         }
         .padding(16)
-        .background(palette.raised, in: shape)
-        .shadow(color: palette.foreground.opacity(0.08), radius: 12, y: 4)
+        // Shadow only the surface: on the whole card it also blurs every glyph inside.
+        .background {
+            shape
+                .fill(palette.raised)
+                .shadow(color: palette.foreground.opacity(0.08), radius: 12, y: 4)
+        }
         .accessibilityElement(children: .contain)
     }
 

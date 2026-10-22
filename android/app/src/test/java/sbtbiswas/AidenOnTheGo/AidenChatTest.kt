@@ -3323,8 +3323,9 @@ class AidenChatTest {
         )
 
         assertTrue(AidenApprovalPresentation.isAutomation(approval.toolName))
-        assertEquals("Create this automation?", AidenApprovalPresentation.title(approval.toolName))
-        assertEquals("Create this automation?", AidenApprovalPresentation.headline(approval.toolName, approval.summary))
+        // Scheduled-task titles match the Mac's card.
+        assertEquals("Save this scheduled task?", AidenApprovalPresentation.headline(approval.toolName, approval.summary))
+        assertEquals("Change this automation?", AidenApprovalPresentation.headline("edit_automation", approval.summary))
         assertTrue(AidenApprovalPresentation.requiresDesktopConfirmation(approval))
         assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
         assertEquals("Approval needed", AidenApprovalPresentation.title("run_command"))

@@ -1612,8 +1612,8 @@ object AidenApprovalPresentation {
     fun isAutomation(toolName: String): Boolean = automationTools.contains(toolName)
 
     fun title(toolName: String): String = when (toolName) {
-        "schedule_task" -> "Create this automation?"
-        "edit_automation" -> "Save these automation changes?"
+        "schedule_task" -> "Save this scheduled task?"
+        "edit_automation" -> "Change this automation?"
         else -> "Approval needed"
     }
 

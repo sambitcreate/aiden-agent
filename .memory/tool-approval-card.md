@@ -19,7 +19,10 @@ Branch `claude/project-thread-khrad6`. The owner asked for a better-looking Allo
   - Wording comes from `AidenApprovalPresentation.headline` / `requestedAction`, matched to the desktop strings. Prefixes are stripped only for the tool that writes them.
   - iOS `AidenPendingApproval` gained `toolName`.
   - Android `AidenSplitButton` gained `fillWidth`.
-  - An expanded request scrolls in a bounded box (Android 200dp, iOS 240pt) because the Android workspace chat and the iOS Bot chat keep the card in a non-scrolling footer. `AidenApprovalCardUiTest` (androidTest) checks Show less and the buttons stay displayed.
+  - A long request folds to 6 lines on both phones. An expanded request scrolls in a bounded box (Android 200dp, iOS 240pt) because the Android workspace chat and the iOS Bot chat keep the card in a non-scrolling footer. While the end is out of view, "Scroll for more" shows beside Show less (Android `requestScroll.canScrollForward`, iOS `onScrollGeometryChange`). `AidenApprovalCardUiTest` (androidTest) checks Show less, the buttons, and that the cue appears and goes away at the end.
+  - Scheduled-task headlines match desktop: schedule_task "Save this scheduled task?", edit_automation "Change this automation?".
+  - iOS card shadow sits on the background shape only; on the whole card SwiftUI also shadows every glyph (a faint halo in light mode, seen in the first phone screenshots).
+  - Screenshots: every UI change gets shots before approval. Desktop is captured in the cloud; phones via Remote Control on the owner's Mac. Gallery page: https://claude.ai/artifact/Dj1BLmcUCtZLZZdk7jGGDY
 - **CLI daemon**: `daemonApprovalSummary` writes "Run command: X", "Read file: X" or "List folder: X" only when that one argument is the whole call. Anything else stays `${tool}: ${json}`, so nothing is hidden.
 - **Activity summary** (desktop `summarizeActivity`, iOS and Android `summary`):
   - A `blocked` call counts as "skipped N command(s)/file change(s)/action(s)".

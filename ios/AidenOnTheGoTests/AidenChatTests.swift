@@ -8029,9 +8029,14 @@ final class AidenChatTests: XCTestCase {
             AidenApprovalPresentation.headline(toolName: "notion__search", kind: .action, summary: "Search Notion"),
             "Approval needed"
         )
+        // Scheduled-task titles match the Mac's card.
         XCTAssertEqual(
             AidenApprovalPresentation.headline(toolName: "schedule_task", kind: .scheduledTask, summary: "Daily report"),
-            "Review scheduled task"
+            "Save this scheduled task?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit_automation", kind: .scheduledTask, summary: "Daily report"),
+            "Change this automation?"
         )
         XCTAssertEqual(AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: " \n\t "), "Review requested action")
         XCTAssertEqual(

@@ -5,10 +5,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
@@ -26,9 +29,10 @@ class AidenApprovalCardUiTest {
     @get:Rule
     val compose = createComposeRule()
 
-    @Test
-    fun anExpandedLongCommandLeavesTheCollapseAndDecisionControlsOnScreen() {
-        val command = (1..80).joinToString("\n") { "echo step $it" }
+    private val responses = mutableListOf<Pair<AidenApprovalDecision, AidenApprovalScope>>()
+
+    private fun showCommand(lines: Int) {
+        val command = (1..lines).joinToString("\n") { "echo step $it" }
         val approval = AidenPendingApproval(
             id = "a-1",
             summary = "Run command: $command",
@@ -39,7 +43,6 @@ class AidenApprovalCardUiTest {
             hostCanAllow = true,
             canAllow = true
         )
-        val responses = mutableListOf<Pair<AidenApprovalDecision, AidenApprovalScope>>()
         compose.setContent {
             AidenTheme {
                 // The chat's bottom bar does not scroll; this is about the height it has on a phone.
@@ -53,6 +56,11 @@ class AidenApprovalCardUiTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun anExpandedLongCommandLeavesTheCollapseAndDecisionControlsOnScreen() {
+        showCommand(lines = 80)
 
         compose.onNodeWithText("Show all").performClick()
 
@@ -62,5 +70,28 @@ class AidenApprovalCardUiTest {
         compose.runOnIdle {
             assertEquals(listOf(AidenApprovalDecision.ALLOW to AidenApprovalScope.ONCE), responses)
         }
+    }
+
+    @Test
+    fun anExpandedCommandSaysWhenItsEndIsBelowTheFold() {
+        showCommand(lines = 80)
+        compose.onNodeWithText("Scroll for more").assertDoesNotExist()
+
+        compose.onNodeWithText("Show all").performClick()
+        compose.onNodeWithText("Scroll for more").assertIsDisplayed()
+
+        // Once the last line is in view there is nothing more to scroll to.
+        compose.onNode(hasScrollAction()).performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 100_000f) }
+        compose.onNodeWithText("Scroll for more").assertDoesNotExist()
+    }
+
+    @Test
+    fun anExpandedCommandThatFitsHasNoScrollCue() {
+        showCommand(lines = 8)
+
+        compose.onNodeWithText("Show all").performClick()
+
+        compose.onNodeWithText("Show less").assertIsDisplayed()
+        compose.onNodeWithText("Scroll for more").assertDoesNotExist()
     }
 }

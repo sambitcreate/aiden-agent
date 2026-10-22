@@ -2748,6 +2748,11 @@ enum AidenApprovalPresentation {
 
     /// The card's title: the requested action as a plain question.
     static func headline(toolName: String, kind: AidenApprovalKind, summary: String) -> String {
+        switch toolName {
+        case "schedule_task": return String(localized: "Save this scheduled task?")
+        case "edit_automation": return String(localized: "Change this automation?")
+        default: break
+        }
         guard kind == .action else { return title(for: kind) }
         switch toolName {
         case "run_command", "bash":

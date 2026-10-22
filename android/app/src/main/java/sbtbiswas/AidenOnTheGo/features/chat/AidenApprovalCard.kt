@@ -4,18 +4,21 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
@@ -48,7 +51,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenPendingApproval
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
 /** Lines the request shows before Show all. */
-private const val COLLAPSED_LINES = 4
+private const val COLLAPSED_LINES = 6
 
 /** About ten lines: the most an expanded request takes before it scrolls. */
 private val ExpandedRequestMaxHeight = 200.dp
@@ -134,15 +137,31 @@ internal fun AidenApprovalCardContent(
                 )
             }
             if (isLong) {
-                Text(
-                    text = if (expanded) "Show less" else "Show all",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.secondary,
-                    modifier = Modifier
-                        .padding(top = 8.dp)
-                        .clickable(role = Role.Button) { expanded = !expanded }
-                )
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (expanded) "Show less" else "Show all",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.secondary,
+                        modifier = Modifier.clickable(role = Role.Button) { expanded = !expanded }
+                    )
+                    Spacer(Modifier.weight(1f))
+                    // The end of a long request must never sit hidden without a cue.
+                    if (expanded && requestScroll.canScrollForward) {
+                        Icon(
+                            Icons.Default.ArrowDownward,
+                            contentDescription = null,
+                            tint = palette.secondary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "Scroll for more",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.secondary
+                        )
+                    }
+                }
             }
         }
         Spacer(Modifier.height(12.dp))

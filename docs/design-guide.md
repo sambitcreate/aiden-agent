@@ -49,9 +49,14 @@ fills, with screen-reader labels instead of relying on color. Specialized
 approvals (scheduled tasks, subagent grants, form fills, classifiers) keep their
 own review bodies inside the same card. The iPhone and Android cards use the
 same layout and wording; they show the approval summary instead of a diff,
-because phones never receive tool arguments. A long request folds behind
-**Show all**, and once expanded it scrolls inside a bounded well, so Show less
-and the buttons stay on screen when the card sits in a non-scrolling footer.
+because phones never receive tool arguments, and a scheduled task asks the
+same question as the desktop ("Save this scheduled task?", "Change this
+automation?"). A long request folds to six lines behind **Show all**, and once
+expanded it scrolls inside a bounded well, so Show less and the buttons stay on
+screen when the card sits in a non-scrolling footer. While the end of the
+request is still out of view, the well says **Scroll for more** next to Show
+less, so no part of what is being approved can hide without a cue. On iPhone the
+card's shadow belongs to its surface only, never to the text inside it.
 
 ## Untitled structure
 
