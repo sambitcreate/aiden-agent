@@ -77,7 +77,9 @@ otherwise "This task stays paused." for a task saved or run while paused (not
 for a pause, a resume or a delete). On desktop the card sits in the chat's
 fixed footer above the composer. That footer never grows under the toolbar,
 so an approval card gets only the room the composer leaves, even while a long
-draft is being typed. A schedule card's review (the hero well, details and
+draft is being typed. When the composer alone is taller than that room (many
+attachments and a long draft), the excess leaves through the top, so the text
+box and Send stay in view. A schedule card's review (the hero well, details and
 instructions) scrolls inside it and shrinks first, keeping the question, notes
 and buttons on screen. It keeps a few lines (up to 7rem, 12% of the window
 height) and past that the whole card scrolls, starting from its question. The quiet line under the body reads "Scheduled work runs on your
