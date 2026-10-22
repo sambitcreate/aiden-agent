@@ -131,8 +131,9 @@ export function ScheduledTaskApproval({
   const legacyGlobalMcp = details.kind === "scheduled-task" && details.legacyGlobalMcp;
 
   return (
-    <div id={descriptionId} className="mt-3 flex min-h-0 flex-col gap-2 text-left" data-scheduled-task-approval="true">
-      {/* A tall review scrolls here, so the question, notes and buttons stay on screen above the composer. */}
+    <div id={descriptionId} className="mt-3 flex min-h-[min(7rem,12dvh)] flex-col gap-2 text-left" data-scheduled-task-approval="true">
+      {/* A tall review scrolls here, so the question, notes and buttons stay on screen above the composer.
+          It keeps a few lines even in a cramped window; the card scrolls for the rest. */}
       <div
         role="group"
         aria-label="Task details"

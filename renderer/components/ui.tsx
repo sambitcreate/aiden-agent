@@ -1354,10 +1354,15 @@ export function ScrollArea({
         </div>
       ) : null}
       {footer ? (
+        // Nothing scrolls the footer, so it never grows under the toolbar; a child
+        // that opts in with min-h-0 (a tall approval) shrinks to the room left.
         <div
           ref={footerRef}
-          className="absolute inset-x-0 bottom-0 z-10"
-          style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
+          className="absolute inset-x-0 bottom-0 z-10 flex flex-col"
+          style={{
+            maxHeight: `calc(100% - ${toolbarHeight}px)`,
+            ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+          }}
         >
           {footer}
         </div>

@@ -364,7 +364,7 @@ export function ChatApprovalCard({
   const plainCommand = plainApproval ? approvalCommand(pending) : undefined;
 
   return (
-    <div>
+    <div className="flex min-h-0 flex-col">
       <p className="sr-only" role="status">
         {invalidPendingPrivilegedApproval
           ? "Invalid privileged approval blocked"
@@ -375,10 +375,10 @@ export function ChatApprovalCard({
         aria-labelledby={`approval-title-${pending.approvalId}`}
         aria-describedby={summaryId}
         className={cn(
-          "approval-shell composer-shell bg-popover p-4 shadow-composer",
-          // The card sits in the chat's fixed footer above the composer; a schedule
-          // review shrinks and scrolls so the card never runs above the window.
-          schedule && pendingCanAllow && "flex max-h-[calc(100dvh-13.5rem)] flex-col",
+          // The chat's footer gives the card only the room the composer leaves. A
+          // schedule review shrinks first; past that, the card scrolls from its question.
+          "approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer",
+          schedule && pendingCanAllow && "flex flex-col",
         )}
       >
         <div className="flex shrink-0 flex-col items-center text-center">

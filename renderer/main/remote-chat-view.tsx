@@ -596,7 +596,7 @@ export function RemoteChatPane({
         showScrollToBottomButton
         streaming={isGenerating}
         footer={
-          <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-3">
+          <div className="aiden-dock-inset chat-content-column flex min-h-0 flex-col gap-2 pb-3">
             {openApproval ? (
               <ChatApprovalCard
                 key={openApproval.approvalId}

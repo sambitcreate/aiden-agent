@@ -75,9 +75,12 @@ scroll cue as a long command. Status notes use soft semantic fills with no
 border: "Scheduling is off…" on the warning fill when the scheduler is off,
 otherwise "This task stays paused." for a task saved or run while paused (not
 for a pause, a resume or a delete). On desktop the card sits in the chat's
-fixed footer above the composer, so a schedule card is capped to the window
-and its review (the hero well, details and instructions) scrolls inside it,
-keeping the question, notes and buttons on screen. The quiet line under the body reads "Scheduled work runs on your
+fixed footer above the composer. That footer never grows under the toolbar,
+so an approval card gets only the room the composer leaves, even while a long
+draft is being typed. A schedule card's review (the hero well, details and
+instructions) scrolls inside it and shrinks first, keeping the question, notes
+and buttons on screen. It keeps a few lines (up to 7rem, 12% of the window
+height) and past that the whole card scrolls, starting from its question. The quiet line under the body reads "Scheduled work runs on your
 desktop while Aiden is open and the computer is awake." The desktop also shows
 the project and connector ids in a tertiary monospaced line, because it
 authorizes the exact host scope; phones receive names only. A phone shows this
