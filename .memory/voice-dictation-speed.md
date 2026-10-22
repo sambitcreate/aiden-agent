@@ -1,0 +1,33 @@
+# Voice dictation speed (STT sub-project 2) — 2026-10-22
+
+Plan: `docs/plans/voice-dictation-speed-plan.md`. Deep dive (Claude Doc): https://claude.ai/artifact/JZWtaaWud4cks6WtdjdQBY.
+
+## Phase 1 (speed fixes on sherpa-onnx), PR #579, branch `claude/project-thread-6azxgh`
+
+- **Preload:** `main/services/local-voice-preload.ts` (`createLocalVoicePreloader`, coalescing; `localVoicePreloadRelevant`).
+  Runs 3 s after launch (main/index.ts, next to shortcut init), from settings effects when `localVoiceModel`,
+  `voiceProvider` or `localVoicePreload: true` change, and after `localModels:download`. Setting `localVoicePreload`
+  (default on, `localVoicePreloadEnabled`), Settings → Voice "Load in advance". Idle unload default 10 → 30 min.
+  Cost: a Parakeet worker is about 2 GB RSS, so a launch holds it for 30 min even without dictation.
+- **Pill:** `preparePill()` in `main/windows/pill-window.ts`; `DictationCoordinator.prepare()` queues it so a new
+  renderer's `ready` always lands after `pillReady = false`. Only when `isDictationShortcutActive()`.
+- **Paste:** `createSecureInputPrefetch` (dictation-paste.ts) via coordinator `prepareDelivery` at stop and again at
+  result before cleanup; a probe is reused if it started ≤ 1.5 s earlier, each probe answers one delivery.
+- **Capture:** `renderer/lib/pcm-recorder.ts` (`PcmRecorder`, MediaRecorder-shaped: state/start/stop/onstop,
+  `takePcm`, `dispose`) reuses `gemini-live-pcm` worklet at 16 kHz; `transcribePcm16` in voice-recorder-core shares
+  the deadline/cancel path with `transcribeBlob`. Local only; cloud keeps MediaRecorder. Tail 80 ms
+  (`recorderStopTailMs`). Empty capture now reports "" (No speech detected) instead of waiting for the watchdog.
+- **Startup:** `DictationStatePayload.voice` (ReadyVoiceProvider) on every "recording" broadcast; pill falls back to
+  `voice:resolveProvider` only without it. Pill reads settings in parallel with getUserMedia.
+- **Composer:** `renderer/lib/dictation-insertion.ts` + `insertDictation` in composer.tsx: caret insertion via
+  `execCommand("insertText")` (undoable), `setText` fallback when another field has focus or execCommand fails (jsdom).
+- **Timing:** coordinator `onTiming` → `logger.info("dictation", "Dictation timing", {startMs, speechMs,
+  transcribeMs, deliverMs, outcome})`.
+- `voice:transcribeLocal` no longer awaits `usageStore.record`.
+- No Remote/iOS/Android/CLI change. Tests: local-voice-preload, settings-application-effects-core, pcm-recorder,
+  dictation-insertion, use-voice-recorder (new), plus coordinator/paste/pill/core extensions.
+
+## Phase 2 (not started)
+
+Owner chose 1a (spike transcribe.cpp Metal vs sherpa CPU 2/4 threads vs sherpa streaming on the Mac via Remote
+Control, then live mode on the winner) and 2a (live words in the pill, one paste at the end in other apps).
