@@ -274,7 +274,8 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       routineScheduler = scheduler;
       scheduler.setBotPorts(durable.runtime);
       routines = createBotRoutineService({ store: scheduler.store, service: scheduler.service,
-        botExists: async (botId) => Boolean(await botStore.get(botId)), defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},
+        botExists: async (botId) => Boolean(await botStore.get(botId)), isPaused,
+        defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},
       });
     },
     assertLegacyChatAllowed() { if (durable || cliDurableBotMarker(agentDir)) throw new Error("This Bot uses durable sessions. Restart the daemon after migration and use bots send or the Bot session endpoint."); },

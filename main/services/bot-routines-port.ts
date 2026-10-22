@@ -7,7 +7,7 @@
  * a `[SILENT]` reply as audit-only (stored, but no bubble, preview or unread).
  */
 
-import type { BotSessionState } from "./bot-runtime/bot-session-service.js";
+import type { BotReplyOutcome, BotSessionState } from "./bot-runtime/bot-session-service.js";
 
 export type { BotSessionState };
 
@@ -28,10 +28,7 @@ export interface BotRoutineSessionPort {
   state(botId: string): Promise<BotSessionState>;
 }
 
-export type BotRoutineSubmissionOutcome =
-  | { kind: "completed"; text: string }
-  | { kind: "failed"; error: string }
-  | { kind: "interrupted" };
+export type BotRoutineSubmissionOutcome = BotReplyOutcome;
 
 export interface BotRoutineReplyPort {
   /** Resolves once the submission settles. Aborting the signal stops waiting only. */

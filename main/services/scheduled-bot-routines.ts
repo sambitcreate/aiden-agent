@@ -242,11 +242,13 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     }
     if (outcome.kind === "failed") throw new Error(outcome.error);
     if (outcome.kind === "interrupted") {
+      // Pi can report a paused submission without settling it. Keep the
+      // automatic fire's receipt until the person resumes that same turn.
+      if (trigger.kind === "automatic" && !outcome.settled)
+        throw new RoutineOutcomeUnknown("The Bot turn is waiting for Resume.");
       // Paused mid-run: the person stopped it on purpose, so nothing surfaces.
-      // Automatic fires remain pending so Resume can finish this same turn.
       const after = await ports.state(task.botId).catch(() => undefined);
       if (after?.kind === "paused") {
-        if (trigger.kind === "automatic") throw new RoutineOutcomeUnknown("This Bot is paused by the person.");
         return { result: "skipped", reason: "paused_by_person", output: "", surface: false };
       }
       if (recovering || trigger.kind === "catch_up")

@@ -275,7 +275,7 @@ test("a person-paused Bot holds an admitted fire until Resume without resubmitti
   await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
   const requestId = `routine:${routine.id}:${due}`;
   await h.session.send("bot-chef", { text: "Check the inbox.", requestId });
-  h.session.states.set("bot-chef", { kind: "paused" });
+  h.session.states.set("bot-chef", { kind: "paused", since: Date.now(), by: "mac" });
 
   await h.scheduler.start();
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -283,8 +283,14 @@ test("a person-paused Bot holds an admitted fire until Resume without resubmitti
   assert.equal(await h.store.runById(routine.id, requestId), undefined);
   assert.equal(h.session.sends.length, 1);
 
+  h.session.awaitReply = async () => h.session.states.get("bot-chef")?.kind === "interrupted"
+    ? { kind: "interrupted" }
+    : { kind: "completed", text: "One urgent message." };
+  h.session.states.set("bot-chef", { kind: "interrupted", submissionId: "sub-1" });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length, 1);
+  assert.equal(await h.store.runById(routine.id, requestId), undefined);
   h.session.states.set("bot-chef", { kind: "idle" });
-  h.session.replies.push({ kind: "completed", text: "One urgent message." });
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
