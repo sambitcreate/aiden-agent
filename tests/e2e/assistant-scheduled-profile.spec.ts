@@ -205,6 +205,46 @@ test.describe("conversational scheduling", () => {
     await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   });
 
+  test("a long scheduled-task review keeps its question, every fact and the buttons on screen in a short window", async ({ aiden }, testInfo) => {
+    const { page, lmStudio, app } = aiden;
+    await finishLmStudioOnboarding(page);
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((item) => item.isVisible())!;
+      window.setMinimumSize(640, 480);
+      window.setSize(740, 520);
+    });
+    const prompt = "Schedule audit: propose a long nightly review.";
+    const steps = Array.from({ length: 24 }, (_, index) => `${index + 1}. Review the changes in area ${index + 1} and note anything that needs a person.`);
+    lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [{ name: "schedule_task", arguments: {
+        action: "create", name: "Long nightly review", cron: "0 22 * * *", timezone: "America/New_York", prompt: steps.join("\n"),
+      } }],
+      finalText: "The nightly review has been saved.",
+    });
+    await page.locator("textarea").fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    const approval = page.getByRole("region", { name: "Save this scheduled task?" });
+    await expect(approval).toBeVisible();
+    // The card sits in the chat's fixed footer, which nothing scrolls, so the whole card has to fit the window.
+    const viewportHeight = await page.evaluate(() => window.innerHeight);
+    await expect.poll(async () => (await approval.boundingBox())?.y ?? -Infinity).toBeGreaterThanOrEqual(0);
+    const card = (await approval.boundingBox())!;
+    expect(card.y + card.height).toBeLessThanOrEqual(viewportHeight);
+    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(approval.getByText("Long nightly review", { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(approval.getByRole("button", { name: "Allow once" })).toBeInViewport({ ratio: 1 });
+    // The rest of a tall review scrolls inside the card, down to the instructions' last line.
+    const review = approval.getByRole("group", { name: "Task details" });
+    await review.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    const instructions = (await approval.getByLabel("Instructions").boundingBox())!;
+    expect(instructions.y + instructions.height).toBeLessThanOrEqual(viewportHeight);
+    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: testInfo.outputPath("long-schedule-review.png") });
+    await approval.getByRole("button", { name: "Allow once" }).click();
+    await expect(page.getByText("The nightly review has been saved.", { exact: true }).first()).toBeVisible();
+  });
+
   test("desktop displays a phone-owned question and sends the answer through host authority", async ({ aiden }) => {
     const { page, app } = aiden;
     await finishLmStudioOnboarding(page);

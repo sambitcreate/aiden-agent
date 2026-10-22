@@ -63,7 +63,8 @@ on every platform. The icon tile shows a calendar clock, and the question names
 the action ("Save this scheduled task?", "Update this scheduled task?", "Pause
 …", "Resume …", "Delete …", "Run this scheduled task now?"). A hero well follows:
 the task name, its cadence in words (never cron), and a "Next run" line only
-while the task will start on its own. Under an inset separator, icon-led detail
+while the task will start on its own once approved (a resumed task does, a
+paused one does not). Under an inset separator, icon-led detail
 rows list **Runs in** (the project, else the connectors by name, else "Anywhere
 on your computer" for Full access, else "No project"), **Access** as a chip
 ("Read-only" on the neutral fill, "Full access" on the warning fill with a
@@ -72,8 +73,11 @@ warning-tinted icon), **Model** ("OpenRouter · Qwen3 Coder") or **Runs** →
 their own labelled well, the script monospaced, with the same folding and
 scroll cue as a long command. Status notes use soft semantic fills with no
 border: "Scheduling is off…" on the warning fill when the scheduler is off,
-otherwise "This task stays paused." for a paused task that is not being
-deleted. The quiet line under the body reads "Scheduled work runs on your
+otherwise "This task stays paused." for a task saved or run while paused (not
+for a pause, a resume or a delete). On desktop the card sits in the chat's
+fixed footer above the composer, so a schedule card is capped to the window
+and its review (the hero well, details and instructions) scrolls inside it,
+keeping the question, notes and buttons on screen. The quiet line under the body reads "Scheduled work runs on your
 desktop while Aiden is open and the computer is awake." The desktop also shows
 the project and connector ids in a tertiary monospaced line, because it
 authorizes the exact host scope; phones receive names only. A phone shows this

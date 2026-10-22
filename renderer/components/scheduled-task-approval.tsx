@@ -17,7 +17,7 @@ import {
 import { Badge, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
-import { formatScheduledTaskCadence } from "../shared/scheduled-task-presentation";
+import { formatScheduledTaskCadence, scheduledTaskEnabledAfterApproval } from "../shared/scheduled-task-presentation";
 
 export type ScheduleApprovalDetails = ScheduledTaskApprovalDetails | AssistantAutomationApprovalDetails;
 
@@ -52,7 +52,7 @@ export function formatScheduleNextRun(timestamp: number, now = Date.now()): stri
 
 /** Whether the task will start on its own after this approval, so a next run is worth naming. */
 function runsOnItsOwn(details: ScheduleApprovalDetails): boolean {
-  if (details.enabled === false || !details.schedulerEnabled || details.nextRunAt <= 0) return false;
+  if (!scheduledTaskEnabledAfterApproval(details) || !details.schedulerEnabled || details.nextRunAt <= 0) return false;
   return details.kind !== "scheduled-task" || details.action !== "remove";
 }
 
@@ -94,7 +94,7 @@ function Note({ tone, icon: Icon, children }: {
     <p
       role="note"
       className={cn(
-        "approval-well flex items-start gap-2 px-3.5 py-2.5 text-small",
+        "approval-well flex shrink-0 items-start gap-2 px-3.5 py-2.5 text-small",
         tone === "warning" ? "bg-status-warning-surface text-status-warning" : "bg-well text-secondary",
       )}
     >
@@ -124,107 +124,117 @@ export function ScheduledTaskApproval({
   const body = script ?? details.prompt;
   const full = details.permission === "full";
   const removing = details.kind === "scheduled-task" && details.action === "remove";
+  // Pausing says so in the question; "stays paused" is for a task saved or run while paused.
+  const staysPaused =
+    !scheduledTaskEnabledAfterApproval(details) && !removing && !(details.kind === "scheduled-task" && details.action === "pause");
   const connectors = details.mcpServerIds.map((id, index) => ({ id, name: details.mcpServerNames[index] ?? id }));
   const legacyGlobalMcp = details.kind === "scheduled-task" && details.legacyGlobalMcp;
 
   return (
-    <div id={descriptionId} className="mt-3 space-y-2 text-left" data-scheduled-task-approval="true">
-      <div className="approval-well bg-well">
-        <div className="px-4 pt-3.5 pb-3">
-          <Text variant="strong" as="p" className="line-clamp-2 break-words">
-            {details.name}
-          </Text>
-          <Text variant="regular" as="p" className="mt-0.5 break-words">
-            {cadence}
-          </Text>
-          {runsOnItsOwn(details) ? (
-            <Text variant="small" color="secondary" as="p" className="mt-1 flex items-center gap-1.5">
-              <Clock className="size-3.5 shrink-0" aria-hidden="true" />
-              Next run {formatScheduleNextRun(details.nextRunAt, now)}
-            </Text>
-          ) : null}
-        </div>
-        <div className="@container mx-4 border-t border-separator py-3">
-          <dl className="grid gap-x-6 gap-y-3 @md:grid-cols-2">
-            <Fact
-              icon={details.workspaceName ? FolderOpen : connectors.length > 0 ? Plug : full ? Earth : Folder}
-              label="Runs in"
-            >
-              {details.workspaceName ? (
-                <>
-                  {details.workspaceName}
-                  {details.workspaceId ? (
-                    <span className="block font-mono text-mini font-normal break-all text-tertiary">
-                      <span className="sr-only">Project id </span>
-                      {details.workspaceId}
-                    </span>
-                  ) : null}
-                </>
-              ) : connectors.length > 0 ? (
-                <ul className="space-y-0.5">
-                  {connectors.map((connector) => (
-                    <li key={connector.id}>
-                      {connector.name}{" "}
-                      <span className="font-mono text-mini font-normal break-all text-tertiary">
-                        <span className="sr-only">id </span>
-                        {connector.id}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : full ? (
-                "Anywhere on your computer"
-              ) : (
-                "No project"
-              )}
-            </Fact>
-            <Fact icon={full ? ShieldAlert : ShieldCheck} label="Access" warning={full}>
-              <Badge color={full ? "warning" : "gray"} className="mt-0.5">
-                {full ? "Full access" : "Read-only"}
-              </Badge>
-            </Fact>
-            {script !== null ? (
-              <Fact icon={SquareTerminal} label="Runs">
-                Script
-              </Fact>
-            ) : (
-              <Fact icon={Cpu} label="Model">
-                {[details.providerName, details.modelName].filter(Boolean).join(" · ")}
-              </Fact>
-            )}
-            <Fact icon={details.notify ? Bell : BellOff} label="Notifications">
-              {details.notify ? "On" : "Off"}
-            </Fact>
-            <Fact icon={Earth} label="Time zone">
-              {details.timezone}
-            </Fact>
-          </dl>
-        </div>
-      </div>
-      {body ? (
+    <div id={descriptionId} className="mt-3 flex min-h-0 flex-col gap-2 text-left" data-scheduled-task-approval="true">
+      {/* A tall review scrolls here, so the question, notes and buttons stay on screen above the composer. */}
+      <div
+        role="group"
+        aria-label="Task details"
+        tabIndex={0}
+        className="approval-well min-h-0 space-y-2 overflow-y-auto overscroll-contain focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+      >
         <div className="approval-well bg-well">
-          <Text variant="small-strong" color="tertiary" as="p" className="px-4 pt-2.5">
-            {script !== null ? "Script" : "Instructions"}
-          </Text>
-          <Text
-            variant="small"
-            as="p"
-            tabIndex={0}
-            aria-label={script !== null ? "Script" : "Instructions"}
-            className={cn(
-              "approval-well max-h-40 select-text overflow-y-auto overscroll-contain px-4 pt-1 pb-3 whitespace-pre-wrap break-words text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring",
-              script !== null && "font-mono",
-            )}
-          >
-            {body}
-          </Text>
+          <div className="px-4 pt-3.5 pb-3">
+            <Text variant="strong" as="p" className="line-clamp-2 break-words">
+              {details.name}
+            </Text>
+            <Text variant="regular" as="p" className="mt-0.5 break-words">
+              {cadence}
+            </Text>
+            {runsOnItsOwn(details) ? (
+              <Text variant="small" color="secondary" as="p" className="mt-1 flex items-center gap-1.5">
+                <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+                Next run {formatScheduleNextRun(details.nextRunAt, now)}
+              </Text>
+            ) : null}
+          </div>
+          <div className="@container mx-4 border-t border-separator py-3">
+            <dl className="grid gap-x-6 gap-y-3 @md:grid-cols-2">
+              <Fact
+                icon={details.workspaceName ? FolderOpen : connectors.length > 0 ? Plug : full ? Earth : Folder}
+                label="Runs in"
+              >
+                {details.workspaceName ? (
+                  <>
+                    {details.workspaceName}
+                    {details.workspaceId ? (
+                      <span className="block font-mono text-mini font-normal break-all text-tertiary">
+                        <span className="sr-only">Project id </span>
+                        {details.workspaceId}
+                      </span>
+                    ) : null}
+                  </>
+                ) : connectors.length > 0 ? (
+                  <ul className="space-y-0.5">
+                    {connectors.map((connector) => (
+                      <li key={connector.id}>
+                        {connector.name}{" "}
+                        <span className="font-mono text-mini font-normal break-all text-tertiary">
+                          <span className="sr-only">id </span>
+                          {connector.id}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : full ? (
+                  "Anywhere on your computer"
+                ) : (
+                  "No project"
+                )}
+              </Fact>
+              <Fact icon={full ? ShieldAlert : ShieldCheck} label="Access" warning={full}>
+                <Badge color={full ? "warning" : "gray"} className="mt-0.5">
+                  {full ? "Full access" : "Read-only"}
+                </Badge>
+              </Fact>
+              {script !== null ? (
+                <Fact icon={SquareTerminal} label="Runs">
+                  Script
+                </Fact>
+              ) : (
+                <Fact icon={Cpu} label="Model">
+                  {[details.providerName, details.modelName].filter(Boolean).join(" · ")}
+                </Fact>
+              )}
+              <Fact icon={details.notify ? Bell : BellOff} label="Notifications">
+                {details.notify ? "On" : "Off"}
+              </Fact>
+              <Fact icon={Earth} label="Time zone">
+                {details.timezone}
+              </Fact>
+            </dl>
+          </div>
         </div>
-      ) : null}
+        {body ? (
+          <div className="approval-well bg-well">
+            <Text variant="small-strong" color="tertiary" as="p" className="px-4 pt-2.5">
+              {script !== null ? "Script" : "Instructions"}
+            </Text>
+            <Text
+              variant="small"
+              as="p"
+              aria-label={script !== null ? "Script" : "Instructions"}
+              className={cn(
+                "select-text px-4 pt-1 pb-3 whitespace-pre-wrap break-words text-primary",
+                script !== null && "font-mono",
+              )}
+            >
+              {body}
+            </Text>
+          </div>
+        ) : null}
+      </div>
       {!details.schedulerEnabled ? (
         <Note tone="warning" icon={TriangleAlert}>
           Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.
         </Note>
-      ) : details.enabled === false && !removing ? (
+      ) : staysPaused ? (
         <Note tone="neutral" icon={CirclePause}>
           This task stays paused.
         </Note>

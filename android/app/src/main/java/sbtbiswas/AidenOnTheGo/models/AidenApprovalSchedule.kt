@@ -62,6 +62,7 @@ data class AidenApprovalSchedule(
     val providerName: String? = null,
     val modelName: String? = null,
     val notify: Boolean,
+    /** The task's state once approved: true for a resume, false for a pause. */
     val enabled: Boolean,
     val schedulerEnabled: Boolean,
     val prompt: String? = null,
@@ -303,13 +304,23 @@ object AidenApprovalSchedulePresentation {
      * (enabled, scheduling on, not being deleted), as on desktop.
      */
     fun nextRun(schedule: AidenApprovalSchedule): Instant? = schedule.nextRun.takeIf {
-        schedule.enabled && schedule.schedulerEnabled && schedule.action != AidenApprovalScheduleAction.REMOVE
+        enabledOnceApproved(schedule) && schedule.schedulerEnabled && schedule.action != AidenApprovalScheduleAction.REMOVE
     }
 
     fun note(schedule: AidenApprovalSchedule): AidenApprovalScheduleNote? = when {
         !schedule.schedulerEnabled -> AidenApprovalScheduleNote.SCHEDULING_OFF
-        !schedule.enabled && schedule.action != AidenApprovalScheduleAction.REMOVE -> AidenApprovalScheduleNote.STAYS_PAUSED
+        // A pause says so in its question.
+        !enabledOnceApproved(schedule) &&
+            schedule.action != AidenApprovalScheduleAction.REMOVE &&
+            schedule.action != AidenApprovalScheduleAction.PAUSE -> AidenApprovalScheduleNote.STAYS_PAUSED
         else -> null
+    }
+
+    /** The task's state once approved: a resume runs again and a pause stops, as the Mac sends it, whatever `enabled` says. */
+    private fun enabledOnceApproved(schedule: AidenApprovalSchedule): Boolean = when (schedule.action) {
+        AidenApprovalScheduleAction.RESUME -> true
+        AidenApprovalScheduleAction.PAUSE -> false
+        else -> schedule.enabled
     }
 
     /** The instructions or script the card shows. */

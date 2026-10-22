@@ -99,6 +99,21 @@ test("a card names the next run only while the task will run on its own", () => 
   assert.equal(approvalScheduleCard(details({ schedulerEnabled: false }))?.schedulerEnabled, false);
 });
 
+test("a pause or resume card says what the task will be once approved, not what it is while it waits", () => {
+  const resumed = approvalScheduleCard(details({ action: "resume", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  assert.equal(resumed?.enabled, true);
+  assert.equal(resumed?.nextRunAt, "2026-10-23T16:00:00.000Z", "a resumed task runs on its own again");
+
+  const paused = approvalScheduleCard(details({ action: "pause", taskId: "task-1", expectedUpdatedAt: 5, enabled: true }));
+  assert.equal(paused?.enabled, false);
+  assert.equal(paused?.nextRunAt, undefined);
+
+  // Running a paused task once leaves it paused.
+  const ranNow = approvalScheduleCard(details({ action: "run_now", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  assert.equal(ranNow?.enabled, false);
+  assert.equal(ranNow?.nextRunAt, undefined);
+});
+
 test("a script task carries its command and never a model or instructions", () => {
   const card = approvalScheduleCard(details({
     mode: "script",

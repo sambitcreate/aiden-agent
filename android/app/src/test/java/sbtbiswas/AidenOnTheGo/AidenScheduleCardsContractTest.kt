@@ -389,6 +389,13 @@ class AidenScheduleCardsContractTest {
         assertNull("paused", AidenApprovalSchedulePresentation.nextRun(card { it.with("enabled" to JsonPrimitive(false)) }))
         assertNull("scheduling off", AidenApprovalSchedulePresentation.nextRun(card { it.with("schedulerEnabled" to JsonPrimitive(false)) }))
         assertNull("deleted", AidenApprovalSchedulePresentation.nextRun(card { it.with("action" to JsonPrimitive("remove")) }))
+        // The task as it will be once approved: resuming a paused task brings its next run back, pausing removes it.
+        assertEquals(
+            "resumed",
+            next,
+            AidenApprovalSchedulePresentation.nextRun(card { it.with("action" to JsonPrimitive("resume"), "enabled" to JsonPrimitive(false)) })
+        )
+        assertNull("paused by this approval", AidenApprovalSchedulePresentation.nextRun(card { it.with("action" to JsonPrimitive("pause")) }))
 
         assertNull(AidenApprovalSchedulePresentation.note(card()))
         assertEquals(
@@ -406,6 +413,20 @@ class AidenScheduleCardsContractTest {
         assertNull(
             "a deleted task is not paused",
             AidenApprovalSchedulePresentation.note(card { it.with("enabled" to JsonPrimitive(false), "action" to JsonPrimitive("remove")) })
+        )
+        // The Mac sends a card's state once approved: a pause arrives disabled and says so in its question.
+        assertNull(
+            "a pause is not 'stays paused'",
+            AidenApprovalSchedulePresentation.note(card { it.with("enabled" to JsonPrimitive(false), "action" to JsonPrimitive("pause")) })
+        )
+        assertNull(
+            "a resumed task is not 'stays paused'",
+            AidenApprovalSchedulePresentation.note(card { it.with("enabled" to JsonPrimitive(false), "action" to JsonPrimitive("resume")) })
+        )
+        assertEquals(
+            "running it once leaves it paused",
+            AidenApprovalScheduleNote.STAYS_PAUSED,
+            AidenApprovalSchedulePresentation.note(card { it.with("enabled" to JsonPrimitive(false), "action" to JsonPrimitive("run_now")) })
         )
     }
 

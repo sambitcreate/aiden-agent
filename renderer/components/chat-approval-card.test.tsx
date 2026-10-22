@@ -277,6 +277,33 @@ test("a next run is named only while the task will run on its own, and schedulin
   }
 });
 
+test("pausing and resuming describe the task as it will be once approved", () => {
+  // A proposal carries the task's state while it waits: resuming a paused task, pausing a running one.
+  const { card: resuming } = mountSchedule(scheduledTask({ action: "resume", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  assert.ok(within(resuming).getByText(/^Next run /u), "a resumed task runs on its own again");
+  assert.equal(within(resuming).queryAllByRole("note").length, 0);
+  cleanup();
+
+  const { card: pausing } = mountSchedule(scheduledTask({ action: "pause", taskId: "task-1", expectedUpdatedAt: 5, enabled: true }));
+  assert.equal(within(pausing).queryByText(/^Next run /u), null, "a paused task has no next run");
+  assert.equal(within(pausing).queryAllByRole("note").length, 0, "the question already says it pauses");
+  cleanup();
+
+  const { card: runningNow } = mountSchedule(scheduledTask({ action: "run_now", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  assert.equal(within(runningNow).queryByText(/^Next run /u), null);
+  assert.equal(within(runningNow).getByRole("note").textContent, "This task stays paused.", "running it once leaves it paused");
+});
+
+test("a tall schedule review scrolls as one labelled region with the notes outside it", () => {
+  const { card } = mountSchedule(scheduledTask({ schedulerEnabled: false }));
+  const review = within(card).getByRole("group", { name: "Task details" });
+  assert.equal(review.tabIndex, 0, "keyboard users can scroll it");
+  assert.ok(within(review).getByText("Morning briefing"));
+  assert.ok(within(review).getByLabelText("Instructions"));
+  assert.equal(within(review).queryAllByRole("note").length, 0);
+  assert.equal(within(card).getAllByRole("note").length, 1, "the scheduling-off note stays in view");
+});
+
 test("a script task shows the exact script it will run and no model", () => {
   const script = "npm outdated --json > reports/outdated.json";
   const { card } = mountSchedule(scheduledTask({ mode: "script", prompt: null, script }));

@@ -3460,6 +3460,7 @@ struct AidenApprovalSchedule: Codable, Equatable, Sendable {
     let providerName: String?
     let modelName: String?
     let notify: Bool
+    /// The task's state once approved: true for a resume, false for a pause.
     let enabled: Bool
     let schedulerEnabled: Bool
     let prompt: String?

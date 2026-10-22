@@ -11,7 +11,7 @@ import {
   safeApprovalText,
   type ScheduledTaskApprovalDetails,
 } from "../../renderer/shared/assistant.js";
-import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task-presentation.js";
+import { formatScheduledTaskCadence, scheduledTaskEnabledAfterApproval } from "../../renderer/shared/scheduled-task-presentation.js";
 import { boundedText } from "./run-event-projection.js";
 
 /** The longest instructions or script a phone card shows; the summary bound. */
@@ -39,6 +39,7 @@ export interface AidenRemoteApprovalSchedule {
   providerName?: string;
   modelName?: string;
   notify: boolean;
+  /** Whether the task is enabled once approved: `true` for a resume, `false` for a pause. */
   enabled: boolean;
   schedulerEnabled: boolean;
   prompt?: string;
@@ -94,8 +95,9 @@ export function approvalScheduleCard(
   ).trim();
   const body = details.mode === "script" ? details.script : details.prompt;
   const content = body ? shortened(body) : undefined;
-  const runsOnItsOwn =
-    details.enabled && details.schedulerEnabled && details.action !== "remove" && details.nextRunAt > 0;
+  // The card says what the task will be once approved: a resumed task runs again, a paused one does not.
+  const enabled = scheduledTaskEnabledAfterApproval(details);
+  const runsOnItsOwn = enabled && details.schedulerEnabled && details.action !== "remove" && details.nextRunAt > 0;
   const nextRun = runsOnItsOwn ? new Date(details.nextRunAt) : undefined;
   const card: AidenRemoteApprovalSchedule = {
     action: details.action,
@@ -109,7 +111,7 @@ export function approvalScheduleCard(
     connectors: [...details.mcpServerNames],
     ...(details.mode === "llm" ? { providerName: details.providerName, modelName: details.modelName } : {}),
     notify: details.notify,
-    enabled: details.enabled,
+    enabled,
     schedulerEnabled: details.schedulerEnabled,
     ...(content?.text ? { [details.mode === "script" ? "script" : "prompt"]: content.text } : {}),
     ...(content?.truncated ? { truncated: true as const } : {}),

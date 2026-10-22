@@ -374,9 +374,14 @@ export function ChatApprovalCard({
         ref={cardRef}
         aria-labelledby={`approval-title-${pending.approvalId}`}
         aria-describedby={summaryId}
-        className="approval-shell composer-shell bg-popover p-4 shadow-composer"
+        className={cn(
+          "approval-shell composer-shell bg-popover p-4 shadow-composer",
+          // The card sits in the chat's fixed footer above the composer; a schedule
+          // review shrinks and scrolls so the card never runs above the window.
+          schedule && pendingCanAllow && "flex max-h-[calc(100dvh-13.5rem)] flex-col",
+        )}
       >
-        <div className="flex flex-col items-center text-center">
+        <div className="flex shrink-0 flex-col items-center text-center">
           <ApprovalIcon
             preview={plainPreview}
             command={plainCommand !== undefined}
@@ -439,7 +444,7 @@ export function ChatApprovalCard({
             {pending.summary}
           </Text>
         )}
-        <Text variant="small" color="secondary" as="p" className="mt-2.5 text-center text-pretty">
+        <Text variant="small" color="secondary" as="p" className="mt-2.5 shrink-0 text-center text-pretty">
           {invalidPendingPrivilegedApproval
             ? "This malformed privileged action cannot be allowed. Deny it to continue."
             : pendingWorkspaceWrite
@@ -455,11 +460,11 @@ export function ChatApprovalCard({
                       : approvalMeta(plainPreview)}
         </Text>
         {disabledReason ? (
-          <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 text-center">
+          <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
             {disabledReason}
           </Text>
         ) : null}
-        <div className="mt-3.5 flex gap-2">
+        <div className="mt-3.5 flex shrink-0 gap-2">
           <Button ref={denyRef} variant="filled" size="large" className="flex-1" disabled={disabled} onClick={() => onDecide("deny")}>
             {pendingFormFill ? "Cancel" : "Deny"}
           </Button>

@@ -8161,6 +8161,9 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(presentation(scheduleCard(enabled: false)).nextRun)
         XCTAssertNil(presentation(scheduleCard(schedulerEnabled: false)).nextRun)
         XCTAssertNil(presentation(scheduleCard(action: .remove)).nextRun)
+        // The task as it will be once approved: resuming a paused task brings its next run back, pausing removes it.
+        XCTAssertNotNil(presentation(scheduleCard(action: .resume, enabled: false)).nextRun, "resumed")
+        XCTAssertNil(presentation(scheduleCard(action: .pause)).nextRun, "paused by this approval")
     }
 
     func testScheduleCardNextRunReadsAsADayInThePhonesTimeZone() throws {
@@ -8198,6 +8201,10 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertEqual(presentation(scheduleCard(action: .update, enabled: false)).note, .paused)
         XCTAssertNil(presentation(scheduleCard(action: .remove, enabled: false)).note, "a deleted task is not 'paused'")
+        // The Mac sends a card's state once approved: a pause arrives disabled and says so in its question.
+        XCTAssertNil(presentation(scheduleCard(action: .pause, enabled: false)).note, "a pause is not 'stays paused'")
+        XCTAssertNil(presentation(scheduleCard(action: .resume, enabled: false)).note, "a resumed task is not 'stays paused'")
+        XCTAssertEqual(presentation(scheduleCard(action: .runNow, enabled: false)).note, .paused, "running it once leaves it paused")
         XCTAssertTrue(AidenScheduleCardPresentation.Note.schedulerOff.isWarning)
         XCTAssertFalse(AidenScheduleCardPresentation.Note.paused.isWarning)
     }

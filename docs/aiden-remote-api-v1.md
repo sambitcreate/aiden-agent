@@ -831,13 +831,13 @@ Paired desktops get the full run projection with `details` and never get the car
 | `name` | 1–120 characters |
 | `cadence` | 1–200 characters of human cadence, such as "Weekdays at 9:00 AM", with the zone in parentheses when it differs from the host's own; "Custom schedule" when the host cannot describe it |
 | `timezone` | IANA zone, 1–128 characters |
-| `nextRunAt` | Optional RFC 3339 UTC (`Z`) date-time, present only while the task will run on its own: enabled, scheduling on, not being removed |
+| `nextRunAt` | Optional RFC 3339 UTC (`Z`) date-time, present only while the task will run on its own once approved: enabled (as `enabled` says), scheduling on, not being removed |
 | `mode` | `llm` \| `script` |
 | `permission` | `read-only` \| `full` |
 | `workspaceName` | Optional project name, 1–120 characters |
 | `connectors` | Connector (MCP server) display names, at most 16, each 1–120 characters; empty for a project task |
 | `providerName`, `modelName` | Optional, `llm` only; 1–120 and 1–256 characters |
-| `notify`, `enabled`, `schedulerEnabled` | Booleans. `enabled: false` is a task saved paused; `schedulerEnabled: false` means scheduling is off on the host, so the task will not run automatically |
+| `notify`, `enabled`, `schedulerEnabled` | Booleans. `enabled` is the task's state once the approval goes through, so a `resume` card is `true` and a `pause` card is `false`; `enabled: false` on any other action is a task saved or run while paused. `schedulerEnabled: false` means scheduling is off on the host, so the task will not run automatically |
 | `prompt` / `script` | Optional, at most 2,000 characters, line breaks allowed; `prompt` only in `llm` mode, `script` only in `script` mode |
 | `truncated` | Optional `true` when the `prompt` or `script` was shortened to fit; only with one of them |
 

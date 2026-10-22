@@ -201,8 +201,8 @@ class AidenApprovalCardUiTest {
             compose.onNode(hasText(title) and isHeading()).assertIsDisplayed()
             compose.onNodeWithText("Morning briefing").assertIsDisplayed()
             compose.onNodeWithText("Weekdays at 9:00 AM").assertIsDisplayed()
-            // A task being deleted never runs again.
-            if (action == AidenApprovalScheduleAction.REMOVE) {
+            // A task being deleted or paused does not run on its own.
+            if (action == AidenApprovalScheduleAction.REMOVE || action == AidenApprovalScheduleAction.PAUSE) {
                 compose.onNodeWithText("Next run", substring = true).assertDoesNotExist()
             } else {
                 compose.onNodeWithText("Next run", substring = true).assertIsDisplayed()

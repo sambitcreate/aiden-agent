@@ -2897,9 +2897,12 @@ struct AidenScheduleCardPresentation: Equatable {
         title = Self.title(for: schedule.action)
         name = schedule.name
         cadence = schedule.cadence
+        // The task's state once approved: a resume runs again and a pause stops,
+        // as the Mac sends it, whatever `enabled` says.
+        let enabledOnceApproved = schedule.action == .resume || (schedule.action != .pause && schedule.enabled)
         // The host sends a next run only for a task that will start on its own;
         // the card holds to that rule even if one arrives anyway.
-        let runsOnItsOwn = schedule.enabled && schedule.schedulerEnabled && schedule.action != .remove
+        let runsOnItsOwn = enabledOnceApproved && schedule.schedulerEnabled && schedule.action != .remove
         nextRun = runsOnItsOwn
             ? schedule.nextRun.map { Self.nextRunText($0, now: now, calendar: calendar, locale: locale) }
             : nil
@@ -2930,7 +2933,8 @@ struct AidenScheduleCardPresentation: Equatable {
         isTruncated = schedule.truncated && content != nil
         if !schedule.schedulerEnabled {
             note = .schedulerOff
-        } else if !schedule.enabled && schedule.action != .remove {
+        } else if !enabledOnceApproved && schedule.action != .remove && schedule.action != .pause {
+            // A pause says so in its question.
             note = .paused
         } else {
             note = nil
