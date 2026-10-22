@@ -710,12 +710,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       let stillRunning = false;
       try {
         // One with no connection is a failed start Lume couldn't turn off: nobody used it, so it is forced.
-        if (vmName) await stopVm(vmName, reason === "quit" || connection === undefined, await possessive(botId));
+        if (vmName) await stopVm(vmName, reason === "quit" || connection === undefined);
       } catch (error) {
         // Even a forced stop failed: count the computer as off only if Lume says it is. One
         // that is still on keeps its place (macOS's limit) and its connection, and its idle
         // timer tries again; an unreadable state counts as on.
         stillRunning = vmName !== undefined && (await getVm(vmName).then((info) => info?.state === "running", () => true));
+        // Named only on failure: the name waits on the Bot store, and almost every stop succeeds.
+        if (error instanceof BotComputerError && error.code === "lume_failed") {
+          throw new BotComputerError("lume_failed", `Aiden couldn't stop ${await possessive(botId)} computer.`);
+        }
         throw error;
       } finally {
         entry.stopping = undefined;
