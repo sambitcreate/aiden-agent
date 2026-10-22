@@ -13,8 +13,9 @@
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit, vncHost, stopDelayMs, stopFails, stopFailsBooting, cloneDelayMs, runReturnDelayMs,
-// runFailsLate, bootDelayMs, hostKey and vncUpstream of a JSON file named by a leading `--fake-config <file>`):
+// keys log, stale, limit, vncHost, stopDelayMs, stopFails, stopFailsBooting, cloneDelayMs, runLaunchDelayMs,
+// runIgnoresTerm, runReturnDelayMs, runFailsLate, bootDelayMs, hostKey and vncUpstream of a JSON file named by
+// a leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)"; `run`
 //   refuses them with Lume's "still being provisioned" error before it launches anything;
 // - AIDEN_FAKE_LUME_LIMIT: how many VMs may run before a start fails with the
@@ -29,6 +30,10 @@
 //   still coming up, fails with an error that gives no reason instead of saying it isn't running;
 // - AIDEN_FAKE_LUME_CLONE_DELAY_MS: how long `clone` copies the disk. A source that starts
 //   running meanwhile fails the clone: the real copy would be torn, and the fake says so.
+// - AIDEN_FAKE_LUME_RUN_LAUNCH_DELAY_MS: how long `run --detach` takes to start up before it launches
+//   anything (the real binary's start-up and argument parsing, before its detach branch spawns the VM);
+// - AIDEN_FAKE_LUME_RUN_IGNORES_TERM: "true" makes `run` ignore SIGTERM (it logs a `term_ignored`
+//   entry), as a Lume that handles TERM would; only SIGKILL ends it. Each call's `cli` entry has its pid;
 // - AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS: how long `run --detach` takes to return once it has
 //   launched its detached VM (the real detach branch launches the VM before it prints and returns);
 // - AIDEN_FAKE_LUME_BOOT_DELAY_MS: how long the detached VM takes to come up. With it set, `run`
@@ -68,6 +73,8 @@ if (args[0] === "--fake-config") {
     stopFails: "AIDEN_FAKE_LUME_STOP_FAILS",
     stopFailsBooting: "AIDEN_FAKE_LUME_STOP_FAILS_BOOTING",
     cloneDelayMs: "AIDEN_FAKE_LUME_CLONE_DELAY_MS",
+    runLaunchDelayMs: "AIDEN_FAKE_LUME_RUN_LAUNCH_DELAY_MS",
+    runIgnoresTerm: "AIDEN_FAKE_LUME_RUN_IGNORES_TERM",
     runReturnDelayMs: "AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS",
     runFailsLate: "AIDEN_FAKE_LUME_RUN_FAILS_LATE",
     bootDelayMs: "AIDEN_FAKE_LUME_BOOT_DELAY_MS",
@@ -248,6 +255,7 @@ async function main() {
   log({
     kind: "cli",
     op,
+    pid: process.pid,
     args,
     env: {
       LUME_TELEMETRY_ENABLED: process.env.LUME_TELEMETRY_ENABLED,
@@ -276,6 +284,12 @@ async function main() {
     storage = options["--storage"];
   }
   if (!path.isAbsolute(storage)) fail("storage must be an absolute path", 72);
+  if (op === "run" && process.env.AIDEN_FAKE_LUME_RUN_IGNORES_TERM === "true") {
+    process.on("SIGTERM", () => log({ kind: "term_ignored", name: positionals[1] }));
+  }
+  if (op === "run" && Number(process.env.AIDEN_FAKE_LUME_RUN_LAUNCH_DELAY_MS ?? "0") > 0) {
+    await sleep(Number(process.env.AIDEN_FAKE_LUME_RUN_LAUNCH_DELAY_MS));
+  }
   const state = readState(storage);
 
   switch (op) {

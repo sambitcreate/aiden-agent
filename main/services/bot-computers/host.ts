@@ -226,6 +226,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   let setupTask: Promise<void> | undefined;
   let setupAbort: AbortController | undefined;
   let shuttingDown = false;
+  /** Aborted first when Aiden quits: it ends any `lume run` still launching, at once. */
+  const quitting = new AbortController();
   let diskCache: { at: number; bytes: number } | undefined;
   /** A base being built boots as a VM too, so it holds one of the running places. */
   let baseHoldsSlot = false;
@@ -284,13 +286,19 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   };
   const lumeEnv = () => lumeEnvironment(deps.env ?? process.env, dirs.home);
 
-  async function lume(command: LumeCommand, timeoutMs: number, signal?: AbortSignal, onSpawn?: () => void): Promise<LumeRunResult> {
+  async function lume(
+    command: LumeCommand,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    onSpawn?: () => void,
+    killOnAbort?: boolean,
+  ): Promise<LumeRunResult> {
     // Verified first: Aiden's VM storage only appears once Lume can run, so a
     // Mac whose helper is missing never makes later deletes or startups run it.
     const resolved = await invocation();
     await mkdir(dirs.vms, { recursive: true, mode: 0o700 });
     await mkdir(dirs.home, { recursive: true, mode: 0o700 });
-    return runLume(resolved, command, { storage: dirs.vms, env: lumeEnv(), timeoutMs, signal, onSpawn });
+    return runLume(resolved, command, { storage: dirs.vms, env: lumeEnv(), timeoutMs, signal, onSpawn, killOnAbort });
   }
 
   const failureKind = (result: LumeRunResult): LumeErrorKind =>
@@ -421,12 +429,20 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     try {
       if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       // `run --detach` launches the VM in the background before it returns, and the VM can
-      // come up after that. So it isn't cut short by a cancel, which would leave no way to tell
-      // whether it launched: it is bounded, and the cancel is honoured once it returns. A run
-      // that fails or times out may still have launched the VM: the catch turns it off.
-      const started = await lume({ op: "run", name: vmName, vncPassword: password, sharedDir, logFile }, 60_000, undefined, () => {
-        launch = "launching";
-      });
+      // come up after that. So a cancel doesn't cut it short, which could stop it partway
+      // through launching: it is bounded, and the cancel is honoured once it returns. Quit does
+      // end it, at once: a `run` still starting up would launch the VM after Aiden has gone,
+      // with nobody left to turn it off. A run that fails, times out or is ended by quit may
+      // still have launched the VM: the catch turns it off.
+      const started = await lume(
+        { op: "run", name: vmName, vncPassword: password, sharedDir, logFile },
+        60_000,
+        quitting.signal,
+        () => {
+          launch = "launching";
+        },
+        true,
+      );
       const refusal = started.exitCode === 0 ? undefined : failureKind(started);
       // Lume refused this VM (it has none by that name, it is still being made, or macOS's limit
       // is reached): nothing is coming up. Any other failure may have launched it.
@@ -1668,8 +1684,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       emit();
     },
 
-    async shutdown(timeoutMs) {
+    beginQuit() {
       shuttingDown = true;
+      // A `lume run` still starting up is ended now, so it can't launch a computer once
+      // Aiden has gone. No new one can start after this.
+      quitting.abort();
+    },
+
+    async shutdown(timeoutMs) {
+      host.beginQuit();
       host.cancelSetUp();
       for (const wake of [...slotWaiters]) wake();
       const stops = [...runtimes.keys()].map((botId) => stopComputer(botId, "quit").catch(() => undefined));

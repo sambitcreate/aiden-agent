@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +42,8 @@ interface FakeConfig {
   stopFails?: string;
   stopFailsBooting?: string;
   cloneDelayMs?: number;
+  runLaunchDelayMs?: number;
+  runIgnoresTerm?: boolean;
   runReturnDelayMs?: number;
   runFailsLate?: string;
   bootDelayMs?: number;
@@ -856,6 +859,121 @@ test("quitting stops every running computer inside its budget, and nothing start
     assert.equal(context.vmRunning(botComputerVmName("ben")), false, "the waiting computer never started");
     context.config.stopDelayMs = undefined;
     context.writeConfig();
+  });
+});
+
+test("quitting while Lume's run is still starting up leaves no computer running after Aiden has gone", { timeout: 60_000 }, async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.give("ada");
+    const vmName = botComputerVmName("ada");
+    // A later launch of Aiden, over the same storage, quits while it starts Ada's computer.
+    await context.host.shutdown(5_000);
+    // Lume's run takes longer to start up, before it launches anything, than quit waits,
+    // and it handles TERM, so only SIGKILL ends it inside the budget.
+    const launchDelayMs = 1_500;
+    context.config.runLaunchDelayMs = launchDelayMs;
+    context.config.runIgnoresTerm = true;
+    context.writeConfig();
+    const budgetMs = 300;
+    const runs = () => context.calls().filter((call) => call.kind === "cli" && call.op === "run");
+    const before = runs().length;
+    const aiden = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.resolve("main/services/bot-computers/test-support/quit-mid-launch.ts"),
+        context.root,
+        fake,
+        path.join(context.dir, "fake-config.json"),
+        path.join(context.dir, "bots"),
+        "ada",
+        String(budgetMs),
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    try {
+      const quit = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
+        let stdout = "";
+        aiden.stdout.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString("utf8");
+        });
+        aiden.on("error", reject);
+        aiden.on("close", (code) => resolve({ code, stdout }));
+      });
+      assert.equal(quit.code, 0);
+      assert.equal(quit.stdout, "quit\n", "Aiden quit once its budget was over");
+      const run = last(runs());
+      assert.ok(runs().length > before && run?.pid, "Lume's run had begun when Aiden quit");
+      // Ended with Aiden, not when its start-up would have finished (allowing a moment for the reap).
+      const reaped = Date.now() + 500;
+      while (processRunning(run.pid) && Date.now() < reaped) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(processRunning(run.pid), false, "Lume's run ended when Aiden quit");
+
+      // Aiden has gone. Wait until Lume's run would have launched the computer and it would be up.
+      const runAt = run.at ?? Date.now();
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, runAt + launchDelayMs + 1_000 - Date.now())));
+      assert.equal(context.vmRunning(vmName), false, "no computer comes up after Aiden has quit");
+      const launched = context.calls().filter((call) => call.kind === "spawned" && call.name === vmName && (call.at ?? 0) >= runAt);
+      assert.deepEqual(
+        launched.filter((call) => call.pid !== undefined && processRunning(call.pid)),
+        [],
+        "nothing the quitting launch started is still running",
+      );
+    } finally {
+      // A failure above leaves neither the helper nor a `run` that ignores TERM behind.
+      if (aiden.exitCode === null && aiden.signalCode === null) aiden.kill("SIGKILL");
+      for (const call of runs().slice(before)) {
+        if (call.pid && processRunning(call.pid)) process.kill(call.pid, "SIGKILL");
+      }
+      context.config.runLaunchDelayMs = undefined;
+      context.config.runIgnoresTerm = undefined;
+      context.writeConfig();
+    }
+  });
+});
+
+test("quitting while Lume's run is launching a computer that is still coming up turns it off before Aiden has gone", async () => {
+  await withHost(async (context) => {
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    const logged = (kind: string) => context.calls().filter((call) => call.kind === kind && call.name === vmName);
+    // Lume's run has launched the VM, which comes up well inside quit's budget, and would only
+    // return after it.
+    const bootDelayMs = 400;
+    const budgetMs = 4_000;
+    context.config.bootDelayMs = bootDelayMs;
+    context.config.runReturnDelayMs = 6_000;
+    context.writeConfig();
+    try {
+      const starting = context.host.ensureRunning("ada", { reason: "tool" }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await waitFor(() => logged("spawned").length === 1, "the VM's process");
+      const spawned = logged("spawned")[0]!;
+      const run = last(context.calls().filter((call) => call.kind === "cli" && call.op === "run"));
+      assert.ok(run?.pid);
+
+      const quitAt = Date.now();
+      await context.host.shutdown(budgetMs);
+      assert.ok(Date.now() - quitAt < budgetMs - 500, `quit returned once the computer was off (${Date.now() - quitAt} ms)`);
+      assert.ok((await starting) instanceof BotComputerError, "the start gives up");
+      const reaped = Date.now() + 500;
+      while (processRunning(run.pid) && Date.now() < reaped) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(processRunning(run.pid), false, "Lume's run ended when Aiden quit");
+      assert.equal(context.vmRunning(vmName), false, "the computer is off when quit returns");
+
+      // Nothing comes up once Aiden has gone.
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, (spawned.at ?? Date.now()) + bootDelayMs + 1_000 - Date.now())));
+      assert.equal(context.vmRunning(vmName), false);
+      assert.equal(spawned.pid !== undefined && processRunning(spawned.pid), false, "the VM's process has ended");
+    } finally {
+      context.config.bootDelayMs = undefined;
+      context.config.runReturnDelayMs = undefined;
+      context.writeConfig();
+    }
   });
 });
 

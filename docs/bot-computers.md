@@ -107,14 +107,19 @@ Bot computer that was interrupted while it was being made is marked for
   until it is off. Deleting a Bot stops and deletes its
   computer before its files are erased. Quitting Aiden turns every running
   computer off at once (a forced stop, like holding the power button) so quit
-  stays within a few seconds.
+  stays within a few seconds. A computer that is still starting when you quit
+  has Lume's launch ended at once, so a computer Lume hadn't launched yet never
+  comes up after Aiden has quit. One Lume had already launched is turned off
+  while Aiden quits, or at Aiden's next launch if it only comes up after Aiden
+  has gone.
 - **A stop that fails:** if Lume can't stop a computer, Aiden asks Lume for its
   state again. A computer that is still running stays shown as running (and
   keeps its idle timer), rather than being shown as off while it runs.
 - **A start that fails:** Lume starts a computer in the background, and the
   computer can come up a few moments after Lume has reported back. So a start
   that is cancelled (Pause, Stop, or every caller giving up) or fails can leave
-  it on. Aiden lets Lume finish launching it, then turns it off; while Lume
+  it on. Aiden lets Lume finish launching it (unless you're quitting Aiden,
+  which ends the launch at once), then turns it off; while Lume
   says it isn't running yet, or fails to turn it off without saying why,
   Aiden keeps checking for up to about ten seconds and turns it off once it
   comes up. Until then the computer still reads Starting and keeps its place,
@@ -284,6 +289,15 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   in `ps`, and that `~/.lume` is untouched.
 - A Set up interrupted mid-download resumes with a range request and ends with
   the pinned SHA-256; whether Apple's URL redirects.
+- Quit Aiden right after a Bot's first `computer` call, while its computer
+  still reads Starting. Quit before Lume reports the start: afterwards
+  `lume ls` shows the computer stopped, no `lume` process is left, and the
+  Bot's next `computer` call starts it as usual. Quit once Lume has launched
+  it: a computer that only comes up after Aiden has gone is stopped at Aiden's
+  next launch.
+- Kill `lume run --detach` with `kill -9` as soon as its background `lume run`
+  shows in `ps`, before it prints `Started …`, then check that `lume ls` and
+  `lume stop` still see the computer that background run launched.
 - `AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 npm run test:bot-computers:packaged` walks the packaged app from Set up through Take over, Pause, Delete Bot and Remove everything, and writes `build/bot-computers-acceptance-receipt.json`.
 
 ## How the Bot uses its computer

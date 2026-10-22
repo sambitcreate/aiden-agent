@@ -96,6 +96,11 @@ export interface BotComputerHost {
   /** The base computer while setup waits for the person's grants (Settings shows its screen). */
   baseView(): BotComputerConnection | undefined;
   reconcile(): Promise<void>;
+  /**
+   * Quit's first step, before anything waits: refuse new starts and end any `lume run` still
+   * launching, at once. `shutdown` does this too.
+   */
+  beginQuit(): void;
   shutdown(timeoutMs: number): Promise<void>;
   onChange(listener: (botId: string | undefined) => void): () => void;
 }

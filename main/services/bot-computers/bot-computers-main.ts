@@ -30,6 +30,9 @@ export interface BotComputers {
 
 let singleton: BotComputers | undefined;
 
+/** How long quit waits for the viewer before it stops the computers anyway. */
+const VIEWER_CLOSE_BUDGET_MS = 500;
+
 export function botComputersEnabled(): boolean {
   return hostPlatformCapabilities().botComputers;
 }
@@ -162,7 +165,22 @@ export async function reconcileBotComputers(): Promise<void> {
 /** Quit: stop every running computer within the deadline. */
 export async function shutdownBotComputers(timeoutMs: number): Promise<void> {
   if (!singleton) return;
-  // Viewers end first, so no stream holds a computer the host is stopping.
-  await singleton.viewer.close().catch((error: unknown) => logger.warn("bot-computers", "The viewer did not close.", error));
-  await singleton.host.shutdown(timeoutMs);
+  const began = Date.now();
+  // A computer still launching is ended before anything waits.
+  singleton.host.beginQuit();
+  // Viewers end first, so no stream holds a computer the host is stopping. Bounded, so a
+  // viewer that won't close can't hold up the stops.
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    singleton.viewer.close().catch((error: unknown) => logger.warn("bot-computers", "The viewer did not close.", error)),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        logger.warn("bot-computers", "The viewer did not close in time.");
+        resolve();
+      }, VIEWER_CLOSE_BUDGET_MS);
+      timer.unref?.();
+    }),
+  ]);
+  clearTimeout(timer);
+  await singleton.host.shutdown(Math.max(0, timeoutMs - (Date.now() - began)));
 }

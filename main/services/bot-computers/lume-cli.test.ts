@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -159,6 +159,34 @@ test("output past the cap ends the child, and a hung child is killed at its time
   const pending = runBoundedProcess(process.execPath, [hung], { env: {}, timeoutMs: 60_000, signal: controller.signal });
   controller.abort();
   await assert.rejects(pending, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+});
+
+test("killOnAbort ends a cancelled child at once, so one that handles TERM does nothing more", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "p8-bounded-"));
+  const ready = path.join(dir, "ready");
+  const launched = path.join(dir, "launched");
+  // Like a Lume still starting up: it handles TERM, then launches 300 ms later.
+  const late = path.join(dir, "late.mjs");
+  writeFileSync(
+    late,
+    "import { writeFileSync } from 'node:fs';\n" +
+      "process.on('SIGTERM', () => {});\n" +
+      "writeFileSync(process.argv[2], 'ready');\n" +
+      "setTimeout(() => writeFileSync(process.argv[3], 'launched'), 300);\n" +
+      "setInterval(() => {}, 1000);\n",
+  );
+  const controller = new AbortController();
+  const pending = runBoundedProcess(process.execPath, [late, ready, launched], {
+    env: {},
+    timeoutMs: 60_000,
+    signal: controller.signal,
+    killOnAbort: true,
+  });
+  while (!existsSync(ready)) await new Promise((resolve) => setTimeout(resolve, 5));
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  assert.equal(existsSync(launched), false, "the child never reached its next step");
 });
 
 test("onSpawn hears that the executable started, and never fires for one that couldn't be started", async () => {

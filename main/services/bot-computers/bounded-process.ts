@@ -18,6 +18,11 @@ export interface BoundedProcessOptions {
   cwd?: string;
   /** Called once the executable has started; never when it couldn't be started at all. */
   onSpawn?: () => void;
+  /**
+   * A cancel ends the child with SIGKILL at once, rather than TERM and then KILL, so it runs
+   * nothing more even if it handles TERM: for Lume's `run` when Aiden quits.
+   */
+  killOnAbort?: boolean;
 }
 
 export interface BoundedProcessResult {
@@ -83,6 +88,13 @@ export function runBoundedProcess(
     };
     const onAbort = () => {
       failure ??= new BotComputerError("cancelled", "The request was cancelled.");
+      if (options.killOnAbort) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
       void terminate();
     };
     const timer = setTimeout(() => {
