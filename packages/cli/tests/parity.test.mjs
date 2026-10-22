@@ -2248,6 +2248,42 @@ test("a durable Bot paused from the CLI stops its running turn, refuses sends an
   assert.equal((await host.durable.runtime.awaitReply(bot.id, running.submissionId, never)).kind, "completed");
   assert.equal(calls, 2);
 
+  // A phone watching the idle Bot hears the pause and the unpause at once; without bot:handoffs it reads unavailable.
+  const remoteBots = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, new api.AidenIdempotencyLedger(), async () => {});
+  const sse = createServer((_request, response) => { void remoteBots.botSessions.openEvents("device_1", bot.id, response).catch(() => response.destroy()); });
+  await new Promise((resolve) => sse.listen(0, "127.0.0.1", resolve));
+  const frames = [], watching = new AbortController();
+  const reading = (async () => {
+    const response = await fetch(`http://127.0.0.1:${sse.address().port}/`, { signal: watching.signal });
+    let buffer = "";
+    for await (const chunk of response.body) {
+      buffer += Buffer.from(chunk).toString("utf8");
+      for (let index; (index = buffer.indexOf("\n\n")) >= 0; buffer = buffer.slice(index + 2)) {
+        const data = buffer.slice(0, index).split("\n").find((line) => line.startsWith("data: "));
+        if (data) frames.push(JSON.parse(data.slice(6)));
+      }
+    }
+  })().catch(() => {});
+  const states = () => frames.map((frame) => frame.type === "snapshot" ? frame.payload.session.state : frame.type === "state" ? frame.payload.state : undefined).filter(Boolean);
+  const until = async (predicate, what) => {
+    for (let tries = 0; !predicate(); tries += 1) {
+      if (tries > 1000) assert.fail(`Timed out waiting for ${what}; states: ${states().join(", ")}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  try {
+    await until(() => states().length > 0, "the snapshot");
+    assert.deepEqual(states(), ["idle"]);
+    await host.command(["pause", bot.id]);
+    await until(() => states().at(-1) === "unavailable", "the pause");
+    await host.command(["unpause", bot.id]);
+    await until(() => states().at(-1) === "idle", "the unpause");
+    assert.deepEqual(states(), ["idle", "unavailable", "idle"]);
+  } finally {
+    watching.abort(); sse.closeAllConnections(); sse.close(); await reading;
+    await remoteBots.botSessions.close();
+  }
+
   // Deleting the Bot forgets its pause.
   await host.command(["pause", bot.id]);
   await host.command(["delete", bot.id]);

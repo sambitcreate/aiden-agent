@@ -33,6 +33,8 @@ export function createCliRemoteBots(agentDir: string, instanceId: string, runtim
   const botFiles = new AidenRemoteBotFileService({ instanceId, botAudienceId: CLI_BOT_OWNER_AUDIENCE_ID, authority: runtime.authority, chats: daemon.chatStore });
   const botSessions = runtime.durable ? new AidenRemoteBotSessionService({ bots,
     runtime: async () => runtime.durable!.runtime, routines: runtime.routines, presets: runtime.durable.presets, approvals: runtime.durable.approvals, memory: runtime.durable.memory,
+    // A pause or unpause from `aiden bots` changes only the state; open phone streams hear it here.
+    stateChanges: runtime.durable.stateChanges,
   }) : undefined;
   return { bots, botFiles, ...(botSessions ? { botSessions } : {}) };
 }

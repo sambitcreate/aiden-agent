@@ -30,7 +30,7 @@ For rollback, stop the daemon first, retain the whole profile, and move only `bo
 | Stable request deduplication and paused restart | Supported | Shared core |
 | Bot memory tools, recall, person edits | Supported | Shared store and existing Remote endpoints |
 | Routines | Supported | Shared routine service/executor; paused turns are skipped |
-| Pause and unpause (the person's switch) | Supported | `aiden bots pause` and `unpause` through the shared core and its pause file: a running turn is stopped and waits for Resume or Dismiss after unpause. Paired devices see a paused Bot as unavailable |
+| Pause and unpause (the person's switch) | Supported | `aiden bots pause` and `unpause` through the shared core and its pause file: a running turn is stopped and waits for Resume or Dismiss after unpause. Paired devices see a paused Bot as unavailable, and an open session stream hears the change at once. Devices can't pause or unpause a CLI Bot (those routes need `bot:handoffs`) |
 | Hand-offs, `sign_in`, Bot rules, Bot computers | Supported (Bot computers on Apple silicon only) | Unavailable; `bot:handoffs` is not advertised |
 | Starter presets | Supported | Shared crash-safe starter and creation-key store |
 | Connection approvals | Supported | Local CLI or paired Remote approval response |
@@ -39,10 +39,10 @@ For rollback, stop the daemon first, retain the whole profile, and move only `bo
 | Rich activity, staged attachments, connection setup | Supported | Unavailable; features withheld |
 | Companion-image inspection and read-only subagent forks | Supported | Calling durable conversation supplies the immutable transcript and attachment snapshot |
 
-Capability negotiation advertises only wired endpoints. Existing native clients use their established feature fallbacks. No Remote protocol fields or revision changed.
+Capability negotiation advertises only wired endpoints. Existing native clients use their established feature fallbacks. The durable CLI switch itself changed no Remote protocol fields or revision; pause support arrived with revision 37, which the CLI serves without `bot:handoffs`.
 
 The Bot CLI additionally exposes `session`, `send`, `resume`, `dismiss`, `stop`, `delete`, `approvals`, and `approve`. Send takes a JSON file containing `text` and a stable `requestId`; Resume and Dismiss take a stable request ID as their third argument. Keep the same ID when retrying an uncertain result.
 
 ## Acceptance
 
-The bundled parity suite exercises preservation, failed-backup recovery, duplicate requests, memory persistence, routine deduplication, process-death Resume/Dismiss, paused routine refusal, and revocation. Shared desktop runtime tests cover the same core. macOS and Linux bundle/runtime acceptance, native capability fallback, and physical pairing/background behavior are separate gates; passing local storage tests does not establish physical-device acceptance.
+The bundled parity suite exercises preservation, failed-backup recovery, duplicate requests, memory persistence, routine deduplication, process-death Resume/Dismiss, paused routine refusal, pausing and unpausing from the CLI (a running turn stopped and left for Resume, the pause surviving a restart, and an open session stream hearing it), and revocation. Shared desktop runtime tests cover the same core. macOS and Linux bundle/runtime acceptance, native capability fallback, and physical pairing/background behavior are separate gates; passing local storage tests does not establish physical-device acceptance.

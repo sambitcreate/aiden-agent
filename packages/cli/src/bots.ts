@@ -112,8 +112,8 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     if (!(await botStore.get(botId))) throw new Error("This Bot no longer exists.");
     if (durable) {
       // The durable session records it in the same store, then closes a running turn and leaves it for Resume.
-      await durable.runtime.pause(botId, "cli");
-      return { botId, paused: true as const, since: (await pauses.get(botId))!.since };
+      const state = await durable.runtime.pause(botId, "cli");
+      return { botId, paused: true as const, since: state.kind === "paused" ? state.since : (await pauses.get(botId))!.since };
     }
     const record = await pauses.pause(botId, "cli");
     for (const chat of await daemon.chatStore.listByBot(botId)) {

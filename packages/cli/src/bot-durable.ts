@@ -44,7 +44,7 @@ export interface CliDurableBotPorts {
   instructions(admission: BotRuntimeAuthorityAdmission): Promise<string>;
   deleteRoutines(botId: string): Promise<void>;
   /** The CLI's pause store (`aiden bots pause`), shared so both paths read one file. */
-  pauses?: BotPauseStore;
+  pauses: BotPauseStore;
 }
 
 export interface CliDurableBotToolContext {
@@ -72,6 +72,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
   const imageInputs = new Map<string, boolean>();
   const approvals = createBotApprovals({ publish: () => {} });
   const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir }) });
+  const stateListeners = new Set<(botId: string) => void>();
   async function admit(botId: string) {
     const chat = await ports.application.getCanonicalChat(botId) ?? await ports.application.createChat({ audienceId: "cli:local", botId });
     return ports.authority.admit({ audienceId: "cli:local", botId, chatId: chat.id });
@@ -150,7 +151,12 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       },
     },
     onSessionOpen: (botId) => memory.beginSession(botId),
-    deleteEffects: [ports.deleteRoutines, async (botId) => { memory.forgetBot(botId); models.forget(botId); imageInputs.delete(botId); }, async (botId) => { await ports.pauses?.forgetBot(botId); }, async (botId) => { await ports.application.deleteBot({ botId }); }],
+    onStateChange: (botId) => {
+      for (const listener of stateListeners) {
+        try { listener(botId); } catch (error) { process.stderr.write(`Bot ${botId} state listener failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+      }
+    },
+    deleteEffects: [ports.deleteRoutines, async (botId) => { memory.forgetBot(botId); models.forget(botId); imageInputs.delete(botId); }, async (botId) => { await ports.pauses.forgetBot(botId); }, async (botId) => { await ports.application.deleteBot({ botId }); }],
     onReport: (botId, error) => process.stderr.write(`Bot ${botId}: ${error instanceof Error ? error.message : String(error)}\n`),
   });
   try { await runtime.initialize(); } // Inspection only; interrupted work never resumes.
@@ -167,7 +173,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
     createBot: (bot, access, botId) => ports.application.createBot({ audienceId: "cli:local", botId, bot, access }),
     session: runtime,
   });
-  return { runtime, approvals, memory, presets: { list: () => BOT_PRESETS, create: async (presetId: string, { audienceId }: { audienceId: string }) => {
+  /** A pause or unpause commits nothing to the conversation, so open phone streams hear it here. */
+  const stateChanges = (listener: (botId: string) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; };
+  return { runtime, approvals, memory, stateChanges, presets: { list: () => BOT_PRESETS, create: async (presetId: string, { audienceId }: { audienceId: string }) => {
     const result = await starter.startFromPreset(presetId, { createBot: (bot, botId) => ports.application.createBot({ audienceId, botId, bot }) });
     return { botId: result.bot.id, created: result.created };
   } } };
