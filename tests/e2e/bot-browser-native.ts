@@ -91,6 +91,10 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
       return html(`<table><tr><td>Password</td><td><input id="secret" type="password"></td></tr></table>
         <div role="button" tabindex="0"><input id="pin" type="password"></div>
         <button id="show" type="button" onclick="for(const f of document.querySelectorAll('#secret,#pin'))f.type='text'">Show</button>`);
+    case "/saved-card":
+      // Rendered on the server with the saved card month and a saved choice marked.
+      return html(`<form><select id="exp" autocomplete="cc-exp-month">${Array.from({ length: 12 }, (_, index) => `<option${index === 4 ? " selected" : ""}>${String(index + 1).padStart(2, "0")}</option>`).join("")}</select>
+        <label><input id="keep" type="checkbox" checked> Keep me signed in</label></form>`);
     default:
       response.writeHead(404).end();
   }
@@ -347,7 +351,15 @@ void app.whenReady().then(async () => {
   const rememberedScroll = { right: await scrollTo(rowNamed("hunt")), wrong: await scrollTo(rowNamed("zzzz")) };
   shownAs.push(await shownTable());
   const shownTableSnapshot = await snapshot(botTab);
+  // A page that marks the saved card month: a Bot's wait can't test which one.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const savedMonth = {
+    right: await waitFor("#exp option:nth-child(5)[selected]"),
+    wrong: await waitFor("#exp option:nth-child(6)[selected]"),
+    role: await waitFor("internal:role=checkbox[checked=true]"),
+  };
   const remembered = {
+    savedMonth,
     shownAs,
     wait: rememberedWait,
     scroll: rememberedScroll,
@@ -383,6 +395,7 @@ void app.whenReady().then(async () => {
           actionRefusal: boundary.BROWSER_BOUNDARY_ACTION_REFUSED,
           valueSelectorRefusal: boundary.BROWSER_VALUE_SELECTOR_REFUSED,
           xpathRefusal: boundary.BROWSER_XPATH_SELECTOR_REFUSED,
+          stateRefusal: boundary.BROWSER_STATE_SELECTOR_REFUSED,
           coveredTarget: boundary.BROWSER_COVERED_TARGET,
           frameNote: boundary.BROWSER_IMAGE_OMITTED.frame,
           maskedNote: boundary.BROWSER_IMAGE_MASKED_NOTE,

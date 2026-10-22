@@ -369,6 +369,51 @@ test("Chromium: every selector that can tell a field's value or state apart is r
   }
 });
 
+test("Chromium: a Bot can't tell which option a page marked selected or which box it marked checked; role states still work", { timeout: 30_000 }, async () => {
+  // A checkout page rendered on the server (or again after a validation
+  // error) marks the saved card month `<option selected>` and a saved choice
+  // `checked`, so an attribute test finds the saved one. The bundled runtime
+  // is the oracle: each form below finds the right month and not another.
+  // The Bot is refused in the page, nested selectors included, while the role
+  // engines' own states still find elements outside a field.
+  const reads = (month: number) => [
+    `#exp option:nth-child(${month})[selected]`,
+    `#exp option:nth-child(${month})[ SELECTED ]`,
+    `#exp option:nth-child(${month})[/**/selected]`,
+    `#exp:has(option:nth-child(${month})[selected])`,
+    `form >> internal:has="#exp option:nth-child(${month})[selected]"`,
+  ];
+  let browser: Browser | undefined;
+  try {
+    browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    const months = Array.from({ length: 12 }, (_, index) => `<option id="m${index + 1}"${index === 4 ? " selected" : ""}>${String(index + 1).padStart(2, "0")}</option>`).join("");
+    await page.setContent(`<form>
+      <select id="exp" autocomplete="cc-exp-month">${months}</select>
+      <select id="lang"><option id="en" selected>English</option><option id="fr">French</option></select>
+      <label><input id="keep" type="checkbox" checked> Keep me signed in</label></form>`);
+    const { plain, bot } = await boundaryWorld(page);
+    const right = reads(5), wrong = reads(6);
+    for (const [index, selector] of right.entries()) {
+      assert.notEqual(await plain(selector), "none", `${selector} finds the saved month`);
+      assert.equal(await plain(wrong[index]!), "none", `${wrong[index]} tells another month apart`);
+      assert.equal(await bot(selector), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`, selector);
+    }
+    // Playwright's attribute engine names the saved month outright.
+    assert.equal(await plain('#exp >> internal:attr=[selected=""s]'), "m5");
+    assert.equal(await bot('#exp >> internal:attr=[selected=""s]'), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
+    assert.equal(await bot("#keep[checked]"), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
+    assert.equal(await bot('internal:attr=[checked=""s]'), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
+    // The role alternative the refusal names, and the selected option of a list that isn't a field.
+    assert.equal(await bot("internal:role=checkbox[checked=true]"), "keep");
+    assert.equal(await plain("internal:role=option[selected=true]"), "m5,en");
+    assert.equal(await bot("internal:role=option[selected=true]"), "en");
+    assert.equal(await bot("#lang option:nth-child(1)"), "en");
+  } finally {
+    await browser?.close();
+  }
+});
+
 test("Chromium: a Bot's locator can't tell what a password, card or code field holds; ordinary locators find the same element", { timeout: 30_000 }, async () => {
   // A textarea's text (its default or a framework's copy of what was typed)
   // and a contenteditable code field's text are what text, label and XPath

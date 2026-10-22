@@ -337,7 +337,7 @@ export const BROWSER_VALUE_SELECTOR_REFUSED =
 export const BROWSER_XPATH_SELECTOR_REFUSED =
   "A Bot can't use XPath locators. Use a role, label, text or CSS locator.";
 export const BROWSER_STATE_SELECTOR_REFUSED =
-  "A Bot can't find fields by their state (checked, empty, valid or in range). Use a role locator, such as internal:role=checkbox[checked=true].";
+  "A Bot can't find fields by their state (checked, selected, empty, valid or in range). Use a role locator, such as internal:role=checkbox[checked=true].";
 /**
  * Only if the bundled Playwright runtime no longer has what a Bot's locator
  * relies on: its text cache and role engines, and no selector engine or CSS
@@ -378,6 +378,8 @@ export function boundaryRefusalOf(error: unknown): unknown {
     BROWSER_SENSITIVE_TYPING_REFUSED,
     BROWSER_OPAQUE_TYPING_REFUSED,
     BROWSER_XPATH_SELECTOR_REFUSED,
+    BROWSER_STATE_SELECTOR_REFUSED,
+    BROWSER_VALUE_SELECTOR_REFUSED,
     BROWSER_LOCATOR_UNCHECKED_REFUSED,
   ]) {
     if (message.includes(sentence)) return new Error(sentence);
@@ -387,7 +389,10 @@ export function boundaryRefusalOf(error: unknown): unknown {
 
 /**
  * Attribute tests on `value` would let a selector read a field: a CSS or
- * Playwright attribute selector, or an escape that could spell one.
+ * Playwright attribute selector, or an escape that could spell one. Refusing
+ * every backslash also keeps an escape from spelling a state pseudo-class
+ * (`STATE_PSEUDO_CLASS`), since Playwright reads a nested selector's body
+ * with `JSON.parse`, where `\u0063` is a `c`.
  */
 const VALUE_ATTRIBUTE = /\[\s*(?:[\w*-]*\|)?value\b|\\/iu;
 /**
@@ -550,14 +555,25 @@ return run();
 
 /**
  * Resolves a Bot's locator, after `BROWSER_BOUNDARY_SCOPE_SOURCE`.
- * Playwright's parser finds any XPath part, nested ones included, and the
- * selector is refused. More than one match is refused without Playwright's
- * previews, which quote attributes and text.
+ * Playwright's parser finds every part, nested ones included. A selector is
+ * refused when any part is XPath, or a CSS or `internal:attr` part tests a
+ * `selected` or `checked` attribute: a server-rendered card-expiry list marks
+ * the saved month `<option selected>`, the same mirror of the choice as
+ * `:default`. Role engines (`internal:role=option[selected]`) stay, since
+ * they never match inside a field. Backslashes are refused in those parts
+ * too, as main does (`VALUE_ATTRIBUTE`). More than one match is refused
+ * without Playwright's previews, which quote attributes and text.
  */
 const BROWSER_BOUNDARY_QUERY_SOURCE = `const __aidenBoundaryQuery=(selector)=>{
 const p=globalThis.__aidenPlaywright;const parsed=p.parseSelector(selector);
-const xpath=(s)=>s.parts.some((part)=>part.name==="xpath"||part.name.startsWith("xpath:")||Boolean(part.body&&typeof part.body==="object"&&part.body.parsed&&xpath(part.body.parsed)));
+const nested=(part,test)=>Boolean(part.body&&typeof part.body==="object"&&part.body.parsed&&test(part.body.parsed));
+const xpath=(s)=>s.parts.some((part)=>part.name==="xpath"||part.name.startsWith("xpath:")||nested(part,xpath));
 if(xpath(parsed))throw new Error(${JSON.stringify(BROWSER_XPATH_SELECTOR_REFUSED)});
+const attributes=(part)=>(part.name==="css"||part.name==="internal:attr")&&typeof part.source==="string"?part.source.replace(/\\/\\*[\\s\\S]*?(?:\\*\\/|$)/g,""):"";
+const escaped=(s)=>s.parts.some((part)=>attributes(part).includes("\\\\")||nested(part,escaped));
+if(escaped(parsed))throw new Error(${JSON.stringify(BROWSER_VALUE_SELECTOR_REFUSED)});
+const mirrors=(s)=>s.parts.some((part)=>/\\[\\s*(?:[\\w*-]*\\|)?(?:selected|checked)(?![\\w-])/i.test(attributes(part))||nested(part,mirrors));
+if(mirrors(parsed))throw new Error(${JSON.stringify(BROWSER_STATE_SELECTOR_REFUSED)});
 return __aidenBoundaryScope(()=>{
 const found=p.querySelectorAll(parsed,document);
 if(found.length>1){const error=new Error("strict mode violation: this locator matches "+found.length+" elements. Use one that matches exactly one.");delete error.stack;throw error;}
