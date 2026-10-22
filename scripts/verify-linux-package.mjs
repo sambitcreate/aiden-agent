@@ -161,16 +161,18 @@ async function verifyActiveNodePty(resources, architecture) {
 }
 
 /**
- * transcribe.cpp runs Parakeet on Metal and only Apple silicon offers it; its
- * Linux prebuild is a 64 MB Vulkan library, so Linux packages leave the engine
- * and its FFI binding out.
+ * transcribe.cpp runs Parakeet on Metal and only Apple silicon offers it. Its
+ * Linux prebuild is a 64 MB Vulkan library, so Linux packages leave out the
+ * engine's and its FFI binding's native prebuilds. Their small JavaScript
+ * packages stay, because electron-builder's file list is shared with macOS,
+ * and nothing loads them on Linux.
  */
 export function assertNoMetalSpeechEngine(entries) {
   const shipped = entries
     .map((entry) => entry.replaceAll("\\", "/"))
-    .find((entry) => /\/node_modules\/(?:transcribe-cpp|@transcribe-cpp|koffi|@koromix)(?:\/|$)/u.test(entry));
+    .find((entry) => /\/node_modules\/(?:@transcribe-cpp|@koromix)\//u.test(entry));
   if (shipped) {
-    throw new Error(`Linux packages must not ship the Metal speech engine: ${shipped}`);
+    throw new Error(`Linux packages must not ship the Metal speech engine's native libraries: ${shipped}`);
   }
 }
 

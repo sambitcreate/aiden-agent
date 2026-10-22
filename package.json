@@ -372,6 +372,8 @@
       "!**/*.map",
       "!**/node_modules/esbuild/**",
       "!**/node_modules/@esbuild/**",
+      "!**/node_modules/@transcribe-cpp/linux-*/**",
+      "!**/node_modules/@koromix/koffi-linux-*/**",
       "!**/*.d.{ts,mts,cts}",
       "!**/node_modules/**/*.{ts,mts,cts,tsx}",
       "!**/node_modules/**/{test,tests,__tests__,__mocks__,example,examples,docs}/**",
@@ -511,12 +513,6 @@
         "AppImage",
         "deb",
         "rpm"
-      ],
-      "files": [
-        "!**/node_modules/transcribe-cpp/**",
-        "!**/node_modules/@transcribe-cpp/**",
-        "!**/node_modules/koffi/**",
-        "!**/node_modules/@koromix/**"
       ],
       "extraFiles": [
         {

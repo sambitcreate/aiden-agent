@@ -140,20 +140,21 @@ test("Linux package verification ignores foreign native prebuilds", () => {
   assert.equal(isElfMagic(Buffer.from([0x7f, 0x45, 0x4c])), false);
 });
 
-test("Linux packages leave out the Metal speech engine and its FFI binding", () => {
+test("Linux packages leave out the native libraries of the Metal speech engine and its FFI binding", () => {
   assert.doesNotThrow(() =>
     assertNoMetalSpeechEngine([
       "/build/main/local-speech-worker.js",
       "/node_modules/sherpa-onnx-node/package.json",
-      "/node_modules/koffi-like/package.json",
+      // The JavaScript packages are shared with the macOS file list and never loaded on Linux.
+      "/node_modules/transcribe-cpp/dist/index.js",
+      "/node_modules/koffi/index.js",
     ]),
   );
   for (const shipped of [
-    "/node_modules/transcribe-cpp/dist/index.js",
     "/node_modules/@transcribe-cpp/linux-x64-cpu-vulkan/libggml-vulkan.so",
-    "/node_modules/koffi/index.js",
+    "/node_modules/@transcribe-cpp/linux-arm64-cpu-vulkan/libtranscribe.so",
     "/node_modules/@koromix/koffi-linux-x64/linux_x64/koffi.node",
   ]) {
-    assert.throws(() => assertNoMetalSpeechEngine([shipped]), /Metal speech engine/u, shipped);
+    assert.throws(() => assertNoMetalSpeechEngine([shipped]), /Metal speech engine's native libraries/u, shipped);
   }
 });

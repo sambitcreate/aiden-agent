@@ -63,9 +63,10 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   `createRoutedSpeechEngine` (worker-core), so the CLI bundle never pulls it. Load decodes 1 s of silence (Metal
   shader warm-up). Packaged: `TRANSCRIBE_LIBRARY` = app.asar.unpacked libtranscribe.dylib (setting it skips the
   binding's contract check). asarUnpack: @transcribe-cpp/darwin-arm64-metal and @koromix/koffi-darwin-arm64.
-  Linux `build.linux.files` excludes transcribe-cpp, @transcribe-cpp, koffi, @koromix (the Linux prebuild is a 64 MB
-  Vulkan build). Verifiers: verify-macos-package `verifyPackagedMetalSpeechEngine`, verify-linux-package
-  `assertNoMetalSpeechEngine`.
+  Root `build.files` excludes `@transcribe-cpp/linux-*` (a 64 MB Vulkan build) and `@koromix/koffi-linux-*`; the small
+  JS packages still ship on Linux, unused. Never add `build.linux.files`: electron-builder then drops the root list and
+  packs the whole repo (CI caught it: .d.mts, docs, .memory in app.asar). Verifiers: verify-macos-package `verifyPackagedMetalSpeechEngine`, verify-linux-package
+  `assertNoMetalSpeechEngine` (native prebuilds only).
 - Catalog: `parakeet-v3-metal` (family `parakeet-gguf`, host darwin/arm64, `livePreview`, quant Q8_0, archive format
   "file", 739,508,576 bytes, HF revision 85ac09ea). Listed first and recommended only via `speechModelsForHost`;
   `PORTABLE_SPEECH_MODELS` (default for `createSpeechModelManager`, so the CLI) excludes it. Automatic picks it once
