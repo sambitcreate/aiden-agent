@@ -1,6 +1,6 @@
 # Voice dictation: speed and live text (STT sub-project 2)
 
-Status: Active (2026-10-22). Phase 1 is in review in [PR #579](https://github.com/sambitcreate/aiden-agent/pull/579); phase 2 waits on the engine spike on the owner's Mac.
+Status: Active (2026-10-22). Phase 1 merged in [PR #579](https://github.com/sambitcreate/aiden-agent/pull/579) on 2026-10-22 and is not released yet. Phase 2 waits on the engine benchmark (`scripts/voice-engine-spike/`) on the owner's Mac.
 
 Deep dive: [Local voice dictation: speed and live text](https://claude.ai/artifact/JZWtaaWud4cks6WtdjdQBY) (2026-10-21). It compares Aiden's on-device dictation with Handy (`cjpais/handy`, MIT) as of v0.9.x.
 
@@ -44,7 +44,15 @@ Acceptance on the owner's Mac: release-to-text on a warm model under about 400 m
 
 ## Phase 2: engine spike, then live text
 
-- Spike on the owner's Mac (Remote Control): transcribe.cpp with Metal (npm `transcribe-cpp`, MIT, darwin-arm64-metal prebuild) against sherpa-onnx CPU at 2 and 4 threads, and sherpa-onnx streaming (Nemotron/Zipformer `OnlineRecognizer`). Measure load time, decode time for 3 s / 10 s / 30 s clips, RSS and word error rate on a fixed set of recordings.
+- Spike on the owner's Mac (Remote Control) with [`scripts/voice-engine-spike/`](../../scripts/voice-engine-spike/README.md). It is a standalone benchmark with its own `package.json` (sherpa-onnx-node 1.13.8, transcribe-cpp 0.4.0), not part of the app. Every model it downloads is pinned by size and SHA-256. It compares:
+  - sherpa-onnx Parakeet TDT v3 int8 on 2 threads (today), 4 threads and Core ML;
+  - transcribe.cpp Parakeet TDT v3 Q8_0 on Metal and on CPU, the same GGUF Handy ships;
+  - the streaming models Parakeet Unified English and Nemotron 3.5 (multilingual) on transcribe.cpp Metal;
+  - Nemotron streaming (English, multilingual) on sherpa-onnx `OnlineRecognizer`.
+
+  For each it reports load time, memory (RSS, and the macOS physical footprint that counts Metal buffers), and decode time for clips of about 3, 10 and 30 s, plus two LibriSpeech clips. For live text it reports update cost, busy share, first word, finalize time and word error rate.
+- transcribe.cpp 0.4.0 does not stream Parakeet TDT v3: the model reports no streaming support and rejects the `parakeet_buffered` extension. Live words on v3, Aiden's multilingual default, would mean re-decoding the recording so far. The benchmark measures this as `redecode`, re-decoding every 500 ms.
+- A smoke run on the 4-vCPU Linux cloud container (not representative) showed sherpa v3 re-decoding falling behind on a 17 s clip. Sherpa Nemotron streaming kept up there at about 75 to 85% busy, with 0 to 4% WER on LibriSpeech. Mac numbers decide.
 - Build live mode on the winner: committed and tentative words in the pill (the Gemini Live path already streams `{committed, tentative}`) and in the composer, with one paste at the end for other apps.
 - Packaging, notarization and the CLI bundle must carry the chosen engine; Remote transcription for phones keeps working.
 
