@@ -75,7 +75,7 @@ jobs:
     outputs:
       artifact-name: ${{ steps.bundle.outputs.name }}
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    runs-on: macos-26
+    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -108,7 +108,7 @@ jobs:
     name: Electron E2E (${{ matrix.shard }}/3)
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    runs-on: macos-26
+    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -171,7 +171,7 @@ jobs:
     name: Desktop build and diagnostics
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    runs-on: macos-26
+    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -225,7 +225,7 @@ jobs:
     needs: changes
     # Catalog refreshes run these too: the runtime takes model limits from it.
     if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
-    runs-on: macos-26
+    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -258,7 +258,7 @@ jobs:
     name: Apple Foundation Models tests
     needs: changes
     if: ${{ needs.changes.outputs.apple == 'true' }}
-    runs-on: macos-26
+    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
     timeout-minutes: 15
     steps:
       - name: Check out source
@@ -280,7 +280,7 @@ jobs:
     name: iOS build and simulator tests
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' }}
-    runs-on: macos-26
+    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
     timeout-minutes: 50
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer

@@ -13,6 +13,14 @@ test("timings separate elapsed time, start offset and summed platform execution"
   assert.equal(summary.totals["macos-26"], 240);
 });
 
+test("self-hosted runner minutes are totalled apart from hosted macOS", () => {
+  const studio = { ...job, name: "Studio", labels: ["self-hosted", "macOS", "ARM64", "aiden-studio"] };
+  const summary = summarizeJobs([job, studio], start);
+  assert.equal(summary.totals["macos-26"], 120);
+  assert.equal(summary.totals["self-hosted"], 120);
+  assert.match(renderSummary(summary), /self-hosted: 2\.00 runner-minutes/u);
+});
+
 test("invalid timestamps are unavailable rather than misleading zeros", () => {
   const summary = summarizeJobs([{ ...job, started_at: null, completed_at: null }], start);
   assert.equal(summary.elapsed, null);
