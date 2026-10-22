@@ -341,8 +341,10 @@ async function openTranscribeCpp(config, files) {
   const initMs = performance.now() - started;
   started = performance.now();
   const model = await tc.TranscribeModel.load(files.model, { backend: config.backend });
-  const loadMs = performance.now() - started;
+  const modelMs = performance.now() - started;
+  // The session builds the native context, so it counts towards being ready for audio, like sherpa's recognizer.
   const session = model.createSession(config.threads ? { nThreads: config.threads } : {});
+  const loadMs = performance.now() - started;
   const caps = model.capabilities;
   const info = {
     transcribeCpp: tc.version(),
@@ -352,6 +354,8 @@ async function openTranscribeCpp(config, files) {
     variant: model.variant,
     supportsStreaming: caps.supportsStreaming,
     initMs: round(initMs),
+    modelMs: round(modelMs),
+    sessionMs: round(loadMs - modelMs),
   };
   const openStream = async () => {
     const stream = await session.stream({ commitPolicy: "stable_prefix", timestamps: "none" });
@@ -563,14 +567,14 @@ const cell = (v, suffix = "") => (v == null ? "–" : `${v}${suffix}`);
 
 function markdown(system, results, clips) {
   const lines = [`# Aiden voice engine spike`, "", `${new Date().toISOString()} · ${system.chip ?? system.cpu} · ${system.performanceCores ?? "?"} P-cores · ${system.memoryGb} GB · macOS ${system.macos ?? "n/a"} · Node ${system.node}`, ""];
-  lines.push("## Load and memory", "", "| Config | Backend | Init ms | Load ms | RSS after load MB | Footprint MB | Peak RSS MB |", "|---|---|---|---|---|---|---|");
+  lines.push("## Load and memory", "", "Load ms is the time until the engine accepts audio: model plus session for transcribe.cpp, recognizer for sherpa. Footprint after run includes inference buffers.", "", "| Config | Backend | Init ms | Load ms | RSS after load MB | Footprint after load MB | Footprint after run MB | Peak RSS MB |", "|---|---|---|---|---|---|---|---|");
   for (const r of results) {
     if (r.error) {
-      lines.push(`| ${r.id} | failed: ${r.error.replace(/\|/g, "/").slice(0, 120)} | | | | | |`);
+      lines.push(`| ${r.id} | failed: ${r.error.replace(/\|/g, "/").slice(0, 120)} | | | | | | |`);
       continue;
     }
     const backend = r.info.backend ?? (r.info.sherpaVersion ? `sherpa ${r.info.sherpaVersion}` : "?");
-    lines.push(`| ${r.id} | ${backend}${r.info.device ? ` (${r.info.device})` : ""} | ${cell(r.info.initMs)} | ${r.loadMs} | ${r.memoryLoaded.rssMb} | ${cell(r.memoryAfter.footprintMb)} | ${r.memoryAfter.maxRssMb} |`);
+    lines.push(`| ${r.id} | ${backend}${r.info.device ? ` (${r.info.device})` : ""} | ${cell(r.info.initMs)} | ${r.loadMs} | ${r.memoryLoaded.rssMb} | ${cell(r.memoryLoaded.footprintMb)} | ${cell(r.memoryAfter.footprintMb)} | ${r.memoryAfter.maxRssMb} |`);
   }
   const ids = clips.map((c) => c.id);
   lines.push("", "## Offline: release-to-text decode (median ms, first decode after load in brackets)", "", `| Config | ${ids.join(" | ")} | mean WER |`, `|---|${ids.map(() => "---").join("|")}|---|`);
