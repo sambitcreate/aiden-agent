@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
 import { createSettingsApplicationEffects } from "./settings-application-effects-core.js";
 import type { AppSettings } from "./types.js";
 
@@ -33,6 +34,13 @@ test("choosing an on-device model or provider loads it ahead of dictation", asyn
     await apply(patch);
     assert.ok(calls.includes("preloadLocalVoice"), JSON.stringify(patch));
   }
+});
+
+test("switching back to Automatic loads the on-device model too", async () => {
+  const { apply, calls } = subject();
+  // The Settings handler parses the Automatic choice before applying effects.
+  await apply(parseVoiceProviderPatch({ voiceProvider: null }));
+  assert.ok(calls.includes("preloadLocalVoice"));
 });
 
 test("unrelated changes and turning Load in advance off load nothing", async () => {

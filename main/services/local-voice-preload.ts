@@ -63,7 +63,8 @@ export function createLocalVoicePreloader(deps: LocalVoicePreloadDeps): () => Pr
 export function localVoicePreloadRelevant(patch: Partial<AppSettings>): boolean {
   return (
     patch.localVoiceModel !== undefined ||
-    patch.voiceProvider !== undefined ||
+    // Automatic clears the choice with an own `voiceProvider: undefined`.
+    "voiceProvider" in patch ||
     patch.localVoicePreload === true
   );
 }
