@@ -1,6 +1,6 @@
 # Voice dictation: speed and live text (STT sub-project 2)
 
-Status: Active (2026-10-22). Phase 1 is in review; phase 2 waits on the engine spike on the owner's Mac.
+Status: Active (2026-10-22). Phase 1 is in review in [PR #579](https://github.com/sambitcreate/aiden-agent/pull/579); phase 2 waits on the engine spike on the owner's Mac.
 
 Deep dive: [Local voice dictation: speed and live text](https://claude.ai/artifact/JZWtaaWud4cks6WtdjdQBY) (2026-10-21). It compares Aiden's on-device dictation with Handy (`cjpais/handy`, MIT) as of v0.9.x.
 
