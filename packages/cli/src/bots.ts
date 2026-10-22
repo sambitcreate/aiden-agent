@@ -110,6 +110,11 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   /** Pause: record it first, so no new turn starts, then stop the Bot's running chats. */
   async function pauseBot(botId: string) {
     if (!(await botStore.get(botId))) throw new Error("This Bot no longer exists.");
+    if (durable) {
+      // The durable session records it in the same store, then closes a running turn and leaves it for Resume.
+      await durable.runtime.pause(botId, "cli");
+      return { botId, paused: true as const, since: (await pauses.get(botId))!.since };
+    }
     const record = await pauses.pause(botId, "cli");
     for (const chat of await daemon.chatStore.listByBot(botId)) {
       await daemon.llmClient.cancelChat(chat.id); await daemon.llmClient.waitForChatIdle(chat.id);
@@ -248,7 +253,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   let routineScheduler: ReturnType<typeof createCliScheduler> | undefined;
   const marker = cliDurableBotMarker(agentDir);
   const durable = marker?.state === "enabled" ? await createCliDurableBots(agentDir, {
-    application, botStore, capabilities, authority, tools,
+    application, botStore, capabilities, authority, tools, pauses,
     instructions: async (admission) => {
       await admission.revalidateBeforeEffect();
       const bot = await botStore.get(admission.authority.botId);
@@ -310,7 +315,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
         case "chat": return application.createChat({ audienceId, botId: id, ...readJson<{ providerId: string; model: string }>(input, undefined!) });
         case "chat-access": return application.updateChatAccess({ audienceId, ...readJson<{ botId: string; chatId: string; expectedRevision: string; access: BotChatAccessUpdate }>(id, undefined!) });
         case "pause": if (!id) throw new Error("Usage: bots pause <bot-id>"); return pauseBot(id);
-        case "unpause": if (!id) throw new Error("Usage: bots unpause <bot-id>"); await pauses.unpause(id); return { botId: id, paused: false };
+        case "unpause": if (!id) throw new Error("Usage: bots unpause <bot-id>"); await (durable ? durable.runtime.unpause(id) : pauses.unpause(id)); return { botId: id, paused: false };
         default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access|pause|unpause");
       }
     },

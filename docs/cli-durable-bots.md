@@ -30,6 +30,8 @@ For rollback, stop the daemon first, retain the whole profile, and move only `bo
 | Stable request deduplication and paused restart | Supported | Shared core |
 | Bot memory tools, recall, person edits | Supported | Shared store and existing Remote endpoints |
 | Routines | Supported | Shared routine service/executor; paused turns are skipped |
+| Pause and unpause (the person's switch) | Supported | `aiden bots pause` and `unpause` through the shared core and its pause file: a running turn is stopped and waits for Resume or Dismiss after unpause. Paired devices see a paused Bot as unavailable |
+| Hand-offs, `sign_in`, Bot rules, Bot computers | Supported (Bot computers on Apple silicon only) | Unavailable; `bot:handoffs` is not advertised |
 | Starter presets | Supported | Shared crash-safe starter and creation-key store |
 | Connection approvals | Supported | Local CLI or paired Remote approval response |
 | Automatic memory review/compaction steering | Supported | Unavailable; no background review is started |

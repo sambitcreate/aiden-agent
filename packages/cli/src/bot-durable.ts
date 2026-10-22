@@ -33,6 +33,7 @@ import type { createBotCapabilityStore } from "../../../main/services/bot-capabi
 import { createCliModelRuntime } from "./providers.ts";
 import { resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 import { cliLeaseHelperPath } from "./state.ts";
+import type { BotPauseStore } from "../../../main/services/bot-pause-store.js";
 
 export interface CliDurableBotPorts {
   application: ReturnType<typeof createBotApplicationService>;
@@ -42,6 +43,8 @@ export interface CliDurableBotPorts {
   tools(admission: BotRuntimeAuthorityAdmission, context?: CliDurableBotToolContext): Promise<AgentTool[]>;
   instructions(admission: BotRuntimeAuthorityAdmission): Promise<string>;
   deleteRoutines(botId: string): Promise<void>;
+  /** The CLI's pause store (`aiden bots pause`), shared so both paths read one file. */
+  pauses?: BotPauseStore;
 }
 
 export interface CliDurableBotToolContext {
@@ -92,7 +95,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
     }) };
   }
   const runtime = await createBotSessionService({
-    profileDir, leaseHelperPath: cliLeaseHelperPath(), models: models.modelsFor,
+    profileDir, leaseHelperPath: cliLeaseHelperPath(), models: models.modelsFor, pauses: ports.pauses,
     knownBotIds: async () => new Set((await ports.botStore.list()).map((bot) => bot.id)),
     resolveModel: async (botId) => {
       if (await ports.capabilities.getBotModelAuthority(botId) === undefined) return null;
@@ -147,7 +150,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       },
     },
     onSessionOpen: (botId) => memory.beginSession(botId),
-    deleteEffects: [ports.deleteRoutines, async (botId) => { memory.forgetBot(botId); models.forget(botId); imageInputs.delete(botId); }, async (botId) => { await ports.application.deleteBot({ botId }); }],
+    deleteEffects: [ports.deleteRoutines, async (botId) => { memory.forgetBot(botId); models.forget(botId); imageInputs.delete(botId); }, async (botId) => { await ports.pauses?.forgetBot(botId); }, async (botId) => { await ports.application.deleteBot({ botId }); }],
     onReport: (botId, error) => process.stderr.write(`Bot ${botId}: ${error instanceof Error ? error.message : String(error)}\n`),
   });
   try { await runtime.initialize(); } // Inspection only; interrupted work never resumes.

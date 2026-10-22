@@ -2184,6 +2184,75 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   assert.equal(calls, beforeReopen);
 });
 
+test("a durable Bot paused from the CLI stops its running turn, refuses sends and waits for Resume once unpaused", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir);
+  const oldEntry = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
+  let calls = 0, hold = true;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request);
+    calls++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
+    // A held reply never finishes on its own: only the pause ends it.
+    if (hold) return;
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+  const bot = await host.application.createBot({ audienceId, bot: { name: "Ada", instructions: "Reply briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } });
+  await host.command(["enable-durable"]);
+  await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  const never = new AbortController().signal;
+
+  // Pausing while a reply streams stops it where it is and leaves it for Resume.
+  const running = await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "before-pause" });
+  for (let tries = 0; calls === 0 && tries < 500; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls, 1);
+  const paused = await host.command(["pause", bot.id]);
+  assert.deepEqual(Object.keys(paused).sort(), ["botId", "paused", "since"]);
+  assert.equal(paused.paused, true);
+  // Bounded: a pause that leaves the turn running would otherwise wait here for good.
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, running.submissionId, AbortSignal.timeout(20_000))).kind, "interrupted");
+  const state = await host.durable.runtime.state(bot.id);
+  assert.equal(state.kind, "paused"); assert.equal(state.by, "cli"); assert.equal(state.since, paused.since);
+  assert.equal(state.interrupted, running.submissionId);
+  assert.equal(await host.isPaused(bot.id), true, "the CLI's own check reads the same pause");
+  await assert.rejects(host.durable.runtime.send(bot.id, { text: "Again", requestId: "while-paused" }), (error) => error.reason === "paused_by_person");
+  assert.equal(calls, 1, "a paused Bot makes no provider request");
+
+  // The pause outlives the daemon.
+  await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  assert.equal((await host.durable.runtime.state(bot.id)).kind, "paused");
+  await assert.rejects(host.durable.runtime.send(bot.id, { text: "Again", requestId: "after-restart" }), (error) => error.reason === "paused_by_person");
+
+  // Unpausing leaves the stopped turn waiting for Resume; nothing runs on its own.
+  assert.deepEqual(await host.command(["unpause", bot.id]), { botId: bot.id, paused: false });
+  const interrupted = await host.durable.runtime.state(bot.id);
+  assert.equal(interrupted.kind, "interrupted"); assert.equal(interrupted.submissionId, running.submissionId);
+  assert.equal(calls, 1);
+  hold = false;
+  await host.durable.runtime.resume(bot.id, "resume-after-unpause");
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, running.submissionId, never)).kind, "completed");
+  assert.equal(calls, 2);
+
+  // Deleting the Bot forgets its pause.
+  await host.command(["pause", bot.id]);
+  await host.command(["delete", bot.id]);
+  assert.equal(await host.isPaused(bot.id), false);
+});
+
 test("failed advisor attempts retain unknown usage and persist idempotently", async (t) => {
   const dir = temporary(t);
   const record = { source: "advisor", providerId: "test", providerLabel: "Test", modelId: "model", modelLabel: "Model", local: false, status: "failed", tokens: null, costStatus: "unavailable" };
