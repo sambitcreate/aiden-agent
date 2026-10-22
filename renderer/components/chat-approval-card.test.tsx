@@ -6,6 +6,7 @@ import { ChatApprovalCard, type ChatApprovalDecisionOptions } from "./chat-appro
 import { TooltipProvider } from "./ui";
 import type { ApprovalPrompt } from "../lib/ipc";
 import { toolApprovalPreview } from "../shared/tool-approval-preview";
+import { subagentOutboundApprovalSummaryV2 } from "../../main/services/subagents/outbound-approval-v2.js";
 
 afterEach(cleanup);
 
@@ -119,6 +120,16 @@ test("a paired host's command summary still shows just the command", () => {
   mount({ toolName: "edit_file", summary: "Edit file: src/forecast.ts" });
   assert.ok(screen.getByRole("region", { name: "Edit forecast.ts?" }));
   assert.ok(screen.getByText("Edit file: src/forecast.ts"));
+});
+
+test("a subagent's web search reaches the owner as a plain card with its whole request", () => {
+  const summary = subagentOutboundApprovalSummaryV2({ toolName: "web_search", kind: "web" }, { query: "best hikes near Boulder" });
+  const { card, decisions } = mount({ toolName: "web_search", summary });
+
+  assert.ok(screen.getByRole("region", { name: "Allow Web search?" }));
+  assert.equal(within(card).getByText(/^Search the public web/u).textContent, summary, "every line of the request is shown");
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  assert.deepEqual(decisions, [["allow", undefined]]);
 });
 
 test("an approval that cannot be allowed here offers only Deny", () => {
