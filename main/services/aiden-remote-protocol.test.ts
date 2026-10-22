@@ -24,7 +24,7 @@ import {
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
-  AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
+  AIDEN_REMOTE_OPT_IN_CAPABILITIES,
   AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
@@ -117,13 +117,13 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 ];
 
 // Simulator control is a desktop-to-desktop grant that pairing never issues,
-// and the phone simulator viewer grant and the Bot card, activity and hand-off
-// opt-ins are negotiated only after pairing.
+// and the phone simulator viewer grant and the Bot card, activity, hand-off and
+// schedule card opt-ins are negotiated only after pairing.
 const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
   (capability) =>
     !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
     !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
-    !(AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES as readonly string[]).includes(capability),
+    !(AIDEN_REMOTE_OPT_IN_CAPABILITIES as readonly string[]).includes(capability),
 );
 // Host-wide grants are issued to desktops only, so phones are never told they
 // exist either and the shared mobile fixture omits both families.
@@ -436,6 +436,8 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botAttachments;
   // Bot hand-offs and pause are revision 37.
   delete revision19.botHandoffs;
+  // Schedule approval cards are revision 39.
+  delete revision19.scheduleCards;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
@@ -2083,6 +2085,39 @@ test("approval scope schemas accept the shared fixture and only allow-with-scope
   assert.equal(request({ decision: "allow", scope: "workspace" }), false);
 });
 
+test("schedule card schemas accept the shared fixture and turn away every structurally malformed card", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  type Labeled = { label: string; schedule: unknown };
+  const { scheduleCards } = await json("fixtures/contract.json") as {
+    scheduleCards: {
+      streamApproval: { approval: Record<string, unknown> };
+      phoneRunEvents: Array<{ type: string; payload: Record<string, unknown> }>;
+      cards: Labeled[];
+      rejected: Labeled[];
+    };
+  };
+  const ajv = new Ajv2020({ strict: false });
+  const pending = ajv.compile({ $ref: "#/components/schemas/PendingApproval", components: spec.components });
+  const runEvent = ajv.compile({ $ref: "#/components/schemas/RunEvent", components: spec.components });
+  const card = ajv.compile({ $ref: "#/components/schemas/ApprovalSchedule", components: spec.components });
+
+  assert.equal(pending(scheduleCards.streamApproval.approval), true);
+  for (const event of scheduleCards.phoneRunEvents) assert.equal(runEvent(event), true, event.type);
+  const carded = scheduleCards.phoneRunEvents.filter((event) => event.payload.schedule !== undefined);
+  assert.ok(carded.length > 0);
+  for (const event of carded) assert.equal(card(event.payload.schedule), true);
+  for (const { label, schedule } of scheduleCards.cards) assert.equal(card(schedule), true, label);
+
+  // Control and bidirectional characters are a text rule every reader enforces, not a schema shape.
+  const textRuleOnly = new Set(["bidi-name", "control-in-cadence"]);
+  for (const { label, schedule } of scheduleCards.rejected) {
+    if (textRuleOnly.has(label)) continue;
+    assert.equal(card(schedule), false, label);
+    assert.equal(pending({ ...scheduleCards.streamApproval.approval, schedule }), false, label);
+  }
+});
+
 test("pairing request OpenAPI schemas accept the shared fixture and keep phones and stray envelopes out", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
@@ -2696,6 +2731,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const older = structuredClone(raw);
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
+  delete older.scheduleCards;
   // The number is re-claimed at merge, so the test names it only through the constant.
   assert.throws(
     () => parseAidenRemoteContractFixture(older),

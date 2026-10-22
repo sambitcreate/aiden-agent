@@ -616,6 +616,79 @@ test("bounded standard schedule approvals remain mobile-allowable without exposi
   assert.match(app.approvals[0] ?? "", /:allow:/u);
 });
 
+test("a schedule card reaches only a device that asks for one and never changes whether it may allow", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-schedule",
+    summary: 'Create scheduled task "Inbox monitor" · Every day at 9:00 AM · Full access · MCP Gmail (gmail)',
+    scopes: ["once", "chat"],
+    details: {
+      kind: "scheduled-task",
+      action: "create",
+      taskId: null,
+      expectedUpdatedAt: null,
+      enabled: true,
+      name: "Inbox monitor",
+      prompt: "Summarize inbox changes.",
+      script: null,
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      nextRunAt: 2_000_000_000_000,
+      notify: true,
+      mode: "llm",
+      permission: "full",
+      workspaceId: null,
+      workspaceName: null,
+      mcpServerIds: ["gmail"],
+      mcpServerNames: ["Gmail"],
+      providerId: "local-provider",
+      providerName: "Local Provider",
+      model: "local-model",
+      modelName: "Local Model",
+      legacyGlobalMcp: false,
+      schedulerEnabled: true,
+    },
+  });
+
+  const plain = app.service.pendingApproval("device-1", "stream-1");
+  const carded = app.service.pendingApproval("device-1", "stream-1", { scheduleCard: true });
+  assert.equal(plain?.schedule, undefined);
+  assert.ok(carded?.schedule);
+  const { schedule, ...rest } = carded;
+  assert.deepEqual(rest, plain, "the card is the only difference");
+  assert.equal(carded.details, undefined);
+  assert.equal(carded.canAllow, true);
+  assert.equal(schedule.name, "Inbox monitor");
+  assert.equal(schedule.permission, "full");
+  assert.deepEqual(schedule.connectors, ["Gmail"]);
+  assert.equal(schedule.nextRunAt, new Date(2_000_000_000_000).toISOString());
+  assert.equal(schedule.prompt, "Summarize inbox changes.");
+
+  // Any other approval stays exactly as before, card or no card.
+  const other = app.service.create("device-1", "stream-2", "chat-2", "turn-2");
+  other.owner.send("chat:approval", {
+    approvalId: "approval-run",
+    summary: "Allow shell for this subagent run",
+    details: {
+      kind: "subagent-run-grant",
+      lane: "shell",
+      runId: "run-implementer",
+      childLabel: "Implement checks",
+      workspaceLabel: "Project",
+      worktreeLabel: null,
+      isManagedWorktree: false,
+      workspaceRevisionPrefix: "a".repeat(12),
+      fullHostAccess: true,
+      noRollback: true,
+    },
+  });
+  const hostOnly = app.service.pendingApproval("device-1", "stream-2", { scheduleCard: true });
+  assert.equal(hostOnly?.approvalId, "approval-run");
+  assert.equal(hostOnly?.schedule, undefined);
+  assert.equal(hostOnly?.canAllow, false);
+});
+
 test("approval detail fields outside the declared shape never reach the host, a device or the journal", async () => {
   const app = persistenceFixture(0);
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
