@@ -108,7 +108,9 @@ jobs:
     name: Electron E2E (${{ matrix.shard }}/3)
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
+    # Stays hosted: the Studio's two runners share one macOS login, so parallel
+    # shards would share the system clipboard and window focus.
+    runs-on: macos-26
     timeout-minutes: 20
     strategy:
       fail-fast: false

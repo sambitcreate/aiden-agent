@@ -106,11 +106,16 @@ been removed to keep release hardening separate from this CI rollout.
 
 ## Self-hosted Mac runner
 
-The macOS jobs in `CI` (build, Electron E2E, verify, desktop test lanes, Apple
-Foundation Models and iOS) and the two TestFlight workflows can run on the
+The macOS jobs in `CI` (build, verify, desktop test lanes, Apple Foundation Models
+and iOS) and the two TestFlight workflows can run on the
 maintainer's Mac Studio instead of GitHub's hosted `macos-26` runners. Hosted Macs
 are capped at five concurrent jobs per account and a full run needs ten, so bursts
 of merges queued Mac jobs for over an hour.
+
+Electron E2E always stays on `macos-26`. Both Studio runners share one macOS login,
+so parallel shards would share the system clipboard and window focus, and some
+specs copy text and check the clipboard. Moving E2E to the Studio needs each runner
+in its own macOS account first.
 
 The repository variable `AIDEN_MAC_RUNNER` is the switch:
 
