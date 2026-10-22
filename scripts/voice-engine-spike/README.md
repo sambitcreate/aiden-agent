@@ -22,7 +22,7 @@ Options:
 - `--clips DIR` adds your own recordings: `name.wav` files with an optional `name.txt` reference transcript.
 - `--cache DIR` and `--sherpa-model DIR` change where models are read from.
 
-Results go to `results/<time>.md` (tables) and `results/<time>.json` (every number and transcript).
+Results go to `results/<time>.md` (tables) and `results/<time>.json` (every number and transcript). `reference-results/` keeps the run that picked the phase 2 engine.
 
 ## What it measures
 
