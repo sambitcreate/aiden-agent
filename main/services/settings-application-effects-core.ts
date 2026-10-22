@@ -1,3 +1,4 @@
+import { localVoicePreloadRelevant } from "./local-voice-preload.js";
 import type { AppSettings } from "./types.js";
 
 export interface SettingsEffects {
@@ -6,6 +7,8 @@ export interface SettingsEffects {
   cancelSkillWork(): Promise<void>;
   refreshCommands(): Promise<void>;
   reconfigureIdleUnload(): Promise<void>;
+  /** Load the on-device model the new settings would dictate with. Best effort, never awaited. */
+  preloadLocalVoice(): void;
   stopCacheWarmers(): void;
   /** Live streams drop a cached grant on their next Computer Use call. */
   revokeComputerUseGrants(): Promise<void>;
@@ -21,6 +24,7 @@ export function createSettingsApplicationEffects(effects: SettingsEffects) {
     if (patch.computerUseAlwaysAllow === false) await effects.revokeComputerUseGrants();
     if (patch.aidenLiveEnabled === false) await effects.stopLiveSessions();
     if (patch.localVoiceIdleUnloadMinutes !== undefined) await effects.reconfigureIdleUnload();
+    if (localVoicePreloadRelevant(patch)) effects.preloadLocalVoice();
     if (patch.skillsEnabled !== undefined) {
       effects.invalidateSkills();
       effects.revokeBotSkills();

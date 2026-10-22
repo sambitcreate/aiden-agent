@@ -639,6 +639,7 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
     voiceLanguage: "klingon!",
     voiceTranslateToEnglish: "yes",
     voiceTrimSilence: 0,
+    localVoicePreload: "yes",
     dictationDictionary: [
       { from: "  aiden  ", to: "Aiden" },
       { from: 42, to: "nope" },
@@ -661,6 +662,7 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
   assert.equal(runtime.voiceLanguage, undefined);
   assert.equal(runtime.voiceTranslateToEnglish, undefined);
   assert.equal(runtime.voiceTrimSilence, undefined);
+  assert.equal(runtime.localVoicePreload, undefined);
   assert.deepEqual(runtime.dictationDictionary, [
     { from: "aiden", to: "Aiden" },
     { from: "pie", to: "Pi" },
@@ -669,7 +671,12 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
 
 test("saved voice language and decode preferences survive a restart", async (t) => {
   const h = await harness(t);
-  await h.store.setSettings({ voiceLanguage: "de", voiceTranslateToEnglish: true, voiceTrimSilence: false });
+  await h.store.setSettings({
+    voiceLanguage: "de",
+    voiceTranslateToEnglish: true,
+    voiceTrimSilence: false,
+    localVoicePreload: false,
+  });
   const restarted = createConfigStore(
     createPortableConfigStores(
       () => path.dirname(h.portableFile),
@@ -681,6 +688,7 @@ test("saved voice language and decode preferences survive a restart", async (t) 
   assert.equal(runtime.voiceLanguage, "de");
   assert.equal(runtime.voiceTranslateToEnglish, true);
   assert.equal(runtime.voiceTrimSilence, false);
+  assert.equal(runtime.localVoicePreload, false);
 });
 
 test("clearing the voice provider returns to Automatic after a restart", async (t) => {

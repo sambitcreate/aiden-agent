@@ -11,14 +11,15 @@ import { onNotification } from "../lib/ipc-bridge";
 import { dictationApi, settingsApi, voiceApi } from "../lib/ipc-voice";
 import type { SlowModelLoadNotice } from "../lib/slow-model-load";
 import { useSlowModelLoad } from "../lib/use-slow-model-load";
-import { voiceSetupMessage, type VoiceProviderResolution } from "../shared/voice-provider";
-import type { DictationStatePayload } from "../shared/dictation";
+import { voiceSetupMessage } from "../shared/voice-provider";
+import type { DictationStatePayload, ReadyVoiceProvider } from "../shared/dictation";
 import {
   ensureMicrophoneAccess,
   microphoneCaptureErrorMessage,
   MICROPHONE_PERMISSION_OFF_MESSAGE,
   cancelTranscription,
   transcribeBlob,
+  transcribePcm16,
 } from "../lib/voice-recorder-core";
 import {
   DictationDeadline,
@@ -34,6 +35,7 @@ import {
   startChunkedMediaRecorder,
 } from "../lib/media-recorder-stop";
 import { startPillAppearanceSync } from "../lib/pill-appearance";
+import { createVoiceRecorder, PcmRecorder, recorderStopTailMs } from "../lib/pcm-recorder";
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "../lib/live-pcm-capture";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
 import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "../lib/gemini-recorded-retry";
@@ -53,7 +55,8 @@ const WAVEFORM_BARS = 9;
 
 interface ActiveRecording {
   operationId: string;
-  recorder: MediaRecorder;
+  /** On-device capture records raw 16 kHz PCM; cloud providers take a MediaRecorder file. */
+  recorder: MediaRecorder | PcmRecorder;
   stream: MediaStream;
   chunks: Blob[];
   audioContext: AudioContext;
@@ -139,6 +142,7 @@ export function PillApp() {
   const releaseRecording = React.useCallback(
     (active: ActiveRecording) => {
       stopWaveform();
+      if (active.recorder instanceof PcmRecorder) active.recorder.dispose();
       active.stream.getTracks().forEach((track) => track.stop());
       void active.audioContext.close().catch(() => {});
       if (recordingRef.current === active) recordingRef.current = null;
@@ -172,7 +176,7 @@ export function PillApp() {
   }, []);
 
   const startRecording = React.useCallback(
-    async (operationId: string) => {
+    async (operationId: string, resolvedVoice?: ReadyVoiceProvider) => {
       if (recordingRef.current) return;
       const token = operationGateRef.current.beginStart();
       if (token === null) return;
@@ -182,16 +186,21 @@ export function PillApp() {
       pendingStopRef.current = false;
       let pendingStream: MediaStream | null = null;
       let pendingAudioContext: AudioContext | null = null;
+      let pendingRecorder: PcmRecorder | null = null;
+      // Settings load while the microphone opens instead of after it.
+      const settingsLoad = settingsApi.get();
+      settingsLoad.catch(() => {});
       try {
-        // Resolve the provider (on-device first) before opening the microphone.
-        const resolution = await voiceApi.resolveProvider();
+        // Main resolved the provider (on-device first) for this press; ask only
+        // when it did not, before opening the microphone.
+        const resolution = resolvedVoice ?? (await voiceApi.resolveProvider());
         if (!operationGateRef.current.isCurrent(token)) return;
         if (resolution.kind === "needs-setup") {
           operationGateRef.current.finishStart(token);
           await dictationApi.reportError(operationId, voiceSetupMessage(resolution.reason));
           return;
         }
-        const voice: Extract<VoiceProviderResolution, { kind: "ready" }> = resolution;
+        const voice: ReadyVoiceProvider = resolution;
         const allowed = await ensureMicrophoneAccess();
         if (!operationGateRef.current.isCurrent(token)) return;
         if (!allowed) {
@@ -206,20 +215,22 @@ export function PillApp() {
           pendingStream = null;
           return;
         }
-        const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-        const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        const recorder = await createVoiceRecorder(stream, voice.provider);
+        if (recorder instanceof PcmRecorder) pendingRecorder = recorder;
         const audioContext = new AudioContext();
         pendingAudioContext = audioContext;
         void audioContext.resume().catch(() => {});
         const analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         audioContext.createMediaStreamSource(stream).connect(analyser);
-        const settings = await settingsApi.get();
+        const settings = await settingsLoad;
         if (!operationGateRef.current.isCurrent(token)) {
           stream.getTracks().forEach((track) => track.stop());
           void audioContext.close().catch(() => {});
+          pendingRecorder?.dispose();
           pendingStream = null;
           pendingAudioContext = null;
+          pendingRecorder = null;
           return;
         }
         const active: ActiveRecording = {
@@ -246,13 +257,26 @@ export function PillApp() {
             () => undefined,
           );
         }
-        recorder.ondataavailable = (event) => {
-          if (event.data.size > 0) active.chunks.push(event.data);
-        };
+        if (!(recorder instanceof PcmRecorder)) {
+          recorder.ondataavailable = (event) => {
+            if (event.data.size > 0) active.chunks.push(event.data);
+          };
+        }
         recorder.onstop = () => {
-          const blob = new Blob(active.chunks, { type: recorder.mimeType || "audio/webm" });
+          const pcm = recorder instanceof PcmRecorder ? recorder.takePcm() : null;
+          const blob = new Blob(active.chunks, {
+            type: recorder instanceof PcmRecorder ? "" : recorder.mimeType || "audio/webm",
+          });
+          const hasAudio = pcm ? pcm.length > 0 : blob.size > 0;
           releaseRecording(active);
-          if (active.cancelled || (blob.size === 0 && !active.liveStart)) return;
+          if (active.cancelled) return;
+          if (!hasAudio && !active.liveStart) {
+            // Nothing was captured: let the coordinator say so instead of waiting out its watchdog.
+            if (operationGateRef.current.isCurrent(token)) {
+              void dictationApi.reportResult(operationId, "").catch(() => {});
+            }
+            return;
+          }
           transcriptionRef.current = active;
           setPhase("finalizing");
           const audioSeconds = Math.max(0, (performance.now() - active.startedAt) / 1_000);
@@ -287,7 +311,7 @@ export function PillApp() {
                   );
                 }
               }
-              if (needsGeminiRecordedRetry(active.liveStart !== undefined, text, blob.size > 0)) {
+              if (needsGeminiRecordedRetry(active.liveStart !== undefined, text, hasAudio)) {
                 const consent = recordedRetryConsent.request();
                 setPhase("fallback-consent");
                 await dictationApi.reportProgress(operationId, "fallback-consent");
@@ -296,7 +320,7 @@ export function PillApp() {
                   return;
                 }
               }
-              if (active.liveStart && !text && blob.size === 0) {
+              if (active.liveStart && !text && !hasAudio) {
                 await dictationApi.reportResult(operationId, "");
                 return;
               }
@@ -312,14 +336,22 @@ export function PillApp() {
                 }
                 active.batchOperationId = `${operationId}-batch`;
                 active.batchProvider = voice.provider;
-                text = await transcribeBlob(blob, {
-                  provider: active.batchProvider,
-                  localModel: voice.provider === "local" ? voice.modelId : undefined,
-                  model: settings.voiceModel,
-                  operationId: active.batchOperationId,
-                  signal: active.transcriptionController.signal,
-                  audioSeconds,
-                });
+                text =
+                  pcm && voice.provider === "local"
+                    ? await transcribePcm16(pcm, {
+                        localModel: voice.modelId,
+                        operationId: active.batchOperationId,
+                        signal: active.transcriptionController.signal,
+                        audioSeconds,
+                      })
+                    : await transcribeBlob(blob, {
+                        provider: active.batchProvider,
+                        localModel: voice.provider === "local" ? voice.modelId : undefined,
+                        model: settings.voiceModel,
+                        operationId: active.batchOperationId,
+                        signal: active.transcriptionController.signal,
+                        audioSeconds,
+                      });
               }
               if (!operationGateRef.current.isCurrent(token)) return;
               await dictationApi.reportResult(operationId, text);
@@ -340,6 +372,7 @@ export function PillApp() {
         recordingRef.current = active;
         pendingStream = null;
         pendingAudioContext = null;
+        pendingRecorder = null;
         operationGateRef.current.finishStart(token);
         if (!operationGateRef.current.isCurrent(token)) {
           active.cancelled = true;
@@ -367,7 +400,11 @@ export function PillApp() {
         timerRef.current = setInterval(() => setElapsed((value) => value + 1), 1_000);
         if (pendingStopRef.current) {
           clearStopTimer();
-          stopTimerRef.current = scheduleRecorderStopWithTail(active.recorder, setTimeout);
+          stopTimerRef.current = scheduleRecorderStopWithTail(
+            active.recorder,
+            setTimeout,
+            recorderStopTailMs(active.recorder),
+          );
         }
       } catch (error) {
         const active = recordingRef.current;
@@ -378,6 +415,7 @@ export function PillApp() {
           if (active.recorder.state !== "inactive") active.recorder.stop();
           releaseRecording(active);
         }
+        pendingRecorder?.dispose();
         pendingStream?.getTracks().forEach((track) => track.stop());
         if (pendingAudioContext) void pendingAudioContext.close().catch(() => {});
         if (!operationGateRef.current.isCurrent(token)) return;
@@ -395,7 +433,11 @@ export function PillApp() {
     const active = recordingRef.current;
     if (!active || active.recorder.state === "inactive") return;
     clearStopTimer();
-    stopTimerRef.current = scheduleRecorderStopWithTail(active.recorder, setTimeout);
+    stopTimerRef.current = scheduleRecorderStopWithTail(
+      active.recorder,
+      setTimeout,
+      recorderStopTailMs(active.recorder),
+    );
   }, [clearStopTimer]);
 
   const discardRecording = React.useCallback(() => {
@@ -437,7 +479,7 @@ export function PillApp() {
         case "recording":
           if (payload.message) setRecordingHint(payload.message);
           if (payload.operationId && payload.operationId !== operationIdRef.current) {
-            void startRecording(payload.operationId);
+            void startRecording(payload.operationId, payload.voice);
           }
           break;
         case "stopping":
@@ -501,7 +543,7 @@ export function PillApp() {
         active.cancelled = true;
         active.transcriptionController.abort();
         void active.liveStart?.then((live) => live?.cancel()).catch(() => {});
-        active.recorder.ondataavailable = null;
+        if (!(active.recorder instanceof PcmRecorder)) active.recorder.ondataavailable = null;
         active.recorder.onstop = null;
         if (active.recorder.state !== "inactive") active.recorder.stop();
         releaseRecording(active);

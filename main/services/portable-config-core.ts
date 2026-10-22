@@ -642,6 +642,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationSounds",
     "voiceTranslateToEnglish",
     "voiceTrimSilence",
+    "localVoicePreload",
     "showLocalModelReasoning",
     "memoryEnabled",
     "skillsEnabled",

@@ -7,6 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import {
   ATOMIC_PASTE_SCRIPT,
+  createSecureInputPrefetch,
   detectMacSecureInput,
   pasteTranscript,
   runJxa,
@@ -222,3 +223,62 @@ JSON.stringify({before: before, enabled: enabled, after: Boolean($.IsSecureEvent
     assert.equal(state.after, state.before);
   },
 );
+
+function probeHarness() {
+  let clock = 0;
+  const answers: boolean[] = [];
+  let probes = 0;
+  const prefetch = createSecureInputPrefetch({
+    probe: async () => {
+      probes += 1;
+      return answers.shift() ?? false;
+    },
+    now: () => clock,
+    maxAgeMs: 1_000,
+  });
+  return {
+    prefetch,
+    answers,
+    probes: () => probes,
+    advance: (ms: number) => {
+      clock += ms;
+    },
+  };
+}
+
+test("a Secure Input probe started at stop answers the paste that follows", async () => {
+  const subject = probeHarness();
+  subject.answers.push(true);
+  subject.prefetch.prefetch();
+  subject.advance(300);
+  // The second prefetch (as delivery begins) reuses the probe already running.
+  subject.prefetch.prefetch();
+  assert.equal(await subject.prefetch.isSecureInputActive(), true);
+  assert.equal(subject.probes(), 1);
+});
+
+test("a stale or already used probe is never trusted for a paste", async () => {
+  const subject = probeHarness();
+  subject.answers.push(false, true, false);
+  subject.prefetch.prefetch();
+  subject.advance(1_001);
+  // The focused field may have changed since: ask again.
+  assert.equal(await subject.prefetch.isSecureInputActive(), true);
+  assert.equal(subject.probes(), 2);
+  assert.equal(await subject.prefetch.isSecureInputActive(), false);
+  assert.equal(subject.probes(), 3);
+});
+
+test("a failed prefetched probe still keeps the transcript on the clipboard", async () => {
+  const prefetch = createSecureInputPrefetch({
+    probe: async () => {
+      throw new Error("osascript timed out");
+    },
+    now: () => 0,
+  });
+  prefetch.prefetch();
+  const { deps, clipboard } = harness({ isSecureInputActive: () => prefetch.isSecureInputActive() });
+  const result = await pasteTranscript("hello", deps);
+  assert.equal(result.outcome, "copied");
+  assert.equal(clipboard(), "hello");
+});

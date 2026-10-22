@@ -1,4 +1,8 @@
-import type { DictationProgress, DictationStatePayload } from "../../renderer/shared/dictation.js";
+import type {
+  DictationProgress,
+  DictationStatePayload,
+  ReadyVoiceProvider,
+} from "../../renderer/shared/dictation.js";
 import {
   HYBRID_TAP_THRESHOLD_MS,
   type DictationActivationMode,
@@ -11,6 +15,8 @@ export type DictationStage = "idle" | "starting" | "recording" | "transcribing" 
 export interface DictationCoordinatorDeps {
   /** Resolves true when this show created a new renderer document. */
   showPill: () => Promise<boolean>;
+  /** Loads the pill hidden ahead of the first press; resolves true when it created a new renderer document. */
+  preparePill?: () => Promise<boolean>;
   hidePill: () => void;
   destroyPill: () => void;
   broadcast: (payload: DictationStatePayload) => void;
@@ -29,6 +35,13 @@ export interface DictationCoordinatorDeps {
   resolveVoice?: () => Promise<VoiceResolutionCheck>;
   /** Best-effort preload of the transcription model when a recording starts. */
   warmUp?: () => void | Promise<void>;
+  /**
+   * Starts delivery checks (the macOS Secure Input probe) when capture stops,
+   * so they finish while the audio is transcribed. Best effort, never awaited.
+   */
+  prepareDelivery?: () => void;
+  /** One record per delivered dictation, for the latency log. */
+  onTiming?: (timing: DictationTiming) => void;
   /** User dictionary applied to the final transcript before delivery. */
   applyDictionary?: (text: string) => string | Promise<string>;
   /** Optional polish after STT; must return the original text on failure. */
@@ -44,7 +57,21 @@ export interface DictationCoordinatorDeps {
   ) => (() => void) | null | undefined;
 }
 
-export type VoiceResolutionCheck = { ok: true } | { ok: false; message: string };
+export type VoiceResolutionCheck = { ok: true; voice?: ReadyVoiceProvider } | { ok: false; message: string };
+
+/** Milliseconds spent in each stage of one delivered dictation. */
+export interface DictationTiming {
+  operationId: string;
+  /** Hotkey press until the pill was told to record (provider check, pill load). */
+  startMs: number;
+  /** Recording until the user stopped. */
+  speechMs: number;
+  /** Stop until the pill reported the transcript (stop tail, decode, IPC). */
+  transcribeMs: number;
+  /** Transcript until it was pasted or copied (cleanup, dictionary, paste). */
+  deliverMs: number;
+  outcome: PasteOutcome;
+}
 
 export const VOICE_CHECK_FAILED_MESSAGE =
   "Aiden couldn't check your voice setup. Open Settings → Voice and try again.";
@@ -105,6 +132,10 @@ export class DictationCoordinator {
   private stopHoldWatch: (() => void) | null = null;
   /** A setup error a freshly created pill missed because it was not subscribed yet. */
   private replayOnReady: DictationStatePayload | null = null;
+  /** The provider this operation's press resolved, passed to the pill with "recording". */
+  private voice: ReadyVoiceProvider | undefined;
+  private recordingAt = 0;
+  private stoppedAt = 0;
 
   constructor(private readonly deps: DictationCoordinatorDeps) {}
 
@@ -125,17 +156,20 @@ export class DictationCoordinator {
     return (this.deps.now ?? Date.now)();
   }
 
+  private broadcastRecording(message?: string): void {
+    this.deps.broadcast({
+      state: "recording",
+      operationId: this.operationId ?? undefined,
+      ...(message ? { message } : {}),
+      ...(this.voice ? { voice: this.voice } : {}),
+    });
+  }
+
   /** Hybrid only: the shortcut stopped being watched, so behave as a latched toggle. */
   private latchHybridToggle(): boolean {
     if (this.mode !== "hybrid") return false;
     this.holdToTalk = false;
-    if (this.stage === "recording") {
-      this.deps.broadcast({
-        state: "recording",
-        operationId: this.operationId ?? undefined,
-        message: "Press the shortcut again to stop.",
-      });
-    }
+    if (this.stage === "recording") this.broadcastRecording("Press the shortcut again to stop.");
     return true;
   }
 
@@ -227,20 +261,12 @@ export class DictationCoordinator {
           this.holdWatchActive = false;
           this.stopHoldWatch = null;
           if (this.latchHybridToggle()) return;
-          this.deps.broadcast({
-            state: "recording",
-            operationId: this.operationId ?? undefined,
-            message: "Release monitoring unavailable — press again to stop.",
-          });
+          this.broadcastRecording("Release monitoring unavailable — press again to stop.");
         },
       );
       if (typeof stop !== "function") {
         if (this.latchHybridToggle()) return;
-        this.deps.broadcast({
-          state: "recording",
-          operationId: this.operationId ?? undefined,
-          message: "Release monitoring unavailable — press again to stop.",
-        });
+        this.broadcastRecording("Release monitoring unavailable — press again to stop.");
         return;
       }
       this.stopHoldWatch = stop;
@@ -249,11 +275,7 @@ export class DictationCoordinator {
       this.holdWatchActive = false;
       this.deps.logError("Could not watch the dictation shortcut for release.", error);
       if (this.latchHybridToggle()) return;
-      this.deps.broadcast({
-        state: "recording",
-        operationId: this.operationId ?? undefined,
-        message: "Release monitoring unavailable — press again to stop.",
-      });
+      this.broadcastRecording("Release monitoring unavailable — press again to stop.");
     }
   }
 
@@ -301,8 +323,26 @@ export class DictationCoordinator {
     if (this.stage !== "recording") return;
     this.endHoldWatch();
     this.stage = "transcribing";
+    this.stoppedAt = this.now();
     this.deps.broadcast({ state: "stopping", operationId: this.operationId ?? undefined });
     this.armWatchdog();
+    this.startDeliveryChecks();
+  }
+
+  private startDeliveryChecks(): void {
+    try {
+      this.deps.prepareDelivery?.();
+    } catch (error) {
+      this.deps.logError("Could not prepare dictation delivery.", error);
+    }
+  }
+
+  private markRecording(): void {
+    this.stage = "recording";
+    this.recordingAt = this.now();
+    this.broadcastRecording(
+      this.mode === "hybrid" && !this.holdToTalk ? "Press the shortcut again to stop." : undefined,
+    );
   }
 
   /** Hotkey press. Toggle mode starts/stops; hold mode starts, ignores down-repeats, and stops once release is in flight. */
@@ -315,6 +355,7 @@ export class DictationCoordinator {
       this.clearReleaseTimer();
       if (this.stage === "idle") {
         this.replayOnReady = null;
+        this.voice = undefined;
         // Freeze the activation behavior for this operation. A Settings edit
         // takes effect on the next recording, never halfway through this one.
         await this.refreshHoldMode();
@@ -334,6 +375,7 @@ export class DictationCoordinator {
           await this.showSetupError(check.message);
           return;
         }
+        this.voice = check.voice;
         this.stage = "starting";
         this.startWarmUp();
         try {
@@ -347,14 +389,7 @@ export class DictationCoordinator {
           return;
         }
         if (this.stage === "starting" && this.pillReady) {
-          this.stage = "recording";
-          this.deps.broadcast({
-            state: "recording",
-            operationId: this.operationId ?? undefined,
-            ...(this.mode === "hybrid" && !this.holdToTalk
-              ? { message: "Press the shortcut again to stop." }
-              : {}),
-          });
+          this.markRecording();
           if (!this.watchesFromPress()) this.beginHoldWatch();
           if (this.pendingRelease) this.stopIfRecording();
         }
@@ -463,6 +498,21 @@ export class DictationCoordinator {
     });
   }
 
+  /**
+   * Load the hidden pill before the first press. Queued like every other event,
+   * so the new renderer's ready signal always lands after this marks it unready.
+   */
+  prepare(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.stage !== "idle" || !this.deps.preparePill) return;
+      try {
+        if (await this.deps.preparePill()) this.pillReady = false;
+      } catch (error) {
+        this.deps.logError("Could not prepare the dictation pill.", error);
+      }
+    });
+  }
+
   ready(): Promise<void> {
     return this.enqueue(() => {
       this.pillReady = true;
@@ -473,14 +523,7 @@ export class DictationCoordinator {
         return;
       }
       if (this.stage === "starting") {
-        this.stage = "recording";
-        this.deps.broadcast({
-          state: "recording",
-          operationId: this.operationId ?? undefined,
-          ...(this.mode === "hybrid" && !this.holdToTalk
-            ? { message: "Press the shortcut again to stop." }
-            : {}),
-        });
+        this.markRecording();
         if (!this.watchesFromPress()) this.beginHoldWatch();
         if (this.pendingRelease) this.stopIfRecording();
       }
@@ -515,6 +558,7 @@ export class DictationCoordinator {
         return;
       this.clearWatchdogTimer();
       this.stage = "delivering";
+      const resultAt = this.now();
       this.deps.broadcast({ state: "delivering", operationId });
       this.endHoldWatch();
       this.pendingRelease = false;
@@ -527,6 +571,9 @@ export class DictationCoordinator {
           this.broadcastError(operationId, "No speech detected.");
           return;
         }
+        // A long transcription outlives the probe started at stop; refresh it
+        // alongside cleanup instead of after it.
+        this.startDeliveryChecks();
         try {
           if ((await this.deps.shouldCleanup?.()) === true && this.deps.cleanupTranscript) {
             const cleaned = (await this.deps.cleanupTranscript(transcript)).trim();
@@ -551,6 +598,7 @@ export class DictationCoordinator {
         const reason = typeof pasteResult === "string" ? undefined : pasteResult.reason;
         this.stage = "idle";
         this.operationId = null;
+        this.reportTiming(operationId, resultAt, outcome);
         this.deps.broadcast({
           state: outcome,
           operationId,
@@ -571,6 +619,22 @@ export class DictationCoordinator {
         );
       }
     });
+  }
+
+  private reportTiming(operationId: string, resultAt: number, outcome: PasteOutcome): void {
+    if (!this.deps.onTiming) return;
+    try {
+      this.deps.onTiming({
+        operationId,
+        startMs: Math.max(0, this.recordingAt - this.pressedAt),
+        speechMs: Math.max(0, this.stoppedAt - this.recordingAt),
+        transcribeMs: Math.max(0, resultAt - this.stoppedAt),
+        deliverMs: Math.max(0, this.now() - resultAt),
+        outcome,
+      });
+    } catch (error) {
+      this.deps.logError("Could not record dictation timing.", error);
+    }
   }
 
   error(value: unknown, operationId?: unknown): Promise<void> {

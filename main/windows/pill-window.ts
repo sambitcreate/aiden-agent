@@ -81,23 +81,33 @@ async function createPillWindow(): Promise<BrowserWindow> {
   return loaded;
 }
 
+async function ensurePill(): Promise<{ window: BrowserWindow; created: boolean }> {
+  if (pillWindow && !pillWindow.isDestroyed()) return { window: pillWindow, created: false };
+  if (!loading) {
+    loading = createPillWindow().finally(() => {
+      loading = null;
+    });
+  }
+  pillWindow = await loading;
+  return { window: pillWindow, created: true };
+}
+
+/**
+ * Load the pill hidden, so the first dictation press skips the window load.
+ * Resolves true when this created a new renderer document.
+ */
+export async function preparePill(): Promise<boolean> {
+  return (await ensurePill()).created;
+}
+
 /**
  * Show the pill over the display containing the mouse cursor, resolving once
  * its renderer is ready to receive dictation state broadcasts.
  */
 export async function showPill(): Promise<boolean> {
-  let created = false;
-  if (!pillWindow || pillWindow.isDestroyed()) {
-    created = true;
-    if (!loading) {
-      loading = createPillWindow().finally(() => {
-        loading = null;
-      });
-    }
-    pillWindow = await loading;
-  }
-  positionPill(pillWindow);
-  pillWindow.showInactive();
+  const { window, created } = await ensurePill();
+  positionPill(window);
+  window.showInactive();
   return created;
 }
 
