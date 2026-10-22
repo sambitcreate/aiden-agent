@@ -1373,6 +1373,15 @@ export function ScrollArea({
   );
 }
 
+/**
+ * A ScrollArea footer's rows as one column that can give up room: a row that
+ * opts in with min-h-0 (a pending approval) shrinks first, and anything still
+ * too tall leaves through the top so the last row (the composer) stays in view.
+ */
+export function ScrollAreaFooterStack({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("flex min-h-0 flex-col justify-end", className)} {...props} />;
+}
+
 export type DialogLayer = "default" | "onboarding";
 
 type DialogProps = React.PropsWithChildren<{

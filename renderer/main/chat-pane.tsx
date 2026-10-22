@@ -76,7 +76,7 @@ import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
   createAgentsInstructionNoticeLog,
@@ -3132,7 +3132,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
         scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
         footer={
-          <>
+          <ScrollAreaFooterStack>
             <EventPresence
               present={Boolean(pending)}
               className="aiden-dock-inset chat-content-column flex min-h-0 flex-col pb-2"
@@ -3486,7 +3486,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
               />
             )}
-          </>
+          </ScrollAreaFooterStack>
         }
       >
         {chat.isLoading || providers.isLoading ? (

@@ -19,6 +19,7 @@ import {
   EmptyState,
   Input,
   ScrollArea,
+  ScrollAreaFooterStack,
   Text,
   toast,
 } from "../components/ui";
@@ -596,7 +597,7 @@ export function RemoteChatPane({
         showScrollToBottomButton
         streaming={isGenerating}
         footer={
-          <div className="aiden-dock-inset chat-content-column flex min-h-0 flex-col gap-2 pb-3">
+          <ScrollAreaFooterStack className="aiden-dock-inset chat-content-column gap-2 pb-3">
             {openApproval ? (
               <ChatApprovalCard
                 key={openApproval.approvalId}
@@ -746,7 +747,7 @@ export function RemoteChatPane({
                 {`This chat runs on ${host.label}. ${sendRefusal ?? ""}`.trim()}
               </Text>
             ) : null}
-          </div>
+          </ScrollAreaFooterStack>
         }
       >
         {loading ? (
