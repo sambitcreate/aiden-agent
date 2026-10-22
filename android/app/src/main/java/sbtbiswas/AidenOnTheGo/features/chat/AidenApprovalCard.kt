@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,7 +78,8 @@ internal fun AidenApprovalCardContent(
     }
     val isLong = request.length > 320 || request.lines().size > COLLAPSED_LINES
     var expanded by remember(approval.id) { mutableStateOf(false) }
-    val requestScroll = rememberScrollState()
+    // A new approval opens at the start of its request, not where the last one was left.
+    val requestScroll = key(approval.id) { rememberScrollState() }
     val note = when {
         !approval.canRespond -> stringResource(R.string.chat_approval_review_only)
         isAutomation && !approval.hasRequiredWriteCapability -> stringResource(R.string.chat_approval_schedule_write_required)
