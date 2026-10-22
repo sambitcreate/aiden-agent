@@ -1374,7 +1374,10 @@ data class AidenStreamPendingApproval(
     val canAllow: Boolean,
     /** Contract revision 17. Raw names so an unknown future scope never fails
      * decoding; [AidenApprovalScope.offered] keeps the known ones. */
-    val scopes: List<String>? = null
+    val scopes: List<String>? = null,
+    /** Contract revision 39 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
+    @Serializable(with = AidenApprovalScheduleLenientSerializer::class)
+    val schedule: AidenApprovalSchedule? = null
 )
 
 @Serializable
@@ -1580,7 +1583,13 @@ data class AidenPendingApproval(
     val hasRequiredWriteCapability: Boolean,
     val hostCanAllow: Boolean,
     val canAllow: Boolean,
-    val scopes: List<AidenApprovalScope> = listOf(AidenApprovalScope.ONCE)
+    val scopes: List<AidenApprovalScope> = listOf(AidenApprovalScope.ONCE),
+    /**
+     * Revision 39: the scheduled-task card, kept only on a `schedule_task` approval. Display
+     * only: it never changes [canAllow] or [scopes]. Approvals are never persisted, so a
+     * relaunch reads it again from the host.
+     */
+    val schedule: AidenApprovalSchedule? = null
 )
 
 data class AidenApprovalCapabilities(
@@ -1708,7 +1717,8 @@ object AidenPendingApprovalResolution {
                 AidenApprovalScope.offered(approval.scopes)
             } else {
                 listOf(AidenApprovalScope.ONCE)
-            }
+            },
+            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
         )
     }
 }

@@ -8007,6 +8007,7 @@ private struct AidenLiveResponseView: View {
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
                     scopes: approval.scopes,
+                    schedule: approval.schedule,
                     onDeny: { Task { await model.respondToApproval(.deny, approvalID: approval.id) } },
                     onAllow: { scope in
                         Task { await model.respondToApproval(.allow, approvalID: approval.id, scope: scope) }
@@ -8049,12 +8050,13 @@ private struct AidenLiveResponseView: View {
 /// Shared with the Bot session chat (`AidenBotSessionChatView`). Matches the
 /// desktop card: an icon tile, the action as a question, the exact request in a
 /// code block, and two equal buttons with the remembered scopes behind Allow's
-/// chevron.
+/// chevron. A `schedule_task` approval with a valid revision 39 `schedule` card
+/// shows the structured schedule in place of the request.
 struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.aidenReduceMotion) private var reduceMotion
-    @State private var isExpanded = false
-    @State private var hasMoreBelow = false
+    @Environment(\.locale) private var locale
+    @Environment(\.calendar) private var calendar
+    @Environment(\.timeZone) private var timeZone
 
     let summary: String
     var toolName: String = ""
@@ -8063,6 +8065,9 @@ struct AidenApprovalCard: View {
     let hasRequiredWriteCapability: Bool
     let canAllow: Bool
     let scopes: [AidenApprovalScope]
+    /// Contract revision 39: display-only. Nil, or any tool but `schedule_task`,
+    /// keeps the summary card.
+    var schedule: AidenApprovalSchedule? = nil
     let onDeny: () -> Void
     let onAllow: (AidenApprovalScope) -> Void
 
@@ -8070,17 +8075,18 @@ struct AidenApprovalCard: View {
 
     private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
     private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-    /// Lines the request shows before Show all.
-    private let collapsedLines = 6
-    /// About twelve lines: the most an expanded request takes before it scrolls.
-    private let expandedMaxHeight: CGFloat = 240
 
     private var request: String {
         kind == .scheduledTask ? summary : AidenApprovalPresentation.requestedAction(toolName: toolName, summary: summary)
     }
 
-    private var isLong: Bool {
-        request.count > 320 || request.split(whereSeparator: \.isNewline).count > collapsedLines
+    /// The next run reads in the phone's own zone, locale and clock style.
+    private var scheduleCard: AidenScheduleCardPresentation? {
+        var calendar = calendar
+        calendar.timeZone = timeZone
+        return AidenApprovalSchedule.card(schedule, toolName: toolName).map {
+            AidenScheduleCardPresentation($0, now: Date(), calendar: calendar, locale: locale)
+        }
     }
 
     private var limit: AidenApprovalLimit? {
@@ -8093,15 +8099,16 @@ struct AidenApprovalCard: View {
     }
 
     var body: some View {
+        let card = scheduleCard
         VStack(spacing: 0) {
-            Image(systemName: AidenApprovalPresentation.symbol(toolName: toolName, kind: kind))
+            Image(systemName: card == nil ? AidenApprovalPresentation.symbol(toolName: toolName, kind: kind) : "calendar.badge.clock")
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(palette.onFillAccent)
                 .frame(width: 44, height: 44)
                 .background(palette.fillAccent, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
                 .accessibilityHidden(true)
 
-            Text(AidenApprovalPresentation.headline(toolName: toolName, kind: kind, summary: summary))
+            Text(card?.title ?? AidenApprovalPresentation.headline(toolName: toolName, kind: kind, summary: summary))
                 .font(.headline)
                 .foregroundStyle(palette.foreground)
                 .multilineTextAlignment(.center)
@@ -8109,58 +8116,25 @@ struct AidenApprovalCard: View {
                 .padding(.top, 12)
                 .accessibilityAddTraits(.isHeader)
 
-            VStack(alignment: .leading, spacing: 8) {
-                if isExpanded {
-                    // The Bot chat keeps this card in its footer: a long request scrolls
-                    // in a bounded box so Show less and the actions stay on screen.
-                    ViewThatFits(in: .vertical) {
-                        requestText
-                        ScrollView { requestText }
-                            .scrollIndicators(.visible)
-                            .scrollIndicatorsFlash(onAppear: true)
-                            // Only an overflowing request gets here, and it opens at the top.
-                            .onAppear { hasMoreBelow = true }
-                            .onDisappear { hasMoreBelow = false }
-                            .onScrollGeometryChange(for: Bool.self) { geometry in
-                                geometry.visibleRect.maxY < geometry.contentSize.height - 1
-                            } action: { _, more in
-                                hasMoreBelow = more
-                            }
-                    }
-                    .frame(maxHeight: expandedMaxHeight, alignment: .top)
-                } else {
-                    requestText
-                }
-
-                if isLong {
-                    HStack(spacing: 8) {
-                        Button(isExpanded ? "Show less" : "Show all") {
-                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                                isExpanded.toggle()
-                            }
-                        }
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                        .buttonStyle(.plain)
-
-                        Spacer(minLength: 0)
-
-                        // The end of a long request must never sit hidden without a cue.
-                        if isExpanded && hasMoreBelow {
-                            Label("Scroll for more", systemImage: "arrow.down")
-                                .font(.footnote)
-                                .foregroundStyle(palette.secondary)
-                        }
-                    }
-                }
+            if let card {
+                AidenScheduleApprovalDetails(card: card)
+                    .padding(.top, 14)
+            } else {
+                AidenApprovalFoldingText(
+                    text: request,
+                    font: .subheadline.monospaced(),
+                    accessibilityLabel: kind == .scheduledTask ? "Scheduled task proposal" : "Requested action"
+                )
+                .padding(14)
+                .background(palette.canvas, in: wellShape)
+                .padding(.top, 14)
             }
-            .padding(14)
-            .background(palette.canvas, in: wellShape)
-            .padding(.top, 14)
 
             Group {
                 if let limit {
                     Label(limit.text, systemImage: limit.symbol)
+                } else if card != nil {
+                    Text(AidenScheduleCardPresentation.footnote)
                 } else {
                     Text(AidenApprovalPresentation.detail(for: kind))
                 }
@@ -8198,18 +8172,6 @@ struct AidenApprovalCard: View {
                 .shadow(color: palette.foreground.opacity(0.08), radius: 12, y: 4)
         }
         .accessibilityElement(children: .contain)
-    }
-
-    private var requestText: some View {
-        Text(request)
-            .font(.subheadline.monospaced())
-            .foregroundStyle(palette.foreground)
-            .lineLimit(isExpanded || !isLong ? nil : collapsedLines)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityLabel(kind == .scheduledTask ? "Scheduled task proposal" : "Requested action")
-            .accessibilityValue(request)
     }
 
     private var allowLabel: some View {
@@ -8267,6 +8229,225 @@ struct AidenApprovalCard: View {
             }
             .aidenApprovalActionGlass(tint: palette.fillAccent)
         }
+    }
+}
+
+/// A request, instructions or script on an approval card. Past six lines it
+/// folds behind Show all; expanded, it scrolls in a bounded box (the Bot chat
+/// keeps the card in its footer) with a Scroll for more cue while text is hidden.
+private struct AidenApprovalFoldingText: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @State private var isExpanded = false
+    @State private var hasMoreBelow = false
+
+    let text: String
+    let font: Font
+    let accessibilityLabel: String
+
+    /// Lines the text shows before Show all.
+    private let collapsedLines = 6
+    /// About twelve lines: the most expanded text takes before it scrolls.
+    private let expandedMaxHeight: CGFloat = 240
+
+    private var isLong: Bool {
+        text.count > 320 || text.split(whereSeparator: \.isNewline).count > collapsedLines
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isExpanded {
+                ViewThatFits(in: .vertical) {
+                    textView
+                    ScrollView { textView }
+                        .scrollIndicators(.visible)
+                        .scrollIndicatorsFlash(onAppear: true)
+                        // Only overflowing text gets here, and it opens at the top.
+                        .onAppear { hasMoreBelow = true }
+                        .onDisappear { hasMoreBelow = false }
+                        .onScrollGeometryChange(for: Bool.self) { geometry in
+                            geometry.visibleRect.maxY < geometry.contentSize.height - 1
+                        } action: { _, more in
+                            hasMoreBelow = more
+                        }
+                }
+                .frame(maxHeight: expandedMaxHeight, alignment: .top)
+            } else {
+                textView
+            }
+
+            if isLong {
+                HStack(spacing: 8) {
+                    Button(isExpanded ? "Show less" : "Show all") {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                            isExpanded.toggle()
+                        }
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .buttonStyle(.plain)
+
+                    Spacer(minLength: 0)
+
+                    // The end of long text must never sit hidden without a cue.
+                    if isExpanded && hasMoreBelow {
+                        Label("Scroll for more", systemImage: "arrow.down")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var textView: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(palette.foreground)
+            .lineLimit(isExpanded || !isLong ? nil : collapsedLines)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(text)
+    }
+}
+
+/// Contract revision 39: the body of a scheduled-task approval with a
+/// `schedule` card. What runs and when, then where, with what access and model,
+/// then the instructions or script and a note when it will not run on its own.
+private struct AidenScheduleApprovalDetails: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let card: AidenScheduleCardPresentation
+
+    private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    /// Row separators start under the label, past the icon column.
+    private let rowInset: CGFloat = 14 + 22 + 10
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+                hero
+                    .padding(14)
+                Divider()
+                    .padding(.leading, 14)
+                ForEach(Array(card.rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 {
+                        Divider()
+                            .padding(.leading, rowInset)
+                    }
+                    rowView(row)
+                }
+            }
+            .background(palette.canvas, in: wellShape)
+
+            if let content = card.content {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(card.contentTitle)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .accessibilityHidden(true)
+                    AidenApprovalFoldingText(
+                        text: content,
+                        font: card.contentIsScript ? .subheadline.monospaced() : .subheadline,
+                        accessibilityLabel: card.contentTitle
+                    )
+                    if card.isTruncated {
+                        Label(AidenScheduleCardPresentation.truncatedNote, systemImage: "scissors")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.canvas, in: wellShape)
+            }
+
+            if let note = card.note {
+                Label {
+                    Text(note.text)
+                        .foregroundStyle(note.isWarning ? palette.foreground : palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: note.symbol)
+                        .foregroundStyle(note.isWarning ? palette.warning : palette.secondary)
+                }
+                .font(.footnote)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(note.isWarning ? palette.warning.opacity(0.14) : palette.canvas, in: wellShape)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(card.name)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(palette.foreground)
+                .lineLimit(2)
+            Text(card.cadence)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+            if let nextRun = card.nextRun {
+                Label("Next run \(nextRun)", systemImage: "clock")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .padding(.top, 3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func rowView(_ row: AidenScheduleCardPresentation.Row) -> some View {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: row.symbol)
+                .font(.subheadline)
+                .foregroundStyle(row.isWarning ? palette.warning : palette.secondary)
+                .frame(width: 22)
+            layout {
+                Text(row.label)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                if !stacked {
+                    Spacer(minLength: 0)
+                }
+                if row == card.access {
+                    accessChip(row)
+                } else {
+                    Text(row.value)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                        .multilineTextAlignment(stacked ? .leading : .trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.accessibilityLabel)
+    }
+
+    /// Read-only sits on a neutral soft fill; Full access on a warning one. The
+    /// text stays foreground: light-mode warning orange is too faint to read.
+    private func accessChip(_ row: AidenScheduleCardPresentation.Row) -> some View {
+        Text(row.value)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(palette.foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background((row.isWarning ? palette.warning : palette.secondary).opacity(0.14), in: Capsule())
     }
 }
 
@@ -10130,7 +10311,8 @@ extension AidenChatViewModel {
             scopes: canAllow && kind == .action
                 ? AidenApprovalScope.offered(approval.scopes?.map(\.rawValue))
                 : [.once],
-            toolName: approval.toolName
+            toolName: approval.toolName,
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
         )
     }
 
