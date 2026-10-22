@@ -77,7 +77,9 @@ test("the same requestId twice admits one user message and reports the repeat as
   const fauxModels = createFauxModels([fauxAssistantMessage("hello back")]);
   const service = await serviceFor(tempProfile(), fauxModels);
   try {
+    assert.equal(await service.submissionForRequest("bot:a", "desk-1"), undefined);
     const first = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    assert.equal(await service.submissionForRequest("bot:a", "desk-1"), first.submissionId);
     const second = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
     assert.equal(first.deduped, false);
     assert.deepEqual(second, { submissionId: first.submissionId, deduped: true });
@@ -99,6 +101,7 @@ test("a requestId is still deduped after a restart", async () => {
 
   const second = await serviceFor(profile, fauxModels);
   try {
+    assert.equal(await second.submissionForRequest("bot:a", "tg:1:2:0:3"), submissionId);
     assert.deepEqual(await second.send("bot:a", { text: "hi", requestId: "tg:1:2:0:3" }), {
       submissionId,
       deduped: true,

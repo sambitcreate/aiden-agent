@@ -117,6 +117,11 @@ export function BotRoutines({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-strong text-primary">{routine.name}</span>
                     <span className="mt-0.5 block truncate text-small text-secondary">{routine.label}</span>
+                    {routine.pendingFireCount > 0 ? (
+                      <span className="mt-0.5 block text-small text-status-warning">Finishing an earlier run</span>
+                    ) : routine.overdueSince !== undefined ? (
+                      <span className="mt-0.5 block text-small text-status-warning">Overdue since {new Date(routine.overdueSince).toLocaleString()}</span>
+                    ) : null}
                   </span>
                   <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
                 </button>

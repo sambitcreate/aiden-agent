@@ -1819,9 +1819,10 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
     name: BOT_ROUTINES_TOOL_NAME,
     label: "Routines",
     description:
-      "This Bot's routines: messages you receive on a schedule, like a weekly plan or a morning check-in. " +
-      "Actions: list; propose (name, schedule, prompt, optional reason) shows the person an Add routine card they approve or decline, so only propose when a regular check-in would clearly help and they haven't declined it; pause (id from list) turns a routine off. " +
-      "You cannot create, change or delete routines yourself: the person does that in the Bot's profile.",
+      "This Bot's routines: one-time or recurring scheduled turns in this same conversation. " +
+      "Actions: list; propose (name, schedule, prompt, optional reason) shows the person an Add routine card to approve or decline; pause (id from list) turns a routine off. " +
+      "When the person asks for a future wake-up, reminder, check-in, or recurring task, propose it directly. Suggest an unrequested routine only when it would clearly help and the person has not declined it. " +
+      "A proposal is not scheduled until the person accepts its card. You cannot create, change or delete routines yourself: the person does that in the Bot's profile.",
     parameters: Type.Object(
       {
         action: Type.Union([Type.Literal("list"), Type.Literal("propose"), Type.Literal("pause")]),

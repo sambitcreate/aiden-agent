@@ -98,6 +98,30 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
   );
 });
 
+test("a Bot fire claim advances the schedule and keeps its original message through an edit", async () => {
+  const store = testStore();
+  const task = await store.save({
+    botId: "bot-chef", name: "Daily check", mode: "llm", cron: "0 9 * * *", timezone: "UTC",
+    routineSchedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = task.nextRunAt!;
+  const claimed = await store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000);
+  assert.equal(claimed.nextRunAt, due + 24 * 60 * 60_000);
+  assert.deepEqual(claimed.pendingRoutineFires, [{
+    fireTime: due, requestId: `routine:${task.id}:${due}`, prompt: "Check the inbox.", name: "Daily check",
+  }]);
+  await assert.rejects(store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000), /no longer due/u);
+
+  const edited = await store.save({
+    id: task.id, botId: "bot-chef", name: "Renamed check", mode: "llm", cron: "0 9 * * *", timezone: "UTC",
+    routineSchedule: { kind: "daily", time: "09:00" }, prompt: "Check calendar instead.",
+  });
+  assert.equal(edited.pendingRoutineFires?.[0]?.prompt, "Check the inbox.");
+  assert.equal((await store.get(task.id))?.pendingRoutineFires?.[0]?.name, "Daily check");
+  await store.settleRoutineFire(task.id, `routine:${task.id}:${due}`);
+  assert.equal((await store.get(task.id))?.pendingRoutineFires?.length ?? 0, 0);
+});
+
 test("ordinary schedule Web Search authority defaults closed, persists explicitly, and survives edits", async () => {
   const store = testStore();
   const closed = await store.save({

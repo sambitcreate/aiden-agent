@@ -165,6 +165,7 @@ function defaultMessage(reason: BotSessionErrorReason): string {
 export type BotWithdrawResult = "withdrawn" | "started" | "gone";
 
 export interface BotSessionService {
+  submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
@@ -650,6 +651,14 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
     state(botId) {
       return currentState(botId);
+    },
+
+    submissionForRequest(botId, requestId) {
+      return serialize(botId, async () => {
+        const { conversation } = await openBot(botId);
+        const existing = await lookupRequest(conversation, requestId);
+        return existing === undefined ? undefined : String(existing.id);
+      });
     },
 
     send(botId, input) {
