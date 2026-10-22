@@ -8,6 +8,7 @@ import type { BotLiveSnapshot, BotQueuedMessage, BotSessionState, BotTranscriptE
 import type { PeerHostView } from "../../shared/peer-host";
 import type {
   AidenRemoteBotApproval,
+  AidenRemoteBotHandoff,
   AidenRemoteBotQueuedMessage,
   AidenRemoteBotSession,
   AidenRemoteBotSessionActivity,
@@ -16,11 +17,24 @@ import type {
   AidenRemoteBotSessionStateView,
 } from "../../../main/services/aiden-remote-protocol";
 
-/** The host's session, mapped for display, plus the approval it is waiting on. */
+/** The host's session, mapped for display, plus the cards it is waiting on. */
 export interface RemoteBotSessionView {
   snapshot: BotLiveSnapshot;
   /** The oldest tool call waiting for a yes or no, answered by `waitId`. */
   approval: AidenRemoteBotApproval | null;
+  /**
+   * Contract revision 37 (`bot:handoffs`): the step the Bot handed back to the
+   * person, answered by `waitId`, or null. A host only sends it to a Mac that
+   * negotiated `bot:handoffs`; others get a "needs you on your Mac" line.
+   */
+  handoff: AidenRemoteBotHandoff | null;
+  /**
+   * Contract revision 37: the person paused the Bot (on its own Mac, a phone
+   * or here). Nothing runs until the pause is lifted, so the turn reads idle;
+   * the wire carries no pause time or origin. A turn the pause cut short reads
+   * interrupted again once it is lifted.
+   */
+  paused: boolean;
 }
 
 /**
@@ -75,6 +89,7 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
   }
 }
 
+/** The turn's state; a person's pause is `remoteBotSessionPaused` and reads idle here. */
 export function remoteBotSessionState(view: AidenRemoteBotSessionStateView): BotSessionState {
   switch (view.state) {
     case "idle":
@@ -90,8 +105,17 @@ export function remoteBotSessionState(view: AidenRemoteBotSessionStateView): Bot
     case "needs_model":
       return { kind: "needs_model" };
     case "unavailable":
+      // The host cannot run the Bot right now. A host without `bot:handoffs`
+      // also reads a person's pause this way.
       return { kind: "unavailable", reason: "held_by_live_process" };
+    case "paused":
+      return { kind: "idle" };
   }
+}
+
+/** Whether the person paused the Bot (revision 37, only sent to `bot:handoffs` devices). */
+export function remoteBotSessionPaused(view: AidenRemoteBotSessionStateView): boolean {
+  return view.state === "paused";
 }
 
 const PHASES: ReadonlySet<string> = new Set(BOT_ACTIVITY_PHASES);
@@ -137,6 +161,8 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
       queued: queued(session.queued),
     },
     approval: session.approval,
+    handoff: session.handoff ?? null,
+    paused: remoteBotSessionPaused(session),
   };
 }
 
@@ -172,7 +198,7 @@ export function applyRemoteBotSessionEvent(
       return next({ entries });
     }
     case "state":
-      return next({ state: remoteBotSessionState(event.payload) });
+      return { ...next({ state: remoteBotSessionState(event.payload) }), paused: remoteBotSessionPaused(event.payload) };
     case "question": {
       const question = event.payload.question;
       return next({
@@ -190,6 +216,8 @@ export function applyRemoteBotSessionEvent(
     case "closed":
       // The host reopens the stream with a fresh snapshot.
       return next({});
+    case "handoff":
+      return { ...next({}), handoff: event.payload.handoff };
   }
 }
 
@@ -204,4 +232,12 @@ export function hostSharesBotSessions(view: Pick<PeerHostView, "features" | "cap
     view.features.includes("bot-durable-session-v1") &&
     ["bot:read", "bot:write", "chat:read", "chat:write"].every((grant) => grants.has(grant))
   );
+}
+
+/**
+ * The host sends this Mac its Bots' hand-off cards and pauses, and takes
+ * their answers and Pause and Resume (contract revision 37, `bot:handoffs`).
+ */
+export function hostServesBotHandoffs(view: Pick<PeerHostView, "capabilities">): boolean {
+  return view.capabilities.includes("bot:handoffs");
 }

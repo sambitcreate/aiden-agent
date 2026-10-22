@@ -667,10 +667,11 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// the memory and routine proposal session entries.
     /// Contract revision 30 adds `bot:activity`, which only opts the device into
     /// the activity and queued session frames and Bot detail `chatActivity`.
+    /// Contract revision 37 adds `bot:handoffs`, asked for in a call of its own.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
-        Self(rawValue: "bot:activity"),
+        Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -680,6 +681,13 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Revision 30: the device receives activity and queued frames and Bot
     /// detail `chatActivity`. It grants no authority.
     static let botActivity = Self(rawValue: "bot:activity")
+
+    /// Revision 37: the device receives the session `handoff` field and
+    /// frames, the `paused` state and Bot `paused` flags, and the `bot_paused`
+    /// error, and may answer hand-offs and pause or resume the Bot (which also
+    /// needs `bot:write`). A Mac that predates it refuses the whole request
+    /// that names it, so the device asks for it alone.
+    static let botHandoffs = Self(rawValue: "bot:handoffs")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -787,6 +795,9 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "memory_over_budget"),
         Self(rawValue: "memory_blocked"),
         Self(rawValue: "routine_proposal_not_found"),
+        // Contract revision 37: only a `bot:handoffs` device is sent these.
+        Self(rawValue: "bot_paused"),
+        Self(rawValue: "handoff_expired"),
     ]
 
     init(from decoder: Decoder) throws {
@@ -2686,7 +2697,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
-        "botSessionCards",
+        "botSessionCards", "botHandoffs",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -2837,6 +2848,10 @@ private enum AidenBotPrivateResponseValidator {
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if root == "botDetail" {
             return parentPath.isEmpty
+        }
+        // Revision 37: the paused Bot detail a `bot:handoffs` device reads.
+        if root == "botHandoffs" {
+            return key == "instructions" && parentPath == ["pausedDetail"]
         }
         if ["botCreate", "botIdentity"].contains(root) {
             return parentPath.count == 1

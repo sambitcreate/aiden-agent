@@ -1167,14 +1167,21 @@ function seedChat(
   return chat;
 }
 
-test("Bot delete erases photo, home, access and chats, then the record last", async () => {
+test("Bot delete erases photo, browser, home, access and chats, then the record last", async () => {
   const owner = bot("bot:doomed");
   const survivor = bot("bot:survivor");
   const app = fixture({ bots: [owner, survivor] });
   const photos: string[] = [];
+  const browsers: string[] = [];
   (app.deps as { deleteBotPhoto?: (botId: string) => Promise<void> }).deleteBotPhoto = async (botId) => {
     photos.push(botId);
     app.events.push("photo:delete");
+  };
+  (app.deps as { deleteBotBrowserProfile?: (botId: string) => Promise<void> }).deleteBotBrowserProfile = async (botId) => {
+    // Its tabs close while its home still resolves.
+    assert.equal(app.homes.has(botId), true);
+    browsers.push(botId);
+    app.events.push("browser:delete");
   };
   await app.service.initialize();
   const chat = await app.service.createChat({ audienceId: "device:a", botId: owner.id });
@@ -1183,9 +1190,10 @@ test("Bot delete erases photo, home, access and chats, then the record last", as
 
   await app.service.deleteBot({ botId: owner.id });
 
-  const order = ["photo:delete", "home:delete", "policy:delete", "chat:remove", "identity:delete"];
+  const order = ["photo:delete", "browser:delete", "home:delete", "policy:delete", "chat:remove", "identity:delete"];
   assert.deepEqual(app.events.filter((event) => order.includes(event)), order);
   assert.deepEqual(photos, [owner.id]);
+  assert.deepEqual(browsers, [owner.id]);
   assert.deepEqual((await app.service.list()).map(({ id }) => id), [survivor.id]);
   assert.equal(app.homes.has(owner.id), false);
   assert.equal(app.policies.has(owner.id), false);

@@ -24,6 +24,8 @@ import { mkdir, lstat, chmod, rm } from "node:fs/promises";
 import { watch } from "node:fs";
 import { createHmac } from "node:crypto";
 import { createBotStore } from "../../../main/services/bot-store-core.js";
+import { createBotPauseStore } from "../../../main/services/bot-pause-store.js";
+import { AidenRemoteServiceError } from "../../../main/services/aiden-remote-errors.js";
 import { createBotApplicationService } from "../../../main/services/bot-application-service.js";
 import { createBotCapabilityStore } from "../../../main/services/bot-capability-store.js";
 import { createBotCapabilityOpaqueKeyStore } from "../../../main/services/bot-capability-key-store.js";
@@ -52,6 +54,10 @@ import type { createDaemonChats } from "./daemon-chats.ts";
 export interface CliBotGenerationRuntime {
   assertLegacyChatAllowed?(): void;
   authority: ReturnType<typeof createBotRuntimeAuthorityResolver>;
+  /** Whether the person paused the Bot (`aiden bots pause`). Throws when the pause file is unreadable. */
+  isPaused(botId: string): Promise<boolean>;
+  /** Refuses a turn for a Bot the person paused, or when the pause file is unreadable (fail closed). */
+  assertNotPaused(botId: string): Promise<void>;
   instructions(admission: BotRuntimeAuthorityAdmission): Promise<string>;
   tools(admission: BotRuntimeAuthorityAdmission): Promise<import("../../../main/services/bot-tool-authority.js").BotToolCandidate["tool"][]>;
 }
@@ -93,6 +99,28 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     },
   });
   const capabilities = createBotCapabilityStore({ root, checkpoint });
+  // The same file shape as the desktop's, under this agent directory (plan §7).
+  const pauses = createBotPauseStore({ root });
+  const isPaused = async (botId: string) => (await pauses.get(botId)) !== undefined;
+  async function assertNotPaused(botId: string) {
+    if (!(await isPaused(botId))) return;
+    const name = (await botStore.get(botId))?.name ?? "This Bot";
+    throw new AidenRemoteServiceError("operation_stale", `${name} is paused.`, 409);
+  }
+  /** Pause: record it first, so no new turn starts, then stop the Bot's running chats. */
+  async function pauseBot(botId: string) {
+    if (!(await botStore.get(botId))) throw new Error("This Bot no longer exists.");
+    if (durable) {
+      // The durable session records it in the same store, then closes a running turn and leaves it for Resume.
+      const state = await durable.runtime.pause(botId, "cli");
+      return { botId, paused: true as const, since: state.kind === "paused" ? state.since : (await pauses.get(botId))!.since };
+    }
+    const record = await pauses.pause(botId, "cli");
+    for (const chat of await daemon.chatStore.listByBot(botId)) {
+      await daemon.llmClient.cancelChat(chat.id); await daemon.llmClient.waitForChatIdle(chat.id);
+    }
+    return { botId, paused: true as const, since: record.since };
+  }
   const managedWorkspace = createBotManagedWorkspaceService({ root });
   const mutationGate = new BotMutationGate(), inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
   const approvedRoots = () => readJson<Pick<AidenRemoteStateDocument, "approvedRoots">>(join(agentDir, "remote.json"), { approvedRoots: [] }).approvedRoots;
@@ -225,7 +253,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   let routineScheduler: ReturnType<typeof createCliScheduler> | undefined;
   const marker = cliDurableBotMarker(agentDir);
   const durable = marker?.state === "enabled" ? await createCliDurableBots(agentDir, {
-    application, botStore, capabilities, authority, tools,
+    application, botStore, capabilities, authority, tools, pauses,
     instructions: async (admission) => {
       await admission.revalidateBeforeEffect();
       const bot = await botStore.get(admission.authority.botId);
@@ -239,7 +267,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     },
   }) : undefined;
   let routines: ReturnType<typeof createBotRoutineService> | undefined;
-  return { application, botStore, capabilities, catalog, managedWorkspace, mutationGate, inventoryLeases, authority, tools, durable,
+  return { application, botStore, capabilities, catalog, managedWorkspace, mutationGate, inventoryLeases, authority, tools, durable, isPaused, assertNotPaused,
     get routines() { return routines; },
     setScheduler(scheduler: ReturnType<typeof createCliScheduler>) {
       if (!durable) return;
@@ -258,6 +286,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     },
     async preflight(input: { audienceId: string; botId: string; chatId: string; providerId: string; model: string }) {
       if (durable || cliDurableBotMarker(agentDir)) throw new Error("Use the durable Bot session endpoint.");
+      await assertNotPaused(input.botId);
       const lease = await authority.admit(input);
       try { assertBotRuntimeProviderSelection(lease.authority.provider, input); await lease.revalidateBeforeEffect(); return { supportsCompanionImages: Boolean(lease.authority.visionProvider) }; }
       finally { lease.release(); }
@@ -285,7 +314,9 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
         case "access": return input ? application.updateBotAccess({ audienceId, botId: id, ...readJson<{ expectedRevision: string; access: BotAccessUpdate }>(input, undefined!) }) : application.getBotAccess(id);
         case "chat": return application.createChat({ audienceId, botId: id, ...readJson<{ providerId: string; model: string }>(input, undefined!) });
         case "chat-access": return application.updateChatAccess({ audienceId, ...readJson<{ botId: string; chatId: string; expectedRevision: string; access: BotChatAccessUpdate }>(id, undefined!) });
-        default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access");
+        case "pause": if (!id) throw new Error("Usage: bots pause <bot-id>"); return pauseBot(id);
+        case "unpause": if (!id) throw new Error("Usage: bots unpause <bot-id>"); await (durable ? durable.runtime.unpause(id) : pauses.unpause(id)); return { botId: id, paused: false };
+        default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access|pause|unpause");
       }
     },
   };

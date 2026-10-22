@@ -606,6 +606,35 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(transport.streamRequests, 2)
     }
 
+    func testReopeningTheFeedOpensANewConnectionAtOnceAndAppliesItsSnapshot() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueStream([
+            event(seq: 3, .snapshot(try session(seq: 3, entries: [message("m1", .user, "Hi")]))),
+        ], staysOpen: true)
+        // The feed the Mac shapes once the phone holds a new grant.
+        transport.queueStream([
+            event(seq: 4, .snapshot(try session(seq: 4, entries: [message("m1", .user, "Hi"), message("m2", .assistant, "Your turn.")]))),
+        ], staysOpen: true)
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let listener = Task { await model.listen() }
+        var deadline = Date().addingTimeInterval(5)
+        while model.seq != 3, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(transport.streamRequests, 1)
+
+        model.reopenFeed()
+        deadline = Date().addingTimeInterval(5)
+        while model.seq != 4, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(model.entries.map(\.id), ["m1", "m2"], "the new feed's snapshot replaces the old one")
+        XCTAssertEqual(transport.streamRequests, 2, "one new connection")
+        XCTAssertFalse(model.isStreamDown, "a reopen is not a dropped connection")
+
+        listener.cancel()
+        await listener.value
+        let requests = transport.streamRequests
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(transport.streamRequests, requests, "a cancelled chat stops reconnecting")
+    }
+
     func testListenStopsWhenItsTaskIsCancelled() async throws {
         let transport = FakeBotSessionTransport()
         let model = AidenBotSessionModel(botID: botID, transport: transport)
@@ -915,7 +944,12 @@ final class AidenBotSessionTests: XCTestCase {
             $0["state"] = "idle"; $0["interrupted"] = false; $0["blocked"] = "access_changed"
         }
         rejects("unknown blocked reason") { $0["blocked"] = "quota" }
-        rejects("unknown state") { $0["state"] = "paused"; $0["interrupted"] = false }
+        rejects("unknown state") { $0["state"] = "hibernating"; $0["interrupted"] = false }
+        XCTAssertTrue(
+            decodes(AidenBotSession.self, base.merging(["state": "paused", "interrupted": false]) { $1 }),
+            "revision 37 knows a paused Bot"
+        )
+        rejects("paused is not interrupted") { $0["state"] = "paused" }
         rejects("too many entries") { session in
             session["entries"] = (0...AidenBotSessionWire.maxEntries).map { index in
                 ["type": "notice", "id": "n\(index)", "notice": "session_reset"]
@@ -3319,23 +3353,27 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
     }
 
     func testAMessageCutOffByLeavingAndThenRefusedForAStateReasonKeepsItsKey() async throws {
-        let transport = FakeBotSessionTransport()
-        let model = await loaded(transport, try session(.idle))
-        transport.holdSend = true
-        let sending = Task { await model.send("Plan my week.") }
-        try await waitUntil({ transport.isHoldingSend }, what: "the request")
-        sending.cancel() // leaving the chat cuts the request off; it may have arrived
-        _ = await sending.value
-        transport.holdSend = false
+        // On the next connection the Bot needs a model, or the person paused it
+        // (revision 37): the message says it couldn't be sent, without asking the Mac.
+        for refusal: AidenBotSessionStateKind in [.needsModel, .paused] {
+            let transport = FakeBotSessionTransport()
+            let model = await loaded(transport, try session(.idle))
+            transport.holdSend = true
+            let sending = Task { await model.send("Plan my week.") }
+            try await waitUntil({ transport.isHoldingSend }, what: "the request")
+            sending.cancel() // leaving the chat cuts the request off; it may have arrived
+            _ = await sending.value
+            transport.holdSend = false
 
-        // On the next connection the Bot needs a model: the message says it couldn't be sent.
-        _ = await model.apply(event(seq: 5, .snapshot(try session(.needsModel, seq: 5))))
-        try await waitUntil({ model.outgoing.first.map { model.look(of: $0) } == .failed }, what: "the failure")
-        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
-        let retried = await model.retrySend(try XCTUnwrap(model.outgoing.first).id)
-        XCTAssertTrue(retried)
-        XCTAssertEqual(transport.sendKeys.count, 2)
-        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "Try again replays the key the cut-off request used")
+            _ = await model.apply(event(seq: 5, .snapshot(try session(refusal, seq: 5))))
+            try await waitUntil({ model.outgoing.first.map { model.look(of: $0) } == .failed }, what: "the failure")
+            XCTAssertEqual(transport.sendKeys.count, 1, "\(refusal): nothing goes out while the Bot can't take it")
+            _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+            let retried = await model.retrySend(try XCTUnwrap(model.outgoing.first).id)
+            XCTAssertTrue(retried)
+            XCTAssertEqual(transport.sendKeys.count, 2)
+            XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "\(refusal): Try again replays the key the cut-off request used")
+        }
     }
 
     func testARefusedMessageRetriesOnANewKeyOnceTheBotIsFixed() async throws {
@@ -4469,5 +4507,333 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         let failures = await model.attach([photo])
         XCTAssertEqual(failures, 1)
         XCTAssertTrue(transport.uploads.isEmpty)
+    }
+}
+
+// MARK: - Contract revision 37: hand-offs and pause (`bot:handoffs`)
+
+/// A transport that serves one snapshot and records hand-off answers,
+/// open-on-Mac requests, and pause and resume.
+private final class HandoffTransport: AidenBotSessionTransport, @unchecked Sendable {
+    let snapshot: AidenBotSession
+    private(set) var answers: [(waitId: String, key: UUID, request: AidenBotHandoffAnswerRequest)] = []
+    private(set) var opens: [(waitId: String, key: UUID)] = []
+    private(set) var pauses: [(pause: Bool, key: UUID)] = []
+    /// Thrown by the next answer instead of a receipt.
+    var nextAnswerError: Error?
+    /// Whether the Mac could bring the hand-off forward.
+    var opened = true
+    /// Thrown by the next pause or resume instead of a state.
+    var nextPauseError: Error?
+    /// What the Mac says after a resume.
+    var unpauseState: AidenBotSessionStateKind = .idle
+
+    init(snapshot: AidenBotSession) {
+        self.snapshot = snapshot
+    }
+
+    func botSession(botId: String) async throws -> AidenBotSession { snapshot }
+
+    func botSessionEvents(botId: String) -> AsyncThrowingStream<AidenBotSessionEvent, Error> {
+        AsyncThrowingStream { continuation in continuation.finish() }
+    }
+
+    func sendBotMessage(botId: String, request: AidenBotMessageRequest, idempotencyKey: UUID) async throws -> AidenBotMessageReceipt {
+        throw URLError(.unsupportedURL)
+    }
+
+    func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        throw URLError(.unsupportedURL)
+    }
+
+    func dismissBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        throw URLError(.unsupportedURL)
+    }
+
+    func stopBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        throw URLError(.unsupportedURL)
+    }
+
+    func answerBotQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotQuestionAnswerReceipt {
+        throw URLError(.unsupportedURL)
+    }
+
+    func respondToApproval(
+        id: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope?,
+        idempotencyKey: UUID
+    ) async throws -> AidenApprovalResponse {
+        throw URLError(.unsupportedURL)
+    }
+
+    func requestBotConnection(
+        botId: String,
+        request: AidenBotConnectionRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotConnectionRequestReceipt {
+        throw URLError(.unsupportedURL)
+    }
+
+    func respondToBotRoutineProposal(
+        botId: String,
+        proposalId: String,
+        request: AidenBotRoutineProposalRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutineProposalRespondResult {
+        throw URLError(.unsupportedURL)
+    }
+
+    func answerBotHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotHandoffAnswerReceipt {
+        answers.append((waitId, idempotencyKey, request))
+        if let error = nextAnswerError {
+            nextAnswerError = nil
+            throw error
+        }
+        return try JSONDecoder().decode(AidenBotHandoffAnswerReceipt.self, from: Data("{\"waitId\":\"\(waitId)\"}".utf8))
+    }
+
+    func openBotHandoffOnMac(botId: String, waitId: String, idempotencyKey: UUID) async throws -> AidenBotHandoffOpenOnMacReceipt {
+        opens.append((waitId, idempotencyKey))
+        return try JSONDecoder().decode(
+            AidenBotHandoffOpenOnMacReceipt.self,
+            from: Data("{\"waitId\":\"\(waitId)\",\"opened\":\(opened)}".utf8)
+        )
+    }
+
+    func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
+        let (name, mimeType, kind, size): (String, String, String, Int) = switch upload {
+        case let .image(name, mimeType, data): (name, mimeType, "image", data.count)
+        case let .text(name, mimeType, text): (name, mimeType, "text", text.utf8.count)
+        }
+        let id = "att_" + String(repeating: "H", count: 43)
+        return try AidenRemoteJSONDecoder.decode(
+            AidenAttachmentReference.self,
+            from: Data(#"{"id":"\#(id)","name":"\#(name)","mimeType":"\#(mimeType)","kind":"\#(kind)","size":\#(size),"expiresAt":"2099-01-01T00:00:00.000Z"}"#.utf8)
+        )
+    }
+
+    func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        pauses.append((true, idempotencyKey))
+        if let error = nextPauseError {
+            nextPauseError = nil
+            throw error
+        }
+        return try AidenBotSessionStateView(state: .paused)
+    }
+
+    func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        pauses.append((false, idempotencyKey))
+        if let error = nextPauseError {
+            nextPauseError = nil
+            throw error
+        }
+        return try AidenBotSessionStateView(state: unpauseState)
+    }
+}
+
+/// The Bot chat's hand-off card and pause, driven by the shared fixture's
+/// `botHandoffs` section.
+@MainActor
+final class AidenBotSessionHandoffTests: XCTestCase {
+    private let botID = "bot_fixture_01"
+    private let waitID = "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f"
+
+    private func section() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try XCTUnwrap(fixture["botHandoffs"] as? [String: Any])
+    }
+
+    /// The fixture's holder session, changed by `edit`.
+    private func session(_ edit: (inout [String: Any]) throws -> Void = { _ in }) throws -> AidenBotSession {
+        var object = try XCTUnwrap(try section()["session"] as? [String: Any])
+        try edit(&object)
+        return try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func frames() throws -> [AidenBotSessionEvent] {
+        try XCTUnwrap(try section()["events"] as? [[String: Any]]).map {
+            try AidenRemoteJSONDecoder.decode(AidenBotSessionEvent.self, from: JSONSerialization.data(withJSONObject: $0))
+        }
+    }
+
+    private func loadedModel(_ snapshot: AidenBotSession) async -> (AidenBotSessionModel, HandoffTransport) {
+        let transport = HandoffTransport(snapshot: snapshot)
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        return (model, transport)
+    }
+
+    private func serverError(status: Int, code: String) throws -> AidenRemoteClientError {
+        let body = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"\#(code)","message":"No.","requestId":"req_test_1","retryable":false}"#.utf8)
+        )
+        return .server(statusCode: status, body: body)
+    }
+
+    func testDoneAnswersTheSnapshotsHandoffOnceByItsWaitIDWithTheTrimmedNote() async throws {
+        let (model, transport) = await loadedModel(try session())
+        XCTAssertEqual(model.handoff?.waitId, waitID)
+        XCTAssertTrue(model.composerAnswersHandoff, "the composer's text is the step's note")
+        model.attachmentsSupported = true
+        XCTAssertFalse(model.canAttach, "photos and files wait until the card is answered")
+
+        let answered = await model.answerHandoff(.done, note: "  The code was from 9:01.\n")
+        XCTAssertTrue(answered)
+        XCTAssertEqual(transport.answers.map(\.waitId), [waitID])
+        XCTAssertEqual(transport.answers.first?.request, try AidenBotHandoffAnswerRequest(outcome: .done, note: "The code was from 9:01."))
+        XCTAssertNil(model.handoff)
+        XCTAssertFalse(model.composerAnswersHandoff)
+        XCTAssertTrue(model.canAttach)
+
+        let again = await model.answerHandoff(.skipped)
+        XCTAssertFalse(again)
+        XCTAssertEqual(transport.answers.count, 1, "nothing is waiting, so nothing more is sent")
+    }
+
+    func testTheComposersNoteSaysWhyItWaitsForStagedPhotosAndForTheMac() async throws {
+        let (model, transport) = await loadedModel(try session { object in object["handoff"] = NSNull() })
+        model.attachmentsSupported = true
+        let photo: @MainActor () async throws -> AidenAttachmentUpload = {
+            .image(name: "receipt.png", mimeType: "image/png", data: Data([0x89, 0x50, 0x4e, 0x47]))
+        }
+        let failures = await model.attach([photo])
+        XCTAssertEqual(failures, 0)
+        // The card arrives after the photo was staged.
+        await model.apply(try frames()[0])
+        XCTAssertTrue(model.composerAnswersHandoff)
+
+        let withPhoto = await model.answerHandoffFromComposer("The code was from 9:01.", connected: true)
+        XCTAssertFalse(withPhoto)
+        XCTAssertEqual(model.errorMessage, AidenBotSessionCopy.handoffPhotosWait, "Send says why instead of doing nothing")
+        XCTAssertTrue(transport.answers.isEmpty)
+        XCTAssertEqual(model.pendingAttachments.count, 1, "the photo stays for the next message")
+        XCTAssertEqual(model.handoff?.waitId, waitID, "the card still waits")
+
+        await model.removeAttachment(try XCTUnwrap(model.pendingAttachments.first).id)
+        // Off the Mac, the note waits, like the card's own Done and Skip.
+        let offline = await model.answerHandoffFromComposer("The code was from 9:01.", connected: false)
+        XCTAssertFalse(offline)
+        XCTAssertTrue(transport.answers.isEmpty)
+
+        let done = await model.answerHandoffFromComposer("The code was from 9:01.", connected: true)
+        XCTAssertTrue(done)
+        XCTAssertEqual(transport.answers.map(\.waitId), [waitID])
+        XCTAssertEqual(transport.answers.first?.request, try AidenBotHandoffAnswerRequest(outcome: .done, note: "The code was from 9:01."))
+    }
+
+    func testALostAnswerKeepsItsKeyAndAnExpiredCardStaysGone() async throws {
+        let (model, transport) = await loadedModel(try session())
+
+        transport.nextAnswerError = URLError(.networkConnectionLost)
+        let lost = await model.answerHandoff(.skipped)
+        XCTAssertFalse(lost)
+        XCTAssertEqual(model.handoff?.waitId, waitID, "the card comes back until the Mac confirms")
+        XCTAssertEqual(model.errorMessage, "That answer wasn’t sent. Please try again.")
+        transport.nextAnswerError = URLError(.networkConnectionLost)
+        _ = await model.answerHandoff(.skipped)
+        transport.nextAnswerError = try serverError(status: 409, code: "handoff_expired")
+        _ = await model.answerHandoff(.done)
+
+        XCTAssertEqual(transport.answers.map(\.request.outcome), [.skipped, .skipped, .done])
+        XCTAssertEqual(transport.answers[0].key, transport.answers[1].key, "the same answer replays under one key")
+        XCTAssertNotEqual(transport.answers[1].key, transport.answers[2].key, "another answer is another request")
+        XCTAssertNil(model.handoff, "an answered or withdrawn card stays gone")
+        XCTAssertEqual(model.errorMessage, "That card was already answered or closed.")
+    }
+
+    func testASignInIsFinishedOnTheMacOrSkippedNeverMarkedDone() async throws {
+        let (model, transport) = await loadedModel(try session { object in
+            var card = try XCTUnwrap(object["handoff"] as? [String: Any])
+            card["kind"] = "sign_in"
+            card["action"] = "Sign in to bank.example.com"
+            object["handoff"] = card
+        })
+        XCTAssertEqual(model.handoff?.kind, .signIn)
+        XCTAssertFalse(model.composerAnswersHandoff, "a sign-in has no note to send")
+
+        let done = await model.answerHandoff(.done)
+        XCTAssertFalse(done)
+        XCTAssertTrue(transport.answers.isEmpty, "Done never reaches the Mac for a sign-in")
+
+        transport.opened = false
+        await model.finishHandoffOnMac()
+        XCTAssertEqual(transport.opens.map(\.waitId), [waitID])
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Open Aiden on your Mac to finish signing in.")
+        XCTAssertEqual(model.handoff?.waitId, waitID, "the card stays until it is answered on the Mac")
+        transport.opened = true
+        await model.finishHandoffOnMac()
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Finish signing in on your Mac.")
+        XCTAssertNotEqual(transport.opens[0].key, transport.opens[1].key, "an answered request does not replay its key")
+
+        let skipped = await model.answerHandoff(.skipped)
+        XCTAssertTrue(skipped)
+        XCTAssertEqual(transport.answers.map(\.request.outcome), [.skipped])
+    }
+
+    func testFixtureFramesShowSettleRecordAndPauseAndAlertOnceForANewWait() async throws {
+        let frames = try frames()
+        let first = try XCTUnwrap(frames.first)
+        let (model, _) = await loadedModel(try session { object in
+            object["handoff"] = NSNull()
+            object["seq"] = first.seq - 1
+        })
+        var alerted: [String] = []
+        model.onHandoffArrived = { alerted.append($0.waitId) }
+        XCTAssertNil(model.handoff)
+
+        let shown = await model.apply(frames[0])
+        XCTAssertEqual(shown, .applied)
+        XCTAssertEqual(model.handoff?.action, "Enter the 2FA code your bank sent you")
+        XCTAssertEqual(alerted, [waitID])
+
+        await model.apply(frames[1])
+        XCTAssertNil(model.handoff)
+        await model.apply(frames[2])
+        guard case let .message(result) = try XCTUnwrap(model.entries.last) else {
+            return XCTFail("the answer is the person's own message")
+        }
+        XCTAssertEqual(result.role, .user)
+        XCTAssertTrue(result.text.hasPrefix("You did this: "))
+
+        await model.apply(frames[3])
+        XCTAssertTrue(model.isPaused)
+        XCTAssertFalse(model.canSend, "a paused Bot takes no message")
+        XCTAssertEqual(alerted, [waitID], "only a new wait alerts")
+    }
+
+    func testResumeOnAPausedBotWaitsForTheMacAndTakesItsAnswer() async throws {
+        let (model, transport) = await loadedModel(try session { object in
+            object["handoff"] = NSNull()
+            object["state"] = "paused"
+        })
+        XCTAssertTrue(model.isPaused)
+        XCTAssertFalse(model.canSend, "a paused Bot takes no message")
+
+        transport.nextPauseError = try serverError(status: 403, code: "capability_denied")
+        await model.unpause()
+        XCTAssertTrue(model.isPaused, "a refused Resume leaves the Bot paused")
+        XCTAssertNotNil(model.errorMessage)
+
+        // A reply the pause cut short comes back interrupted, with its own Resume.
+        transport.unpauseState = .interrupted
+        await model.unpause()
+        XCTAssertEqual(transport.pauses.map(\.pause), [false, false], "the chat never pauses a Bot itself")
+        XCTAssertNotEqual(transport.pauses[0].key, transport.pauses[1].key, "a definite refusal is not replayed")
+        XCTAssertFalse(model.isPaused)
+        XCTAssertTrue(model.isInterrupted)
+        XCTAssertTrue(model.canSend)
     }
 }

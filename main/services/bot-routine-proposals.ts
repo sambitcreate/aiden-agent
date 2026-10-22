@@ -153,10 +153,14 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     await writeJsonAtomic(fileOf(botId), { version: 1, proposals: kept }, { mode: 0o600, mkdirMode: 0o700 });
   }
 
+  type Append = (kind: string, data: Record<string, unknown>) => Promise<void>;
+  const sessionAppend = (botId: string): Append => (kind, data) => dependencies.appendEntry(botId, kind, data);
+
   /**
-   * Settle `records[index]`: the card first (status entry), then the record.
-   * Either write failing leaves the record unsettled, and the next answer or
-   * read settles it again; a repeated status entry folds the same way.
+   * Settle `records[index]`: the card first (status entry, through `append`),
+   * then the record. Either write failing leaves the record unsettled, and the
+   * next answer or read settles it again; a repeated status entry folds the
+   * same way.
    */
   async function settle(
     botId: string,
@@ -164,6 +168,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     index: number,
     status: Exclude<BotRoutineProposalStatus, "pending">,
     routineId?: string,
+    append: Append = sessionAppend(botId),
   ): Promise<BotRoutineProposalRecord> {
     const record = records[index]!;
     const data: BotRoutineProposalStatusEntryData = {
@@ -171,7 +176,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       status,
       ...(routineId !== undefined ? { routineId } : {}),
     };
-    await dependencies.appendEntry(botId, BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND, { ...data });
+    await append(BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND, { ...data });
     const { routineId: _previous, ...rest } = record;
     const next: BotRoutineProposalRecord = {
       ...rest,
@@ -188,14 +193,20 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
    * A routine created from a proposal is the committed answer, whatever the
    * record says: an Add routine cut short after creating it (a failed status
    * write, a quit) settles as accepted rather than staying open or turning
-   * into Not added. Must run inside `serial(botId)`.
+   * into Not added. Must run inside `serial(botId)`. From inside a Bot's
+   * tool call, `append` is that call's own write: the Bot's session would wait
+   * on a pause or quit that waits for the call.
    */
-  async function reconcile(botId: string, records: BotRoutineProposalRecord[]): Promise<BotRoutineProposalRecord[]> {
+  async function reconcile(
+    botId: string,
+    records: BotRoutineProposalRecord[],
+    append: Append = sessionAppend(botId),
+  ): Promise<BotRoutineProposalRecord[]> {
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index]!;
       if (record.status === "accepted") continue;
       const created = await dependencies.routines.findBySourceProposal(botId, record.proposalId);
-      if (created) await settle(botId, records, index, "accepted", created.id);
+      if (created) await settle(botId, records, index, "accepted", created.id, append);
     }
     return records;
   }
@@ -239,8 +250,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     propose(
       botId: string,
       input: { name: string; schedule: unknown; prompt: string; reason?: string },
-      append: (kind: string, data: Record<string, unknown>) => Promise<void> = (kind, data) =>
-        dependencies.appendEntry(botId, kind, data),
+      append: Append = sessionAppend(botId),
     ): Promise<BotRoutineProposeResult> {
       return serial(botId, async () => {
         let parsed;
@@ -253,7 +263,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         if (reason !== undefined && [...reason].length > BOT_ROUTINE_PROPOSAL_REASON_LIMIT) {
           return { ok: false, code: "invalid", error: `The reason is at most ${BOT_ROUTINE_PROPOSAL_REASON_LIMIT} characters.` };
         }
-        const records = await reconcile(botId, await load(botId));
+        const records = await reconcile(botId, await load(botId), append);
         if (records.filter((record) => record.status === "pending").length >= BOT_ROUTINE_PROPOSAL_PENDING_LIMIT) {
           return {
             ok: false,

@@ -90,6 +90,7 @@ const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpe
       <BotRowMenus
         bot={row.bot}
         pinned={pinned}
+        paused={row.state?.kind === "paused"}
         rowRef={rowRef}
         moreClassName="right-1.5 top-1/2 -translate-y-1/2"
         onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}
@@ -162,6 +163,7 @@ const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen,
       <BotRowMenus
         bot={row.bot}
         pinned
+        paused={row.state?.kind === "paused"}
         rowRef={rowRef}
         moreClassName="right-1.5 top-1.5"
         onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}

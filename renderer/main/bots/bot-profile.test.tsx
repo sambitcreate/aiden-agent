@@ -1,8 +1,11 @@
-import { installBotTestIpc } from "./test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BotDefinition, BotUpdateInput } from "../../shared/bots";
+import type { BotSessionState } from "./bot-session-state";
+import { useQueryClient } from "@tanstack/react-query";
+import { useBotNotificationsSync } from "../../lib/bot-notifications-sync";
 import { BotsView } from "../bots-view";
 import { createBotTestQueryClient, mountWithBotRouter } from "./test-providers";
 import { botFixture, catalogFixture } from "./test-fixtures";
@@ -125,15 +128,48 @@ test("Escape abandons an inline name edit instead of saving it", async () => {
   assert.equal(store.updates[0]!.name, "Trip Planner");
 });
 
-test("the Profile ••• menu holds Advanced and Delete Bot", async () => {
+test("the Profile ••• menu holds Advanced, Pause Bot and Delete Bot", async () => {
   botStoreIpc(botFixture());
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
   await openMenu("More for Planner");
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Advanced", "Delete Bot"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Advanced", "Pause Bot", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Delete Bot" }));
   const dialog = await screen.findByRole("alertdialog");
   assert.ok(within(dialog).getByRole("heading", { name: "Delete Planner?" }));
+});
+
+test("the Profile shows the Bot's rules after its routines", async () => {
+  botStoreIpc(botFixture());
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+  const rules = await screen.findByRole("list", { name: "Rules" });
+  assert.ok(within(rules).getByText("Move money or enter card details"));
+  const headings = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
+  assert.ok(headings.includes("Routines") && headings.indexOf("Rules") > headings.indexOf("Routines"), headings.join(", "));
+});
+
+test("a paused Bot's Profile ••• menu resumes it, and a running one's pauses it", async () => {
+  let state: BotSessionState = { kind: "paused", since: 1, by: "phone" };
+  const { calls } = botStoreIpc(botFixture(), {
+    "bots:live:summary": (botId) => ({ botId, preview: null, updatedAt: null, state, needsYou: false, lastReplyAt: null }),
+    "bots:unpause": () => (state = { kind: "idle" }),
+    "bots:pause": () => (state = { kind: "paused", since: 2, by: "mac" }),
+  });
+  // As in the app window: main's `bots:changed` re-reads the Bot's summary.
+  const Sync = () => {
+    useBotNotificationsSync(useQueryClient());
+    return null;
+  };
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1", sidebar: <Sync /> });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:live:summary")));
+  await openMenu("More for Planner");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Resume Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:unpause").map((call) => call.args), [["bot-1"]]));
+
+  act(() => emitBotTestNotification("bots:changed", { botId: "bot-1", session: state }));
+  await openMenu("More for Planner");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:pause").map((call) => call.args), [["bot-1"]]));
 });
 
 test("Advanced shows the model, image model, access and Telegram controls, and no opening greeting", async () => {
@@ -186,23 +222,34 @@ test("Advanced names only the model in its control, says what it reads under the
 
 function advancedIpc() {
   const accessUpdates: unknown[] = [];
+  // Like main: a save answers with the saved access view alone, and the next read returns it.
+  let access: Record<string, unknown> = { botId: "bot-1", revision: "acc-1", policyEpoch: "e", summary: "", accessMode: "full" };
   const store = botStoreIpc(botFixture(), {
     "bots:getCapabilityCatalog": () => catalogFixture(),
     "bots:getBotAccess": () => ({
-      access: { botId: "bot-1", revision: "acc-1", policyEpoch: "e", summary: "", accessMode: "full" },
+      access,
       modelSelection: { providerId: "prov-text", modelId: "model-text" },
       visionModelSelection: { providerId: "prov-vision", modelId: "model-vision" },
     }),
     "bots:updateBotAccess": (input) => {
       accessUpdates.push(input);
-      return {};
+      const { access: update } = input as { access: { accessMode: string; custom?: unknown } };
+      access = {
+        botId: "bot-1",
+        revision: `${String(access.revision)}+`,
+        policyEpoch: "e",
+        summary: "",
+        accessMode: update.accessMode,
+        ...(update.custom ? { custom: update.custom } : {}),
+      };
+      return access;
     },
     "bots:getTelegramBinding": () => null,
   });
   return { ...store, accessUpdates };
 }
 
-test("Advanced saves access with the toolbar's one Save, then has nothing left to save", async () => {
+test("Advanced saves access with the toolbar's one Save, then has nothing left to save, and opens again on the saved choice", async () => {
   const store = advancedIpc();
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
   const access = await screen.findByRole("radiogroup", { name: "What it can use" });
@@ -220,6 +267,14 @@ test("Advanced saves access with the toolbar's one Save, then has nothing left t
   await waitFor(() =>
     assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true),
   );
+
+  // Back to the Profile and into Advanced again: the page opens on what was saved.
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  await screen.findByRole("button", { name: "Instructions" });
+  await openMenu("More for Planner");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced" }));
+  const reopened = await screen.findByRole("radiogroup", { name: "What it can use" });
+  assert.equal(within(reopened).getByRole("radio", { name: "Only what I choose" }).getAttribute("aria-checked"), "true");
 });
 
 test("Advanced turns on web search for an Everything Bot that doesn't have it yet", async () => {

@@ -28,6 +28,7 @@ import {
 import {
   AidenLiveArt,
   AidenOnTheGoArt,
+  BotComputersArt,
   BotsArt,
   ChatControlsArt,
   CommandPaletteArt,
@@ -73,6 +74,7 @@ export const FEATURE_ART = {
   mcp: { tint: "mint", Art: McpConnectorsArt },
   geminiLive: { tint: "lilac", Art: AidenLiveArt },
   bots: { tint: "peach", Art: BotsArt },
+  botComputers: { tint: "aqua", Art: BotComputersArt },
   schedules: { tint: "mint", Art: ScheduledAutomationsArt },
   voice: { tint: "coral", Art: VoiceDictationArt },
   commands: { tint: "periwinkle", Art: CommandPaletteArt },

@@ -104,7 +104,9 @@ data class AidenBotHomeRow(
     val preview: String
         get() {
             when (bot.sessionState) {
-                AidenBotSessionState.INTERRUPTED -> return AidenBotSessionCopy.PAUSED_ROW
+                AidenBotSessionState.INTERRUPTED -> return AidenBotSessionCopy.INTERRUPTED_ROW
+                // Revision 37: a Bot the person paused (only `bot:handoffs` phones are told).
+                AidenBotSessionState.PAUSED -> return AidenBotSessionCopy.PAUSED_ROW
                 AidenBotSessionState.NEEDS_MODEL -> return AidenBotSessionCopy.NEEDS_MODEL
                 else -> {}
             }

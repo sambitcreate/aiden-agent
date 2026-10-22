@@ -259,7 +259,7 @@ function isMobileSimulatorCapability(
   );
 }
 
-/** Revision 27/30 opt-ins (`bot:cards`, `bot:activity`): no authority, any device type. */
+/** Revision 27/30/36 opt-ins (`bot:cards`, `bot:activity`, `bot:handoffs`): no authority, any device type. */
 function isBotOptInCapability(
   value: unknown,
 ): value is (typeof AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES)[number] {

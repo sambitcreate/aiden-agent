@@ -99,7 +99,16 @@ test("classifies real platform aborts and timeouts", async () => {
   assert.deepEqual([classifyMcpFailure(aborted, "http").failure, classifyMcpFailure(aborted, "http").errorClass], ["cancelled", "AbortError"]);
   const timedOut = await new Promise<unknown>((resolve) => {
     const signal = AbortSignal.timeout(1);
-    signal.addEventListener("abort", () => resolve(signal.reason), { once: true });
+    // AbortSignal.timeout's timer doesn't keep the event loop alive, so hold it open until the abort fires.
+    const hold = setTimeout(() => undefined, 1_000);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(hold);
+        resolve(signal.reason);
+      },
+      { once: true },
+    );
   });
   const classified = classifyMcpFailure(timedOut, "http");
   assert.deepEqual([classified.failure, classified.code, classified.errorClass], ["timeout", "timed-out", "TimeoutError"]);

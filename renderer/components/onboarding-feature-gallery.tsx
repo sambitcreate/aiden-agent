@@ -17,6 +17,7 @@ import {
   Lightbulb,
   MessageSquare,
   Mic2,
+  Monitor,
   MousePointer2,
   Palette,
   Plug,
@@ -237,6 +238,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description:
       "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers what matters to you, and can check in on a schedule.",
     icon: Bot,
+    size: "standard",
+  },
+  {
+    id: "botComputers",
+    group: "control",
+    title: "Bot computers",
+    description:
+      "Give a Bot its own macOS virtual machine, apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Bot computers; nothing downloads until you choose Set up.",
+    icon: Monitor,
     size: "standard",
   },
   {

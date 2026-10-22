@@ -53,6 +53,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotCharacter.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCreateView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotHandoffCard.swift",
   "AidenOnTheGo/Features/Bots/AidenBotImagePlaygroundView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotMemoryView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotPresetsView.swift",

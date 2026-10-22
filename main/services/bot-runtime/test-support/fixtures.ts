@@ -7,11 +7,14 @@ import { mock } from "node:test";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { BotDefinition } from "../../../../renderer/shared/bots.js";
+import type { BotHandoffAnswer } from "../../../../renderer/shared/bot-handoffs.js";
 import type {
   BotApprovalRequest,
   BotExtensionDeps,
   BotPolicyDecision,
   BotReadmission,
+  BotRuleHandoffRecord,
+  BotRuleHandoffRequest,
   BotToolEntry,
 } from "../bot-extension.js";
 
@@ -23,6 +26,10 @@ export interface RecordedDeps extends BotExtensionDeps {
   approvals: BotApprovalRequest[];
   readmissions: number;
   policyChecks: string[];
+  /** Rule hand-off cards asked, in order. */
+  handoffs: BotRuleHandoffRequest[];
+  /** Every `recordHandoff` call, duplicates included. */
+  recordCalls: BotRuleHandoffRecord[];
 }
 
 export function recordingDeps(options: {
@@ -30,12 +37,16 @@ export function recordingDeps(options: {
   tools?: BotToolEntry[];
   policy?: (toolName: string) => BotPolicyDecision;
   approve?: (request: BotApprovalRequest) => Promise<"allow" | "deny">;
+  /** Answers rule hand-off cards. Absent: no one to ask. */
+  handoff?: (request: BotRuleHandoffRequest) => Promise<BotHandoffAnswer>;
   readmit?: () => BotReadmission;
 } = {}): RecordedDeps {
   const deps: RecordedDeps = {
     approvals: [],
     readmissions: 0,
     policyChecks: [],
+    handoffs: [],
+    recordCalls: [],
     loadBot: async (botId) => fakeBot(botId),
     systemSections: async () => options.sections ?? ["BASE", "PERSONA", "AUTHORITY"],
     currentTools: async () => options.tools ?? [],
@@ -46,6 +57,17 @@ export function recordingDeps(options: {
     requestApproval: async (request) => {
       deps.approvals.push(request);
       return options.approve ? options.approve(request) : "allow";
+    },
+    ...(options.handoff === undefined
+      ? {}
+      : {
+          requestHandoff: async (request: BotRuleHandoffRequest) => {
+            deps.handoffs.push(request);
+            return options.handoff!(request);
+          },
+        }),
+    recordHandoff: async (record) => {
+      deps.recordCalls.push(record);
     },
     readmit: async () => {
       deps.readmissions += 1;

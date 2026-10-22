@@ -511,6 +511,18 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
           );
       })(),
       browserService.shutdown(),
+      // Every running Bot computer is asked to stop, then forced, inside the budget;
+      // a computer that never started (or no Apple silicon) resolves at once.
+      Promise.race([
+        import("./services/bot-computers/bot-computers-main.js")
+          .then(({ shutdownBotComputers }) => shutdownBotComputers(4_000))
+          .then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000).unref()),
+      ])
+        .then((stopped) => {
+          if (!stopped) logger.warn("bot-computers", "Bot computers did not stop within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("bot-computers", "Bot computers did not stop cleanly.", error)),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
       // the budget are still signalled by their transports' close.
@@ -2078,6 +2090,13 @@ if (!ownsSingleInstanceLock) {
         trackConnectionSetupFocus,
         logError: (message, error) => logger.error("bots", message, error),
       });
+      // Bot computers left running by an earlier launch stop, and interrupted ones are
+      // marked for Reset. Apple silicon only; a Mac that never chose Set up runs no Lume.
+      if (hostPlatformCapabilities().botComputers) {
+        void import("./services/bot-computers/bot-computers-main.js")
+          .then(({ reconcileBotComputers }) => reconcileBotComputers())
+          .catch((error) => logger.warn("bot-computers", "Bot computer startup check did not finish.", error));
+      }
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
       try {

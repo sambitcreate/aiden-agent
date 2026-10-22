@@ -103,6 +103,15 @@ func aidenResolvedBotDeepLink(
     return .openChat(chat.chatId)
 }
 
+/// The Bots path a `aiden-otg://bot/{id}/chat` link opens on a Mac serving
+/// durable sessions: that Bot's one durable chat, where its hand-off card
+/// waits (Android parity). Nil on an older Mac, whose link opens the Bot's
+/// conversation (`aidenResolvedBotDeepLink`).
+func aidenBotSessionDeepLinkPath(botID: String, hostFeatures: [String]?) -> [String]? {
+    guard case let .durableSession(id) = AidenBotChatRoute.resolve(botID: botID, hostFeatures: hostFeatures) else { return nil }
+    return [AidenBotChatRoute.pathValue(botID: id)]
+}
+
 /// A shimmering placeholder block for cold loads. Warm refreshes keep the
 /// last-good UI in place and never show it.
 struct AidenBotSkeletonBlock: View {
@@ -155,11 +164,13 @@ struct AidenBotHomeRow: Equatable, Identifiable {
 
     var id: String { bot.id }
 
-    /// The durable session state comes first: a paused turn or a missing
-    /// model says so; otherwise the last message, or a greeting prompt.
+    /// The durable session state comes first: an interrupted turn, a Bot the
+    /// person paused (revision 37) or a missing model says so; otherwise the
+    /// last message, or a greeting prompt.
     var preview: String {
         switch bot.sessionState {
-        case .interrupted: return AidenBotSessionCopy.pausedSubtitle
+        case .interrupted: return AidenBotSessionCopy.interruptedSubtitle
+        case .paused: return AidenBotSessionCopy.pausedSubtitle
         case .needsModel: return AidenBotSessionCopy.needsModel
         default: break
         }

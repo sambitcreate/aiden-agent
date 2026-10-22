@@ -25,6 +25,26 @@ export function trackConnectionSetupFocus(): void {
   });
 }
 
+/**
+ * The main window a Bot's main-initiated work should use: the focused one,
+ * else the most recently focused, else the newest. `undefined` with no window.
+ */
+export function currentMainWindow(): BrowserWindow | undefined {
+  trackConnectionSetupFocus();
+  const windows = BrowserWindow.getAllWindows().filter((window) => !isAuxiliaryWindow(window));
+  const target = connectionSetupTarget({
+    all: () =>
+      windows.map((window) => ({
+        id: window.id,
+        isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
+        isFocused: () => window.isFocused(),
+        send: () => undefined,
+      })),
+    focusHistory: () => focusHistory.list(),
+  });
+  return target ? windows.find((window) => window.id === target.id) : undefined;
+}
+
 /** Returns false, and sends nothing, for a plugin Aiden cannot set up. */
 export function openConnectionSetup(pluginId: string): boolean {
   if (!connectionSuggestionFor(pluginId)) return false;

@@ -27,6 +27,8 @@ export interface BotToolFactsInput {
   admission: BotAdmission;
   supportsImages: boolean;
   fileLocations: number;
+  /** The Bot has its own computer on a host with Bot computers. */
+  hasComputer: boolean;
   /** A fresh catalog snapshot (connections and skills) for this Bot. */
   catalog(): Promise<{
     connections: readonly BotCatalogConnectionResource[];
@@ -57,13 +59,14 @@ export function createBotToolFacts(input: BotToolFactsInput): BotToolFactsWithSk
   const { admission } = input;
   const authority = admission.authority;
   const catalog = once(input.catalog);
+  const liveMcpTools = once(input.liveMcpTools);
   const mcpTools = once(async (): Promise<ReadonlyMap<string, BotRuntimeMcpToolAuthority>> => {
     if (authority.connections.length === 0) return new Map();
     const [current, built] = await Promise.all([catalog(), input.mcpTools()]);
     const granted = exactBotMcpToolNames(authority, current.connections, built);
     // A changed live tool (for example read-only turned mutating) is not the
     // granted tool, so it is neither offered nor dispatched under the old effect.
-    const live = await input.liveMcpTools();
+    const live = await liveMcpTools();
     return new Map([...granted].filter(([name, grant]) => botMcpLiveToolMatchesGrant(grant, live.get(name))));
   });
   const skills = once(async () => {
@@ -79,8 +82,11 @@ export function createBotToolFacts(input: BotToolFactsInput): BotToolFactsWithSk
     authority,
     supportsImages: input.supportsImages,
     fileLocations: input.fileLocations,
+    hasComputer: input.hasComputer,
     mcpTools,
     skillToolNames: async () => (await skills()).names,
     skillSnapshot: async () => (await skills()).snapshot,
+    // Only a granted tool's entry: the same live inventory the grant was checked against.
+    mcpToolDescriptor: async (name) => ((await mcpTools()).has(name) ? (await liveMcpTools()).get(name) : undefined),
   };
 }

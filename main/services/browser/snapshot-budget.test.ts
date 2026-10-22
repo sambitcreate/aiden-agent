@@ -84,3 +84,15 @@ test("oversized locators are omitted whole and a later useful locator still fits
   assert.deepEqual(result.elements.map((element) => element.selector), [usable.selector]);
   assert.equal(result.contextBudget.omitted.elements, 1);
 });
+
+test("a Bot snapshot keeps the field's autocomplete, its hold and why its image is missing", () => {
+  const original = snapshot();
+  original.tab.heldForPerson = { reason: "sign_in" };
+  original.imageNote = "The screenshot was left out: the page changed while it was captured. Take another snapshot.";
+  original.elements = [{ ...original.elements[0]!, tag: "input", attributes: { autocomplete: "one-time-code", type: "text", value: "482913" } }];
+  const result = boundBrowserSnapshot(original);
+  assert.deepEqual(result.elements[0]?.attributes, { autocomplete: "one-time-code", type: "text" });
+  assert.deepEqual(result.tab.heldForPerson, { reason: "sign_in" });
+  assert.equal(result.imageNote, original.imageNote);
+  assert.equal(result.image, undefined);
+});

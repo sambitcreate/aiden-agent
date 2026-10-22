@@ -20,7 +20,7 @@ function tab(id: string): BrowserTab {
     viewport: { mode: "fill", width: 1280, height: 720 }, appearance: "system", zoom: 1, recording: false,
     agentControlling: false, floating: false, visible: true };
 }
-function harness(options: { supportsImages?: boolean; empty?: boolean } = {}) {
+function harness(options: { supportsImages?: boolean; empty?: boolean; profile?: "workspace" | "bot" } = {}) {
   const abort = new AbortController();
   let state: BrowserState = { workspaceId: "workspace", revision: 1, agentAccessOverride: "inherit", agentAccessAllowed: true,
     tabs: options.empty ? [] : [tab("first"), tab("second")], activeTabId: options.empty ? null : "first",
@@ -29,6 +29,7 @@ function harness(options: { supportsImages?: boolean; empty?: boolean } = {}) {
   let handler: ((command: BrowserCommand, signal: AbortSignal) => Promise<BrowserCommandResult>) | undefined;
   const tools = createBrowserAgentTools({ workspaceId: "workspace", chatId: "chat", generationId: "generation",
     signal: abort.signal, supportsImages: options.supportsImages ?? true,
+    ...(options.profile ? { profile: options.profile } : {}),
     port: {
       getState: () => state,
       command: async (command, signal) => {
@@ -75,7 +76,27 @@ test("workspace browser access overrides global defaults and inherit follows the
 test("exposes the complete 14-operation reference browser surface", () => {
   const h = harness();
   assert.deepEqual(h.tools.map(({ name }) => name), BROWSER_TOOL_NAMES);
+  assert.equal(h.tools.length, 14);
   for (const tool of h.tools) assert.equal((tool.parameters as { additionalProperties?: boolean }).additionalProperties, false);
+  assert.deepEqual(harness({ profile: "workspace" }).tools.map(({ name }) => name), BROWSER_TOOL_NAMES);
+});
+
+test("a Bot's browser has no page scripts or recording, and opens web pages only", async () => {
+  const h = harness({ profile: "bot" });
+  assert.deepEqual(h.tools.map(({ name }) => name), [
+    "browser_status", "browser_open", "browser_navigate", "browser_resize", "browser_set_appearance", "browser_snapshot",
+    "browser_click", "browser_type", "browser_press", "browser_scroll", "browser_wait_for",
+  ]);
+  const open = h.tools.find(({ name }) => name === "browser_open")!;
+  assert.equal("path" in (open.parameters as { properties: Record<string, unknown> }).properties, false);
+  for (const args of [{ url: "file:///tmp/sample.html" }, { url: "/tmp/sample.html" }]) {
+    await assert.rejects(h.call("browser_open", args), /web pages only/u);
+  }
+  await assert.rejects(h.call("browser_open", { path: "/tmp/sample.html" }));
+  await assert.rejects(h.call("browser_navigate", { url: "file:///tmp/sample.html" }), /web pages only/u);
+  assert.equal(h.calls.length, 0);
+  await h.call("browser_navigate", { url: "https://example.test/next" });
+  assert.deepEqual(h.calls.map(({ action }) => action), ["navigate"]);
 });
 
 test("pins default tab per generation and only changes it after a successful explicit target", async () => {

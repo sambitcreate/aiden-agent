@@ -7,6 +7,7 @@ import {
   parseBotRoutineBotId,
   parseBotRoutineCreate,
   parseBotRoutineDelete,
+  parseBotRoutineRunNow,
   parseBotRoutineUpdate,
 } from "../services/scheduled-bot-routines.js";
 
@@ -26,6 +27,10 @@ export function registerBotRoutineHandlers(): void {
   );
   ipcMain.handle("bots:routines:delete", (_event, input: unknown) =>
     botRoutineService.delete(parseBotRoutineDelete(input)),
+  );
+  // Run now, from the "skipped while paused" notice: starts one run and returns its id.
+  ipcMain.handle("bots:routines:runNow", (_event, input: unknown) =>
+    botRoutineService.runNow(parseBotRoutineRunNow(input)),
   );
   // Add routine / Not now on a card the Bot showed. A repeat returns the settled answer.
   ipcMain.handle(BOT_ROUTINE_PROPOSAL_CHANNELS.respond, (_event, input: unknown) =>

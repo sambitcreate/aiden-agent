@@ -10,6 +10,7 @@ export const INVOKE_PREFIXES = [
   "assistant-live:",
   "attachments:",
   "bots:",
+  "botComputers:",
   "browser:",
   "chat:",
   "devices:",
@@ -93,6 +94,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:approval-settled",
   /** A Bot's question or approval appeared or settled: `{botId}`. The Bots sidebar re-reads its row. */
   "bots:attention",
+  "botComputers:changed",
   "browser:event",
   "devices:state",
   "devices:reveal",

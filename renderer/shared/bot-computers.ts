@@ -1,0 +1,419 @@
+/**
+ * Bot computers (plan §8): a macOS VM per Bot, on Apple silicon only.
+ *
+ * These are the renderer-safe shapes main projects over IPC. Main owns every
+ * decision (what is downloaded, which VM runs, when it stops); the renderer
+ * only parses these and asks for the person's explicit actions.
+ */
+
+import { formatHarnessBytes } from "./acp-harness.js";
+import { DEVICE_ID_PATTERN, parseDeviceStreamGrant, type DeviceStreamGrant } from "./devices.js";
+
+/** The guest's grants for its driver, as the base reports them while it waits for the person. */
+export interface BotComputerGuestPermissions {
+  accessibility: boolean;
+  screenRecording: boolean;
+}
+
+export type BotComputerBuildStep = "create" | "provision" | "guest_driver" | "permissions";
+
+export type BotComputerSetupState =
+  | { kind: "unsupported"; reason: "platform" | "host_os" }
+  | { kind: "not_set_up" }
+  | { kind: "downloading"; receivedBytes: number; totalBytes: number }
+  | { kind: "verifying" }
+  | {
+      kind: "building_base";
+      step: BotComputerBuildStep;
+      /** Only while `step` is "permissions": what the guest has granted so far. */
+      permissions?: BotComputerGuestPermissions;
+    }
+  | {
+      kind: "ready";
+      baseVersion: string;
+      baseBuild: string;
+      updateAvailable: boolean;
+      /** The base's guest driver passed its probe: Bots can act on screen elements, not only pixels. */
+      elementControl?: boolean;
+      /** Why the last attempt to set up element control ended without it. */
+      elementControlNote?: string;
+    }
+  | { kind: "failed"; message: string; resumable: boolean };
+
+export type BotComputerRunState = "stopped" | "starting" | "running" | "stopping" | "waiting_for_slot" | "stale";
+
+export interface BotComputerStatus {
+  botId: string;
+  vmName: string;
+  state: BotComputerRunState;
+  baseBuild: string;
+  outdated: boolean;
+  lastUsedAt?: number;
+  controller: "bot" | "person";
+  activity?: string;
+}
+
+export interface BotComputersSettings {
+  maxRunning: 1 | 2;
+  idleStopMinutes: number;
+}
+
+/** What Set up and each start need, stated up front on the Settings page. */
+export interface BotComputersRequirements {
+  /** The pinned macOS restore image download. */
+  downloadBytes: number;
+  /** About how much disk the finished base computer takes. */
+  baseDiskBytes: number;
+  /** Free disk Set up checks for before it downloads: the download plus the base and headroom. */
+  setupFreeBytes: number;
+  /** Free memory each running computer needs. */
+  memoryPerComputerBytes: number;
+  /** The macOS version the pinned base installs. */
+  baseVersion: string;
+}
+
+export interface BotComputersStatus {
+  setup: BotComputerSetupState;
+  settings: BotComputersSettings;
+  diskUsedBytes: number;
+  freeDiskBytes?: number;
+  computers: BotComputerStatus[];
+  requirements: BotComputersRequirements;
+}
+
+/** Every Bot-computer IPC channel. Invoke channels share the `botComputers:` prefix. */
+export const BOT_COMPUTER_CHANNELS = {
+  status: "botComputers:status", // invoke() → BotComputersStatus
+  // Set up and Update base start the work and reply with the status at once;
+  // progress, the result and any failure arrive as `botComputers:changed`.
+  setUp: "botComputers:setUp", // invoke() → BotComputersStatus
+  cancelSetUp: "botComputers:cancelSetUp", // invoke() → void
+  updateBase: "botComputers:updateBase", // invoke() → BotComputersStatus
+  removeEverything: "botComputers:removeEverything", // invoke() → BotComputersStatus
+  updateSettings: "botComputers:updateSettings", // invoke(Partial<BotComputersSettings>) → BotComputersSettings
+  give: "botComputers:give", // invoke(botId) → BotComputerStatus
+  reset: "botComputers:reset", // invoke(botId) → BotComputerStatus
+  remove: "botComputers:remove", // invoke(botId) → void
+  stop: "botComputers:stop", // invoke(botId) → void
+  // The Computer tab (plan §8.5). A grant with `start: true` starts the
+  // computer (the person opened the tab); without it a stopped computer is refused.
+  viewerGrant: "botComputers:viewerGrant", // invoke(botId, { start }) → BotComputerViewerGrant
+  takeOver: "botComputers:takeOver", // invoke(botId) → BotComputerStatus; refused unless the computer is running
+  giveBack: "botComputers:giveBack", // invoke(botId) → BotComputerStatus
+  pointer: "botComputers:pointer", // invoke(botId) → BotComputerPointer | null
+  // The guest driver lane (plan §8.6). Element control on a ready base that
+  // lacks it boots the base once; while setup waits for the person's grants,
+  // Settings shows the base's screen and can check again or skip.
+  setUpElementControl: "botComputers:setUpElementControl", // invoke() → BotComputersStatus
+  checkPermissions: "botComputers:checkPermissions", // invoke() → void
+  skipPermissions: "botComputers:skipPermissions", // invoke() → void
+  baseViewerGrant: "botComputers:baseViewerGrant", // invoke() → BotComputerViewerGrant; only while the base waits for grants
+} as const;
+
+/** The host id the Computer tab's device stream uses; main's viewer proxy serves nothing else. */
+export const BOT_COMPUTER_VIEWER_HOST_ID = "bot-computers";
+
+/**
+ * Aiden's scroll packet on the viewer's input socket: `{ x, y, dx, dy }`, a
+ * point normalized like a touch and the wheel's pixel deltas. serve-sim has
+ * no scroll packet, so only the Bot computer viewer hub reads it.
+ */
+export const BOT_COMPUTER_VIEWER_SCROLL_TAG = 0x20;
+
+/** Where the Computer tab connects: the device stream target for this computer's current run. */
+export interface BotComputerViewerGrant {
+  hostId: typeof BOT_COMPUTER_VIEWER_HOST_ID;
+  /** The computer's VM name, which the viewer hub serves as its device id. */
+  deviceId: string;
+  grant: DeviceStreamGrant;
+}
+
+/** The Bot's last action point, in framebuffer pixels of a `width` × `height` screen. */
+export interface BotComputerPointer {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Broadcast with the whole `BotComputersStatus` whenever anything changes. */
+export const BOT_COMPUTERS_CHANGED_CHANNEL = "botComputers:changed";
+
+export const BOT_COMPUTER_MAX_RUNNING_CHOICES = [1, 2] as const;
+export const BOT_COMPUTER_IDLE_STOP_CHOICES = [5, 10, 15, 30, 60] as const;
+export const DEFAULT_BOT_COMPUTERS_SETTINGS: BotComputersSettings = Object.freeze({
+  maxRunning: 2,
+  idleStopMinutes: 10,
+});
+
+/**
+ * Validate a settings change from the renderer. Unknown keys and values
+ * outside the offered choices throw rather than being clamped.
+ */
+export function parseBotComputersSettingsPatch(value: unknown): Partial<BotComputersSettings> {
+  const input = record(value);
+  if (!input) throw new Error("Bot computer settings must be an object.");
+  const patch: Partial<BotComputersSettings> = {};
+  for (const [key, entry] of Object.entries(input)) {
+    if (key === "maxRunning") {
+      if (entry !== 1 && entry !== 2) throw new Error("At most one or two Bot computers can run at once.");
+      patch.maxRunning = entry;
+    } else if (key === "idleStopMinutes") {
+      if (!(BOT_COMPUTER_IDLE_STOP_CHOICES as readonly unknown[]).includes(entry)) {
+        throw new Error("Choose one of the offered idle stop times.");
+      }
+      patch.idleStopMinutes = entry as number;
+    } else {
+      throw new Error(`Unknown Bot computer setting: ${key}`);
+    }
+  }
+  return patch;
+}
+
+const RUN_STATES: ReadonlySet<string> = new Set([
+  "stopped",
+  "starting",
+  "running",
+  "stopping",
+  "waiting_for_slot",
+  "stale",
+]);
+const BUILD_STEPS: ReadonlySet<string> = new Set(["create", "provision", "guest_driver", "permissions"]);
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function count(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function text(value: unknown, limit: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= limit ? value : undefined;
+}
+
+function parseSetup(value: unknown): BotComputerSetupState | undefined {
+  const input = record(value);
+  switch (input?.kind) {
+    case "unsupported":
+      return input.reason === "platform" || input.reason === "host_os"
+        ? { kind: "unsupported", reason: input.reason }
+        : undefined;
+    case "not_set_up":
+      return { kind: "not_set_up" };
+    case "downloading": {
+      const receivedBytes = count(input.receivedBytes);
+      const totalBytes = count(input.totalBytes);
+      return receivedBytes !== undefined && totalBytes !== undefined
+        ? { kind: "downloading", receivedBytes, totalBytes }
+        : undefined;
+    }
+    case "verifying":
+      return { kind: "verifying" };
+    case "building_base": {
+      if (typeof input.step !== "string" || !BUILD_STEPS.has(input.step)) return undefined;
+      const step = input.step as BotComputerBuildStep;
+      const permissions = record(input.permissions);
+      return step === "permissions" &&
+        typeof permissions?.accessibility === "boolean" &&
+        typeof permissions.screenRecording === "boolean"
+        ? {
+            kind: "building_base",
+            step,
+            permissions: { accessibility: permissions.accessibility, screenRecording: permissions.screenRecording },
+          }
+        : { kind: "building_base", step };
+    }
+    case "ready": {
+      const baseVersion = text(input.baseVersion, 32);
+      const baseBuild = text(input.baseBuild, 32);
+      if (!baseVersion || !baseBuild || typeof input.updateAvailable !== "boolean") return undefined;
+      const note = text(input.elementControlNote, 300);
+      return {
+        kind: "ready",
+        baseVersion,
+        baseBuild,
+        updateAvailable: input.updateAvailable,
+        ...(typeof input.elementControl === "boolean" ? { elementControl: input.elementControl } : {}),
+        ...(note ? { elementControlNote: note } : {}),
+      };
+    }
+    case "failed": {
+      const message = text(input.message, 600);
+      return message && typeof input.resumable === "boolean"
+        ? { kind: "failed", message, resumable: input.resumable }
+        : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+export function parseBotComputerStatus(value: unknown): BotComputerStatus | undefined {
+  const input = record(value);
+  const botId = text(input?.botId, 200);
+  const vmName = text(input?.vmName, 64);
+  const baseBuild = typeof input?.baseBuild === "string" && input.baseBuild.length <= 32 ? input.baseBuild : undefined;
+  if (!input || !botId || !vmName || baseBuild === undefined) return undefined;
+  if (typeof input.state !== "string" || !RUN_STATES.has(input.state)) return undefined;
+  if (typeof input.outdated !== "boolean") return undefined;
+  if (input.controller !== "bot" && input.controller !== "person") return undefined;
+  const lastUsedAt = count(input.lastUsedAt);
+  const activity = text(input.activity, 200);
+  return {
+    botId,
+    vmName,
+    state: input.state as BotComputerRunState,
+    baseBuild,
+    outdated: input.outdated,
+    ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
+    controller: input.controller,
+    ...(activity ? { activity } : {}),
+  };
+}
+
+/** The renderer accepts only this shape from main; anything else is dropped. */
+export function parseBotComputersStatus(value: unknown): BotComputersStatus | undefined {
+  const input = record(value);
+  const setup = parseSetup(input?.setup);
+  const settings = record(input?.settings);
+  const requirements = record(input?.requirements);
+  if (!input || !setup || !settings || !requirements || !Array.isArray(input.computers)) return undefined;
+  if (settings.maxRunning !== 1 && settings.maxRunning !== 2) return undefined;
+  const idleStopMinutes = count(settings.idleStopMinutes);
+  const diskUsedBytes = count(input.diskUsedBytes);
+  const freeDiskBytes = count(input.freeDiskBytes);
+  const downloadBytes = count(requirements.downloadBytes);
+  const baseDiskBytes = count(requirements.baseDiskBytes);
+  const setupFreeBytes = count(requirements.setupFreeBytes);
+  const memoryPerComputerBytes = count(requirements.memoryPerComputerBytes);
+  const baseVersion = text(requirements.baseVersion, 32);
+  if (
+    idleStopMinutes === undefined ||
+    diskUsedBytes === undefined ||
+    downloadBytes === undefined ||
+    baseDiskBytes === undefined ||
+    setupFreeBytes === undefined ||
+    memoryPerComputerBytes === undefined ||
+    !baseVersion
+  ) {
+    return undefined;
+  }
+  const computers: BotComputerStatus[] = [];
+  for (const entry of input.computers) {
+    const computer = parseBotComputerStatus(entry);
+    if (computer) computers.push(computer);
+  }
+  return {
+    setup,
+    settings: { maxRunning: settings.maxRunning, idleStopMinutes },
+    diskUsedBytes,
+    ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
+    computers,
+    requirements: { downloadBytes, baseDiskBytes, setupFreeBytes, memoryPerComputerBytes, baseVersion },
+  };
+}
+
+/** "20 GB", "8.6 GB". Decimal units, as download pages and Finder show them. */
+export function formatBotComputerBytes(bytes: number): string {
+  if (bytes >= 1_000_000_000 && bytes % 1_000_000_000 < 50_000_000) return `${Math.round(bytes / 1_000_000_000)} GB`;
+  return formatHarnessBytes(bytes);
+}
+
+/** "about 20 GB": sizes stated before anything is downloaded are approximate. */
+export function approximateBotComputerBytes(bytes: number): string {
+  if (bytes >= 1_000_000_000) return `about ${Math.round(bytes / 1_000_000_000)} GB`;
+  return `about ${formatHarnessBytes(bytes)}`;
+}
+
+const BUILD_STEP_COPY: Record<BotComputerBuildStep, string> = {
+  create: "Installing macOS on the base computer",
+  provision: "Preparing the base computer",
+  guest_driver: "Installing Aiden's helper in the base computer",
+  permissions: "Waiting for permissions in the base computer",
+};
+
+/** One line describing setup, for the Settings row and screen readers. */
+export function botComputerSetupSummary(setup: BotComputerSetupState): string {
+  switch (setup.kind) {
+    case "unsupported":
+      return setup.reason === "host_os"
+        ? "Bot computers need macOS 26 or later on this Mac."
+        : "Bot computers need a Mac with Apple silicon.";
+    case "not_set_up":
+      return "Not set up.";
+    case "downloading":
+      return setup.totalBytes > 0
+        ? `Downloading macOS ${formatHarnessBytes(setup.receivedBytes)} of ${formatHarnessBytes(setup.totalBytes)}…`
+        : "Downloading macOS…";
+    case "verifying":
+      return "Checking the download…";
+    case "building_base":
+      return `${BUILD_STEP_COPY[setup.step]}…`;
+    case "ready":
+      return setup.updateAvailable
+        ? `Ready. A newer base (macOS ${setup.baseVersion}) is available.`
+        : `Ready (macOS ${setup.baseVersion}).`;
+    case "failed":
+      return setup.message;
+  }
+}
+
+/** Download progress as a whole percentage, or null outside the download. */
+export function botComputerSetupPercent(setup: BotComputerSetupState): number | null {
+  if (setup.kind !== "downloading" || setup.totalBytes <= 0) return null;
+  return Math.min(100, Math.floor((setup.receivedBytes / setup.totalBytes) * 100));
+}
+
+export function botComputerSetupBusy(setup: BotComputerSetupState): boolean {
+  return setup.kind === "downloading" || setup.kind === "verifying" || setup.kind === "building_base";
+}
+
+/** The computer's state in plain words, naming the Bot ("Ada's computer is running."). */
+export function botComputerStateLabel(state: BotComputerRunState, botName: string): string {
+  const owner = `${botName}'s computer`;
+  switch (state) {
+    case "stopped":
+      return `${owner} is off. It starts when ${botName} needs it.`;
+    case "starting":
+      return `Starting ${owner}…`;
+    case "running":
+      return `${owner} is running.`;
+    case "stopping":
+      return `Stopping ${owner}…`;
+    case "waiting_for_slot":
+      return "Waiting for another Bot's computer";
+    case "stale":
+      return `${owner} didn't finish being made. Reset it to start again.`;
+  }
+}
+
+export function parseBotComputerViewerGrant(value: unknown, now = Date.now()): BotComputerViewerGrant | undefined {
+  const input = record(value);
+  if (!input || input.hostId !== BOT_COMPUTER_VIEWER_HOST_ID) return undefined;
+  if (typeof input.deviceId !== "string" || !DEVICE_ID_PATTERN.test(input.deviceId)) return undefined;
+  const grant = parseDeviceStreamGrant(input.grant, now);
+  return grant ? { hostId: BOT_COMPUTER_VIEWER_HOST_ID, deviceId: input.deviceId, grant } : undefined;
+}
+
+/** The viewer grant's options from the renderer. Anything but `{ start: boolean }` throws. */
+export function parseBotComputerViewerRequest(value: unknown): { start: boolean } {
+  if (value === undefined) return { start: false };
+  const input = record(value);
+  if (!input || Object.keys(input).some((key) => key !== "start") || (input.start !== undefined && typeof input.start !== "boolean")) {
+    throw new Error("The viewer request must be { start: boolean }.");
+  }
+  return { start: input.start === true };
+}
+
+/** A pointer inside its screen, or null for none. */
+export function parseBotComputerPointer(value: unknown): BotComputerPointer | null {
+  const input = record(value);
+  if (!input) return null;
+  const { x, y, width, height } = input;
+  if (![x, y, width, height].every((entry) => typeof entry === "number" && Number.isFinite(entry))) return null;
+  const pointer = { x: x as number, y: y as number, width: width as number, height: height as number };
+  if (pointer.width <= 0 || pointer.height <= 0 || pointer.width > 8192 || pointer.height > 8192) return null;
+  if (pointer.x < 0 || pointer.y < 0 || pointer.x > pointer.width || pointer.y > pointer.height) return null;
+  return pointer;
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "upstream": "https://github.com/trycua/cua",
+  "tag": "lume-v0.6.1",
+  "sourceCommit": "3350f504014c85416009a90fcb339fe556ce02fc",
+  "version": "0.6.1",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "asset": "lume-0.6.1-darwin-arm64.tar.gz",
+  "url": "https://github.com/trycua/cua/releases/download/lume-v0.6.1/lume-0.6.1-darwin-arm64.tar.gz",
+  "sha256": "2675b7981b7d3eb525cd27f40a385c986052eb71b3360c0b2579644725f1bad8",
+  "maxArchiveBytes": 67108864,
+  "appBundle": "lume.app",
+  "bundleIdentifier": "com.trycua.lume",
+  "bundleVersion": "0.6.1",
+  "binaryPath": "lume.app/Contents/MacOS/lume",
+  "binarySha256": "a369d63746690afe79626e357241df2f95b523e7f6f60ac9bc7665762abfc904",
+  "binaryBytes": 21425024,
+  "upstreamSigningTeamId": "YCK386LBJ7",
+  "license": "MIT",
+  "releaseChannel": "stable"
+}

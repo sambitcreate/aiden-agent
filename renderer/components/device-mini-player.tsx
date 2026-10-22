@@ -21,7 +21,9 @@ import {
   snapDeviceMiniPlayer,
   type DeviceMiniPlayerEdge,
   type DeviceMiniPlayerFrame,
+  type DeviceMiniPlayerGeometry,
 } from "../lib/device-mini-player-layout";
+import type { BrowserFloatingSize } from "../lib/browser-floating-layout";
 import { deviceTabKey, parseDeviceTabKey } from "../lib/device-tabs";
 import {
   deviceWorkspace,
@@ -46,7 +48,8 @@ const EDGES: ReadonlyArray<{ edge: DeviceMiniPlayerEdge; className: string }> = 
 /** A touch that travels less than this is a click on the handle, not a drag. */
 const DRAG_SLOP_PX = 4;
 
-function useDocumentVisible(): boolean {
+/** Whether the window is on screen; floating players stream only then. */
+export function useDocumentVisible(): boolean {
   const [visible, setVisible] = React.useState(
     () => typeof document === "undefined" || document.visibilityState !== "hidden",
   );
@@ -58,35 +61,46 @@ function useDocumentVisible(): boolean {
   return visible;
 }
 
-export interface DeviceMiniPlayerProps {
-  device: DeviceSummary;
+export interface FloatingPlayerFrameProps {
+  /** Names the player and shows in its header. */
   title: string;
-  /** Streams only while true. */
-  active: boolean;
-  onDock(): void;
-  onClose(): void;
+  /** The displayed screen's size, which the frame keeps the aspect ratio of. */
+  source: BrowserFloatingSize;
+  /** The person's stored size and position; the frame re-fits it to the chat area on every layout. */
+  geometry: DeviceMiniPlayerGeometry;
+  onGeometryChange(geometry: DeviceMiniPlayerGeometry): void;
+  /** What a screen reader calls the player ("floating device"). */
+  roleDescription: string;
+  /** Header buttons before Dock and Close. */
+  actions?: React.ReactNode;
+  dock: { label: string; title: string; onDock(): void };
+  close: { label: string; title: string; onClose(): void };
+  /** Data attributes for the player's section, such as which screen it shows. */
+  data?: Readonly<Record<`data-${string}`, string>>;
+  /** The screen area below the header. */
+  children: React.ReactNode;
 }
 
 /**
- * A resizable, draggable device player over the chat. Drag the header to
- * move it (it snaps to nearby edges and corners), drag any edge to resize it,
- * or focus the header and use the arrow keys and plus or minus. Escape docks
- * it back into its tab. The screen takes touches and keys like the full viewer.
+ * The floating player's frame over the chat, shared by the Simulator's player
+ * and a Bot's computer. Drag the header to move it (it snaps to nearby edges
+ * and corners), drag any edge to resize it, or focus the header and use the
+ * arrow keys and plus or minus. Escape docks it back into its tab.
  */
-export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: DeviceMiniPlayerProps) {
+export function FloatingPlayerFrame({
+  title,
+  source,
+  geometry,
+  onGeometryChange,
+  roleDescription,
+  actions,
+  dock,
+  close,
+  data,
+  children,
+}: FloatingPlayerFrameProps) {
   // The chat area in viewport coordinates; the player never leaves it.
   const container = useFloatingContainerBounds();
-  const geometry = useDeviceMiniPlayerGeometry();
-  const stream = useDeviceStream({ hostId: device.hostId, deviceId: device.id, platform: device.platform, active });
-  const android = device.platform === "android";
-  // A portrait framebuffer reporting landscape is drawn turned, as in the full viewer.
-  const displayRotation = deviceDisplayRotation(device.platform, stream.screen);
-  const displayedScreen =
-    stream.screen && (displayRotation === 90 || displayRotation === -90)
-      ? { width: stream.screen.height, height: stream.screen.width }
-      : stream.screen;
-  const source = deviceMiniPlayerSource(device.kind, displayedScreen);
-  const mediaStyle = rotatedMediaStyle(displayRotation);
   const stored = deviceMiniPlayerFrame({ source, container, geometry });
   const [live, setLive] = React.useState<DeviceMiniPlayerFrame | null>(null);
   const frame = live ?? stored;
@@ -100,10 +114,9 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
   } | null>(null);
   const titleId = React.useId();
   const hintId = React.useId();
-  const streaming = stream.status === "streaming";
 
   const commit = (next: DeviceMiniPlayerFrame) => {
-    deviceWorkspace.setGeometry(deviceMiniPlayerGeometry(next));
+    onGeometryChange(deviceMiniPlayerGeometry(next));
   };
   const begin = (event: React.PointerEvent<HTMLElement>, edge: DeviceMiniPlayerEdge | null) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
@@ -146,11 +159,11 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
         "device-mini-player fixed z-[48] flex min-h-0 min-w-0 flex-col rounded-sheet bg-popover text-primary shadow-dialog",
         live ? "transition-none" : "device-mini-player-settle",
       )}
-      data-device-mini-player={deviceTabKey({ hostId: device.hostId, deviceId: device.id })}
+      {...data}
       data-dragging={live ? "true" : undefined}
       aria-labelledby={titleId}
       aria-describedby={hintId}
-      aria-roledescription="floating device"
+      aria-roledescription={roleDescription}
       style={{
         visibility: hidden ? "hidden" : undefined,
         left: container.x + frame.x,
@@ -163,7 +176,7 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
         if (event.key !== "Escape" || event.defaultPrevented) return;
         event.preventDefault();
         event.stopPropagation();
-        onDock();
+        dock.onDock();
       }}
     >
       <span id={hintId} className="sr-only">
@@ -184,63 +197,123 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
         <Text id={titleId} variant="small-strong" className="min-w-0 flex-1 truncate">
           {title}
         </Text>
-        {android ? (
-          <Button
-            variant="transparent"
-            size="small"
-            iconOnly
-            aria-label="Back"
-            title="Back"
-            disabled={!streaming}
-            onClick={() => stream.client()?.pressButton("back")}
-          >
-            <ArrowLeft aria-hidden />
-          </Button>
-        ) : null}
-        <Button
-          variant="transparent"
-          size="small"
-          iconOnly
-          aria-label="Home"
-          title="Home"
-          disabled={!streaming}
-          onClick={() => stream.client()?.pressButton("home")}
-        >
-          <House aria-hidden />
-        </Button>
-        {android ? (
-          <Button
-            variant="transparent"
-            size="small"
-            iconOnly
-            aria-label="Recents"
-            title="Recents"
-            disabled={!streaming}
-            onClick={() => stream.client()?.pressButton("recents")}
-          >
-            <Square aria-hidden />
-          </Button>
-        ) : (
-          // Android rotates through the emulator's sensor action, which the full viewer offers.
-          <Button
-            variant="transparent"
-            size="small"
-            iconOnly
-            aria-label="Rotate"
-            title="Rotate"
-            disabled={!streaming}
-            onClick={() => stream.client()?.rotate()}
-          >
-            <RotateCw aria-hidden />
-          </Button>
-        )}
-        <Button variant="transparent" size="small" iconOnly aria-label="Dock device in its tab" title="Dock in tab" onClick={onDock}>
+        {actions}
+        <Button variant="transparent" size="small" iconOnly aria-label={dock.label} title={dock.title} onClick={dock.onDock}>
           <PanelRight aria-hidden />
         </Button>
-        <Button variant="transparent" size="small" iconOnly aria-label="Close floating device" title="Close floating device" onClick={onClose}>
+        <Button variant="transparent" size="small" iconOnly aria-label={close.label} title={close.title} onClick={close.onClose}>
           <X aria-hidden />
         </Button>
       </div>
+      {children}
+      {EDGES.map(({ edge, className }) => (
+        <div
+          key={edge}
+          role="presentation"
+          data-device-mini-player-resize={edge}
+          className={cn("absolute z-10 touch-none", className)}
+          onPointerDown={(event) => begin(event, edge)}
+          onPointerMove={move}
+          onPointerUp={end}
+          onPointerCancel={end}
+        />
+      ))}
+    </section>
+  );
+}
+
+export interface DeviceMiniPlayerProps {
+  device: DeviceSummary;
+  title: string;
+  /** Streams only while true. */
+  active: boolean;
+  onDock(): void;
+  onClose(): void;
+}
+
+/**
+ * A resizable, draggable device player over the chat (`FloatingPlayerFrame`).
+ * The screen takes touches and keys like the full viewer.
+ */
+export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: DeviceMiniPlayerProps) {
+  const geometry = useDeviceMiniPlayerGeometry();
+  const stream = useDeviceStream({ hostId: device.hostId, deviceId: device.id, platform: device.platform, active });
+  const android = device.platform === "android";
+  // A portrait framebuffer reporting landscape is drawn turned, as in the full viewer.
+  const displayRotation = deviceDisplayRotation(device.platform, stream.screen);
+  const displayedScreen =
+    stream.screen && (displayRotation === 90 || displayRotation === -90)
+      ? { width: stream.screen.height, height: stream.screen.width }
+      : stream.screen;
+  const source = deviceMiniPlayerSource(device.kind, displayedScreen);
+  const mediaStyle = rotatedMediaStyle(displayRotation);
+  const streaming = stream.status === "streaming";
+
+  return (
+    <FloatingPlayerFrame
+      title={title}
+      source={source}
+      geometry={geometry}
+      onGeometryChange={(next) => deviceWorkspace.setGeometry(next)}
+      roleDescription="floating device"
+      data={{ "data-device-mini-player": deviceTabKey({ hostId: device.hostId, deviceId: device.id }) }}
+      dock={{ label: "Dock device in its tab", title: "Dock in tab", onDock }}
+      close={{ label: "Close floating device", title: "Close floating device", onClose }}
+      actions={
+        <>
+          {android ? (
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              aria-label="Back"
+              title="Back"
+              disabled={!streaming}
+              onClick={() => stream.client()?.pressButton("back")}
+            >
+              <ArrowLeft aria-hidden />
+            </Button>
+          ) : null}
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Home"
+            title="Home"
+            disabled={!streaming}
+            onClick={() => stream.client()?.pressButton("home")}
+          >
+            <House aria-hidden />
+          </Button>
+          {android ? (
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              aria-label="Recents"
+              title="Recents"
+              disabled={!streaming}
+              onClick={() => stream.client()?.pressButton("recents")}
+            >
+              <Square aria-hidden />
+            </Button>
+          ) : (
+            // Android rotates through the emulator's sensor action, which the full viewer offers.
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              aria-label="Rotate"
+              title="Rotate"
+              disabled={!streaming}
+              onClick={() => stream.client()?.rotate()}
+            >
+              <RotateCw aria-hidden />
+            </Button>
+          )}
+        </>
+      }
+    >
       <div
         className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-b-sheet bg-well"
         style={DEVICE_SCREEN_CONTAINER_STYLE}
@@ -279,19 +352,7 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
           {streaming ? "Live" : stream.status === "error" ? "Disconnected" : "Connecting…"}
         </span>
       </div>
-      {EDGES.map(({ edge, className }) => (
-        <div
-          key={edge}
-          role="presentation"
-          data-device-mini-player-resize={edge}
-          className={cn("absolute z-10 touch-none", className)}
-          onPointerDown={(event) => begin(event, edge)}
-          onPointerMove={move}
-          onPointerUp={end}
-          onPointerCancel={end}
-        />
-      ))}
-    </section>
+    </FloatingPlayerFrame>
   );
 }
 

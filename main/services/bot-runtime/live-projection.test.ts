@@ -9,10 +9,12 @@ import {
   applyBotLiveEvent,
   botLastReplyAt,
   botRetryableFailedTurn,
+  botTranscriptPreview,
   type BotLiveEvent,
   type BotLiveSnapshot,
   type BotPendingQuestion,
 } from "../../../renderer/shared/bot-live.js";
+import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
 import {
@@ -26,10 +28,12 @@ import {
   type BotLiveProjectionDeps,
 } from "./live-projection.js";
 import { createBotQuestions } from "./bot-questions.js";
+import { createBotHandoffs } from "./bot-handoffs.js";
 import { createBotTurnIntents, stopWithIntents, wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
+import { HANDOFF_ARGS, HANDOFF_TOOL_NAME, handoffEntries } from "./test-support/handoff-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -711,6 +715,275 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
     stopListening();
     await live.close();
   }
+});
+
+test("a waiting hand-off reaches subscribers and late joiners, reads as waiting, and Done becomes the person's line before the reply", async () => {
+  const handoffs = createBotHandoffs();
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Thanks, the transfer is through."),
+  ]);
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: handoffEntries(handoffs, "bot:a") }) },
+    projection: { handoff: (botId) => handoffs.pending(botId)[0] ?? null },
+  });
+  const stopListening = handoffs.onChange((botId) => void live.projection.refreshHandoff(botId));
+  try {
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    assert.equal(first.snapshot.handoff, null);
+    await live.service.send("bot:a", { text: "move the savings", requestId: "desk-1" });
+    await waitFor(() => tape.view?.handoff != null, { what: "the hand-off event" });
+    const card = tape.view!.handoff!;
+    assert.equal(card.action, "Enter the 2FA code for your bank");
+    assert.equal(card.open?.url, "https://bank.example/verify");
+    await waitFor(() => tape.view?.activity?.phase === "waiting", { what: "the waiting line" });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "the Bot list shows it needs the person");
+
+    const late = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(late.snapshot.handoff?.waitId, card.waitId, "a window opened later sees the same card");
+    late.unsubscribe();
+
+    assert.equal(handoffs.answer("bot:a", card.waitId, { outcome: "done", note: "Code entered." }), "answered");
+    await waitFor(
+      () => tape.view?.handoff === null && visibleText(tape.view).includes("assistant:Thanks, the transfer is through."),
+      { what: "the answer and the reply" },
+    );
+    assert.equal(tape.gaps, 0);
+    const shown = visibleText(tape.view);
+    assert.ok(shown.indexOf("handoff_result") < shown.indexOf("assistant:Thanks, the transfer is through."), shown.join(" | "));
+    const result = tape.view!.entries.find((entry) => entry.type === "handoff_result");
+    assert.deepEqual(result?.type === "handoff_result" ? [result.kind, result.outcome, result.action, result.note] : undefined, [
+      "action",
+      "done",
+      "Enter the 2FA code for your bank",
+      "Code entered.",
+    ]);
+    const rows = botTranscriptRows(tape.view!.entries, null, { running: false, level: "summary" });
+    assert.ok(rows.some((row) => row.kind === "handoff_result" && row.text === "You did this: Enter the 2FA code for your bank"));
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false);
+    first.unsubscribe();
+  } finally {
+    stopListening();
+    await live.close();
+  }
+});
+
+test("a hand-off that opens or settles without a refresh reaching the open chat is caught up when the next window subscribes", async () => {
+  const handoffs = createBotHandoffs();
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Thanks, the transfer is through."),
+  ]);
+  // No `refreshHandoff` wiring: only a subscribe can bring the open feed up to date.
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: handoffEntries(handoffs, "bot:a") }) },
+    projection: { handoff: (botId) => handoffs.pending(botId)[0] ?? null },
+  });
+  try {
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    await live.service.send("bot:a", { text: "move the savings", requestId: "desk-1" });
+    await waitFor(() => handoffs.pending("bot:a").length === 1, { what: "the hand-off card" });
+    const [card] = handoffs.pending("bot:a");
+    assert.equal(tape.view?.handoff ?? null, null, "nothing told the open chat yet");
+
+    const opened = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(opened.snapshot.handoff?.waitId, card!.waitId, "the new window shows the waiting card");
+    await waitFor(() => tape.view?.handoff?.waitId === card!.waitId, { what: "the catch-up event in the open chat" });
+    opened.unsubscribe();
+
+    assert.equal(handoffs.answer("bot:a", card!.waitId, { outcome: "done" }), "answered");
+    await waitFor(() => visibleText(tape.view).includes("assistant:Thanks, the transfer is through."), { what: "the reply" });
+    assert.equal(tape.view?.handoff?.waitId, card!.waitId, "the settled card has not reached the open chat yet");
+    const settled = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(settled.snapshot.handoff, null, "a window opened after the answer shows no card");
+    await waitFor(() => tape.view?.handoff === null, { what: "the open chat losing the card" });
+    settled.unsubscribe();
+    assert.equal(tape.gaps, 0);
+    first.unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("only a settled hand-off becomes the person's line; a stopped or refused one stays a tool result", () => {
+  const call = (id: string, name: string) => ({ type: "toolCall", id, name, arguments: { action: "Pay the invoice" } });
+  const result = (id: number, toolCallId: string, toolName: string, isError: boolean, details: unknown) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: isError ? [{ severity: "error", code: "aborted", message: "stopped" }] : [] },
+    model: [{ role: "toolResult", toolCallId, toolName, isError, details, content: [{ type: "text", text: "…" }], timestamp: 2_000 + id }],
+  });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Pay it" }], timestamp: 900 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{
+        role: "assistant",
+        stopReason: "toolUse",
+        timestamp: 1_000,
+        content: [call("h1", "hand_off"), call("h2", "hand_off"), call("h3", "hand_off"), call("h4", "sign_in")],
+      }],
+    },
+    result(3, "h1", "hand_off", false, { kind: "action", outcome: "skipped", action: "Pay the invoice" }),
+    result(4, "h2", "hand_off", true, { kind: "action", outcome: "done", action: "Pay the invoice" }),
+    result(5, "h3", "hand_off", false, { answerText: "not a hand-off" }),
+    result(6, "h4", "sign_in", false, {
+      kind: "sign_in",
+      outcome: "done",
+      action: "Sign in to github.com",
+      origin: "https://github.com",
+    }),
+  ] as never);
+  const lines = entries.flatMap((entry) =>
+    entry.type === "handoff_result"
+      ? [`${entry.id} ${entry.outcome}`]
+      : entry.type === "tool_result"
+        ? [`tool ${entry.toolCallId} ${entry.status}`]
+        : [],
+  );
+  assert.deepEqual(lines, ["handoff:h1 skipped", "tool h2 stopped", "tool h3 ok", "handoff:h4 done"]);
+  const signIn = entries.find((entry) => entry.id === "handoff:h4");
+  assert.equal(signIn?.type === "handoff_result" ? signIn.origin : undefined, "https://github.com");
+  assert.deepEqual(
+    botTranscriptRows(entries, null, { running: false, level: "summary" }).flatMap((row) => (row.kind === "handoff_result" ? [row.text] : [])),
+    ["You skipped this: Pay the invoice", "You signed in to github.com"],
+  );
+  assert.deepEqual(botTranscriptPreview(entries), { text: "You signed in to github.com", at: 2_006 }, "the Bot list previews the person's answer");
+});
+
+test("a rule hand-off's answer reads right after the call it stopped; the last answer for a call wins and malformed ones never show", () => {
+  const rule = { id: "default.purchase", label: "Make a purchase or booking" };
+  const call = (id: string) => ({ type: "toolCall", id, name: "computer_use", arguments: { action: "click", element: 3 } });
+  const blocked = (id: number, toolCallId: string) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: [{ severity: "error", code: "blocked", message: "blocked" }] },
+    model: [{
+      role: "toolResult",
+      toolCallId,
+      toolName: "computer_use",
+      isError: true,
+      content: [{ type: "text", text: "Tool call blocked: The person did this themselves." }],
+      timestamp: 2_000 + id,
+    }],
+  });
+  const answer = (id: number, data: Record<string, unknown>) => ({ id, kind: "aiden.handoff-result", data });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Order it" }], timestamp: 900 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{ role: "assistant", stopReason: "toolUse", timestamp: 1_000, content: [call("r1"), call("r2")] }],
+    },
+    answer(3, { kind: "action", outcome: "skipped", action: rule.label, toolCallId: "r1", rule }),
+    answer(4, { kind: "action", outcome: "done", action: rule.label, note: "Booked for two", toolCallId: "r1", rule }),
+    blocked(5, "r1"),
+    // Not a rule entry (no rule), and one with an overlong action: neither shows.
+    answer(6, { kind: "action", outcome: "done", action: rule.label, toolCallId: "r2" }),
+    answer(7, { kind: "action", outcome: "done", action: "x".repeat(161), toolCallId: "r2", rule }),
+    // Its blocked result never landed (a crash after recording): it reads where it was written.
+    answer(8, { kind: "action", outcome: "done", action: rule.label, toolCallId: "r9", rule }),
+    blocked(9, "r2"),
+  ] as never);
+  const lines = entries.flatMap((entry) =>
+    entry.type === "handoff_result"
+      ? [`${entry.id} ${entry.outcome}`]
+      : entry.type === "tool_result"
+        ? [`tool ${entry.toolCallId} ${entry.status}`]
+        : [],
+  );
+  assert.deepEqual(lines, ["tool r1 blocked", "handoff:r1 done", "handoff:r9 done", "tool r2 blocked"]);
+  const r1 = entries.find((entry) => entry.id === "handoff:r1");
+  assert.deepEqual(
+    r1?.type === "handoff_result" ? { kind: r1.kind, note: r1.note, at: r1.at } : undefined,
+    { kind: "action", note: "Booked for two", at: 2_005 },
+  );
+  const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
+  assert.deepEqual(
+    rows.flatMap((row) => (row.kind === "handoff_result" ? [row.text] : [])),
+    ["You did this: Make a purchase or booking", "You did this: Make a purchase or booking"],
+  );
+});
+
+test("a provider that reuses a call id in every turn still gives each hand-off answer its own row, in its own turn", () => {
+  const rule = { id: "default.purchase", label: "Make a purchase or booking" };
+  const ask = (id: number, text: string) => ({
+    id,
+    kind: "pi.user",
+    model: [{ role: "user", content: [{ type: "text", text }], timestamp: 1_000 * id }],
+  });
+  const calling = (id: number, name: string) => ({
+    id,
+    kind: "pi.assistant",
+    model: [{
+      role: "assistant",
+      stopReason: "toolUse",
+      timestamp: 1_000 * id,
+      content: [{ type: "toolCall", id: "call_0", name, arguments: { action: "Pay" } }],
+    }],
+  });
+  const settled = (id: number, toolName: string, isError: boolean, details?: unknown) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: isError ? [{ severity: "error", code: "blocked", message: "blocked" }] : [] },
+    model: [{
+      role: "toolResult",
+      toolCallId: "call_0",
+      toolName,
+      isError,
+      details,
+      content: [{ type: "text", text: "…" }],
+      timestamp: 1_000 * id,
+    }],
+  });
+  const ruleAnswer = (id: number, outcome: string, note: string) => ({
+    id,
+    kind: "aiden.handoff-result",
+    data: { kind: "action", outcome, action: rule.label, note, toolCallId: "call_0", rule },
+  });
+  const entries = projectBotTranscript([
+    ask(1, "Pay the invoice"),
+    calling(2, "hand_off"),
+    settled(3, "hand_off", false, { kind: "action", outcome: "done", action: "Pay the invoice", note: "Invoice paid" }),
+    ask(4, "Pay the rent"),
+    calling(5, "hand_off"),
+    settled(6, "hand_off", false, { kind: "action", outcome: "skipped", action: "Pay the rent", note: "Rent later" }),
+    ask(7, "Book the table"),
+    calling(8, "computer_use"),
+    ruleAnswer(9, "done", "Table booked"),
+    settled(10, "computer_use", true),
+    ask(11, "Book the flight"),
+    calling(12, "computer_use"),
+    ruleAnswer(13, "skipped", "Flight later"),
+    settled(14, "computer_use", true),
+  ] as never);
+  const handoffRows = entries.filter((entry) => entry.type === "handoff_result");
+  assert.deepEqual(
+    handoffRows.map((entry) => (entry.type === "handoff_result" ? `${entry.outcome} (${entry.note})` : "")),
+    ["done (Invoice paid)", "skipped (Rent later)", "done (Table booked)", "skipped (Flight later)"],
+    "every turn shows its own answer, once",
+  );
+  assert.equal(new Set(handoffRows.map((entry) => entry.id)).size, 4, "no two rows share an id");
+  assert.equal(handoffRows[0]!.id, "handoff:call_0", "the first answer keeps the id every client already has");
+  // Each answer sits in its own turn: right after the person's ask (or the call it stopped) of that turn.
+  const order = entries.flatMap((entry) =>
+    entry.type === "user" ? [entry.text] : entry.type === "handoff_result" ? [entry.note ?? ""] : [],
+  );
+  assert.deepEqual(order, [
+    "Pay the invoice",
+    "Invoice paid",
+    "Pay the rent",
+    "Rent later",
+    "Book the table",
+    "Table booked",
+    "Book the flight",
+    "Flight later",
+  ]);
 });
 
 test("Stop pressed while a slow tool runs ends the chat with the person's stopped line", async () => {
@@ -1561,11 +1834,12 @@ test("a list summary says when the last reply arrived and whether the Bot is wai
   }
 });
 
-test("a list summary reads a waiting question and approval whether or not a chat is open", async () => {
+test("a list summary reads a waiting question, hand-off and approval whether or not a chat is open", async () => {
   let question: BotPendingQuestion | null = null;
+  let handoff: BotPendingHandoff | null = null;
   let approval = false;
   const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
-    projection: { question: () => question, approvalPending: () => approval },
+    projection: { question: () => question, handoff: () => handoff, approvalPending: () => approval },
   });
   try {
     const closed = async () => (await live.projection.summary("bot:a")).needsYou;
@@ -1573,6 +1847,9 @@ test("a list summary reads a waiting question and approval whether or not a chat
     question = { botId: "bot:a", waitId: "w1", toolCallId: "t1", questions: [] };
     assert.equal(await closed(), true, "a question waits with no chat open");
     question = null;
+    handoff = { botId: "bot:a", waitId: "w2", toolCallId: "t2", kind: "action", action: "Pay the invoice", source: "tool" };
+    assert.equal(await closed(), true, "a hand-off waits with no chat open");
+    handoff = null;
     approval = true;
     assert.equal(await closed(), true, "an approval waits with no chat open");
     approval = false;

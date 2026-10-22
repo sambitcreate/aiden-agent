@@ -14,12 +14,18 @@ import {
   parseAidenRemoteBotMessageRequest,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
+  parseAidenRemoteBotSummary,
+  parseAidenRemoteBotHandoff,
+  parseAidenRemoteBotHandoffAnswerRequest,
+  parseAidenRemoteBotHandoffOpenOnMacReceipt,
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
   AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
+  AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
@@ -111,8 +117,8 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 ];
 
 // Simulator control is a desktop-to-desktop grant that pairing never issues,
-// and the phone simulator viewer grant and the Bot card and activity opt-ins are
-// negotiated only after pairing.
+// and the phone simulator viewer grant and the Bot card, activity and hand-off
+// opt-ins are negotiated only after pairing.
 const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
   (capability) =>
     !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
@@ -127,7 +133,8 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 36);
+  // The shared fixture tracks the host's revision; the number lives only in the protocol module.
+  assert.equal(fixture.contractRevision, AIDEN_REMOTE_CONTRACT_REVISION);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -427,6 +434,8 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botActivityPrivacy;
   // Bot message attachments are revision 33.
   delete revision19.botAttachments;
+  // Bot hand-offs and pause are revision 37.
+  delete revision19.botHandoffs;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
@@ -560,6 +569,9 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/dismiss",
     "/bots/{botId}/stop",
     "/bots/{botId}/questions/{waitId}/answer",
+    "/bots/{botId}/handoffs/{waitId}/answer",
+    "/bots/{botId}/handoffs/{waitId}/open-on-mac",
+    "/bots/{botId}/pause",
     "/bots/{botId}/routines",
     "/bots/{botId}/routines/{routineId}",
     "/bots/{botId}/connection-requests",
@@ -983,6 +995,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["post /bots/{botId}/dismiss", ["bot:read", "bot:write"]],
     ["post /bots/{botId}/stop", ["bot:read", "bot:write"]],
     ["post /bots/{botId}/questions/{waitId}/answer", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/handoffs/{waitId}/answer", ["bot:read", "bot:write", "bot:handoffs"]],
+    ["post /bots/{botId}/handoffs/{waitId}/open-on-mac", ["bot:read", "bot:write", "bot:handoffs"]],
+    ["post /bots/{botId}/pause", ["bot:read", "bot:write", "bot:handoffs"]],
+    ["delete /bots/{botId}/pause", ["bot:read", "bot:write", "bot:handoffs"]],
     ["get /bots/{botId}/routines", ["bot:read"]],
     ["post /bots/{botId}/routines", ["bot:read", "bot:write"]],
     ["patch /bots/{botId}/routines/{routineId}", ["bot:read", "bot:write"]],
@@ -1069,6 +1085,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "BotConversationItem",
     "BotConversationPage",
     "BotAvatarUploadRequest",
+    "BotHandoff",
+    "BotHandoffAnswerRequest",
+    "BotHandoffAnswerReceipt",
+    "BotHandoffOpenOnMacReceipt",
   ];
   for (const name of closedBotSchemas) {
     // A schema composed with allOf closes over everything it evaluates instead.
@@ -1268,6 +1288,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/dismiss", "post", "200", "BotSessionState"],
     ["/bots/{botId}/stop", "post", "200", "BotSessionState"],
     ["/bots/{botId}/questions/{waitId}/answer", "post", "200", "BotQuestionAnswerReceipt"],
+    ["/bots/{botId}/handoffs/{waitId}/answer", "post", "200", "BotHandoffAnswerReceipt"],
+    ["/bots/{botId}/handoffs/{waitId}/open-on-mac", "post", "200", "BotHandoffOpenOnMacReceipt"],
+    ["/bots/{botId}/pause", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/pause", "delete", "200", "BotSessionState"],
     ["/bots/{botId}/routines", "get", "200", "BotRoutineList"],
     ["/bots/{botId}/routines", "post", "201", "BotRoutine"],
     ["/bots/{botId}/routines/{routineId}", "patch", "200", "BotRoutine"],
@@ -1332,6 +1356,10 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/scheduled-tasks/{taskId}/pause", "post"],
     ["/scheduled-tasks/{taskId}/resume", "post"],
     ["/scheduled-tasks/{taskId}/run", "post"],
+    ["/bots/{botId}/handoffs/{waitId}/answer", "post"],
+    ["/bots/{botId}/handoffs/{waitId}/open-on-mac", "post"],
+    ["/bots/{botId}/pause", "post"],
+    ["/bots/{botId}/pause", "delete"],
   ] as const) {
     assert(parameterRefs(route, method).includes("#/components/parameters/IdempotencyKey"));
   }
@@ -2568,4 +2596,165 @@ test("the shared phase table is the one the Mac draws, and an unknown phase read
   assert.equal(botActivityDisplay("app", "follows", app.app).word, app.word);
   assert.deepEqual(botActivityDisplay("teleporting", "follows"), botActivityDisplay("working", "follows"));
   for (const row of elapsed) assert.equal(botElapsedLabel(row.startedAt, row.now), row.label, JSON.stringify(row));
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 37: Bot hand-offs and pause on phones
+// ---------------------------------------------------------------------------
+
+test("hand-off frames and pause round-trip for holders, and a legacy device never sees a revision-37 word", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const section = parseAidenRemoteContractFixture(raw).botHandoffs!;
+  assert.equal(section.capability, "bot:handoffs");
+  assert.deepEqual(section.session, raw.botHandoffs.session, "the waiting session round-trips");
+  assert.deepEqual(section.events, raw.botHandoffs.events, "every holder frame round-trips");
+  assert.deepEqual(section.legacy.events, raw.botHandoffs.legacy.events, "every legacy frame round-trips");
+  assert.deepEqual(section.pausedSummary, raw.botHandoffs.pausedSummary);
+  assert.deepEqual(section.pausedDetail, raw.botHandoffs.pausedDetail);
+
+  // The card opens and then settles; every route answers for the same wait.
+  const cards = section.events.flatMap((event) => (event.type === "handoff" ? [event.payload.handoff] : []));
+  assert.deepEqual(cards, [section.session.handoff, null]);
+  const waitId = section.session.handoff!.waitId;
+  assert.equal(section.answer.response.waitId, waitId);
+  assert.equal(section.openOnMac.response.waitId, waitId);
+  assert.deepEqual(section.pause.response, { state: "paused", interrupted: false });
+  assert.equal(section.unpause.response.state, "idle");
+
+  // Both audiences read the same gapless sequence, so a resume cursor works
+  // the same way whichever view a device holds.
+  const seqs = (events: Array<{ seq: number }>) => events.map((event) => event.seq);
+  assert.deepEqual(seqs(section.legacy.events), seqs(section.events));
+  assert.deepEqual(seqs(section.events), [41, 42, 43, 44]);
+  // The answer is the person's own message, the same entry for both views.
+  const answerEntry = (events: typeof section.events) =>
+    events.find((event) => event.type === "entry" && event.payload.entry.id === "entry_handoff:call_fixture_36");
+  assert.deepEqual(answerEntry(section.legacy.events), answerEntry(section.events));
+
+  // A legacy device reads the hand-off as one assistant line and a pause as unavailable.
+  const legacyText = JSON.stringify(raw.botHandoffs.legacy);
+  assert.doesNotMatch(legacyText, /"handoff"|"paused"|bot_paused/u);
+  const notice = section.legacy.session.entries[section.legacy.session.entries.length - 1]!;
+  assert.equal(notice.type === "message" && notice.role, "assistant");
+  assert.equal(notice.id, `handoff-notice:${waitId}`);
+  assert.equal(section.legacy.pausedSession.state, "unavailable");
+  assert.equal(section.legacy.pausedSummary.sessionState, "unavailable");
+  assert.equal(section.pausedError.error.message, section.legacy.pausedError.error.message);
+});
+
+test("hand-off, answer and paused-flag parsers refuse what a closed decoder would refuse", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const card = raw.botHandoffs.session.handoff as Record<string, unknown>;
+  assert.deepEqual(parseAidenRemoteBotHandoff(card), card);
+  const { why: _why, open: _open, ...bare } = card;
+  assert.deepEqual(parseAidenRemoteBotHandoff({ ...bare, kind: "sign_in" }), { ...bare, kind: "sign_in" });
+  for (const invalid of [
+    { ...card, extra: true },
+    { ...card, kind: "payment" },
+    { ...card, waitId: "wait id" },
+    { ...card, action: "   " },
+    { ...card, action: "x".repeat(161) },
+    { ...card, open: { url: "http://bank.example.com/verify" } },
+    { ...card, open: { url: "javascript:alert(1)" } },
+    { ...card, open: { url: "https://bank.example.com", target: "_blank" } },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotHandoff(invalid), Error, JSON.stringify(invalid));
+  }
+
+  assert.deepEqual(parseAidenRemoteBotHandoffAnswerRequest({ outcome: "skipped" }), { outcome: "skipped" });
+  for (const invalid of [
+    { outcome: "later" },
+    { outcome: "done", note: "  " },
+    { outcome: "done", note: "x".repeat(4_001) },
+    { outcome: "done", waitId: card.waitId },
+    {},
+  ]) {
+    assert.throws(() => parseAidenRemoteBotHandoffAnswerRequest(invalid), Error, JSON.stringify(invalid));
+  }
+  assert.throws(() => parseAidenRemoteBotHandoffOpenOnMacReceipt({ waitId: card.waitId, opened: "yes" }));
+
+  // `paused` and the `paused` session state always travel together; a summary sends the flag only as true.
+  const summary = raw.botHandoffs.pausedSummary as Record<string, unknown>;
+  assert.throws(() => parseAidenRemoteBotSummary({ ...summary, paused: false }), /must be true/u);
+  assert.throws(() => parseAidenRemoteBotSummary({ ...summary, sessionState: "idle" }), /agree/u);
+  const { paused: _flag, ...unflagged } = summary;
+  assert.throws(() => parseAidenRemoteBotSummary(unflagged), /agree/u);
+  const detail = raw.botHandoffs.pausedDetail as Record<string, unknown>;
+  assert.equal(parseAidenRemoteBotDetail({ ...detail, sessionState: "idle", paused: false }).paused, false);
+  assert.throws(() => parseAidenRemoteBotDetail({ ...detail, paused: false }), /agree/u);
+  assert.throws(() => parseAidenRemoteBotDetail({ ...detail, sessionState: "running" }), /agree/u);
+
+  // A session's hand-off is nullable and closed; a frame carries it wrapped.
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botHandoffs.session, handoff: { ...card, extra: 1 } }));
+  const [opened] = raw.botHandoffs.events as Array<Record<string, any>>;
+  assert.throws(() => parseAidenRemoteBotSessionEvent({ ...opened, payload: card }));
+  assert.throws(() => parseAidenRemoteBotSessionEvent({ ...opened, payload: { handoff: card, approval: null } }));
+});
+
+test("Bot hand-off fixtures require their own revision, and an older fixture parses without them", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
+  // The number is re-claimed at merge, so the test names it only through the constant.
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.botHandoffs;
+  assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
+
+  // The fixture guards its own invariants: a legacy view may not leak a holder word.
+  const leaky = structuredClone(raw);
+  leaky.botHandoffs.legacy.pausedSummary = raw.botHandoffs.pausedSummary;
+  assert.throws(() => parseAidenRemoteContractFixture(leaky), /must not carry paused/u);
+  const leakySnapshot = structuredClone(raw);
+  const settled = leakySnapshot.botHandoffs.legacy.events.find((event: { type: string }) => event.type === "snapshot");
+  settled.payload.session.handoff = null;
+  assert.throws(() => parseAidenRemoteContractFixture(leakySnapshot), /must not carry hand-off or paused/u);
+  const wrongCode = structuredClone(raw);
+  wrongCode.botHandoffs.legacy.pausedError.error.code = "bot_paused";
+  assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
+});
+
+test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const section = raw.botHandoffs;
+  const ajv = new Ajv2020({ strict: false });
+  const schema = (name: string) => ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  // BotSession composes BotSessionState with allOf, which plain JSON Schema
+  // validators read as closed, so the session's hand-off is checked on its own.
+  const handoff = schema("BotHandoff");
+  const event = schema("BotSessionEvent");
+  const state = schema("BotSessionState");
+  const summary = schema("BotSummary");
+  const detail = schema("BotDetail");
+  const answer = schema("BotHandoffAnswerRequest");
+  const error = schema("ErrorEnvelope");
+  for (const [validate, sample, label] of [
+    [handoff, section.session.handoff, "session hand-off"],
+    [handoff, section.events[0].payload.handoff, "hand-off frame"],
+    [answer, section.answer.request, "answer"],
+    [schema("BotHandoffAnswerReceipt"), section.answer.response, "answer receipt"],
+    [schema("BotHandoffOpenOnMacReceipt"), section.openOnMac.response, "open-on-Mac receipt"],
+    [state, section.pause.response, "pause"],
+    [state, section.unpause.response, "unpause"],
+    [summary, section.pausedSummary, "paused summary"],
+    [summary, section.legacy.pausedSummary, "legacy paused summary"],
+    [detail, section.pausedDetail, "paused detail"],
+    [error, section.pausedError, "paused error"],
+    [error, section.legacy.pausedError, "legacy paused error"],
+  ] as const) {
+    assert.equal(validate(sample), true, `${label}: ${JSON.stringify(validate.errors)}`);
+  }
+  for (const frame of [...section.events, ...section.legacy.events]) {
+    assert.equal(event(frame), true, `${frame.type} ${frame.seq}: ${JSON.stringify(event.errors)}`);
+  }
+  assert.equal(answer({ outcome: "later" }), false);
+  assert.equal(answer({ outcome: "done", note: "" }), false);
+  assert.equal(summary({ ...section.pausedSummary, paused: false }), false);
+  assert.equal(handoff({ ...section.session.handoff, extra: true }), false);
+  assert.equal(handoff({ ...section.session.handoff, open: { url: "http://bank.example.com" } }), false);
 });

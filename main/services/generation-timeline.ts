@@ -303,6 +303,11 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
       return { label: "Use computer", detail: safeDetail(values.action) };
+    // A Bot's own computer: its stated intent, never typed text or the command.
+    case "computer":
+      return { label: "Use its computer", detail: safeDetail(values.intent) };
+    case "computer_shell":
+      return { label: "Run command in its computer", detail: safeDetail(values.description) };
     case "form_fill":
       return { label: "Fill form fields" };
     case "vcc_recall":

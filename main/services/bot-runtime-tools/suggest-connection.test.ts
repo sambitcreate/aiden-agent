@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import { suggestConnectionCandidate } from "../bot-runtime/bot-tool-candidates.js";
+import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import { getMcpPreset, serverFromPreset } from "../mcp-presets.js";
 import type { McpServer } from "../types.js";
 import {
@@ -167,4 +170,38 @@ test("a plugin counts as connected only when its preset is enabled and signed in
   servers = [{ ...notion, url: "https://attacker.invalid/mcp" }, composio];
   assert.equal(await isBotConnectionReady("notion", deps), false);
   assert.equal(await isBotConnectionReady("not-a-plugin", deps), false);
+});
+
+test("bound to a Bot call, the card is written into that call's conversation, and a card the chat still shows is pending", async () => {
+  // The calling conversation as a call reads it: newest first.
+  const log: EntryRecord[] = [];
+  const call = {
+    entries: async () => [...log].reverse(),
+    appendEntry: async (kind: string, data: unknown) => {
+      log.push({ id: log.length + 1, kind, data } as unknown as EntryRecord);
+    },
+  } as unknown as BotToolCall;
+  const candidate = suggestConnectionCandidate("bot-a", { isConnected: () => false, isDismissed: () => false });
+  const suggest = async () =>
+    ((await candidate.bind!(call).execute("call-1", { pluginId: "notion", reason: "Keep plans in Notion." })).details as { status: string })
+      .status;
+
+  assert.equal(await suggest(), "suggested");
+  assert.deepEqual(
+    log.map((entry) => [entry.kind, (entry.data as unknown as ConnectCardEntry).pluginId, (entry.data as unknown as ConnectCardEntry).status]),
+    [["aiden.connect-card", "notion", "pending"]],
+  );
+  assert.equal(await suggest(), "pending", "the card already waits in the chat");
+  assert.equal(log.length, 1);
+
+  // A compaction whose kept context starts after the card: the chat no longer shows it, so it may be offered again.
+  log.push({ id: log.length + 1, kind: "pi.compaction", head: log.length + 1 } as unknown as EntryRecord);
+  assert.equal(await suggest(), "suggested");
+  assert.equal(log.filter((entry) => entry.kind === "aiden.connect-card").length, 2);
+
+  await assert.rejects(
+    candidate.tool.execute("call-2", { pluginId: "gmail", reason: "Read your mail." }),
+    /needs a Bot conversation/u,
+    "unbound, it writes nowhere",
+  );
 });

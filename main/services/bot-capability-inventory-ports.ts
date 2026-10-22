@@ -38,6 +38,13 @@ export interface BotCapabilityInventoryPortDependencies {
   subagentsAvailable(): boolean;
   /** Host policy always narrows a persisted Computer Use preference. */
   computerUseSupported?: () => boolean;
+  /** Browser settings let agents use Aiden's browser (a Bot's own browser follows them). */
+  browserAgentAccess?: () => Promise<boolean>;
+  /**
+   * Bot computers are set up on a host that has them (Apple silicon), so a Bot
+   * given a computer can use it. Each Bot still needs its own computer.
+   */
+  botComputersReady?: () => Promise<boolean>;
   shellFingerprint?: string;
   fullMacScopeFingerprint?: string;
   botHomeScopeFingerprint?: string;
@@ -256,6 +263,8 @@ function ordinaryInventory(input: {
   webSearchReady: boolean;
   subagentsAvailable: boolean;
   computerUseSupported: boolean;
+  browserAgentAccess: boolean;
+  botComputersReady: boolean;
 }): BotOrdinaryCapabilityInventory[] {
   const values: Array<{
     kind: BotOrdinaryCapabilityInventory["kind"];
@@ -272,8 +281,8 @@ function ordinaryInventory(input: {
     {
       kind: "browser",
       label: "Browser",
-      description: "Browser control is not currently available to ordinary Bot chats.",
-      available: false,
+      description: "Browse the web in its own browser, with its own sign-ins, which you can watch in its Browser tab.",
+      available: input.browserAgentAccess,
     },
     {
       kind: "computer_use",
@@ -282,6 +291,12 @@ function ordinaryInventory(input: {
       available:
         input.computerUseSupported &&
         input.settings.computerUseEnabled === true,
+    },
+    {
+      kind: "computer",
+      label: "Bot computer",
+      description: "Use its own computer, a macOS virtual machine apart from your Mac that you can watch and take over. Give it one in its profile.",
+      available: input.botComputersReady,
     },
     {
       kind: "schedules",
@@ -440,9 +455,12 @@ export function createBotCapabilityInventoryPorts(
       return skills;
     },
     async inspectOtherCapabilities(signal) {
-      const [settings, webSearchAvailability] = await Promise.all([
+      const [settings, webSearchAvailability, browserAgentAccess, botComputersReady] = await Promise.all([
         dependencies.getSettings(),
         dependencies.webSearchAvailability(),
+        dependencies.browserAgentAccess?.() ?? Promise.resolve(false),
+        // An unreadable Bot computers state offers nothing rather than failing the catalog.
+        dependencies.botComputersReady?.().catch(() => false) ?? Promise.resolve(false),
       ]);
       if (signal.aborted) throw signal.reason;
       return ordinaryInventory({
@@ -451,6 +469,8 @@ export function createBotCapabilityInventoryPorts(
         subagentsAvailable: dependencies.subagentsAvailable(),
         computerUseSupported:
           dependencies.computerUseSupported?.() === true,
+        browserAgentAccess: browserAgentAccess === true,
+        botComputersReady: botComputersReady === true,
       });
     },
   };

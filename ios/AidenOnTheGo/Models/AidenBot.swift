@@ -168,6 +168,21 @@ enum AidenBotWire {
         }
     }
 
+    /// Revision 37: a Bot's `paused` flag, absent (false) from a Mac or device
+    /// without `bot:handoffs`. A flag and a `paused` session state always
+    /// travel together, as the Mac's own parser requires.
+    static func pausedFlag<Key: CodingKey>(
+        _ values: KeyedDecodingContainer<Key>,
+        forKey key: Key,
+        sessionState: AidenBotSessionStateKind?
+    ) throws -> Bool {
+        let paused = try optional(Bool.self, from: values, forKey: key) ?? false
+        if let sessionState, (sessionState == .paused) != paused {
+            throw AidenBotContractError.invalidCombination("bot paused state")
+        }
+        return paused
+    }
+
     static func requireOnlyKeys(
         _ decoder: Decoder,
         allowed: Set<String>
@@ -316,6 +331,9 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     let revision: String
     /// Present when the host advertises `bot-durable-session-v1`.
     let sessionState: AidenBotSessionStateKind?
+    /// Revision 37 (`bot:handoffs`): the person paused this Bot. It always
+    /// agrees with a `paused` session state; a Mac sends it only as `true`.
+    let paused: Bool
 
     init(detail: AidenBotDetail) {
         id = detail.id
@@ -327,6 +345,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
         updatedAt = detail.updatedAt
         revision = detail.revision
         sessionState = detail.sessionState
+        paused = detail.paused
     }
 
     init(from decoder: Decoder) throws {
@@ -350,6 +369,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
             from: values,
             forKey: .sessionState
         )
+        paused = try AidenBotWire.pausedFlag(values, forKey: .paused, sessionState: sessionState)
         // Archive was replaced by Delete in revision 25 (as the host parser).
         guard try decoder.container(keyedBy: AidenBotDynamicCodingKey.self)
             .allKeys.contains(where: { $0.stringValue == "archivedAt" }) == false else {
@@ -438,6 +458,9 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     let revision: String
     /// Present when the host advertises `bot-durable-session-v1`.
     let sessionState: AidenBotSessionStateKind?
+    /// Revision 37 (`bot:handoffs`): the person paused this Bot. It always
+    /// agrees with a `paused` session state.
+    let paused: Bool
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -467,6 +490,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
             from: values,
             forKey: .sessionState
         )
+        paused = try AidenBotWire.pausedFlag(values, forKey: .paused, sessionState: sessionState)
         access = try values.decode(AidenBotAccessView.self, forKey: .access)
         modelSelection = try AidenBotWire.optional(
             AidenBotModelSelection.self,
