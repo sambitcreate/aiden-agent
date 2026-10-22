@@ -351,6 +351,62 @@ test("a server switched off for the model is listed for Bots as unavailable, wit
   assert.notEqual(connection?.connectionFingerprint, HASH);
 });
 
+test("a model's Bot identity survives catalog metadata updates but not an image-capability change", async () => {
+  const fingerprintFor = async (metadata: Record<string, unknown>) => {
+    const ports = createBotCapabilityInventoryPorts({
+      loadOpaqueSelectionKey: async () => new Uint8Array(32),
+      loadNoticeStatus: async () => ({ version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true }),
+      listProviders: async () => [{
+        id: "openai-codex",
+        kind: "openai",
+        label: "ChatGPT / Codex",
+        baseUrl: "https://chatgpt.invalid/backend-api",
+        models: ["gpt-sol"],
+        modelMetadata: { "gpt-sol": { source: "provider", type: "llm", ...metadata } },
+        needsKey: true,
+        hasKey: true,
+      }],
+      providerCredentialSignature: async () => HASH,
+      listMcpServers: async () => [],
+      inspectMcpScopes: async () => [],
+      listSkills: async () => [],
+      listApprovedLocations: async () => [],
+      incarnations: {
+        reconcileNamespace: async (_namespace, resources) =>
+          resources.map(({ sourceId }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: "b".repeat(43) })),
+      },
+      getSettings: async () => ({}),
+      webSearchAvailability: async () => ({ ready: false }),
+      subagentsAvailable: () => false,
+    });
+    const [provider] = await ports.listProviders(new AbortController().signal);
+    return provider!.models[0]!.modelFingerprint;
+  };
+  const bound = await fingerprintFor({
+    name: "GPT Sol",
+    vision: true,
+    reasoning: true,
+    thinkingLevels: ["low", "medium", "high"],
+    contextLength: 272_000,
+  });
+  // A Pi release that widens the context window, renames the model, or adds a
+  // thinking level must not invalidate Bots that already chose this model.
+  assert.equal(await fingerprintFor({
+    name: "GPT Sol (renamed)",
+    vision: true,
+    reasoning: true,
+    thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
+    contextLength: 500_000,
+  }), bound);
+  assert.notEqual(await fingerprintFor({
+    name: "GPT Sol",
+    vision: false,
+    reasoning: true,
+    thinkingLevels: ["low", "medium", "high"],
+    contextLength: 272_000,
+  }), bound);
+});
+
 test("the Browser capability is available exactly while Browser settings let agents browse", async () => {
   const unused = async (): Promise<never> => {
     throw new Error("not read by inspectOtherCapabilities");

@@ -100,16 +100,23 @@ function providerInventory(
     models: provider.models.flatMap((modelId) => {
       const metadata = provider.modelMetadata?.[modelId];
       if (!modelId || isNonChatModel({ model: modelId, metadataType: metadata?.type })) return [];
+      const supportsImages =
+        (metadata?.overrides?.vision ?? metadata?.vision) === true &&
+        metadata?.overrides?.maxImages !== 0;
       return [
         {
           sourceId: modelId,
           label: metadata?.name ?? modelId,
           available,
-          supportsImages: (metadata?.overrides?.vision ?? metadata?.vision) === true && metadata?.overrides?.maxImages !== 0,
+          supportsImages,
+          // Only authority facts. Descriptive catalog metadata (name, context
+          // window, thinking levels, pricing) changes with Pi releases and the
+          // remote catalog refresh; hashing it re-minted the opaque model id
+          // and failed every Bot bound to that model until it was re-chosen.
           modelFingerprint: botCapabilityFactsFingerprint({
             providerId: provider.id,
             modelId,
-            metadata: metadata ?? null,
+            supportsImages,
           }),
         },
       ];
