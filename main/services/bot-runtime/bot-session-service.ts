@@ -234,6 +234,7 @@ export interface BotSessionRuntime extends BotSessionService {
 }
 
 export interface BotSessionServiceDeps {
+  leaseHelperPath?: string;
   profileDir: string;
   /**
    * pi-ai model access. Production passes each Bot its own view, so a Bot's
@@ -348,6 +349,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   const registries = new Map<string, BotRegistry>();
   const hostOrUnavailable = await createBotHarnessHost({
     profileDir: deps.profileDir,
+    leaseHelperPath: deps.leaseHelperPath,
     models: deps.models,
     buildRegistry: (botId) => {
       const registry = createBotRegistry(botId, deps.extension);

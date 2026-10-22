@@ -1,3 +1,7 @@
+import { verificationIdentity } from "./pi-verification-store.js";
+import { hostCommandObservation } from "./pi-host-command-observation.js";
+import { toolOutputScope } from "./tool-output-store.js";
+import { recordAttendedToolArguments } from "./assistant/tool-loop-guard.js";
 import { Agent, runToolCall, type AgentToolCallOutcome, type AgentTurnDecision, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
 import { type AgentHarnessResources, type AgentHarnessStreamOptions, type AgentHarnessStreamOptionsPatch, formatSkillsForSystemPrompt } from "./pi-legacy-harness.js";
 import {
@@ -1219,10 +1223,12 @@ export class PiAgentRuntimeHarness {
             }
           : undefined,
       beforeToolCall:
+        options.prepareNextTurnWithContext ||
         options.beforeToolCall ||
         durability?.effects ||
         extensions.some((extension) => extension.beforeToolCall)
           ? async (context, signal) => {
+              recordAttendedToolArguments(context.toolCall, context.args);
               let hostResult: BeforeToolCallResult | undefined;
               try {
                 hostResult = await options.beforeToolCall?.(context, signal);
@@ -2730,6 +2736,16 @@ export class PiAgentRuntimeHarness {
       state,
       terminalDigest: piRuntimeTerminalDigest(state),
     });
+    const observation = hostCommandObservation(context.result);
+    if (observation) {
+      // Receipts are private evidence: a failed write must not fail the tool effect or the run.
+      await binding.store.verification.check(binding.chatId, toolOutputScope({ runId: this.identity.runId, sessionId: this.identity.sessionId }), {
+        checkId: verificationIdentity("check", tracked.owner.effectId), runId: verificationIdentity("run", this.identity.runId), turnId: verificationIdentity("turn", operation.operationId),
+        artifactId: verificationIdentity("artifact", tracked.owner.effectId), kind: "tool_execution",
+        snapshot: async () => observation.snapshot,
+        observe: async () => observation,
+      }, this.managedAbortController?.signal).catch(() => undefined);
+    }
     operation.effects.delete(context.toolCall.id);
   }
 

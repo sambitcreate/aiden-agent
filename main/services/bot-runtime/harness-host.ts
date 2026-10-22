@@ -36,6 +36,8 @@ const PLAIN_DIRECTORY_CHARACTER = /^[A-Za-z0-9_-]$/u;
 const ENCODED_DIRECTORY_NAME = /^(?:[A-Za-z0-9_-]|~[0-9a-f]{2})+$/u;
 
 export interface BotHarnessHostOptions {
+  /** Host-owned native helper; CLI bundles it beside its entry point. */
+  leaseHelperPath?: string;
   /** The profile directory; Bot sessions live under `<profileDir>/bots/`. */
   profileDir: string;
   /**
@@ -189,7 +191,7 @@ export async function createBotHarnessHost(
   opts: BotHarnessHostOptions,
 ): Promise<BotHarnessHost | BotHarnessHostUnavailable> {
   const botsDir = path.join(opts.profileDir, "bots");
-  const lock = await acquireBotProfileLock(botsDir);
+  const lock = await acquireBotProfileLock(botsDir, opts.leaseHelperPath);
   if (!lock.ok) return { unavailable: lock.reason, pid: lock.pid };
 
   const ctx: Context = BACKGROUND_CONTEXT;

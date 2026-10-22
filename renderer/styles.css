@@ -1003,6 +1003,11 @@ textarea {
 
 /* A collapse from a stuck header brings its section back into view below the
    toolbar instead of leaving the reader stranded mid-transcript. */
+.transcript-settled-contained {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 200px;
+}
+
 .transcript-sticky-section {
   scroll-margin-top: var(--scroll-area-sticky-top, 0px);
 }

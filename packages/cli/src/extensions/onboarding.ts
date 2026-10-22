@@ -11,6 +11,7 @@ export const CLI_FEATURE_TOUR = [
   "Tools: advisor, memory, web search, MCP, delegated tasks and standalone HTML artifacts share this session.",
   "Codemode: enable +codemode in defaultTools to batch tools, generate images or classify data. Every nested tool still follows workspace access. /mcp manages Aiden's MCP servers (aiden-mcp.json).",
   "Automation: aiden serve runs schedules, Bots and configured Telegram. Each Bot has separate Full or Custom access.",
+  "Durable Bots: aiden bots enable-durable privately backs up legacy chats; restart the daemon to use persistent sessions, explicit Resume/Dismiss, routines and memory edits.",
   "Remote: aiden serve --remote enables authenticated HTTPS and event streams for paired phones. Pairing, approved folders and Tailscale are controlled locally.",
   "Speech: aiden speech explicitly installs and runs local transcription models. No model download runs during setup.",
   "Privacy: CLI credentials and history live in your private agent directory. Benchmark catalogs fetch only after your explicit command.",

@@ -60,8 +60,8 @@ for (const candidate of [
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
-// pi-coding-agent 1.2 dropped its chord dependency, so the CLI no longer
-// ships chord; a reintroduced import fails to resolve at build time.
+// Durable Bots explicitly pin chord and pi-durable to the desktop 1.3.0 line.
+// Both are bundled; no Pi runtime package is allowed as an external.
 const allowedExternalPackages = new Set([
 	"@silvia-odwyer/photon-node",
 	"jiti",
@@ -478,6 +478,29 @@ for (const resolver of [
 validateExternalImports([mainResult.metafile]);
 assertNoDuplicatePackages(mainResult.metafile);
 assertNoMcpSdkClient(mainResult.metafile);
+// Audit the transitive Bot host graph independently of the legacy daemon's
+// intentionally stubbed desktop imports. Future shared-core changes must not
+// accidentally pull Electron state into durable CLI sessions.
+const botHostInput = Object.keys(mainResult.metafile.inputs).find((file) => file.endsWith("src/bot-durable.ts"));
+if (!botHostInput) throw new Error("Durable Bot host is missing from the CLI bundle.");
+const botVisited = new Set();
+const botPending = [[botHostInput, []]];
+while (botPending.length) {
+  const [file, ancestors] = botPending.pop();
+  if (botVisited.has(file)) continue;
+  botVisited.add(file);
+  if (file.endsWith("main/platform.ts") || file.endsWith("vendor/electron-stub.ts") || file === "electron") {
+    throw new Error(`Durable Bot host imports Electron: ${[...ancestors, file].join(" -> ")}`);
+  }
+  for (const imported of mainResult.metafile.inputs[file]?.imports ?? []) {
+    // DataStore's desktop default is a known lazy fallback. Every CLI store
+    // supplies its explicit profile root; the Electron stub fails if that
+    // invariant is broken. Permit only this exact guarded edge.
+    if (file.endsWith("main/services/data-store.ts") && imported.kind === "dynamic-import" && imported.path.endsWith("main/platform.ts")) continue;
+    if (!imported.external) botPending.push([imported.path, [...ancestors, file]]);
+  }
+}
+
 
 // Bundle externals resolve at runtime from the app root's node_modules
 // ancestry. Tree-shaking usually eliminates unreferenced ones (photon-node
