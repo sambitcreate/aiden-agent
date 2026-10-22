@@ -1,11 +1,12 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -20,13 +21,17 @@ import sbtbiswas.AidenOnTheGo.models.AidenApprovalScope
 import sbtbiswas.AidenOnTheGo.models.AidenPendingApproval
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSplitButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.R
 
+private val ApprovalActionHeight = 48.dp
+
 /**
- * Approval banner actions: a tonal Deny and a primary one-time allow. When the host
- * offers broader scopes, the allow becomes a split button whose menu lists them.
+ * Approval card actions: a tonal Deny and a primary one-time allow, sharing the width
+ * equally. When the host offers broader scopes, the allow becomes a split button whose
+ * menu lists them.
  */
 @Composable
 internal fun AidenApprovalActions(
@@ -40,20 +45,21 @@ internal fun AidenApprovalActions(
     val broaderScopes = approval.scopes.filter { it != AidenApprovalScope.ONCE }
     Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         AidenTonalButton(
             text = if (isAutomation) stringResource(R.string.action_cancel) else stringResource(R.string.chat_approval_deny),
             onClick = { onRespond(AidenApprovalDecision.DENY, AidenApprovalScope.ONCE) },
-            enabled = enabled
+            enabled = enabled,
+            modifier = Modifier.weight(1f).height(ApprovalActionHeight)
         )
         if (!approval.canAllow) return@Row
-        Spacer(modifier = Modifier.width(10.dp))
         if (broaderScopes.isEmpty()) {
             AidenPrimaryButton(
                 text = allowLabel,
                 onClick = { onRespond(AidenApprovalDecision.ALLOW, AidenApprovalScope.ONCE) },
-                enabled = enabled
+                enabled = enabled,
+                modifier = Modifier.weight(1f).height(ApprovalActionHeight)
             )
             return@Row
         }
@@ -64,11 +70,25 @@ internal fun AidenApprovalActions(
             menuExpanded = scopeMenuOpen && enabled,
             onMenuExpandedChange = { scopeMenuOpen = it },
             menuContentDescription = stringResource(R.string.chat_approval_more_options),
-            enabled = enabled
+            enabled = enabled,
+            height = ApprovalActionHeight,
+            fillWidth = true,
+            modifier = Modifier.weight(1f)
         ) {
             broaderScopes.forEach { scope ->
                 DropdownMenuItem(
-                    text = { Text(AidenApprovalPresentation.scopeTitle(scope)) },
+                    text = {
+                        Column {
+                            Text(AidenApprovalPresentation.scopeTitle(scope))
+                            AidenApprovalPresentation.scopeDetail(scope)?.let { detail ->
+                                Text(
+                                    detail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AidenTheme.palette.secondary
+                                )
+                            }
+                        }
+                    },
                     onClick = {
                         scopeMenuOpen = false
                         onRespond(AidenApprovalDecision.ALLOW, scope)

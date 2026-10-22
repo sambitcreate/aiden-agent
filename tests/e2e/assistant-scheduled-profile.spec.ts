@@ -134,7 +134,7 @@ test.describe("conversational scheduling", () => {
     await expect(page.getByRole("heading", { name: "When should the workspace brief run?" })).toBeVisible();
     await page.getByRole("button", { name: /Weekdays Every weekday/u }).click();
     await page.getByRole("button", { name: "Submit", exact: true }).click();
-    const approval = page.getByRole("region", { name: "schedule task needs approval" });
+    const approval = page.getByRole("region", { name: "Save this scheduled task?" });
     await expect(approval).toContainText("Summarize important workspace changes without modifying files.");
     await approval.getByRole("button", { name: "Allow once" }).click();
     await expect(page.getByText("Your workspace brief has been saved.", { exact: true }).first()).toBeVisible();

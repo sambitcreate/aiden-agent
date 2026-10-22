@@ -1146,7 +1146,9 @@
         "renderer/lib/draft-workspace-menu.test.ts",
         "renderer/shared/workspace-artifacts.test.ts",
         "renderer/components/artifacts-panel.test.tsx",
-        "renderer/lib/chat-prompt-bridge.test.ts"
+        "renderer/lib/chat-prompt-bridge.test.ts",
+        "renderer/components/chat-approval-card.test.tsx",
+        "renderer/shared/tool-approval-preview.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",

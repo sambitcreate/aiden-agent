@@ -400,6 +400,51 @@ test("uncounted tools fall back to a neutral tool-call tally", () => {
   );
 });
 
+test("a denied call is skipped, not counted as work done", () => {
+  assert.equal(
+    summarizeActivity(timeline("completed", [step("deny", 0, "run_command", "blocked")])),
+    "Skipped 1 command",
+  );
+  assert.equal(
+    summarizeActivity(
+      timeline("completed", [
+        step("read", 0, "read_file"),
+        step("deny-edit", 1, "edit_file", "blocked"),
+        step("deny-write", 2, "write_file", "blocked"),
+      ]),
+    ),
+    "Explored 1 file, skipped 2 file changes",
+  );
+  assert.equal(
+    summarizeActivity(
+      timeline("completed", [
+        step("run", 0, "run_command"),
+        step("deny-run", 1, "run_command", "blocked"),
+        step("deny-fetch", 2, "web_fetch", "blocked"),
+      ]),
+    ),
+    "Ran 1 command, skipped 2 actions",
+  );
+  // A stopped call may have run partway, so it still counts.
+  assert.equal(
+    summarizeActivity(timeline("cancelled", [step("stop", 0, "run_command", "cancelled")])),
+    "Ran 1 command",
+  );
+});
+
+test("a call waiting for approval is not reported as running", () => {
+  assert.equal(
+    summarizeActivity(timeline("running", [step("ask", 0, "run_command", "awaiting_approval")])),
+    "Waiting for approval",
+  );
+  assert.equal(
+    summarizeActivity(
+      timeline("running", [step("read", 0, "read_file"), step("ask", 1, "edit_file", "awaiting_approval")]),
+    ),
+    "Exploring 1 file",
+  );
+});
+
 test("a live turn reads in the present tense", () => {
   assert.equal(
     summarizeActivity(timeline("running", tools({ read_file: 2, run_command: 1 }))),

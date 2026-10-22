@@ -1078,11 +1078,15 @@ enum AidenAgentActivityPresentation {
     }
 
     static func summary(_ timeline: AidenGenerationTimeline) -> String {
-        let tools = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
-        guard !tools.isEmpty else {
+        let toolSteps = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
+        guard !toolSteps.isEmpty else {
             return timeline.status == .running ? "Thinking" : "Thought \(duration(timeline.steps.compactMap(\.durationMs).reduce(0, +)))"
         }
         let running = timeline.status == .running
+        // Matches desktop: a denied or blocked call never ran, so it is
+        // counted as skipped. A call still waiting for approval is not counted yet.
+        let skipped = toolSteps.filter { $0.status == .blocked }
+        let tools = toolSteps.filter { $0.status != .blocked && $0.status != .awaitingApproval }
         let files = tools.filter { $0.toolName == "read_file" }.count
         let searches = tools.filter { $0.toolName == "grep" || $0.toolName == "glob" }.count
         let directories = tools.filter { $0.toolName == "list_dir" }.count
@@ -1112,7 +1116,13 @@ enum AidenAgentActivityPresentation {
         if mac > 0 { clauses.append("\(mac) Computer Use action\(mac == 1 ? "" : "s")") }
         if compactions > 0 { clauses.append(running ? "compacting context" : "compacted context") }
         if other > 0 { clauses.append("\(other) tool call\(other == 1 ? "" : "s")") }
-        if clauses.isEmpty { return running ? "Working" : "Used \(tools.count) tool\(tools.count == 1 ? "" : "s")" }
+        if !skipped.isEmpty {
+            let noun = skipped.allSatisfy { $0.toolName == "run_command" }
+                ? "command"
+                : skipped.allSatisfy { $0.toolName == "write_file" || $0.toolName == "edit_file" } ? "file change" : "action"
+            clauses.append("skipped \(skipped.count) \(noun)\(skipped.count == 1 ? "" : "s")")
+        }
+        if clauses.isEmpty { return running ? "Waiting for approval" : "No activity" }
         let sentence = clauses.joined(separator: ", ")
         guard explored.isEmpty, let first = sentence.first else { return sentence }
         return first.uppercased() + sentence.dropFirst()
@@ -2585,6 +2595,8 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     let hostCanAllow: Bool
     let canAllow: Bool
     var scopes: [AidenApprovalScope] = [.once]
+    /// The host's tool name, used only to word the card. Empty when unknown.
+    var toolName: String = ""
 }
 
 enum AidenApprovalKind: Equatable, Sendable {
@@ -2630,13 +2642,6 @@ enum AidenApprovalResponseAuthorization: Equatable, Sendable {
 }
 
 enum AidenApprovalPresentation {
-    static func oneLineSummary(_ summary: String) -> String {
-        let collapsed = summary
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-        return collapsed.isEmpty ? String(localized: "Review requested action") : collapsed
-    }
-
     static func title(for kind: AidenApprovalKind) -> String {
         switch kind {
         case .action: String(localized: "Approval needed")
@@ -2647,7 +2652,7 @@ enum AidenApprovalPresentation {
     static func detail(for kind: AidenApprovalKind) -> String {
         switch kind {
         case .action:
-            String(localized: "Review this one action before Aiden continues.")
+            String(localized: "Aiden is paused until you choose.")
         case .scheduledTask:
             String(localized: "Check the exact schedule and unattended access before Aiden saves it.")
         }
@@ -2673,6 +2678,83 @@ enum AidenApprovalPresentation {
         case .chat: String(localized: "Allow for this chat")
         case .always: String(localized: "Always allow")
         }
+    }
+
+    /// What a remembered scope covers, under its menu title.
+    static func scopeDetail(_ scope: AidenApprovalScope) -> String? {
+        switch scope {
+        case .once: nil
+        case .chat: String(localized: "This exact action, until Aiden quits")
+        case .always: String(localized: "This exact action in this workspace")
+        }
+    }
+
+    /// Host summary prefixes that name the tool, which the card's title already says.
+    /// Desktop hosts write the first five; the CLI daemon writes the last two.
+    private static let actionPrefixes: [String: String] = [
+        "run_command": "Run command: ",
+        "edit_file": "Edit file: ",
+        "write_file": "Create or replace file: ",
+        "share_image": "Share image in chat: ",
+        "bash": "Run command: ",
+        "read": "Read file: ",
+        "ls": "List folder: ",
+    ]
+
+    /// The exact action the host asks about, without a prefix the title repeats.
+    static func requestedAction(toolName: String, summary: String) -> String {
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let prefix = actionPrefixes[toolName], trimmed.hasPrefix(prefix) {
+            let rest = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rest.isEmpty { return rest }
+        }
+        return trimmed.isEmpty ? String(localized: "Review requested action") : trimmed
+    }
+
+    /// The card's title: the requested action as a plain question.
+    static func headline(toolName: String, kind: AidenApprovalKind, summary: String) -> String {
+        guard kind == .action else { return title(for: kind) }
+        switch toolName {
+        case "run_command", "bash":
+            return String(localized: "Run this command?")
+        case "edit_file", "edit":
+            return fileName(toolName: toolName, summary: summary).map { String(localized: "Edit \($0)?") }
+                ?? String(localized: "Edit files?")
+        case "write_file", "write":
+            return fileName(toolName: toolName, summary: summary).map { String(localized: "Write \($0)?") }
+                ?? String(localized: "Write a file?")
+        case "delete_file": return String(localized: "Delete files?")
+        case "move_file": return String(localized: "Move files?")
+        case "read_file", "read": return String(localized: "Read a file?")
+        case "ls": return String(localized: "List a folder?")
+        case "grep", "find": return String(localized: "Search files?")
+        case "web_fetch": return String(localized: "Open a web page?")
+        case "generate_image": return String(localized: "Generate an image?")
+        case "share_image": return String(localized: "Share this image in the chat?")
+        default: return title(for: kind)
+        }
+    }
+
+    /// The SF Symbol in the card's icon tile.
+    static func symbol(toolName: String, kind: AidenApprovalKind) -> String {
+        guard kind == .action else { return "calendar.badge.clock" }
+        switch toolName {
+        case "run_command", "bash": return "terminal"
+        case "edit_file", "edit": return "pencil"
+        case "write_file", "write": return "doc.badge.plus"
+        default: return "lock.shield"
+        }
+    }
+
+    /// A short file name for the title, only when the host summary names one path.
+    private static func fileName(toolName: String, summary: String) -> String? {
+        guard let prefix = actionPrefixes[toolName],
+              summary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(prefix) else { return nil }
+        let path = requestedAction(toolName: toolName, summary: summary)
+        guard !path.contains(where: \.isNewline),
+              let name = path.split(separator: "/").last.map(String.init),
+              !name.isEmpty, name.count <= 60 else { return nil }
+        return name
     }
 }
 
@@ -2700,7 +2782,8 @@ enum AidenPendingApprovalResolution {
             hasRequiredWriteCapability: hasRequiredWriteCapability,
             hostCanAllow: approval.canAllow,
             canAllow: canAllow,
-            scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once]
+            scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once],
+            toolName: approval.toolName
         )
     }
 }

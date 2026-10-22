@@ -82,7 +82,10 @@ import {
   createAgentsInstructionNoticeLog,
 } from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
-import { chatReadinessMessage as chatReadinessMessageFor } from "../lib/composer-placeholder";
+import {
+  chatReadinessMessage as chatReadinessMessageFor,
+  DENIED_APPROVAL_COMPOSER_PLACEHOLDER,
+} from "../lib/composer-placeholder";
 import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
@@ -616,6 +619,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
+  // After a Deny, the composer invites the user to say what to do instead,
+  // until they send something or leave the chat.
+  const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
   const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
   // The prompt whose agent deadline passed while its card was still open.
@@ -2244,6 +2250,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setApprovals((prev) =>
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
+        setDeniedApprovalChatId(decision === "deny" ? decisionChatId : null);
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
         if (prompt.source === "remote") {
@@ -3221,7 +3228,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 hasMessages={hasMessages}
                 chatId={chatId}
                 initialText={draft?.initialText}
-                onSend={handleSend}
+                placeholder={
+                  deniedApprovalChatId === chatId && approvals.length === 0
+                    ? DENIED_APPROVAL_COMPOSER_PLACEHOLDER
+                    : undefined
+                }
+                onSend={(...args) => {
+                  setDeniedApprovalChatId(null);
+                  return handleSend(...args);
+                }}
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
                 firstSendStatus={
@@ -3229,8 +3244,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ? "Choose how to continue above."
                     : undefined
                 }
-                onQueue={draft ? undefined : queueMessage}
-                onSteer={draft || observedRunVisible ? undefined : steerMessage}
+                onQueue={
+                  draft
+                    ? undefined
+                    : (...args) => {
+                        setDeniedApprovalChatId(null);
+                        return queueMessage(...args);
+                      }
+                }
+                onSteer={
+                  draft || observedRunVisible
+                    ? undefined
+                    : (text, attachments, skillInvocation) => {
+                        setDeniedApprovalChatId(null);
+                        return steerMessage(text, attachments, skillInvocation);
+                      }
+                }
                 hasQueuedMessages={queuedState.messages.length > 0}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={

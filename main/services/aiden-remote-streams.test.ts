@@ -298,6 +298,40 @@ test("approval scopes reach the host only when offered, allowed and chosen", asy
   ]);
 });
 
+test("the desktop card's change preview never reaches a paired phone", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-preview",
+    toolCallId: "call-1",
+    toolName: "edit_file",
+    summary: "Edit file: src/secret.ts",
+    preview: {
+      kind: "file",
+      operation: "edit",
+      path: "src/secret.ts",
+      lines: [{ type: "added", text: "const token = 'preview-only-contents';" }],
+      added: 1,
+      removed: 0,
+      omittedLines: 0,
+    },
+  });
+
+  // The phone gets the summary and can still answer; the file's contents stay on the desktop.
+  const pending = app.service.pendingApproval("device-1", "stream-1");
+  assert.equal(pending?.summary, "Edit file: src/secret.ts");
+  assert.equal(pending?.canAllow, true);
+  const output: string[] = [];
+  const response = Object.assign(new EventEmitter(), {
+    writeHead() { return this; },
+    write(value: string) { output.push(value); return true; },
+    end() { (this as unknown as EventEmitter).emit("finish"); return this; },
+  }) as unknown as ServerResponse;
+  app.service.openEvents("device-1", "stream-1", 0, response);
+  assert.match(output.join(""), /event: approval_required/u);
+  assert.doesNotMatch(JSON.stringify(pending) + output.join(""), /preview-only-contents|"preview"/u);
+});
+
 test("cancel and approval decisions are bound to the owning device and owner identity", async () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

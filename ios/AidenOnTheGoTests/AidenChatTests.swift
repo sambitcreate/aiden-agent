@@ -7983,12 +7983,105 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
-    func testApprovalSummaryCollapsesWhitespaceForCompactDisclosure() {
+    func testApprovalCardNamesTheActionAndShowsTheExactRequest() {
+        // Desktop hosts prefix the request with the tool's name; the title says it instead.
         XCTAssertEqual(
-            AidenApprovalPresentation.oneLineSummary("Run command:\n  find ~/Downloads   -type f"),
-            "Run command: find ~/Downloads -type f"
+            AidenApprovalPresentation.headline(toolName: "run_command", kind: .action, summary: "Run command: npm test"),
+            "Run this command?"
         )
-        XCTAssertEqual(AidenApprovalPresentation.oneLineSummary(" \n\t "), "Review requested action")
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: "Run command: find ~/Downloads\n  -type f"),
+            "find ~/Downloads\n  -type f",
+            "The command keeps its own line breaks and spacing."
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit_file", kind: .action, summary: "Edit file: src/forecast.ts"),
+            "Edit forecast.ts?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "edit_file", summary: "Edit file: src/forecast.ts"),
+            "src/forecast.ts"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "write_file", kind: .action, summary: "Create or replace file: notes/todo.md"),
+            "Write todo.md?"
+        )
+        // The CLI daemon's raw request stays whole when it has no readable form.
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "edit", summary: #"edit: {"path":"a.ts"}"#),
+            #"edit: {"path":"a.ts"}"#
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit", kind: .action, summary: #"edit: {"path":"a.ts"}"#),
+            "Edit files?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "bash", kind: .action, summary: "Run command: ls -la"),
+            "Run this command?"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.requestedAction(toolName: "bash", summary: "Run command: ls -la"), "ls -la")
+        // A prefix is only removed for the tool that writes it.
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "notion__search", summary: "Run command: rm -rf /"),
+            "Run command: rm -rf /"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "notion__search", kind: .action, summary: "Search Notion"),
+            "Approval needed"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "schedule_task", kind: .scheduledTask, summary: "Daily report"),
+            "Review scheduled task"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: " \n\t "), "Review requested action")
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: "Run command: "),
+            "Run command:",
+            "An empty command is shown as sent rather than as a blank block."
+        )
+    }
+
+    func testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
+        func step(_ index: Int, _ toolName: String, _ status: AidenAgentStepStatus) -> AidenAgentStep {
+            AidenAgentStep(
+                id: "tool-\(index)", order: index, kind: .tool, toolName: toolName,
+                label: "Tool", status: status, startedAt: 1_000, updatedAt: 2_000,
+                finishedAt: 2_000, contentOffset: 0, durationMs: 1_000,
+                target: nil, detail: nil, lineChanges: nil
+            )
+        }
+        func timeline(_ status: AidenGenerationTimelineStatus, _ steps: [AidenAgentStep]) -> AidenGenerationTimeline {
+            AidenGenerationTimeline(
+                version: 3, generationId: "stream-1", status: status,
+                startedAt: 1_000, finishedAt: status == .running ? nil : 2_000, steps: steps
+            )
+        }
+        // The same sentences as the desktop activity header.
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [step(0, "run_command", .blocked)])),
+            "Skipped 1 command"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [
+                step(0, "read_file", .completed), step(1, "edit_file", .blocked), step(2, "write_file", .blocked),
+            ])),
+            "Explored 1 file, skipped 2 file changes"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [
+                step(0, "run_command", .completed), step(1, "run_command", .blocked), step(2, "web_fetch", .blocked),
+            ])),
+            "Ran 1 command, skipped 2 actions"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.cancelled, [step(0, "run_command", .cancelled)])),
+            "Ran 1 command",
+            "A stopped call may have run partway, so it still counts."
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.running, [step(0, "run_command", .awaitingApproval)])),
+            "Waiting for approval"
+        )
     }
 
     @MainActor

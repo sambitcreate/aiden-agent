@@ -14,6 +14,7 @@ for emphasis; do not add a separate pill or circular button variant.
 | A custom visual that must follow a button's silhouette, such as its artwork mask | `.squircle-control` | The same button radius and corner shape |
 | Joined actions, such as an action with a separate menu trigger | `.squircle-control.squircle-action-group` around direct `Button` children | 16px outer corners, square internal seams |
 | Chat composer | `.composer-shell` | `--radius-composer: 40px` and `corner-shape: squircle` |
+| Tool approval card above the composer | `.composer-shell` on the card, `.approval-well` for its code and note wells, `.approval-icon-tile` for the icon | The composer's 40px squircle; wells use the composer radius less the card's 16px padding; the icon tile is a 14px squircle |
 
 The renderer's action rule also covers existing `button`, `[role="button"]`, and
 `[data-slot="button"]` elements, including the compact dictation window. Reuse
@@ -30,6 +31,23 @@ Joined actions reuse the group rule instead of per-corner utility overrides.
 Their individual hover and focus fills meet at straight seams, while the group
 and its end buttons share the outer squircle. Leave the group overflow visible
 so each button's keyboard outline and portaled menus remain unobstructed.
+
+## Approval card
+
+A tool approval reads top to bottom as one centered question: an accent icon
+tile, the action as a plain question ("Run this command?", "Edit forecast.ts?"),
+the exact request in a monospaced well, one quiet line under it ("Aiden is
+paused until you choose.", or the file and its size of change), and two equal
+large buttons. Deny is the filled neutral action and keeps initial focus; Allow
+once is the accent action. When the host offers remembered scopes, Allow once
+becomes a joined action whose chevron menu lists **Allow for this chat** and
+**Always allow in this workspace**, each with one line on what it covers. A
+file change shows removed and added lines on the soft red and green status
+fills, with screen-reader labels instead of relying on color. Specialized
+approvals (scheduled tasks, subagent grants, form fills, classifiers) keep their
+own review bodies inside the same card. The iPhone and Android cards use the
+same layout and wording; they show the approval summary instead of a diff,
+because phones never receive tool arguments.
 
 ## Untitled structure
 

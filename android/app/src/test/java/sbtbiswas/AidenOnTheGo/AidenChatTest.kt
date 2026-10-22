@@ -3324,10 +3324,105 @@ class AidenChatTest {
 
         assertTrue(AidenApprovalPresentation.isAutomation(approval.toolName))
         assertEquals("Create this automation?", AidenApprovalPresentation.title(approval.toolName))
-        assertEquals("Create a daily report", AidenApprovalPresentation.oneLineSummary(approval.summary))
+        assertEquals("Create this automation?", AidenApprovalPresentation.headline(approval.toolName, approval.summary))
         assertTrue(AidenApprovalPresentation.requiresDesktopConfirmation(approval))
         assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
-        assertEquals("Approval Required", AidenApprovalPresentation.title("run_command"))
+        assertEquals("Approval needed", AidenApprovalPresentation.title("run_command"))
+    }
+
+    @Test
+    fun testApprovalCardNamesTheActionAndShowsTheExactRequest() {
+        // Desktop hosts prefix the request with the tool's name; the title says it instead.
+        assertEquals("Run this command?", AidenApprovalPresentation.headline("run_command", "Run command: npm test"))
+        assertEquals(
+            "find ~/Downloads\n  -type f",
+            AidenApprovalPresentation.requestedAction("run_command", "Run command: find ~/Downloads\n  -type f")
+        )
+        assertEquals("Edit forecast.ts?", AidenApprovalPresentation.headline("edit_file", "Edit file: src/forecast.ts"))
+        assertEquals("src/forecast.ts", AidenApprovalPresentation.requestedAction("edit_file", "Edit file: src/forecast.ts"))
+        assertEquals("Write todo.md?", AidenApprovalPresentation.headline("write_file", "Create or replace file: notes/todo.md"))
+        // The CLI daemon's raw request stays whole when it has no readable form.
+        assertEquals("edit: {\"path\":\"a.ts\"}", AidenApprovalPresentation.requestedAction("edit", "edit: {\"path\":\"a.ts\"}"))
+        assertEquals("Edit files?", AidenApprovalPresentation.headline("edit", "edit: {\"path\":\"a.ts\"}"))
+        assertEquals("Run this command?", AidenApprovalPresentation.headline("bash", "Run command: ls -la"))
+        assertEquals("ls -la", AidenApprovalPresentation.requestedAction("bash", "Run command: ls -la"))
+        // A prefix is only removed for the tool that writes it.
+        assertEquals("Run command: rm -rf /", AidenApprovalPresentation.requestedAction("notion__search", "Run command: rm -rf /"))
+        assertEquals("Approval needed", AidenApprovalPresentation.headline("notion__search", "Search Notion"))
+        assertEquals("Review requested action", AidenApprovalPresentation.requestedAction("run_command", " \n\t "))
+        assertEquals("Run command:", AidenApprovalPresentation.requestedAction("run_command", "Run command: "))
+    }
+
+    @Test
+    fun testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
+        fun step(index: Int, toolName: String, status: AidenAgentStepStatus) = AidenAgentStep(
+            id = "tool-$index",
+            order = index,
+            kind = AidenAgentStep.Kind.TOOL,
+            toolCallId = "call-$index",
+            toolName = toolName,
+            label = "Tool",
+            status = status,
+            startedAt = 1000.0,
+            updatedAt = 2000.0,
+            finishedAt = 2000.0,
+            contentOffset = 0,
+            durationMs = 1000.0
+        )
+        fun timeline(status: AidenGenerationTimelineStatus, steps: List<AidenAgentStep>) = AidenGenerationTimeline(
+            version = 3,
+            generationId = "gen_skipped",
+            status = status,
+            startedAt = 1000.0,
+            finishedAt = if (status == AidenGenerationTimelineStatus.RUNNING) null else 2000.0,
+            steps = steps
+        )
+        // The same sentences as the desktop activity header.
+        assertEquals(
+            "Skipped 1 command",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.COMPLETED, listOf(step(0, "run_command", AidenAgentStepStatus.BLOCKED)))
+            )
+        )
+        assertEquals(
+            "Explored 1 file, skipped 2 file changes",
+            AidenAgentActivityPresentation.summary(
+                timeline(
+                    AidenGenerationTimelineStatus.COMPLETED,
+                    listOf(
+                        step(0, "read_file", AidenAgentStepStatus.COMPLETED),
+                        step(1, "edit_file", AidenAgentStepStatus.BLOCKED),
+                        step(2, "write_file", AidenAgentStepStatus.BLOCKED)
+                    )
+                )
+            )
+        )
+        assertEquals(
+            "Ran 1 command, skipped 2 actions",
+            AidenAgentActivityPresentation.summary(
+                timeline(
+                    AidenGenerationTimelineStatus.COMPLETED,
+                    listOf(
+                        step(0, "run_command", AidenAgentStepStatus.COMPLETED),
+                        step(1, "run_command", AidenAgentStepStatus.BLOCKED),
+                        step(2, "web_fetch", AidenAgentStepStatus.BLOCKED)
+                    )
+                )
+            )
+        )
+        // A stopped call may have run partway, so it still counts.
+        assertEquals(
+            "Ran 1 command",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.CANCELLED, listOf(step(0, "run_command", AidenAgentStepStatus.CANCELLED)))
+            )
+        )
+        assertEquals(
+            "Waiting for approval",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.RUNNING, listOf(step(0, "run_command", AidenAgentStepStatus.AWAITING_APPROVAL)))
+            )
+        )
     }
 
     @Test

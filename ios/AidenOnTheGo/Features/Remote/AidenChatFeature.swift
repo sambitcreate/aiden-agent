@@ -8001,6 +8001,7 @@ private struct AidenLiveResponseView: View {
             if let approval = model.pendingApproval {
                 AidenApprovalCard(
                     summary: approval.summary,
+                    toolName: approval.toolName,
                     kind: approval.kind,
                     canRespond: approval.canRespond,
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
@@ -8045,13 +8046,17 @@ private struct AidenLiveResponseView: View {
     }
 }
 
-/// Shared with the Bot session chat (`AidenBotSessionChatView`).
+/// Shared with the Bot session chat (`AidenBotSessionChatView`). Matches the
+/// desktop card: an icon tile, the action as a question, the exact request in a
+/// code block, and two equal buttons with the remembered scopes behind Allow's
+/// chevron.
 struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var isExpanded = false
 
     let summary: String
+    var toolName: String = ""
     let kind: AidenApprovalKind
     let canRespond: Bool
     let hasRequiredWriteCapability: Bool
@@ -8062,150 +8067,170 @@ struct AidenApprovalCard: View {
 
     private var broaderScopes: [AidenApprovalScope] { scopes.filter { $0 != .once } }
 
-    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+    private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    /// Lines the request shows before Show all.
+    private let collapsedLines = 6
+
+    private var request: String {
+        kind == .scheduledTask ? summary : AidenApprovalPresentation.requestedAction(toolName: toolName, summary: summary)
+    }
+
+    private var isLong: Bool {
+        request.count > 320 || request.split(whereSeparator: \.isNewline).count > collapsedLines
+    }
+
+    /// A reason the card cannot be fully answered here, shown in place of the note.
+    private var limit: (text: String, symbol: String)? {
+        if !canRespond {
+            return (String(localized: "This paired device can review approvals but cannot respond."), "lock.fill")
+        }
+        if kind == .scheduledTask && !hasRequiredWriteCapability {
+            return (String(localized: "Schedule write access is required to approve this task."), "lock.fill")
+        }
+        if !canAllow {
+            return kind == .scheduledTask
+                ? (String(localized: "This task must be approved on your paired desktop."), "desktopcomputer")
+                : (String(localized: "Allow this on your Mac. You can deny it here."), "desktopcomputer")
+        }
+        return nil
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "shield")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(palette.warning)
-                    .frame(width: 32, height: 32)
-                    .background(palette.warning.opacity(0.12), in: Circle())
-                    .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            Image(systemName: AidenApprovalPresentation.symbol(toolName: toolName, kind: kind))
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(palette.onFillAccent)
+                .frame(width: 44, height: 44)
+                .background(palette.fillAccent, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(AidenApprovalPresentation.title(for: kind))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(palette.foreground)
+            Text(AidenApprovalPresentation.headline(toolName: toolName, kind: kind, summary: summary))
+                .font(.headline)
+                .foregroundStyle(palette.foreground)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
+                .accessibilityAddTraits(.isHeader)
 
-                    Text(AidenApprovalPresentation.detail(for: kind))
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            if kind == .scheduledTask {
-                Text(summary)
-                    .font(.caption.monospaced())
+            VStack(alignment: .leading, spacing: 8) {
+                Text(request)
+                    .font(.subheadline.monospaced())
                     .foregroundStyle(palette.foreground)
+                    .lineLimit(isExpanded || !isLong ? nil : collapsedLines)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .accessibilityLabel("Scheduled task proposal")
-                    .accessibilityValue(summary)
-            } else {
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                        isExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(AidenApprovalPresentation.oneLineSummary(summary))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(palette.foreground)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel(kind == .scheduledTask ? "Scheduled task proposal" : "Requested action")
+                    .accessibilityValue(request)
 
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(palette.secondary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                if isLong {
+                    Button(isExpanded ? "Show less" : "Show all") {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                            isExpanded.toggle()
+                        }
                     }
-                    .padding(.horizontal, 10)
-                    .frame(height: 36)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .accessibilityLabel("Requested action")
-                .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
-                .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
-
-                if isExpanded {
-                    Text(summary)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(palette.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .buttonStyle(.plain)
                 }
             }
+            .padding(14)
+            .background(palette.canvas, in: wellShape)
+            .padding(.top, 14)
 
-            if !canRespond {
-                Label("This paired device can review approvals but cannot respond.", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else if kind == .scheduledTask && !hasRequiredWriteCapability {
-                Label("Schedule write access is required to approve this task.", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else if kind == .scheduledTask && !canAllow {
-                Label("This task must be approved on your paired desktop.", systemImage: "desktopcomputer")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
+            Group {
+                if let limit {
+                    Label(limit.text, systemImage: limit.symbol)
+                } else {
+                    Text(AidenApprovalPresentation.detail(for: kind))
+                }
             }
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 12)
 
             if canRespond {
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-
+                HStack(spacing: 10) {
                     Button(action: onDeny) {
                         Text(AidenApprovalPresentation.denyTitle(for: kind))
-                            .font(.caption.weight(.semibold))
+                            .font(.body.weight(.semibold))
                             .foregroundStyle(palette.foreground)
-                            .padding(.horizontal, 13)
-                            .frame(height: 34)
+                            .frame(maxWidth: .infinity, minHeight: 50)
+                            .contentShape(Capsule())
                             .aidenApprovalActionGlass()
                     }
                     .buttonStyle(.plain)
-                    .padding(.vertical, 5)
-
-                    if canAllow && !broaderScopes.isEmpty {
-                        Menu {
-                            ForEach(broaderScopes, id: \.self) { scope in
-                                Button(AidenApprovalPresentation.scopeTitle(scope)) { onAllow(scope) }
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.foreground)
-                                .frame(width: 34, height: 34)
-                                .aidenApprovalActionGlass()
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
-                        .accessibilityLabel("More allow options")
-                        .accessibilityHint("Remember this exact action for this chat or always")
-                    }
 
                     if canAllow {
-                        Button { onAllow(.once) } label: {
-                            Text(AidenApprovalPresentation.allowTitle(for: kind))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.onFillAccent)
-                                .padding(.horizontal, 13)
-                                .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.fillAccent)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
+                        allowButton
                     }
                 }
+                .padding(.top, 16)
             }
         }
-        .padding(12)
+        .padding(16)
         .background(palette.raised, in: shape)
-        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
+        .shadow(color: palette.foreground.opacity(0.08), radius: 12, y: 4)
         .accessibilityElement(children: .contain)
+    }
+
+    private var allowLabel: some View {
+        Text(AidenApprovalPresentation.allowTitle(for: kind))
+            .font(.body.weight(.semibold))
+            .foregroundStyle(palette.onFillAccent)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+    }
+
+    @ViewBuilder
+    private var allowButton: some View {
+        if broaderScopes.isEmpty {
+            Button { onAllow(.once) } label: {
+                allowLabel
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .contentShape(Capsule())
+                    .aidenApprovalActionGlass(tint: palette.fillAccent)
+            }
+            .buttonStyle(.plain)
+        } else {
+            HStack(spacing: 0) {
+                Button { onAllow(.once) } label: {
+                    allowLabel
+                        .padding(.leading, 8)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Rectangle()
+                    .fill(palette.onFillAccent.opacity(0.25))
+                    .frame(width: 1, height: 22)
+                    .accessibilityHidden(true)
+
+                Menu {
+                    ForEach(broaderScopes, id: \.self) { scope in
+                        Button { onAllow(scope) } label: {
+                            Text(AidenApprovalPresentation.scopeTitle(scope))
+                            if let detail = AidenApprovalPresentation.scopeDetail(scope) {
+                                Text(detail)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(palette.onFillAccent)
+                        .frame(width: 44, height: 50)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("More ways to allow")
+                .accessibilityHint("Remember this exact action for this chat or always")
+            }
+            .aidenApprovalActionGlass(tint: palette.fillAccent)
+        }
     }
 }
 
@@ -10068,7 +10093,8 @@ extension AidenChatViewModel {
             canAllow: canAllow,
             scopes: canAllow && kind == .action
                 ? AidenApprovalScope.offered(approval.scopes?.map(\.rawValue))
-                : [.once]
+                : [.once],
+            toolName: approval.toolName
         )
     }
 

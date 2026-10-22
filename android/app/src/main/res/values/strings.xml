@@ -853,6 +853,9 @@
     <string name="chat_title_fallback">Chat</string>
     <string name="chat_approval_review_only">This paired device can review approvals but cannot respond.</string>
     <string name="chat_approval_schedule_write_required">Schedule write access is required to approve this task.</string>
+    <string name="chat_approval_deny_only">Allow this on your Mac. You can deny it here.</string>
+    <string name="chat_approval_paused_note">Aiden is paused until you choose.</string>
+    <string name="chat_approval_automation_note">Check the exact schedule and unattended access before Aiden saves it.</string>
     <string name="chat_approval_confirm_on_desktop">Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.</string>
     <string name="chat_composer_placeholder">Message Aiden</string>
     <string name="chat_progress_hide">Hide progress</string>
