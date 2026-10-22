@@ -8,6 +8,7 @@ import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/c
 // picker, voice input, and send/stop.
 
 import * as React from "react";
+import { flushSync } from "react-dom";
 import {
   AlertDialog,
   Button,
@@ -661,10 +662,20 @@ export function Composer({
     submissionAllowed &&
     !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
+  /**
+   * Where dictation lands, fixed when recording starts. Live words show at this
+   * spot in a read-only draft until the final text replaces them.
+   */
+  const [dictationAnchor, setDictationAnchor] = React.useState<{ start: number; end: number } | null>(null);
+  const dictationAnchorRef = React.useRef(dictationAnchor);
+  dictationAnchorRef.current = dictationAnchor;
   const insertDictation = React.useCallback(
     (transcript: string) => {
       const input = inputRef?.current;
-      const selection = input ? { start: input.selectionStart, end: input.selectionEnd } : null;
+      const anchor = dictationAnchorRef.current;
+      // Take the live words out of the textarea first, so the insert edits the real draft.
+      if (anchor) flushSync(() => setDictationAnchor(null));
+      const selection = anchor ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : null);
       const active = document.activeElement;
       const typingElsewhere =
         active instanceof HTMLElement &&
@@ -695,6 +706,18 @@ export function Composer({
     },
     { model: settings.data?.voiceModel },
   );
+  React.useLayoutEffect(() => {
+    if (!voice.recording) return;
+    const input = inputRef?.current;
+    setDictationAnchor((current) => current ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : selection));
+  }, [inputRef, selection, voice.recording]);
+  React.useEffect(() => {
+    if (!voice.recording && !voice.transcribing) setDictationAnchor(null);
+  }, [voice.recording, voice.transcribing]);
+  const liveDictation = [voice.liveTranscript.committed, voice.liveTranscript.tentative].filter(Boolean).join(" ");
+  const dictationPreviewing =
+    dictationAnchor !== null && liveDictation.length > 0 && !firstSendPending && (voice.recording || voice.transcribing);
+  const composerValue = dictationPreviewing ? dictationInsertion(text, dictationAnchor, liveDictation).text : text;
 
   React.useLayoutEffect(() => {
     slashPaletteBlockedRef.current = slashPaletteBlocked;
@@ -2206,25 +2229,34 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
-              value={text}
-              readOnly={composerInputLocked || firstSendPending}
-              aria-busy={composerInputLocked || firstSendPending || undefined}
+              value={composerValue}
+              readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
+              aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
               onChange={(event) => {
-                if (firstSendPendingRef.current) return;
+                if (firstSendPendingRef.current || dictationPreviewing) return;
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
                   end: event.target.selectionEnd,
                 });
+                // Until live words appear, dictation follows the caret.
+                if (dictationAnchorRef.current) {
+                  setDictationAnchor({ start: event.target.selectionStart, end: event.target.selectionEnd });
+                }
               }}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              onSelect={(event) =>
+              onSelect={(event) => {
+                // Positions inside live dictation words do not exist in the draft.
+                if (dictationPreviewing) return;
                 updateSelection({
                   start: event.currentTarget.selectionStart,
                   end: event.currentTarget.selectionEnd,
-                })
-              }
+                });
+                if (dictationAnchorRef.current) {
+                  setDictationAnchor({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
+                }
+              }}
               onCompositionStart={() => {
                 markSlashInteraction();
                 setComposing(true);
@@ -2501,18 +2533,7 @@ export function Composer({
                 ) : null}
               </div>
               <div className="composer-action-row ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5">
-                {voice.recording &&
-                (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
-                  <span
-                    className="max-w-56 truncate text-small"
-                    role="status"
-                    aria-live="polite"
-                    aria-label="Live transcription"
-                  >
-                    <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
-                    <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
-                  </span>
-                ) : voice.transcribing && voice.loadingModel ? (
+                {voice.transcribing && voice.loadingModel ? (
                   <span
                     className="max-w-56 truncate text-small text-secondary"
                     role="status"

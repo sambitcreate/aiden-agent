@@ -26,6 +26,8 @@ const SAMPLE_RATE = 16_000;
 const FRAME_SAMPLES = 320; // 20 ms
 /** Ten minutes, the same cap as a Gemini Live session. */
 export const MAX_LIVE_PREVIEW_SAMPLES = SAMPLE_RATE * 600;
+/** One push carries a few hundred milliseconds; ten seconds is a generous ceiling. */
+export const MAX_LIVE_PREVIEW_PUSH_SAMPLES = SAMPLE_RATE * 10;
 /** A new decode waits for at least this much new audio. */
 const MIN_NEW_SAMPLES = SAMPLE_RATE * 0.3;
 /** Decodes start no closer together than this, or 1.5× the last decode. */

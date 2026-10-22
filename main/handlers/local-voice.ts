@@ -24,6 +24,8 @@ import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";
 import { asString, pcm16FromIpc } from "./voice-codec.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import { localLivePreviews } from "../services/local-speech-live.js";
+import { MAX_LIVE_PREVIEW_PUSH_SAMPLES } from "../services/local-speech-live-core.js";
 
 const activeLocalTranscriptions = new Map<
   string,
@@ -95,6 +97,8 @@ export function registerLocalVoiceHandlers(): void {
       const key = localOperationKey(owner.id, owner.documentId, operationId);
       const parsedModelId = asString(modelId, "modelId");
       const samples = pcm16FromIpc(pcm);
+      // The final decode supersedes the live preview; no preview decode may queue behind it.
+      localLivePreviews.stopOwner(owner);
       const previous = activeLocalTranscriptions.get(key);
       previous?.controller.abort();
       previous?.removeOwnerInvalidation();
@@ -133,6 +137,28 @@ export function registerLocalVoiceHandlers(): void {
       }
     },
   );
+  // ── Live dictation text (models fast enough to decode while you speak) ──
+  ipcMain.handle("voice:localLiveStart", (event, modelId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Live dictation text must come from the active application document."),
+    );
+    return localLivePreviews.start(owner, asString(modelId, "modelId"));
+  });
+  ipcMain.handle("voice:localLivePush", (event, sessionId: unknown, pcm: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Live dictation text must come from the active application document."),
+    );
+    localLivePreviews.push(owner, asString(sessionId, "sessionId"), pcm16FromIpc(pcm, MAX_LIVE_PREVIEW_PUSH_SAMPLES));
+  });
+  ipcMain.handle("voice:localLiveStop", (event, sessionId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Live dictation text must come from the active application document."),
+    );
+    localLivePreviews.stop(owner, asString(sessionId, "sessionId"));
+  });
   ipcMain.handle("voice:transcribeLocalCancel", (event, operationId: unknown) => {
     const owner = rendererDocumentOwner(
       event,
