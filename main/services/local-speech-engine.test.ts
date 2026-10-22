@@ -55,8 +55,12 @@ const req = (spec = v3, extra: Partial<Parameters<ReturnType<typeof createSpeech
   trimSilence: false, vadModelPath: "/vad.onnx", ...extra,
 });
 
-test("every catalog family maps each file role into the recognizer config", () => {
+test("every sherpa catalog family maps each file role into the recognizer config", () => {
   for (const spec of SPEECH_MODELS) {
+    if (spec.family === "parakeet-gguf") {
+      assert.throws(() => buildRecognizerConfig(spec, "/dir", { language: null, task: "transcribe" }), /transcribe\.cpp/);
+      continue;
+    }
     const json = JSON.stringify(buildRecognizerConfig(spec, "/dir", { language: null, task: "transcribe" }));
     for (const file of Object.values(spec.files)) assert.ok(json.includes(`/dir/${file}`), `${spec.id} missing ${file}`);
     assert.ok(json.includes('"numThreads":2') && json.includes('"provider":"cpu"'), spec.id);

@@ -35,7 +35,8 @@ async function loadComposer() {
       export const Button=primitive('button'), Textarea=primitive('textarea'), Input=primitive('input'), Text=primitive('span');
       export const Dialog=()=>null, AlertDialog=()=>null, DropdownMenu=()=>null, DropdownMenuContent=()=>null, DropdownMenuItem=()=>null, DropdownMenuTrigger=()=>null;
       export const toast=Object.fromEntries(['info','error','success'].map(level => [level, message => (globalThis.__composerToasts ??= []).push(message)]));`,
-    "../lib/use-voice-recorder": "export const useVoiceRecorder=()=>({});",
+    "../lib/use-voice-recorder":
+      "export const useVoiceRecorder=()=>({liveTranscript:{committed:\"\",tentative:\"\"}});",
     "../lib/queries":
       "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
     "../lib/command-system":

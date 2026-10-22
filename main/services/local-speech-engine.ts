@@ -89,6 +89,8 @@ export function buildRecognizerConfig(spec: SpeechModelSpec, dir: string, opts: 
     case "moonshine-v2":
       family = { moonshine: { encoder: file("encoder"), mergedDecoder: file("mergedDecoder") } };
       break;
+    case "parakeet-gguf":
+      throw new Error(`${spec.id} runs on transcribe.cpp, not sherpa-onnx.`);
   }
   return {
     featConfig: { sampleRate: SAMPLE_RATE, featureDim: 80 },
@@ -142,7 +144,7 @@ function configKey(spec: SpeechModelSpec, options: ConfigOptions): string {
 }
 
 /** Recognizers misbehave on sub-second input, so short audio is zero-padded to 1.25 s. */
-function atLeastOneSecond(samples: Float32Array): Float32Array {
+export function atLeastOneSecond(samples: Float32Array): Float32Array {
   if (samples.length >= MIN_SAMPLES) return samples;
   const padded = new Float32Array(PADDED_SAMPLES);
   padded.set(samples);
@@ -162,8 +164,58 @@ export interface SpeechEngineDeps {
   warn?: (message: string) => void;
 }
 
-function warnToStderr(message: string): void {
+export function warnToStderr(message: string): void {
   process.stderr.write(`[local-speech] ${message}\n`);
+}
+
+/** Speech regions found by sherpa's Silero VAD, or null when VAD fails and the whole clip should be decoded. */
+export type SpeechRegionDetector = (samples: Float32Array, vadModelPath: string) => SampleRange[] | null;
+
+export function createSileroRegionDetector(load: () => SherpaModule, warn: (message: string) => void = warnToStderr): SpeechRegionDetector {
+  return (samples, vadModelPath) => {
+    try {
+      const vad = new (load().Vad)(
+        {
+          sileroVad: { model: vadModelPath, threshold: 0.3, minSilenceDuration: 0.45, minSpeechDuration: 0.06, windowSize: VAD_WINDOW, maxSpeechDuration: 28 },
+          sampleRate: SAMPLE_RATE,
+          numThreads: 1,
+          provider: "cpu",
+          debug: 0,
+        },
+        60,
+      );
+      const regions: SampleRange[] = [];
+      const drain = () => {
+        while (!vad.isEmpty()) {
+          const segment = vad.front();
+          regions.push({ start: segment.start, end: segment.start + segment.samples.length });
+          vad.pop();
+        }
+      };
+      for (let offset = 0; offset < samples.length; offset += VAD_WINDOW) {
+        vad.acceptWaveform(samples.subarray(offset, Math.min(samples.length, offset + VAD_WINDOW)));
+        drain();
+      }
+      vad.flush();
+      drain();
+      return regions;
+    } catch (error) {
+      warn(`Voice activity detection failed; decoding the whole clip: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  };
+}
+
+/** The sample ranges to decode: speech regions when trimming silence, else fixed windows. */
+export function decodeRanges(
+  samples: Float32Array,
+  spec: SpeechModelSpec,
+  request: Pick<EngineTranscribeRequest, "trimSilence" | "vadModelPath">,
+  detectRegions: SpeechRegionDetector,
+): SampleRange[] {
+  const maxWindow = spec.capabilities.maxWindowSeconds;
+  const regions = request.trimSilence ? detectRegions(samples, request.vadModelPath) : null;
+  return regions ? planSegments(regions, samples.length, maxWindow) : fixedChunks(samples.length, maxWindow);
 }
 
 export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineDeps = {}) {
@@ -204,38 +256,7 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
     return build(spec, dir, options).recognizer;
   }
 
-  function vadRegions(samples: Float32Array, vadModelPath: string): SampleRange[] | null {
-    try {
-      const vad = new (load().Vad)(
-        {
-          sileroVad: { model: vadModelPath, threshold: 0.3, minSilenceDuration: 0.45, minSpeechDuration: 0.06, windowSize: VAD_WINDOW, maxSpeechDuration: 28 },
-          sampleRate: SAMPLE_RATE,
-          numThreads: 1,
-          provider: "cpu",
-          debug: 0,
-        },
-        60,
-      );
-      const regions: SampleRange[] = [];
-      const drain = () => {
-        while (!vad.isEmpty()) {
-          const segment = vad.front();
-          regions.push({ start: segment.start, end: segment.start + segment.samples.length });
-          vad.pop();
-        }
-      };
-      for (let offset = 0; offset < samples.length; offset += VAD_WINDOW) {
-        vad.acceptWaveform(samples.subarray(offset, Math.min(samples.length, offset + VAD_WINDOW)));
-        drain();
-      }
-      vad.flush();
-      drain();
-      return regions;
-    } catch (error) {
-      warn(`Voice activity detection failed; decoding the whole clip: ${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    }
-  }
+  const detectRegions = createSileroRegionDetector(load, warn);
 
   return {
     status(): { ready: boolean; error: string | null } {
@@ -260,9 +281,7 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
       const recognizer = ensure(spec, request.modelDirectory, configOptions(spec, language, task));
       const started = performance.now();
       const samples = atLeastOneSecond(request.samples);
-      const maxWindow = spec.capabilities.maxWindowSeconds;
-      const regions = request.trimSilence ? vadRegions(samples, request.vadModelPath) : null;
-      const ranges = regions ? planSegments(regions, samples.length, maxWindow) : fixedChunks(samples.length, maxWindow);
+      const ranges = decodeRanges(samples, spec, request, detectRegions);
       const texts: string[] = [];
       let detected: string | null = null;
       for (const range of ranges) {
@@ -290,7 +309,7 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
 let sherpa: SherpaModule | null = null;
 let sherpaError: string | null = null;
 
-function loadSherpa(): SherpaModule {
+export function loadSherpa(): SherpaModule {
   if (sherpa) return sherpa;
   if (sherpaError) throw new Error(sherpaError);
   try {

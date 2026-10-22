@@ -65,6 +65,11 @@ export const voiceApi = {
     invoke<string>("voice:transcribeLocal", pcm, modelId, operationId),
   cancelLocalTranscription: (operationId: string) =>
     invoke<void>("voice:transcribeLocalCancel", operationId),
+  /** Live text for an on-device model fast enough to decode while you speak; null otherwise. */
+  localLiveStart: (modelId: string) => invoke<{ sessionId: string } | null>("voice:localLiveStart", modelId),
+  /** Native-order PCM16 samples captured since the last push. */
+  localLivePush: (sessionId: string, pcm: ArrayBuffer) => invoke<void>("voice:localLivePush", sessionId, pcm),
+  localLiveStop: (sessionId: string) => invoke<void>("voice:localLiveStop", sessionId),
   streamStart: () => invoke<{ sessionId: string }>("voice:streamStart"),
   streamPush: (sessionId: string, pcmBase64: string) =>
     invoke<void>("voice:streamPush", sessionId, pcmBase64),

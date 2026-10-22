@@ -790,3 +790,20 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## transcribe.cpp, ggml and koffi (on-device dictation on Apple silicon)
+
+On Apple silicon Macs, on-device dictation runs Parakeet on the GPU through
+`transcribe-cpp` 0.4.0 and its `@transcribe-cpp/darwin-arm64-metal` prebuilt
+libraries, which bundle ggml and miniz. The binding loads them with `koffi`
+3.3.3. The native libraries ship unpacked in the macOS app and are left out of
+Linux packages.
+
+transcribe.cpp: Copyright (c) 2026 The transcribe.cpp authors  
+ggml: Copyright (c) 2023-2026 The ggml authors  
+miniz: Copyright 2013-2014 RAD Game Tools and Valve Software; Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC  
+koffi: Copyright (C) 2026 Niels Martignène
+
+MIT License. The package's `licenses/` folder carries each license; see
+https://github.com/handy-computer/transcribe.cpp and
+https://github.com/Koromix/koffi

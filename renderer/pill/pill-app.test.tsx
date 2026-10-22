@@ -36,6 +36,14 @@ let capturedSamples = new Float32Array(1_600).fill(0.25);
 let decodes = 0;
 
 class FakeAudioWorkletNode {
+  static latest: FakeAudioWorkletNode | null = null;
+  constructor() {
+    FakeAudioWorkletNode.latest = this;
+  }
+  /** 100 ms of microphone audio, posted while recording. */
+  speak() {
+    this.port.onmessage?.({ data: new Float32Array(1_600).fill(0.25) });
+  }
   readonly port = {
     onmessage: null as ((event: { data: unknown }) => void) | null,
     postMessage: (message: { type?: string }) => {
@@ -233,4 +241,36 @@ test("a recording that captured nothing reports an empty result instead of waiti
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
   assert.deepEqual(calls.find((call) => call.channel === "dictation:result")?.args, ["op-5", ""]);
   assert.equal(calls.some((call) => call.channel === "voice:transcribeLocal"), false);
+});
+
+test("a model that can keep up shows live words in the pill, and only the final text is reported", async () => {
+  const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3-metal", automatic: true } as const;
+  const { calls } = mount(voice, async () => "Hello there, friend.", {
+    "voice:localLiveStart": () => ({ sessionId: "live-7" }),
+    "voice:localLivePush": () => undefined,
+    "voice:localLiveStop": () => undefined,
+  });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
+  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-6", voice }));
+  await screen.findByRole("button", { name: "Cancel dictation" });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:localLiveStart")));
+  assert.deepEqual(calls.find((call) => call.channel === "voice:localLiveStart")?.args, ["parakeet-v3-metal"]);
+  act(() => {
+    for (let post = 0; post < 3; post += 1) FakeAudioWorkletNode.latest!.speak();
+  });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:localLivePush")));
+
+  act(() => emitBotTestNotification("voice:stream-text", { sessionId: "live-7", committed: "hello", tentative: "there" }));
+  const live = await screen.findByLabelText("Live transcription");
+  assert.equal(live.textContent, "hello there");
+
+  act(() => emitBotTestNotification("dictation:state", { state: "stopping", operationId: "op-6" }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
+  const order = calls.map((call) => call.channel);
+  assert.ok(order.indexOf("voice:localLiveStop") < order.indexOf("voice:transcribeLocal"), order.join(", "));
+  // One paste at the end, with the final decode's text rather than the preview's.
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "dictation:result").map((call) => call.args),
+    [["op-6", "Hello there, friend."]],
+  );
 });

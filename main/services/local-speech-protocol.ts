@@ -15,7 +15,8 @@ export type LocalSpeechAudio = { kind: "pcm16"; pcm: Int16Array } | { kind: "ogg
 type V = typeof LOCAL_SPEECH_PROTOCOL_VERSION;
 
 export type LocalSpeechParentMessage =
-  | { version: V; kind: "status"; requestId: string }
+  /** Readiness of the engine that runs `family`; without one, the sherpa-onnx engine. */
+  | { version: V; kind: "status"; requestId: string; family?: SpeechModelFamily }
   | {
       version: V;
       kind: "load";
@@ -63,7 +64,7 @@ export type LocalSpeechWorkerMessage =
     }
   | { version: V; kind: "failure"; requestId: string; message: string; code?: LocalSpeechFailureCode };
 
-const FAMILIES: readonly SpeechModelFamily[] = ["nemo-transducer", "nemo-canary", "whisper", "sense-voice", "moonshine-v2"];
+const FAMILIES: readonly SpeechModelFamily[] = ["nemo-transducer", "nemo-canary", "whisper", "sense-voice", "moonshine-v2", "parakeet-gguf"];
 const FAILURE_CODES: readonly LocalSpeechFailureCode[] = [
   "model-missing",
   "engine-unavailable",
@@ -141,6 +142,7 @@ export function isLocalSpeechParentMessage(value: unknown): value is LocalSpeech
   if (!isNonEmptyString(value.requestId)) return false;
   switch (value.kind) {
     case "status":
+      return value.family === undefined || FAMILIES.includes(value.family as SpeechModelFamily);
     case "release":
       return true;
     case "load":

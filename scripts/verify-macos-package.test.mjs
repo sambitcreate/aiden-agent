@@ -38,6 +38,8 @@ import {
   verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
   verifyPackagedLocalSpeechWorker,
+  verifyPackagedMetalSpeechEngine,
+  PACKAGED_METAL_SPEECH_ENTRIES,
   verifyPackagedSpeechResources,
   verifyPackagedVccWorker,
   verifyPackagedNodePtyResources,
@@ -405,6 +407,30 @@ test("package verifier requires a packed on-device transcription worker", async 
     const packedAsar = path.join(root, "packed.asar");
     await createPackage(source, packedAsar);
     await assert.doesNotReject(verifyPackagedLocalSpeechWorker(packedAsar));
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires the Metal speech libraries to be ASAR-unpacked", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-metal-speech-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  try {
+    for (const entry of PACKAGED_METAL_SPEECH_ENTRIES) {
+      await mkdir(path.dirname(path.join(source, entry)), { recursive: true });
+      await writeFile(path.join(source, entry), "mach-o");
+    }
+    const packed = path.join(root, "packed.asar");
+    await createPackage(source, packed);
+    await assert.rejects(verifyPackagedMetalSpeechEngine(packed), /ASAR-unpacked/u);
+
+    const unpacked = path.join(root, "unpacked.asar");
+    await createPackageWithOptions(source, unpacked, { unpack: "**/{*.dylib,*.node}" });
+    await assert.doesNotReject(verifyPackagedMetalSpeechEngine(unpacked));
+
+    await writeFile(path.join(`${unpacked}.unpacked`, PACKAGED_METAL_SPEECH_ENTRIES[0]), "");
+    await assert.rejects(verifyPackagedMetalSpeechEngine(unpacked), /empty/u);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

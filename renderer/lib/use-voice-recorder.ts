@@ -23,6 +23,7 @@ import {
 import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "./media-recorder-stop";
 import { createVoiceRecorder, PcmRecorder, recorderStopTailMs } from "./pcm-recorder";
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "./live-pcm-capture";
+import { LocalLivePreview } from "./local-live-preview";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
 import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "./gemini-recorded-retry";
 import { localVoiceApi, voiceApi } from "./ipc";
@@ -58,6 +59,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   const streamRef = React.useRef<MediaStream | null>(null);
   const liveRef = React.useRef<GeminiLiveCapture | null>(null);
   const liveStartRef = React.useRef<Promise<GeminiLiveCapture | null> | null>(null);
+  /** Live words from an on-device model fast enough to decode while you speak. */
+  const localPreviewRef = React.useRef<LocalLivePreview | null>(null);
   const pendingStopRef = React.useRef(false);
   const batchOperationIdRef = React.useRef<string | null>(null);
   const batchProviderRef = React.useRef<RecorderOptions["provider"] | null>(null);
@@ -162,9 +165,13 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
           if (e.data.size > 0) chunksRef.current.push(e.data);
         };
       }
+      let localPreview: LocalLivePreview | null = null;
       recorder.onstop = async () => {
         const liveStart = liveStartRef.current;
         liveRef.current = null;
+        // The preview's last words stay on screen until the final text replaces them.
+        localPreview?.stop();
+        if (localPreviewRef.current === localPreview) localPreviewRef.current = null;
         const isCurrent = operationGate.isCurrent(token);
         stopTracks();
         if (!isCurrent) {
@@ -270,6 +277,12 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         }
       };
       recorderRef.current = recorder;
+      if (recorder instanceof PcmRecorder && selected.provider === "local" && selected.localModel) {
+        const preview = LocalLivePreview.start(selected.localModel, setLiveTranscript);
+        localPreview = preview;
+        localPreviewRef.current = preview;
+        recorder.onchunk = (chunk) => preview.push(chunk);
+      }
       if (liveEnabled) {
         liveStartRef.current = GeminiLiveCapture.start(stream, setLiveTranscript).catch(() => null);
       } else {
@@ -277,6 +290,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       }
       if (!operationGate.isCurrent(token)) {
         transcriptionController.abort();
+        localPreviewRef.current?.stop();
+        localPreviewRef.current = null;
         void liveStartRef.current?.then((live) => live?.cancel()).catch(() => {});
         liveStartRef.current = null;
         liveRef.current = null;
@@ -297,6 +312,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         scheduleRecorderStopWithTail(recorder, setTimeout, recorderStopTailMs(recorder));
       }
     } catch (error) {
+      localPreviewRef.current?.stop();
+      localPreviewRef.current = null;
       const live = liveRef.current;
       liveRef.current = null;
       const liveStart = liveStartRef.current;
@@ -338,6 +355,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         if (recorder.state !== "inactive") recorder.stop();
       }
       chunksRef.current = [];
+      localPreviewRef.current?.stop();
+      localPreviewRef.current = null;
       void liveRef.current?.cancel();
       liveRef.current = null;
       void liveStartRef.current?.then((live) => live?.cancel()).catch(() => {});
