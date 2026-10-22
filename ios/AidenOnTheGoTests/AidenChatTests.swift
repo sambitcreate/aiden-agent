@@ -8041,6 +8041,15 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testRememberedApprovalsSayWhatTheyCover() {
+        // The Mac remembers a command exactly, but a file by its path, whatever the change.
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "run_command"), "This exact command, until Aiden quits")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.always, toolName: "run_command"), "This exact command in this workspace")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "edit_file"), "Any edit to this file, until Aiden quits")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.always, toolName: "write_file"), "Any write to this file in this workspace")
+        XCTAssertNil(AidenApprovalPresentation.scopeDetail(.once, toolName: "edit_file"))
+    }
+
     func testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
         func step(_ index: Int, _ toolName: String, _ status: AidenAgentStepStatus) -> AidenAgentStep {
             AidenAgentStep(

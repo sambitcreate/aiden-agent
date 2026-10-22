@@ -1660,11 +1660,20 @@ object AidenApprovalPresentation {
         AidenApprovalScope.ALWAYS -> "Always allow"
     }
 
-    /** What a remembered scope covers, under its menu title. */
-    fun scopeDetail(scope: AidenApprovalScope): String? = when (scope) {
-        AidenApprovalScope.ONCE -> null
-        AidenApprovalScope.CHAT -> "This exact action, until Aiden quits"
-        AidenApprovalScope.ALWAYS -> "This exact action in this workspace"
+    /**
+     * What a remembered scope covers, under its menu title. A command rule matches only
+     * that exact command, but a file rule matches the tool and path, so it also covers
+     * later changes with different contents.
+     */
+    fun scopeDetail(scope: AidenApprovalScope, toolName: String): String? {
+        if (scope == AidenApprovalScope.ONCE) return null
+        val target = when (toolName) {
+            "run_command" -> "This exact command"
+            "edit_file" -> "Any edit to this file"
+            "write_file" -> "Any write to this file"
+            else -> "This exact action"
+        }
+        return if (scope == AidenApprovalScope.CHAT) "$target, until Aiden quits" else "$target in this workspace"
     }
 
     fun requiresDesktopConfirmation(approval: AidenPendingApproval): Boolean =

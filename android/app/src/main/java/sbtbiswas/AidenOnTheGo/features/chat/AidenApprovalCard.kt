@@ -7,10 +7,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Edit
@@ -47,6 +50,9 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 /** Lines the request shows before Show all. */
 private const val COLLAPSED_LINES = 4
 
+/** About ten lines: the most an expanded request takes before it scrolls. */
+private val ExpandedRequestMaxHeight = 200.dp
+
 /**
  * The approval card's content, matching desktop and iOS: an icon tile, the action as a
  * question, the exact request in a code block, a short note, and two equal buttons with
@@ -68,6 +74,7 @@ internal fun AidenApprovalCardContent(
     }
     val isLong = request.length > 320 || request.lines().size > COLLAPSED_LINES
     var expanded by remember(approval.id) { mutableStateOf(false) }
+    val requestScroll = rememberScrollState()
     val note = when {
         !approval.canRespond -> stringResource(R.string.chat_approval_review_only)
         isAutomation && !approval.hasRequiredWriteCapability -> stringResource(R.string.chat_approval_schedule_write_required)
@@ -107,7 +114,17 @@ internal fun AidenApprovalCardContent(
                 .background(palette.canvas, RoundedCornerShape(14.dp))
                 .padding(14.dp)
         ) {
-            SelectionContainer {
+            // The card can sit in the chat's bottom bar, which does not scroll: an expanded
+            // request scrolls in its own bounded box so Show less and the actions stay on screen.
+            SelectionContainer(
+                if (expanded) {
+                    Modifier
+                        .heightIn(max = ExpandedRequestMaxHeight)
+                        .verticalScroll(requestScroll)
+                } else {
+                    Modifier
+                }
+            ) {
                 Text(
                     text = request,
                     style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),

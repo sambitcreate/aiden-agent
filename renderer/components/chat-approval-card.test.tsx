@@ -68,6 +68,20 @@ test("the Allow menu offers the remembered scopes and sends the one picked", asy
   assert.deepEqual(decisions, [["allow", { scope: "always" }]]);
 });
 
+test("a remembered file approval says it covers any later change to that file", async () => {
+  // File rules match the tool and path, not the contents, so the hint must not promise an exact change.
+  const { card } = mount({ toolName: "edit_file", summary: "Edit file: src/forecast.ts", scopes: ["once", "chat", "always"] });
+
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  assert.deepEqual(
+    (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
+    [
+      "Allow for this chatWon't ask again for any edit to forecast.ts until Aiden quits.",
+      "Always allow in this workspaceWon't ask again for any edit to forecast.ts here. Undo in Settings → Tool approvals.",
+    ],
+  );
+});
+
 test("a file edit shows the lines it removes and adds, labelled for screen readers", () => {
   const { card } = mount({
     toolName: "edit_file",

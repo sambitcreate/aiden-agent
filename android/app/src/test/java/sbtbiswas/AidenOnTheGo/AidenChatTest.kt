@@ -3354,6 +3354,16 @@ class AidenChatTest {
     }
 
     @Test
+    fun testRememberedApprovalsSayWhatTheyCover() {
+        // The Mac remembers a command exactly, but a file by its path, whatever the change.
+        assertEquals("This exact command, until Aiden quits", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.CHAT, "run_command"))
+        assertEquals("This exact command in this workspace", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ALWAYS, "run_command"))
+        assertEquals("Any edit to this file, until Aiden quits", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.CHAT, "edit_file"))
+        assertEquals("Any write to this file in this workspace", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ALWAYS, "write_file"))
+        assertNull(AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ONCE, "edit_file"))
+    }
+
+    @Test
     fun testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
         fun step(index: Int, toolName: String, status: AidenAgentStepStatus) = AidenAgentStep(
             id = "tool-$index",

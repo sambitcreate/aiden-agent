@@ -89,6 +89,15 @@ const FILE_SUMMARY_PREFIXES: Record<string, { prefix: string; verb: string }> = 
   write_file: { prefix: "Create or replace file: ", verb: "Write" },
 };
 
+/** The one file a file approval names: from the desktop preview, or from Aiden's own summary. */
+function approvalFilePath(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string | undefined {
+  if (pending.preview?.kind === "file") return pending.preview.path;
+  const fileSummary = FILE_SUMMARY_PREFIXES[pending.toolName];
+  if (!fileSummary || !pending.summary.startsWith(fileSummary.prefix)) return undefined;
+  const path = pending.summary.slice(fileSummary.prefix.length).trim();
+  return path && !/[\r\n]/u.test(path) ? path : undefined;
+}
+
 /** The approval card's question, in plain words: "Run this command?", "Edit forecast.ts?". */
 export function approvalHeadline(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string {
   const { preview } = pending;
@@ -96,10 +105,8 @@ export function approvalHeadline(pending: Pick<ApprovalPrompt, "toolName" | "sum
     return `${preview.operation === "edit" ? "Edit" : "Write"} ${fileName(preview.path)}?`;
   }
   const fileSummary = FILE_SUMMARY_PREFIXES[pending.toolName];
-  if (fileSummary && pending.summary.startsWith(fileSummary.prefix)) {
-    const path = pending.summary.slice(fileSummary.prefix.length).trim();
-    if (path && !/[\r\n]/u.test(path)) return `${fileSummary.verb} ${fileName(path)}?`;
-  }
+  const path = approvalFilePath(pending);
+  if (fileSummary && path) return `${fileSummary.verb} ${fileName(path)}?`;
   switch (pending.toolName) {
     case "run_command":
       return "Run this command?";
@@ -227,13 +234,25 @@ function ApprovalFileChange({
   );
 }
 
-function rememberScopeHint(scope: Exclude<ToolApprovalScope, "once">, pending: Pick<ApprovalPrompt, "toolName" | "preview">): string {
+/**
+ * What a remembered approval covers. A command rule matches only that exact
+ * command, but a file rule matches the tool and path, so it also covers later
+ * changes with different contents (see `toolApprovalRuleTarget`).
+ */
+function rememberScopeHint(
+  scope: Exclude<ToolApprovalScope, "once">,
+  pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">,
+): string {
+  const path = approvalFilePath(pending);
+  const file = path ? fileName(path) : "this file";
   const target =
-    pending.preview?.kind === "file"
-      ? `changes to ${fileName(pending.preview.path)}`
-      : pending.toolName === "run_command"
-        ? "this exact command"
-        : "this exact action";
+    pending.toolName === "run_command"
+      ? "this exact command"
+      : pending.toolName === "edit_file"
+        ? `any edit to ${file}`
+        : pending.toolName === "write_file"
+          ? `any write to ${file}`
+          : "this exact action";
   return scope === "always"
     ? `Won't ask again for ${target} here. Undo in Settings → Tool approvals.`
     : `Won't ask again for ${target} until Aiden quits.`;

@@ -80,7 +80,7 @@ internal fun AidenApprovalActions(
                     text = {
                         Column {
                             Text(AidenApprovalPresentation.scopeTitle(scope))
-                            AidenApprovalPresentation.scopeDetail(scope)?.let { detail ->
+                            AidenApprovalPresentation.scopeDetail(scope, approval.toolName)?.let { detail ->
                                 Text(
                                     detail,
                                     style = MaterialTheme.typography.bodySmall,

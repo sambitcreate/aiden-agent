@@ -2680,17 +2680,25 @@ enum AidenApprovalPresentation {
         }
     }
 
-    /// What a remembered scope covers, under its menu title.
-    static func scopeDetail(_ scope: AidenApprovalScope) -> String? {
-        switch scope {
-        case .once: nil
-        case .chat: String(localized: "This exact action, until Aiden quits")
-        case .always: String(localized: "This exact action in this workspace")
+    /// What a remembered scope covers, under its menu title. A command rule
+    /// matches only that exact command, but a file rule matches the tool and
+    /// path, so it also covers later changes with different contents.
+    static func scopeDetail(_ scope: AidenApprovalScope, toolName: String) -> String? {
+        switch (scope, toolName) {
+        case (.once, _): nil
+        case (.chat, "run_command"): String(localized: "This exact command, until Aiden quits")
+        case (.always, "run_command"): String(localized: "This exact command in this workspace")
+        case (.chat, "edit_file"): String(localized: "Any edit to this file, until Aiden quits")
+        case (.always, "edit_file"): String(localized: "Any edit to this file in this workspace")
+        case (.chat, "write_file"): String(localized: "Any write to this file, until Aiden quits")
+        case (.always, "write_file"): String(localized: "Any write to this file in this workspace")
+        case (.chat, _): String(localized: "This exact action, until Aiden quits")
+        case (.always, _): String(localized: "This exact action in this workspace")
         }
     }
 
     /// Host summary prefixes that name the tool, which the card's title already says.
-    /// Desktop hosts write the first five; the CLI daemon writes the last two.
+    /// Desktop hosts write the first four; the CLI daemon writes the last three.
     private static let actionPrefixes: [String: String] = [
         "run_command": "Run command: ",
         "edit_file": "Edit file: ",

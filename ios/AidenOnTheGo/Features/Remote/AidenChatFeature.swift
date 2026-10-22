@@ -8071,6 +8071,8 @@ struct AidenApprovalCard: View {
     private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
     /// Lines the request shows before Show all.
     private let collapsedLines = 6
+    /// About twelve lines: the most an expanded request takes before it scrolls.
+    private let expandedMaxHeight: CGFloat = 240
 
     private var request: String {
         kind == .scheduledTask ? summary : AidenApprovalPresentation.requestedAction(toolName: toolName, summary: summary)
@@ -8114,14 +8116,17 @@ struct AidenApprovalCard: View {
                 .accessibilityAddTraits(.isHeader)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(request)
-                    .font(.subheadline.monospaced())
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(isExpanded || !isLong ? nil : collapsedLines)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel(kind == .scheduledTask ? "Scheduled task proposal" : "Requested action")
-                    .accessibilityValue(request)
+                if isExpanded {
+                    // The Bot chat keeps this card in its footer: a long request scrolls
+                    // in a bounded box so Show less and the actions stay on screen.
+                    ViewThatFits(in: .vertical) {
+                        requestText
+                        ScrollView { requestText }
+                    }
+                    .frame(maxHeight: expandedMaxHeight, alignment: .top)
+                } else {
+                    requestText
+                }
 
                 if isLong {
                     Button(isExpanded ? "Show less" : "Show all") {
@@ -8176,6 +8181,18 @@ struct AidenApprovalCard: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var requestText: some View {
+        Text(request)
+            .font(.subheadline.monospaced())
+            .foregroundStyle(palette.foreground)
+            .lineLimit(isExpanded || !isLong ? nil : collapsedLines)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(kind == .scheduledTask ? "Scheduled task proposal" : "Requested action")
+            .accessibilityValue(request)
+    }
+
     private var allowLabel: some View {
         Text(AidenApprovalPresentation.allowTitle(for: kind))
             .font(.body.weight(.semibold))
@@ -8213,7 +8230,7 @@ struct AidenApprovalCard: View {
                     ForEach(broaderScopes, id: \.self) { scope in
                         Button { onAllow(scope) } label: {
                             Text(AidenApprovalPresentation.scopeTitle(scope))
-                            if let detail = AidenApprovalPresentation.scopeDetail(scope) {
+                            if let detail = AidenApprovalPresentation.scopeDetail(scope, toolName: toolName) {
                                 Text(detail)
                             }
                         }
@@ -8227,7 +8244,7 @@ struct AidenApprovalCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("More ways to allow")
-                .accessibilityHint("Remember this exact action for this chat or always")
+                .accessibilityHint("Remember this approval for this chat or always")
             }
             .aidenApprovalActionGlass(tint: palette.fillAccent)
         }

@@ -41,13 +41,17 @@ paused until you choose.", or the file and its size of change), and two equal
 large buttons. Deny is the filled neutral action and keeps initial focus; Allow
 once is the accent action. When the host offers remembered scopes, Allow once
 becomes a joined action whose chevron menu lists **Allow for this chat** and
-**Always allow in this workspace**, each with one line on what it covers. A
+**Always allow in this workspace**, each with one line on what it covers: a
+command rule covers only that exact command, but a file rule covers any later
+edit (or write) to that file, whatever it changes, so the line says so. A
 file change shows removed and added lines on the soft red and green status
 fills, with screen-reader labels instead of relying on color. Specialized
 approvals (scheduled tasks, subagent grants, form fills, classifiers) keep their
 own review bodies inside the same card. The iPhone and Android cards use the
 same layout and wording; they show the approval summary instead of a diff,
-because phones never receive tool arguments.
+because phones never receive tool arguments. A long request folds behind
+**Show all**, and once expanded it scrolls inside a bounded well, so Show less
+and the buttons stay on screen when the card sits in a non-scrolling footer.
 
 ## Untitled structure
 
