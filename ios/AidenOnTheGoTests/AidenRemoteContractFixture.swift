@@ -261,6 +261,20 @@ struct AidenBotHandoffsContractFixture: Decodable {
     let legacy: Legacy
 }
 
+/// Revision 39 (`schedule:cards`): scheduled-task approvals with their card.
+/// The fixture's `rejected` cards stay raw JSON; tests wrap each in a valid approval.
+struct AidenScheduleCardsContractFixture: Decodable {
+    struct Card: Decodable {
+        let label: String
+        let schedule: AidenApprovalSchedule
+    }
+
+    let capability: AidenRemoteCapability
+    let streamApproval: AidenStreamApprovalSnapshot
+    let phoneRunEvents: [AidenRemoteRunEvent]
+    let cards: [Card]
+}
+
 extension AidenBotCreateContractFixture: AidenBotPrivateResponseScoped {
     static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCreate") }
 }
@@ -447,6 +461,8 @@ struct AidenRemoteContractFixture: Decodable {
     let botSessionCards: AidenBotSession
     /// Revision 37: present from a revision-37 fixture.
     let botHandoffs: AidenBotHandoffsContractFixture?
+    /// Revision 39: present from a revision-39 fixture.
+    let scheduleCards: AidenScheduleCardsContractFixture?
     let taskProgress: AidenRemoteChatTaskProgress?
     let agentRoster: AidenRemoteChatAgentRoster?
     let agentInterrupt: AgentInterruptFixture?
@@ -523,6 +539,7 @@ struct AidenRemoteContractFixture: Decodable {
         )
         botSessionCards = try values.decode(AidenBotSession.self, forKey: .botSessionCards)
         botHandoffs = try values.decodeIfPresent(AidenBotHandoffsContractFixture.self, forKey: .botHandoffs)
+        scheduleCards = try values.decodeIfPresent(AidenScheduleCardsContractFixture.self, forKey: .scheduleCards)
         taskProgress = try values.decodeIfPresent(AidenRemoteChatTaskProgress.self, forKey: .taskProgress)
         agentRoster = try values.decodeIfPresent(AidenRemoteChatAgentRoster.self, forKey: .agentRoster)
         agentInterrupt = try values.decodeIfPresent(AgentInterruptFixture.self, forKey: .agentInterrupt)
@@ -648,7 +665,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botConnectionRequest, botPresets, botPresetCreate
         case legacyNonNegotiating
         case botMemory, botMemoryEdit, botRoutineProposalRespond, botRoutineSuggestions
-        case botRoutineNotifications, botSessionCards, botHandoffs
+        case botRoutineNotifications, botSessionCards, botHandoffs, scheduleCards
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
         case scheduleRunNotification, error, runControlError, phoneRunEvents

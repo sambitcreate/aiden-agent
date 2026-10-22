@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { ChatApprovalCard, type ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { TooltipProvider } from "./ui";
 import type { ApprovalPrompt } from "../lib/ipc";
+import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
 import { toolApprovalPreview } from "../shared/tool-approval-preview";
 import { subagentOutboundApprovalSummaryV2 } from "../../main/services/subagents/outbound-approval-v2.js";
 
@@ -140,4 +141,181 @@ test("an approval that cannot be allowed here offers only Deny", () => {
     ["Deny"],
   );
   assert.ok(within(card).getByText(/cannot safely authorize this action from this view/u));
+});
+
+const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** A scheduled-task approval as the schedule tool hands it to the card. */
+function scheduledTask(overrides: Partial<ScheduledTaskApprovalDetails> = {}): ScheduledTaskApprovalDetails {
+  return {
+    kind: "scheduled-task",
+    action: "create",
+    taskId: null,
+    expectedUpdatedAt: null,
+    enabled: true,
+    name: "Morning briefing",
+    prompt: "Summarize overnight commits.\nFlag anything that broke the build.",
+    script: null,
+    cron: "0 9 * * 1-5",
+    timezone: LOCAL_ZONE,
+    nextRunAt: Date.now() + 3 * 86_400_000,
+    notify: true,
+    mode: "llm",
+    permission: "read-only",
+    workspaceId: "workspace-1",
+    workspaceName: "Aiden Agent",
+    mcpServerIds: [],
+    mcpServerNames: [],
+    providerId: "openrouter",
+    providerName: "OpenRouter",
+    model: "qwen/qwen3-coder",
+    modelName: "Qwen3 Coder",
+    legacyGlobalMcp: false,
+    schedulerEnabled: true,
+    ...overrides,
+  };
+}
+
+function mountSchedule(details: ScheduledTaskApprovalDetails | AssistantAutomationApprovalDetails) {
+  return mount({
+    toolName: details.kind === "scheduled-task" ? "schedule_task" : "edit_automation",
+    summary: "Create scheduled task",
+    details: details as unknown as ApprovalPrompt["details"],
+  });
+}
+
+/** Each detail row as its label and what it says, the way a screen reader pairs them. */
+function facts(card: HTMLElement): Record<string, string> {
+  return Object.fromEntries(
+    within(card).getAllByRole("term").map((term) => [term.textContent, term.nextElementSibling?.textContent ?? ""]),
+  );
+}
+
+test("a scheduled task reads as the task itself: its question, cadence, next run, where it runs and what it is told", () => {
+  const { card, decisions } = mountSchedule(scheduledTask());
+
+  assert.equal(screen.getByRole("region", { name: "Save this scheduled task?" }), card);
+  assert.ok(within(card).getByText("Morning briefing"));
+  assert.ok(within(card).getByText(/^Weekdays at 9:00\sAM$/u), "the cadence is plain words, never cron");
+  assert.equal(within(card).queryByText(/0 9 \* \* 1-5/u), null);
+  assert.ok(within(card).getByText(/^Next run /u));
+  const rows = facts(card);
+  assert.match(rows["Runs in"] ?? "", /^Aiden Agent.*workspace-1$/u, "the project and the exact id it authorizes");
+  assert.equal(rows.Access, "Read-only");
+  assert.equal(rows.Model, "OpenRouter · Qwen3 Coder");
+  assert.equal(rows.Notifications, "On");
+  assert.equal(rows["Time zone"], LOCAL_ZONE);
+  assert.equal(
+    within(card).getByLabelText("Instructions").textContent,
+    "Summarize overnight commits.\nFlag anything that broke the build.",
+  );
+  assert.ok(within(card).getByText("Scheduled work runs on your desktop while Aiden is open and the computer is awake."));
+  assert.equal(within(card).queryAllByRole("note").length, 0, "a task that will run as asked needs no warning");
+
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Deny" }));
+  assert.deepEqual(decisions, [
+    ["allow", undefined],
+    ["deny", undefined],
+  ]);
+});
+
+test("where a task runs follows its scope: connectors by name and id, the whole computer, or no project", () => {
+  const { card } = mountSchedule(scheduledTask({
+    permission: "full",
+    workspaceId: null,
+    workspaceName: null,
+    mcpServerIds: ["gmail-1", "linear-2"],
+    mcpServerNames: ["Gmail", "Linear"],
+  }));
+  const connectors = within(card).getAllByRole("listitem").map((item) => item.textContent);
+  assert.equal(connectors.length, 2);
+  assert.match(connectors[0] ?? "", /^Gmail .*gmail-1$/u);
+  assert.match(connectors[1] ?? "", /^Linear .*linear-2$/u);
+  assert.equal(facts(card).Access, "Full access");
+  cleanup();
+
+  const { card: global } = mountSchedule(scheduledTask({ permission: "full", workspaceId: null, workspaceName: null }));
+  assert.equal(facts(global)["Runs in"], "Anywhere on your computer");
+  cleanup();
+
+  const { card: unscoped } = mountSchedule(scheduledTask({ workspaceId: null, workspaceName: null }));
+  assert.equal(facts(unscoped)["Runs in"], "No project");
+  assert.equal(facts(unscoped).Access, "Read-only");
+});
+
+test("a next run is named only while the task will run on its own, and scheduling off or paused says why", () => {
+  const { card: off } = mountSchedule(scheduledTask({ schedulerEnabled: false }));
+  assert.equal(within(off).queryByText(/^Next run /u), null);
+  assert.equal(
+    within(off).getByRole("note").textContent,
+    "Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.",
+  );
+  assert.ok(within(off).getByRole("button", { name: "Allow once" }), "saving stays possible while scheduling is off");
+  cleanup();
+
+  const { card: paused } = mountSchedule(scheduledTask({ action: "update", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  assert.ok(screen.getByRole("region", { name: "Update this scheduled task?" }));
+  assert.equal(within(paused).queryByText(/^Next run /u), null);
+  assert.equal(within(paused).getByRole("note").textContent, "This task stays paused.");
+  cleanup();
+
+  const { card: removing } = mountSchedule(scheduledTask({ action: "remove", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  assert.ok(screen.getByRole("region", { name: "Delete this scheduled task?" }));
+  assert.equal(within(removing).queryByText(/^Next run /u), null);
+  assert.equal(within(removing).queryAllByRole("note").length, 0, "a deleted task is not described as paused");
+  cleanup();
+
+  for (const [action, title] of [
+    ["pause", "Pause this scheduled task?"],
+    ["resume", "Resume this scheduled task?"],
+    ["run_now", "Run this scheduled task now?"],
+  ] as const) {
+    mountSchedule(scheduledTask({ action, taskId: "task-1", expectedUpdatedAt: 5 }));
+    assert.ok(screen.getByRole("region", { name: title }), action);
+    cleanup();
+  }
+});
+
+test("a script task shows the exact script it will run and no model", () => {
+  const script = "npm outdated --json > reports/outdated.json";
+  const { card } = mountSchedule(scheduledTask({ mode: "script", prompt: null, script }));
+
+  const rows = facts(card);
+  assert.equal(rows.Runs, "Script");
+  assert.equal(rows.Model, undefined);
+  assert.equal(within(card).getByLabelText("Script").textContent, script);
+  assert.equal(within(card).queryByLabelText("Instructions"), null);
+});
+
+test("an automation change keeps its own question and the same review", () => {
+  const automation: AssistantAutomationApprovalDetails = {
+    kind: "assistant-automation",
+    action: "edit",
+    taskId: "task-1",
+    enabled: false,
+    name: "Weekly digest",
+    prompt: "Write the weekly digest.",
+    cron: "0 17 * * 5",
+    timezone: LOCAL_ZONE,
+    nextRunAt: Date.now() + 86_400_000,
+    notify: false,
+    mode: "llm",
+    permission: "read-only",
+    workspaceId: null,
+    workspaceName: null,
+    mcpServerIds: [],
+    mcpServerNames: [],
+    providerId: "openrouter",
+    providerName: "OpenRouter",
+    model: "qwen/qwen3-coder",
+    modelName: "Qwen3 Coder",
+    schedulerEnabled: true,
+  };
+  const { card } = mountSchedule(automation);
+
+  assert.equal(screen.getByRole("region", { name: "Change this automation?" }), card);
+  assert.equal(facts(card).Notifications, "Off");
+  assert.equal(within(card).queryByText(/^Next run /u), null);
+  assert.equal(within(card).getByRole("note").textContent, "This task stays paused.");
 });

@@ -8061,6 +8061,147 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    // MARK: Contract revision 39: scheduled-task approval cards
+
+    private func scheduleCard(
+        action: AidenApprovalSchedule.Action = .create,
+        nextRunAt: String? = "2026-10-23T16:00:00.000Z",
+        mode: AidenApprovalSchedule.Mode = .llm,
+        permission: AidenApprovalSchedule.Permission = .readOnly,
+        workspaceName: String? = nil,
+        connectors: [String] = [],
+        providerName: String? = "Provider A",
+        modelName: String? = "Model B",
+        notify: Bool = true,
+        enabled: Bool = true,
+        schedulerEnabled: Bool = true,
+        prompt: String? = "Summarize the overnight changes.",
+        script: String? = nil,
+        truncated: Bool = false
+    ) -> AidenApprovalSchedule {
+        AidenApprovalSchedule(
+            action: action, name: "Morning briefing", cadence: "Weekdays at 9:00 AM",
+            timezone: "America/Los_Angeles", nextRunAt: nextRunAt, mode: mode, permission: permission,
+            workspaceName: workspaceName, connectors: connectors, providerName: providerName,
+            modelName: modelName, notify: notify, enabled: enabled, schedulerEnabled: schedulerEnabled,
+            prompt: prompt, script: script, truncated: truncated
+        )
+    }
+
+    private var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    private func presentation(_ schedule: AidenApprovalSchedule, now: Date = Date(timeIntervalSince1970: 1_792_670_400)) -> AidenScheduleCardPresentation {
+        // 2026-10-22T12:00:00Z, a Thursday.
+        AidenScheduleCardPresentation(schedule, now: now, calendar: utcCalendar, locale: Locale(identifier: "en_US"))
+    }
+
+    func testScheduleCardTitleSaysWhatApprovingWouldDo() {
+        let titles = AidenApprovalSchedule.Action.allCases.map { presentation(scheduleCard(action: $0)).title }
+        XCTAssertEqual(titles, [
+            "Save this scheduled task?",
+            "Update this scheduled task?",
+            "Pause this scheduled task?",
+            "Resume this scheduled task?",
+            "Delete this scheduled task?",
+            "Run this scheduled task now?",
+        ])
+    }
+
+    func testScheduleCardRunsInNamesTheNarrowestScopeTheTaskHas() {
+        func runsIn(_ schedule: AidenApprovalSchedule) -> String { presentation(schedule).runsIn.value }
+        XCTAssertEqual(runsIn(scheduleCard(workspaceName: "Project A", connectors: ["Connector A"])), "Project A")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .full, connectors: ["Connector A", "Connector B"])), "Connector A, Connector B")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .full)), "Anywhere on your computer")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .readOnly)), "No project")
+    }
+
+    func testScheduleCardRowsDescribeAccessModelAndDelivery() {
+        let briefing = presentation(scheduleCard(workspaceName: "Project A"))
+        XCTAssertEqual(briefing.rows.map(\.label), ["Runs in", "Access", "Model", "Notifications", "Time zone"])
+        XCTAssertEqual(briefing.rows.map(\.value), ["Project A", "Read-only", "Provider A · Model B", "On", "America/Los_Angeles"])
+        XCTAssertEqual(briefing.access.accessibilityLabel, "Access, Read-only")
+        XCTAssertFalse(briefing.isFullAccess)
+        XCTAssertEqual(briefing.contentTitle, "Instructions")
+        XCTAssertEqual(briefing.content, "Summarize the overnight changes.")
+        XCTAssertFalse(briefing.contentIsScript)
+
+        let full = presentation(scheduleCard(permission: .full, notify: false))
+        XCTAssertTrue(full.isFullAccess)
+        XCTAssertEqual(full.access.value, "Full access")
+        XCTAssertTrue(full.access.isWarning)
+        XCTAssertEqual(full.notifications.value, "Off")
+        XCTAssertEqual(full.rows.filter(\.isWarning).map(\.label), ["Access"], "only full access is flagged")
+
+        XCTAssertEqual(presentation(scheduleCard(modelName: nil)).model?.value, "Provider A")
+        let unnamed = presentation(scheduleCard(providerName: nil, modelName: nil))
+        XCTAssertNil(unnamed.model, "no empty Model row")
+        XCTAssertEqual(unnamed.rows.map(\.label), ["Runs in", "Access", "Notifications", "Time zone"])
+
+        let script = presentation(scheduleCard(
+            mode: .script, providerName: nil, modelName: nil, prompt: nil,
+            script: "npm test", truncated: true
+        ))
+        XCTAssertEqual(script.model?.label, "Runs")
+        XCTAssertEqual(script.model?.value, "Script")
+        XCTAssertEqual(script.contentTitle, "Script")
+        XCTAssertEqual(script.content, "npm test")
+        XCTAssertTrue(script.contentIsScript)
+        XCTAssertTrue(script.isTruncated)
+        XCTAssertFalse(briefing.isTruncated)
+    }
+
+    func testScheduleCardNamesTheNextRunOnlyWhenTheTaskStartsOnItsOwn() throws {
+        XCTAssertTrue(try XCTUnwrap(presentation(scheduleCard()).nextRun).hasPrefix("tomorrow at "))
+        XCTAssertNil(presentation(scheduleCard(nextRunAt: nil)).nextRun)
+        // Even if a next run arrives, a paused, unscheduled or deleted task does not show one.
+        XCTAssertNil(presentation(scheduleCard(enabled: false)).nextRun)
+        XCTAssertNil(presentation(scheduleCard(schedulerEnabled: false)).nextRun)
+        XCTAssertNil(presentation(scheduleCard(action: .remove)).nextRun)
+    }
+
+    func testScheduleCardNextRunReadsAsADayInThePhonesTimeZone() throws {
+        let now = Date(timeIntervalSince1970: 1_792_670_400) // Thu 2026-10-22T12:00:00Z
+        let locale = Locale(identifier: "en_US")
+        func text(_ iso: String, now: Date = now, calendar: Calendar? = nil) throws -> String {
+            AidenScheduleCardPresentation.nextRunText(
+                try XCTUnwrap(AidenApprovalSchedule.utcInstant(iso)),
+                now: now, calendar: calendar ?? utcCalendar, locale: locale
+            )
+        }
+        let today = try text("2026-10-22T16:00:00Z")
+        XCTAssertTrue(today.hasPrefix("today at 4:00"), today)
+        XCTAssertTrue(try text("2026-10-23T09:00:00Z").hasPrefix("tomorrow at 9:00"))
+        // Calendar days, not 24-hour spans.
+        XCTAssertTrue(try text("2026-10-23T00:30:00Z", now: Date(timeIntervalSince1970: 1_792_711_800)).hasPrefix("tomorrow at "))
+        let saturday = try text("2026-10-24T16:00:00Z")
+        XCTAssertTrue(saturday.hasPrefix("Sat, Oct 24"), saturday)
+        XCTAssertFalse(saturday.contains("2026"), "this year's date leaves the year out")
+        let nextYear = try text("2027-01-05T16:00:00Z")
+        XCTAssertTrue(nextYear.contains("2027"), nextYear)
+        // Read in the phone's zone: 05:00 UTC on the 23rd is still the 22nd in Los Angeles.
+        var pacific = Calendar(identifier: .gregorian)
+        pacific.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        XCTAssertTrue(try text("2026-10-23T05:00:00Z", calendar: pacific).hasPrefix("today at 10:00"))
+    }
+
+    func testScheduleCardNotesExplainWhyATaskWillNotRun() {
+        XCTAssertNil(presentation(scheduleCard()).note)
+        XCTAssertEqual(presentation(scheduleCard(schedulerEnabled: false)).note, .schedulerOff)
+        XCTAssertEqual(
+            presentation(scheduleCard(enabled: false, schedulerEnabled: false)).note,
+            .schedulerOff,
+            "scheduling being off outranks a paused task"
+        )
+        XCTAssertEqual(presentation(scheduleCard(action: .update, enabled: false)).note, .paused)
+        XCTAssertNil(presentation(scheduleCard(action: .remove, enabled: false)).note, "a deleted task is not 'paused'")
+        XCTAssertTrue(AidenScheduleCardPresentation.Note.schedulerOff.isWarning)
+        XCTAssertFalse(AidenScheduleCardPresentation.Note.paused.isWarning)
+    }
+
     func testRememberedApprovalsSayWhatTheyCover() {
         // The Mac remembers a command exactly, but a file by its path, whatever the change.
         XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "run_command"), "This exact command, until Aiden quits")

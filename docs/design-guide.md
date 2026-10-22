@@ -58,6 +58,28 @@ request is still out of view, the well says **Scroll for more** next to Show
 less, so no part of what is being approved can hide without a cue. On iPhone the
 card's shadow belongs to its surface only, never to the text inside it.
 
+A scheduled-task approval replaces the monospaced well with a structured review
+on every platform. The icon tile shows a calendar clock, and the question names
+the action ("Save this scheduled task?", "Update this scheduled task?", "Pause
+…", "Resume …", "Delete …", "Run this scheduled task now?"). A hero well follows:
+the task name, its cadence in words (never cron), and a "Next run" line only
+while the task will start on its own. Under an inset separator, icon-led detail
+rows list **Runs in** (the project, else the connectors by name, else "Anywhere
+on your computer" for Full access, else "No project"), **Access** as a chip
+("Read-only" on the neutral fill, "Full access" on the warning fill with a
+warning-tinted icon), **Model** ("OpenRouter · Qwen3 Coder") or **Runs** →
+"Script", **Notifications** and **Time zone**. The instructions or script sit in
+their own labelled well, the script monospaced, with the same folding and
+scroll cue as a long command. Status notes use soft semantic fills with no
+border: "Scheduling is off…" on the warning fill when the scheduler is off,
+otherwise "This task stays paused." for a paused task that is not being
+deleted. The quiet line under the body reads "Scheduled work runs on your
+desktop while Aiden is open and the computer is awake." The desktop also shows
+the project and connector ids in a tertiary monospaced line, because it
+authorizes the exact host scope; phones receive names only. A phone shows this
+review only when the host sends the revision 39 `schedule` card, and otherwise
+keeps the summary card.
+
 ## Untitled structure
 
 Aiden adopts the structural layer of the Untitled theme (`GUI.md`, `gui/`) while keeping its own radii and preset palettes:

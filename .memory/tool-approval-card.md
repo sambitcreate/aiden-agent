@@ -23,6 +23,11 @@ Branch `claude/project-thread-khrad6`. The owner asked for a better-looking Allo
   - Scheduled-task headlines match desktop: schedule_task "Save this scheduled task?", edit_automation "Change this automation?".
   - iOS card shadow sits on the background shape only; on the whole card SwiftUI also shadows every glyph (a faint halo in light mode, seen in the first phone screenshots).
   - Screenshots: every UI change gets shots before approval. Desktop is captured in the cloud; phones via Remote Control on the owner's Mac. Gallery page: https://claude.ai/artifact/Dj1BLmcUCtZLZZdk7jGGDY
+- **Rich scheduled-task card** (branch `claude/project-thread-dz5a7e`, stacked on khrad6). The owner found the summary-only schedule card bland and asked for a rich view on desktop, iOS and Android.
+  - Desktop: `renderer/components/scheduled-task-approval.tsx` (`ScheduledTaskApproval`, `scheduleApprovalHeadline`, `formatScheduleNextRun`) replaces the old schedule body in `chat-approval-card.tsx`; the icon tile is `CalendarClock` (`ApprovalIcon` takes an optional `icon`). It covers `scheduled-task` and `assistant-automation` details. Ids show as tertiary mono under the names because the desktop authorizes the exact host scope.
+  - Phones get the card only through contract revision 39 (`schedule:cards`, provisional, re-claim at merge): `main/services/aiden-remote-approval-schedule.ts` builds a display-only, id-free `schedule` object on the host and `parseAidenRemoteApprovalSchedule` is the wire validator iOS and Android mirror. It is a separate field, never `details`, and never changes `canAllow`. An invalid card decodes as nil and the phone keeps the summary card.
+  - Shared rules on all three: "Runs in" is project, else connectors, else "Anywhere on your computer" for Full, else "No project"; Next run only while enabled, scheduling on and not removing; "Scheduling is off…" warning note beats "This task stays paused."; footer "Scheduled work runs on your desktop while Aiden is open and the computer is awake."
+  - `ScheduledTaskApprovalDetails.script` must be single-line (the guard calls `safeApprovalText` without multiline); a multi-line script renders as an invalid approval.
 - **CLI daemon**: `daemonApprovalSummary` writes "Run command: X", "Read file: X" or "List folder: X" only when that one argument is the whole call. Anything else stays `${tool}: ${json}`, so nothing is hidden.
 - **Activity summary** (desktop `summarizeActivity`, iOS and Android `summary`):
   - A `blocked` call counts as "skipped N command(s)/file change(s)/action(s)".
@@ -34,3 +39,5 @@ Branch `claude/project-thread-khrad6`. The owner asked for a better-looking Allo
   - A phone-isolation case in `aiden-remote-streams.test.ts`.
   - A CLI parity case for the summary.
   - iOS `AidenChatTests` and Android `AidenChatTest` cover headline and skipped cases.
+  - Rich schedule card: the schedule cases in `chat-approval-card.test.tsx`; `main/services/aiden-remote-approval-schedule.test.ts` (builder and wire validator) plus the opt-in cases in the remote protocol, streams and host-runs suites; Android `AidenScheduleCardsContractTest` (unit) and the schedule cases in `AidenApprovalCardUiTest`; iOS `AidenRemotePhase0Tests` (fixture decode), `AidenRemoteClientTests` (negotiation) and `AidenChatTests` (presentation).
+  - Screenshots for this round are on the orphan branch `claude/approval-card-screenshots` under `shots/desktop`, `shots/ios` and `shots/android`.

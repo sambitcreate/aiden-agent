@@ -1,7 +1,7 @@
 import { ClassifierApproval } from "./classifier-approval";
 import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
-import { ChevronDown, FilePen, FilePlus, ShieldQuestion, SquareTerminal } from "lucide-react";
+import { CalendarClock, ChevronDown, FilePen, FilePlus, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
 import {
   Button,
   DropdownMenu,
@@ -23,6 +23,7 @@ import {
 import { SubagentShellApproval } from "./subagent-shell-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
+import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval, scheduleApprovalHeadline } from "./scheduled-task-approval";
 import { ComputerUseAccessApproval } from "./computer-use-access-approval";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import type { ApprovalPrompt } from "../lib/ipc";
@@ -146,14 +147,22 @@ function approvalMeta(preview: ToolApprovalPreview | undefined): string {
   return `${preview.path} · ${preview.added} added, ${preview.removed} removed`;
 }
 
-export function ApprovalIcon({ preview, command }: { preview: ToolApprovalPreview | undefined; command: boolean }) {
-  const Icon = command
+export function ApprovalIcon({
+  preview,
+  command,
+  icon,
+}: {
+  preview: ToolApprovalPreview | undefined;
+  command: boolean;
+  icon?: LucideIcon;
+}) {
+  const Icon = icon ?? (command
     ? SquareTerminal
     : preview?.kind === "file"
       ? preview.operation === "edit"
         ? FilePen
         : FilePlus
-      : ShieldQuestion;
+      : ShieldQuestion);
   return (
     <span className="approval-icon-tile grid size-11 shrink-0 place-items-center bg-fill-accent text-fill-accent-foreground">
       <Icon className="size-5" aria-hidden="true" />
@@ -368,7 +377,11 @@ export function ChatApprovalCard({
         className="approval-shell composer-shell bg-popover p-4 shadow-composer"
       >
         <div className="flex flex-col items-center text-center">
-          <ApprovalIcon preview={plainPreview} command={plainCommand !== undefined} />
+          <ApprovalIcon
+            preview={plainPreview}
+            command={plainCommand !== undefined}
+            icon={schedule && pendingCanAllow ? CalendarClock : undefined}
+          />
           <Text variant="strong" as="p" id={`approval-title-${pending.approvalId}`} className="mt-2.5 text-balance">
             {invalidPendingPrivilegedApproval
               ? "Invalid privileged approval blocked"
@@ -382,7 +395,9 @@ export function ChatApprovalCard({
                     ? `${pendingShell.childLabel} wants to run a full-host command`
                     : pendingRunGrant
                       ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
-                      : approvalHeadline(pending)}
+                      : schedule
+                        ? scheduleApprovalHeadline(schedule)
+                        : approvalHeadline(pending)}
             {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
           </Text>
         </div>
@@ -392,19 +407,7 @@ export function ChatApprovalCard({
             device that owns this chat.
           </Text>
         ) : schedule ? (
-          <div id={summaryId} tabIndex={0} className="approval-well mt-3 max-h-56 space-y-2 overflow-y-auto overscroll-contain bg-well px-4 py-3 text-small text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
-            <p className="font-semibold">{schedule.name}</p>
-            <p>{pending.summary}</p>
-            {schedule.mode === "llm" ? <p>Model: {schedule.providerName} / {schedule.modelName}</p> : null}
-            <p>Access: {schedule.permission === "full" ? "Full" : "Read-only"}{schedule.workspaceName ? ` · ${schedule.workspaceName} (${schedule.workspaceId})` : ""}{schedule.mcpServerIds.map((id, index) => ` · ${schedule.mcpServerNames[index]} (${id})`).join("")}</p>
-            <div>
-              <p className="font-medium">{schedule.mode === "script" ? "Script" : "Instructions"}</p>
-              <p className="select-text whitespace-pre-wrap break-words">{schedule.prompt ?? ("script" in schedule ? schedule.script : "")}</p>
-            </div>
-            <p>Timezone: {schedule.timezone} · Notifications {schedule.notify ? "on" : "off"}</p>
-            {!schedule.schedulerEnabled ? <p className="text-status-warning">Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.</p> : schedule.enabled === false ? <p>This task stays paused.</p> : null}
-            <p className="text-secondary">Scheduled work runs on your desktop while Aiden is open and the computer is awake.</p>
-          </div>
+          <ScheduledTaskApproval details={schedule} descriptionId={summaryId} />
         ) : pendingClassifier.details ? (
           <ClassifierApproval details={pendingClassifier.details} descriptionId={summaryId} />
         ) : pendingWorkspaceWrite ? (
@@ -447,7 +450,9 @@ export function ChatApprovalCard({
                   ? "Review this one exact full-host command before Aiden continues."
                   : pendingRunGrant
                     ? "Review this grant for the entire subagent run."
-                    : approvalMeta(plainPreview)}
+                    : schedule
+                      ? SCHEDULE_APPROVAL_FOOTER
+                      : approvalMeta(plainPreview)}
         </Text>
         {disabledReason ? (
           <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 text-center">
