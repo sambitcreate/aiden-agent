@@ -18,6 +18,12 @@
 // starting the paused turn. A turn dismissed or stopped for good is
 // `dismissed` and never delivered.
 //
+// Pause: a message to a Bot the person paused is not admitted. The chat gets
+// one fixed line ("Ada is paused. Resume it in Aiden to continue.") per
+// message, and no row: nothing waits for an answer. A turn that was running
+// when the Bot paused keeps its `interrupted` row and is delivered once the
+// person unpauses and resumes it.
+//
 // Routines: a finished routine's visible reply (or its failure) is a
 // `routine` row keyed by the run's request id. It starts `pending` and uses
 // the same `pending → sending → sent` path and duplicate-labelled redelivery,
@@ -114,6 +120,8 @@ export interface TelegramBotIngressDeps {
    * enabled and still targets that chat. Checked right before each send.
    */
   routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "chatId" | "threadId">): Promise<boolean>;
+  /** The Bot's display name, for the paused line. */
+  botName?(botId: string): Promise<string | undefined>;
   now?: () => number;
   onError?(message: string, cause: unknown): void;
 }
@@ -125,8 +133,11 @@ export function telegramRoutineText(routineName: string, text: string): string {
 }
 
 export interface TelegramBotIngress {
-  /** Durably admit one message. Resolves only after the session accepted it. */
-  admit(message: TelegramBotMessage): Promise<{ requestId: string; deduped: boolean }>;
+  /**
+   * Durably admit one message. Resolves only after the session accepted it,
+   * or, for a paused Bot (`paused: true`), after the paused line was sent.
+   */
+  admit(message: TelegramBotMessage): Promise<{ requestId: string; deduped: boolean; paused?: true }>;
   /**
    * Durably queue a routine's result for the bound chat and send it in the
    * background. A request id that already has a row is ignored.
@@ -143,6 +154,21 @@ export interface TelegramBotIngress {
   /** Resolves when no background wait or delivery is running (tests and shutdown). */
   idle(): Promise<void>;
   stop(): void;
+}
+
+/** What the chat hears instead of an answer while its Bot is paused. */
+export function telegramBotPausedLine(name: string | undefined): string {
+  const display = name?.trim();
+  return `${display ? display : "This Bot"} is paused. Resume it in Aiden to continue.`;
+}
+
+/** Duck-typed: this module only imports the session's types (the CLI bundles it without the runtime). */
+function isPausedByPerson(cause: unknown): boolean {
+  return (
+    cause instanceof Error &&
+    cause.name === "BotSessionError" &&
+    (cause as { reason?: unknown }).reason === "paused_by_person"
+  );
 }
 
 export function telegramBotRequestId(message: Pick<TelegramBotMessage, "botId" | "chatId" | "threadId" | "messageId">): string {
@@ -336,11 +362,30 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         if (known.state === "awaiting") trackOnce({ ...known });
         return { requestId, deduped: true };
       }
-      const { submissionId, deduped } = await deps.session.send(message.botId, {
-        text: message.text,
-        requestId,
-        ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
-      });
+      let admitted: { submissionId: string; deduped: boolean };
+      try {
+        admitted = await deps.session.send(message.botId, {
+          text: message.text,
+          requestId,
+          ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
+        });
+      } catch (cause) {
+        if (!isPausedByPerson(cause)) throw cause;
+        // Not admitted and no row: the update is consumed with one fixed line.
+        const name = await deps.botName?.(message.botId).catch(() => undefined);
+        try {
+          await deps.deliver({
+            chatId: message.chatId,
+            ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
+            ownerUserId: message.ownerUserId,
+            text: telegramBotPausedLine(name),
+          });
+        } catch (deliveryError) {
+          deps.onError?.("Telegram could not tell a chat its Bot is paused.", deliveryError);
+        }
+        return { requestId, deduped: false, paused: true };
+      }
+      const { submissionId, deduped } = admitted;
       const recordRow = () => locked(async (file) => {
         const existing = file.rows.find((candidate) => candidate.requestId === requestId);
         if (existing !== undefined) return undefined;
@@ -408,7 +453,8 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     },
 
     botStateChanged(botId, state) {
-      if (state.kind === "interrupted" || stopper.signal.aborted) return;
+      // Still held: an interrupted turn waits for Resume, a paused Bot for unpause.
+      if (state.kind === "interrupted" || state.kind === "paused" || stopper.signal.aborted) return;
       inBackground(async () => {
         const rows = await locked((file) =>
           file.rows

@@ -45,6 +45,14 @@ Image-generation catalogs are also manual-only. The OpenRouter models API (`http
 
 Agent harness runtimes (ACP providers such as Google Antigravity) are also manual-only. The pinned release table lives in source (`main/services/antigravity/release.ts`) with exact URLs, SHA-256 hashes and member sizes; Aiden never fetches release metadata, registries or manifests at runtime. The archive is downloaded from its pinned `dl.google.com` URL only when the user chooses Install in Settings → Providers, and runtime updates arrive only with a new Aiden release. Listing the provider, startup, background catalog refreshes and onboarding navigation must not download, launch the agent, or contact the network; the agent starts only for an explicit sign-in (and the one catalog discovery that follows it), an explicit user "refresh models" action, or an attended desktop chat turn. Its credentials live in the agent's isolated profile under Aiden's userData, never in `~/.gemini`.
 
+Bot computers (Lume and the macOS restore image) are also manual-only.
+
+- Lume ships inside the app at an exact pin (`resources/bot-computers/lume-artifact.json` for provenance; the security values are compiled into `main/services/bot-computers/lume-binary.ts`). It is upgraded only with an Aiden release.
+- Aiden runs only the vendored binary, never a `PATH` lookup, the installer, `lume serve`, `lume update` or `lume pull`. Every child process gets `LUME_TELEMETRY_ENABLED=false`, `LUME_UPDATE_CHECK=false` and an isolated `HOME`. Every command names Aiden's storage (`--storage`, or `--source-storage` plus `--dest-storage` for `clone`).
+- The macOS restore image is pinned in `main/services/bot-computers/release.ts` (URL, size, SHA-256). It is downloaded from that fixed URL, with no redirects, only after the person chooses **Set up** or **Update base** in Settings → Bot computers.
+- Startup, listing, onboarding and background work never download, create or start a VM.
+- A Bot computer starts only for that Bot's `computer` or `computer_shell` call, a routine that uses it, the person opening its Computer tab, or the person's Open on its computer sign-in card. Set up, Update base and Set up element control in Settings start the base computer only.
+
 ## Aiden CLI (`packages/cli`)
 
 The headless Aiden Agent lives in `packages/cli` as a self-contained npm package with its own lockfile — it is deliberately not an npm workspace of the Electron root. See `packages/cli/README.md` and `docs/plans/aiden-cli-plan.md` for architecture and phasing.

@@ -12,6 +12,7 @@ import { peerTlsOptions } from "../peer-transport.js";
 import {
   decideDeviceHubRoute,
   hubResponseHeaders,
+  rendererProxyOrigins,
   startDeviceHubProxy,
   type DeviceHubProxy,
   type DeviceHubUpstream,
@@ -103,7 +104,7 @@ interface Harness {
   hubRunning: { value: boolean };
 }
 
-async function withProxy(run: (harness: Harness) => Promise<void>) {
+async function withProxy(run: (harness: Harness) => Promise<void>, extra: { hubHeaders?: Record<string, string> } = {}) {
   const hub = await startFakeHub();
   const clock = { now: 1_000_000 };
   const hubRunning = { value: true };
@@ -111,6 +112,7 @@ async function withProxy(run: (harness: Harness) => Promise<void>) {
     resolveHub: (hostId) => (hostId === "local" && hubRunning.value ? hub.origin : null),
     allowedOrigins: ["file://", "http://localhost:5173"],
     now: () => clock.now,
+    ...extra,
   });
   try {
     await run({ hub, proxy, clock, hubRunning });
@@ -461,6 +463,39 @@ test("allowlisted WebSocket upgrades are piped end to end", async () => {
     assert.equal(list.status, 101);
     list.socket!.destroy();
   });
+});
+
+test("main's hub headers reach a loopback hub on requests and upgrades, and the caller cannot supply or override them", async () => {
+  await withProxy(
+    async ({ proxy, hub }) => {
+      const { token } = proxy.mintGrant();
+      const response = await send(proxy, `/api/devices?t=${token}`, {
+        headers: { origin: "file://", "x-hub-key": "guessed" },
+      });
+      assert.equal(response.status, 200);
+      const connection = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}&host=local`, {
+        origin: "file://",
+        "x-hub-key": "guessed",
+      });
+      assert.equal(connection.status, 101);
+      await connection.firstFrame;
+      connection.socket!.destroy();
+      assert.deepEqual(
+        hub.records.map((record) => [record.upgrade, record.headers["x-hub-key"]]),
+        [
+          [false, "main-only"],
+          [true, "main-only"],
+        ],
+      );
+    },
+    { hubHeaders: { "x-hub-key": "main-only" } },
+  );
+});
+
+test("the renderer origins are the packaged file:// renderer plus a well-formed dev server", () => {
+  assert.deepEqual(rendererProxyOrigins({}), ["file://"]);
+  assert.deepEqual(rendererProxyOrigins({ AIDEN_RENDERER_URL: "http://localhost:5173/index.html" }), ["file://", "http://localhost:5173"]);
+  assert.deepEqual(rendererProxyOrigins({ AIDEN_RENDERER_URL: "not a url" }), ["file://"]);
 });
 
 test("a client that resets while its host resolves never crashes the proxy", async () => {

@@ -55,6 +55,7 @@ import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
   AidenOperationContractError,
+  AidenOperationNotExecutedError,
   AidenOperationUnknownOutcomeError,
   assertDurableOperationResult,
   assertRevision,
@@ -1140,6 +1141,11 @@ export class AidenRemoteChatService {
        */
       durableBotSessions?: () => boolean;
       botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
+      /**
+       * Whether the person paused this Bot (plan §7). A paused Bot's chat
+       * refuses turns; a throw (an unreadable pause record) refuses too.
+       */
+      botPaused?: (botId: string) => Promise<boolean>;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -2073,6 +2079,7 @@ export class AidenRemoteChatService {
         parsed,
         async () => {
           const authoritative = await this.chat(chatId);
+          await this.refuseIfBotPaused(authoritative);
           const requestedProviderId = parsed.providerId ?? authoritative.providerId;
           const requestedModelId = parsed.modelId ?? authoritative.model;
           const preservesPinnedGemini =
@@ -2170,6 +2177,10 @@ export class AidenRemoteChatService {
           let appendedChat: Chat | undefined;
           try {
             turn.onReleased(owner.owner.onInvalidated(turn.release));
+            // Again now that this turn holds the chat. A pause recorded after
+            // this check is enforced on the generation: it checks again once
+            // registered, and the pause stops the chat's running work.
+            await this.refuseIfBotPaused(authoritative);
             const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
             try {
               if (parsed.skill) turn.reserveSkillPreparation();
@@ -2307,6 +2318,14 @@ export class AidenRemoteChatService {
     } catch (error) {
       return this.mapOperationError(error);
     }
+  }
+
+  /** A Bot the person paused takes no turns; nothing ran, so the same key runs once it is resumed. */
+  private async refuseIfBotPaused(chat: Chat): Promise<void> {
+    if (!chat.botId || (await this.options.botPaused?.(chat.botId)) !== true) return;
+    throw new AidenOperationNotExecutedError(
+      new AidenRemoteServiceError("operation_stale", "This Bot is paused. Resume it to continue.", 409),
+    );
   }
 
   private mapOperationError(error: unknown): never {

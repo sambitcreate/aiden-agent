@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createBotApprovals } from "./bot-approvals.js";
 import { wireBotAttention } from "./bot-attention.js";
+import { createBotHandoffs } from "./bot-handoffs.js";
 import { createBotQuestions } from "./bot-questions.js";
 import {
   optionAnswer,
@@ -11,13 +12,28 @@ import {
 function setup() {
   const questions = createBotQuestions();
   const approvals = createBotApprovals({ publish() {}, withdraw() {} });
+  const handoffs = createBotHandoffs();
   const sent: Array<{ channel: string; payload: unknown }> = [];
   const stop = wireBotAttention({
     questions,
     approvals,
+    handoffs,
     broadcast: (channel, payload) => void sent.push({ channel, payload }),
   });
-  return { questions, approvals, sent, stop };
+  return { questions, approvals, handoffs, sent, stop };
+}
+
+function handOff(handoffs: ReturnType<typeof createBotHandoffs>, botId: string, waitId: string, signal?: AbortSignal) {
+  return handoffs.request({
+    botId,
+    waitId,
+    toolCallId: `call-${waitId}`,
+    kind: "action",
+    action: "Enter the 2FA code for your bank",
+    why: "Only you get the code on your phone.",
+    source: "tool",
+    signal,
+  });
 }
 
 function ask(
@@ -116,4 +132,29 @@ test("a second Bot's question carries its own id, and stopping the wiring silenc
   questions.answer("bot-b", "w2", optionAnswer("w2", "Red"));
   await Promise.all([first, second]);
   assert.equal(sent.length, 2, "nothing is broadcast after the unsubscribe");
+});
+
+test("a hand-off card opening, being answered and being withdrawn each tell the sidebar, with only the Bot id", async () => {
+  const { handoffs, sent, stop } = setup();
+  const answered = handOff(handoffs, "bot-a", "h1");
+  assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot-a" } }]);
+  assert.equal(handoffs.answer("bot-a", "h1", { outcome: "done" }), "answered");
+  assert.deepEqual(await answered, { outcome: "done" });
+  assert.equal(sent.length, 2);
+
+  const controller = new AbortController();
+  const withdrawn = handOff(handoffs, "bot-b", "h2", controller.signal);
+  controller.abort();
+  await assert.rejects(withdrawn);
+  assert.deepEqual(
+    sent.slice(2).map((message) => message.payload),
+    [{ botId: "bot-b" }, { botId: "bot-b" }],
+  );
+  assert.equal(JSON.stringify(sent).includes("2FA"), false, "no hand-off text is broadcast");
+
+  stop();
+  const late = handOff(handoffs, "bot-a", "h3");
+  handoffs.answer("bot-a", "h3", { outcome: "skipped" });
+  await late;
+  assert.equal(sent.length, 4, "nothing is broadcast after the unsubscribe");
 });

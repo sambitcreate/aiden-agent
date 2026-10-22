@@ -318,6 +318,18 @@ struct AidenServer: Codable, Equatable, Sendable {
         serverCapabilities?.contains(.botActivity) == true
     }
 
+    /// The Mac offers `bot:handoffs` (revision 37), so this device may ask for
+    /// it. There is no feature token: the support inventory is the only signal.
+    var offersBotHandoffs: Bool {
+        serverCapabilities?.contains(.botHandoffs) == true
+    }
+
+    /// This device holds `bot:handoffs`: show hand-off cards and the paused
+    /// state, and offer Pause and Resume.
+    var supportsBotHandoffs: Bool {
+        offersBotHandoffs && capabilities.contains(.botHandoffs)
+    }
+
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
     var announcesBotActivity: Bool {
         features.contains(Self.botActivityFeature)
@@ -1043,7 +1055,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity,
+            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .appControlsRead, .appControlsRespond,
         ])
         guard !accepts.isEmpty,
@@ -1774,6 +1786,67 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
         guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
         return receipt
+    }
+
+    // MARK: Contract revision 37: Bot hand-offs and pause (`bot:handoffs`)
+
+    /// Answers the hand-off the Bot waits on: Done or Skip, with an optional
+    /// note. The request UUID is the idempotency key, so a retried answer
+    /// replays the same receipt. `409 handoff_expired` means nothing waits.
+    func answerBotHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotHandoffAnswerReceipt {
+        try validateBotIdentifier(botId)
+        try validateBotWaitIdentifier(waitId)
+        let receipt: AidenBotHandoffAnswerReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "handoffs", waitId, "answer"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    /// Asks the Mac to bring a hand-off (a sign-in) forward. It leaves the
+    /// wait open; `opened` is false when no Aiden window could show it.
+    func openBotHandoffOnMac(
+        botId: String,
+        waitId: String,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotHandoffOpenOnMacReceipt {
+        try validateBotIdentifier(botId)
+        try validateBotWaitIdentifier(waitId)
+        let receipt: AidenBotHandoffOpenOnMacReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "handoffs", waitId, "open-on-mac"],
+            body: AidenBotSessionActionRequest(),
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    /// Pauses the Bot: a running reply stops, and nothing runs until it is resumed.
+    func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("pause", botId: botId, idempotencyKey: idempotencyKey)
+    }
+
+    /// Resumes a paused Bot (`DELETE /bots/{botId}/pause`, no body). A reply
+    /// the pause cut short comes back interrupted.
+    func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try validateBotIdentifier(botId)
+        return try await send(
+            method: "DELETE",
+            path: ["bots", botId, "pause"],
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
     }
 
     private func botSessionAction(
@@ -3019,6 +3092,13 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private func validateBotIdentifier(_ value: String) throws {
         try validateSafeIdentifier(value, maximumScalars: AidenRemoteProtocol.maxBotIdentifierLength)
+    }
+
+    /// A Bot wait id (`^[A-Za-z0-9-]{1,64}$`) before it goes into a route.
+    private func validateBotWaitIdentifier(_ value: String) throws {
+        guard (try? AidenBotHandoffWire.validateWaitID(value)) != nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
     }
 
     private func validateRemoteIdentifier(_ value: String) throws {

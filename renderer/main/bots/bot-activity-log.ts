@@ -41,6 +41,8 @@ function replyTitle(start: BotTurn["start"]): { title: string; routine: boolean 
     }
     case "question_answer":
       return { title: shortTitle(start.text, "Answer"), routine: false };
+    case "handoff_result":
+      return { title: "Hand-off", routine: false };
     case "routine":
       return { title: shortTitle(start.label, "Routine"), routine: true };
     default:

@@ -356,6 +356,41 @@ test("run history is capped at the newest 50 entries per task", async () => {
   assert.equal((await store.get(task.id))?.lastRunAt, 55);
 });
 
+test("Bot routine skip reasons survive a reload, including a person's pause", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([]);
+  const runs = new MemoryPersistence<unknown[]>([]);
+  const store = createScheduleStore(tasks, runs, () => 1_800_000_000_000);
+  const task = await store.save({
+    name: "Script",
+    mode: "script",
+    cron: "0 * * * *",
+    timezone: "UTC",
+    script: "report.sh",
+    permission: "full",
+  });
+  const reasons = ["bot_paused", "paused_by_person", "duplicate"] as const;
+  for (const [index, reason] of reasons.entries()) {
+    await store.recordRun({
+      id: `run-${index}`,
+      taskId: task.id,
+      startedAt: index,
+      finishedAt: index + 1,
+      result: "skipped",
+      reason,
+      output: "",
+    });
+  }
+  const reloaded = createScheduleStore(
+    new MemoryPersistence(tasks.snapshot()),
+    new MemoryPersistence(runs.snapshot()),
+    () => 1_800_000_000_000,
+  );
+  assert.deepEqual(
+    (await reloaded.runs(task.id)).map((run) => run.reason),
+    ["duplicate", "paused_by_person", "bot_paused"],
+  );
+});
+
 test("store methods remain safe when called without an object receiver", async () => {
   const store = testStore();
   const task = await store.save({

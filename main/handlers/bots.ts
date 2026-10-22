@@ -24,12 +24,20 @@ import {
   type AidenRemoteBotAvatarUploadRequest,
 } from "../services/aiden-remote-protocol.js";
 import { registerBotLiveHandlers } from "./bot-live.js";
+import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
-import { registerBotMemoryHandlers } from "./bot-memory.js";
+import { registerBotHandoffHandlers } from "./bot-handoffs.js";
+import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
+import { registerBotRuleHandlers } from "./bot-rules.js";
+import { botRules } from "../services/bot-rules/store-main.js";
 import { botMemoryService } from "../services/bot-memory/bot-memory-main.js";
+import { registerBotBrowserHandlers } from "./bot-browser.js";
 import { registerBotFileHandlers } from "./bot-files.js";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
 import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
+import { botHandoffs } from "../services/bot-runtime/bot-handoffs-main.js";
+import { botBrowserWorkspace } from "../services/bot-runtime/bot-browser-main.js";
+import { openBotHandoffById } from "../services/bot-runtime/bot-handoff-open-main.js";
 import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
 import {
   telegramBotBindingAuthority,
@@ -129,6 +137,12 @@ export function registerBotHandlers(): void {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
   });
+  // Pause / Resume (plan §7): the pause is the Mac's, and survives a restart.
+  registerBotPauseHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    runtime: botSessionRuntime,
+    getBot: (botId) => botApplicationService.get(botId),
+  });
   ipcMain.handle("bots:withdraw", async (_event, input: unknown) => {
     const { botId, submissionId } = parseBotWithdraw(input);
     return (await botSessionRuntime()).withdraw(botId, submissionId);
@@ -188,11 +202,29 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
   registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
+  // Bot hand-off cards: any desktop window may answer; the first answer wins. Open needs the app's own document.
+  registerBotHandoffHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handoffs: botHandoffs,
+    open: async (botId, waitId, event) => {
+      const owner = rendererDocumentOwner(event, () => new Error("Opening a hand-off requires the active application document."));
+      // A link opens in the Bot's own browser, shown in this window.
+      return openBotHandoffById(botId, waitId, "desktop", owner);
+    },
+  });
+  // The Bot store answers null for a Bot it doesn't have.
+  const botExists = botExistsIn(botApplicationService);
   // Profile → Memory: view, edit, delete and erase what the Bot remembers.
   registerBotMemoryHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     memory: botMemoryService,
-    botExists: async (botId) => (await botApplicationService.get(botId)) !== undefined,
+    botExists,
+  });
+  // Profile → Rules: what the Bot must ask about or hand to the person.
+  registerBotRuleHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    rules: botRules,
+    botExists,
   });
   // Read-only Files: the Bot's own folder.
   registerBotFileHandlers({
@@ -200,6 +232,11 @@ export function registerBotHandlers(): void {
     homePath: async (botId) => (await botApplicationService.resolveManagedWorkspace(botId)).homePath,
     list: listWorkspaceFiles,
     read: readWorkspaceFile,
+  });
+  // The Bot's own browser, watched and driven in its panel's Browser tab.
+  registerBotBrowserHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    workspace: botBrowserWorkspace,
   });
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));

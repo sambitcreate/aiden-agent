@@ -18,6 +18,14 @@ export interface BotMemoryHandlerDependencies {
   botExists(botId: string): Promise<boolean>;
 }
 
+/**
+ * `botExists` for a Bot lookup, such as the Bot application service, that
+ * answers `null` (or `undefined`) for a Bot it doesn't have.
+ */
+export function botExistsIn(bots: { get(botId: string): Promise<unknown> }): (botId: string) => Promise<boolean> {
+  return async (botId) => (await bots.get(botId)) != null;
+}
+
 export function registerBotMemoryHandlers(dependencies: BotMemoryHandlerDependencies): void {
   async function knownBot(raw: unknown): Promise<string> {
     const botId = parseBotId(raw);

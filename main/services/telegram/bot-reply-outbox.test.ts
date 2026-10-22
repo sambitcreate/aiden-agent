@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createBotSessionService } from "../bot-runtime/bot-session-service.js";
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
@@ -11,6 +12,7 @@ import type { BotReplyOutcome } from "../bot-runtime/bot-session-service.js";
 import {
   createTelegramBotIngress,
   MAY_BE_DUPLICATE_PREFIX,
+  telegramBotPausedLine,
   telegramBotRequestId,
   type BotReplyRow,
   type TelegramBotReply,
@@ -383,6 +385,78 @@ test("a Resume that lands while startup recovery is still settling its paused ob
     await session.shutdown();
     await ingress.idle();
     ingress.stop();
+  }
+});
+
+test("a message to a paused Bot gets one fixed line, no row, and never reaches the Bot", async () => {
+  const dir = tempDir();
+  const fauxModels = createFauxModels([fauxAssistantMessage("never")]);
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+  });
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file: path.join(dir, "outbox.json"),
+    session,
+    deliver: async (reply) => void delivered.push(reply),
+    botName: async () => "Ada",
+  });
+  try {
+    await session.pause("bot:a", "mac");
+    const admitted = await ingress.admit({ botId: "bot:a", chatId: 7, threadId: 3, messageId: 60, ownerUserId: 7, text: "hi" });
+    await ingress.idle();
+    assert.deepEqual(admitted, { requestId: "tg:bot:a:7:3:60", deduped: false, paused: true });
+    assert.deepEqual(delivered, [
+      { chatId: 7, threadId: 3, ownerUserId: 7, text: "Ada is paused. Resume it in Aiden to continue." },
+    ]);
+    assert.deepEqual(await ingress.rows(), [], "nothing waits for an answer");
+    assert.equal(fauxModels.calls(), 0);
+    const view = await (await session.conversation("bot:a")).context(BACKGROUND_CONTEXT);
+    assert.equal(view.entries.some((entry) => entry.kind === "pi.user"), false, "the Bot got no input");
+  } finally {
+    ingress.stop();
+    await session.shutdown();
+  }
+  assert.equal(telegramBotPausedLine(undefined), "This Bot is paused. Resume it in Aiden to continue.");
+});
+
+test("a Telegram turn paused mid-reply is delivered once after unpause and Resume, not before", async () => {
+  const dir = tempDir();
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("finished after the pause")], { tokensPerSecond: 40 });
+  let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+    onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
+  });
+  const delivered: string[] = [];
+  ingress = createTelegramBotIngress({ file: path.join(dir, "outbox.json"), session, deliver: async (reply) => void delivered.push(reply.text) });
+  try {
+    await ingress.admit({ botId: "bot:a", chatId: 7, messageId: 61, ownerUserId: 7, text: "write it all" });
+    await waitFor(async () => (await session.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
+      what: "the Telegram turn to stream",
+    });
+    await session.pause("bot:a", "phone");
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "interrupted", { what: "the paused row" });
+    await session.unpause("bot:a");
+    await ingress.idle();
+    assert.deepEqual(delivered, [], "unpausing alone delivers nothing");
+    assert.equal(fauxModels.calls(), 1);
+
+    await session.resume("bot:a", "desk-resume");
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "sent", { what: "the resumed reply to be sent" });
+    await ingress.idle();
+    assert.deepEqual(delivered, ["finished after the pause"]);
+  } finally {
+    ingress.stop();
+    await session.shutdown();
   }
 });
 

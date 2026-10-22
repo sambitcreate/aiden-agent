@@ -131,6 +131,8 @@ import {
 } from "./aiden-remote-bot-session.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
+import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
+import { LEGACY_AUDIENCE, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
@@ -555,6 +557,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
                   durableBotSessions: () => activeBotSessions !== undefined,
                   botTurnAuthorityPreflight: preflightBotTurnAuthority,
+                  // A Bot the person paused takes no turns from the legacy chat route either.
+                  botPaused: async (botId: string) =>
+                    (await import("./bot-runtime/bot-session-main.js")).isBotPaused(botId),
                 }
               : {}),
             idempotency,
@@ -746,11 +751,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
               await (await botSessionRuntime()).deleteBot(botId);
             },
+            // The holder's view (revision 37: a person's pause is `paused`); the
+            // router and the host feed project it for every other device.
             sessionStates: async (botIds) => {
               const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
               const runtime = await botSessionRuntime();
               const rows = await mapWithConcurrency(botIds, 4, async (botId) =>
-                [botId, projectBotSessionState(await runtime.state(botId)).state] as const,
+                [botId, projectBotSessionState(await runtime.state(botId), { handoffs: true }).state] as const,
               );
               return new Map(rows);
             },
@@ -866,6 +873,27 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 routines: botRoutineService,
                 questions: botQuestions,
                 approvals: botApprovals,
+                // Revision 37: phones answer hand-offs through the desktop's own bridge.
+                handoffs: botHandoffs,
+                openHandoffOnMac: async (botId, waitId) => {
+                  const { openBotHandoffById } = await import("./bot-runtime/bot-handoff-open-main.js");
+                  return openBotHandoffById(botId, waitId, "phone");
+                },
+                // A pause or unpause on the Mac commits nothing to the conversation:
+                // open phone streams hear it through the runtime's state bridge.
+                stateChanges: (listener) => {
+                  let stopped = false;
+                  let unsubscribe: (() => void) | undefined;
+                  void import("./bot-runtime/bot-session-main.js")
+                    .then(({ onBotSessionStateChange }) => {
+                      if (!stopped) unsubscribe = onBotSessionStateChange((botId) => listener(botId));
+                    })
+                    .catch((error: unknown) => logger.warn("aiden-remote", "Bot state changes are unavailable to phones.", error));
+                  return () => {
+                    stopped = true;
+                    unsubscribe?.();
+                  };
+                },
                 turnIntents: botTurnIntents,
                 // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
                 runStarts: botRunStarts,
@@ -975,7 +1003,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                       ...(repository ? { repository } : {}),
                     };
                   }),
-                  bots: (botList?.bots ?? []) as unknown as AidenRemoteHostFeedBot[],
+                  // Paired desktops get the revision-35 Bot rows: no `paused` state or flag.
+                  bots: (botList?.bots ?? []).map((bot) =>
+                    projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
+                  ) as unknown as AidenRemoteHostFeedBot[],
                 };
               },
             },

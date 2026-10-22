@@ -4,13 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { EntryRecord } from "@earendil-works/pi-durable";
+import type { EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
 import {
   BOT_ROUTINE_NOTES_LIMITS,
   createBotRoutineNotesStore,
   ROUTINE_NOTES_TOOL_NAME,
 } from "./bot-routine-notes.js";
-import { routineNotesCandidate, routineTaskIdOfRun } from "./bot-runtime/bot-tool-candidates.js";
+import { routineNotesCandidate, routineTaskIdOfCall } from "./bot-runtime/bot-tool-candidates.js";
 import { botIngressAllowsTool } from "./bot-runtime/bot-tool-policy.js";
 import type { BotToolCall } from "./bot-runtime/tool-adapter.js";
 import type { BotRoutinePorts } from "./bot-routines-port.js";
@@ -144,24 +144,27 @@ test("the tool writes the calling run's routine and nothing outside a routine ru
 test("a call is bound to the routine whose input its run serves, not the newest routine", async () => {
   const notice = (id: number, requestId: string) =>
     ({ id, kind: "aiden.bot-notice", data: { notice: "routine", label: "R", requestId } }) as unknown as EntryRecord;
-  const entries = [
-    notice(1, "routine:task-a:1700000000000"),
-    { id: 2, kind: "pi.user" } as unknown as EntryRecord,
-    // A second routine queued behind the first while it runs.
-    notice(3, "routine:task-b:1700000000000"),
-  ];
-  const submissions = new Map([
-    ["routine:task-a:1700000000000", "11"],
-    ["routine:task-b:1700000000000", "12"],
-  ]);
-  const lookup = (running: string | undefined) => ({
-    runningSubmissionId: async () => running,
-    submissionIdOf: async (requestId: string) => submissions.get(requestId),
+  const A = "routine:task-a:1700000000000";
+  const B = "routine:task-b:1700000000000";
+  // Newest first, as a call reads them: a second routine queued behind the first while it runs.
+  const entries = [notice(3, B), { id: 2, kind: "pi.user" } as unknown as EntryRecord, notice(1, A)];
+  const callWith = (log: readonly EntryRecord[], statuses: Record<string, SubmissionRecord["status"]>) => ({
+    entries: async () => [...log],
+    submissions: async (requestIds: readonly string[]) =>
+      requestIds.map((requestId) =>
+        statuses[requestId] === undefined ? undefined : ({ requestId, status: statuses[requestId] } as SubmissionRecord),
+      ),
   });
-  assert.equal(await routineTaskIdOfRun(entries, lookup("11")), "task-a");
-  assert.equal(await routineTaskIdOfRun(entries, lookup("12")), "task-b");
-  assert.equal(await routineTaskIdOfRun(entries, lookup("99")), undefined, "a person's run has no routine");
-  assert.equal(await routineTaskIdOfRun(entries, lookup(undefined)), undefined, "an idle Bot has no run");
+  assert.equal(await routineTaskIdOfCall(callWith(entries, { [A]: "placed", [B]: "queued" })), "task-a");
+  assert.equal(await routineTaskIdOfCall(callWith(entries, { [A]: "done", [B]: "placed" })), "task-b");
+  assert.equal(await routineTaskIdOfCall(callWith(entries, { [A]: "done", [B]: "done" })), undefined, "a person's run has no routine");
+  assert.equal(await routineTaskIdOfCall(callWith([], {})), undefined, "a conversation without routines");
+
+  // A Bot that has run routines many times still finds the run under way, the newest.
+  const current = "routine:task-now:1700000000000";
+  const history = Array.from({ length: 40 }, (_, index) => notice(99 - index, `routine:task-${index}:1700000000000`));
+  const done = Object.fromEntries(history.map((entry) => [(entry.data as { requestId: string }).requestId, "done" as const]));
+  assert.equal(await routineTaskIdOfCall(callWith([notice(100, current), ...history], { ...done, [current]: "placed" })), "task-now");
 });
 
 class MemoryPersistence<T> {

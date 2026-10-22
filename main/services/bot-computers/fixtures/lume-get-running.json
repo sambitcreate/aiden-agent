@@ -1,0 +1,24 @@
+[
+  {
+    "name" : "aiden-bot-5d41402abc4b2a76",
+    "os" : "macOS",
+    "cpuCount" : 4,
+    "memorySize" : 8589934592,
+    "diskSize" : {
+      "allocated" : 31138512896,
+      "total" : 107374182400
+    },
+    "display" : "1024x768",
+    "status" : "running",
+    "provisioningOperation" : null,
+    "vncUrl" : "vnc:\/\/:Zq7Tn2Lw9Rk4Hm6Xb3Pv8Cd5Fs1Jy0Ga@127.0.0.1:62295",
+    "ipAddress" : "192.168.64.7",
+    "sshAvailable" : true,
+    "locationName" : "\/Users\/person\/Library\/Application Support\/Aiden Agent\/bot-computers\/vms",
+    "sharedDirectories" : null,
+    "networkMode" : "nat",
+    "downloadProgress" : null,
+    "machineIdentifier" : "YnBsaXN0MDDRAQJURUNJRBMAKDBQ3/M+cAgLEAAAAAAAAAEBAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAZ",
+    "macAddress" : "a6:4f:2c:9e:13:71"
+  }
+]

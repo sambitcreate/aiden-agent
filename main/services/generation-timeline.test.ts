@@ -250,6 +250,17 @@ test("projects display_image as a safe relative GUI artifact action", () => {
   });
 });
 
+test("projects a Bot computer step with its intent, never typed text or the command", () => {
+  assert.deepEqual(safeToolDescriptor("computer", { action: "type", text: "SECRET TEXT", intent: "Type the search terms" }), {
+    label: "Use its computer",
+    detail: "Type the search terms",
+  });
+  assert.deepEqual(safeToolDescriptor("computer_shell", { command: "export TOKEN=SECRET", description: "Set up the project" }), {
+    label: "Run command in its computer",
+    detail: "Set up the project",
+  });
+});
+
 test("projects generate_image with only its model and a known aspect ratio, never the prompt", () => {
   const descriptor = safeToolDescriptor("generate_image", {
     provider: "fal",

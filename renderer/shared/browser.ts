@@ -75,7 +75,13 @@ export interface BrowserTab {
   floating: boolean;
   pictureInPicture?: boolean;
   visible?: boolean;
+  /**
+   * A Bot's tab the person is using (a sign-in or hand-off card is open, or
+   * they took over). The Bot can't read or drive it until it is released.
+   */
+  heldForPerson?: { reason: BrowserHoldReason };
 }
+export type BrowserHoldReason = "sign_in" | "handoff" | "takeover";
 export interface BrowserHistoryEntry {
   url: string;
   title: string;
@@ -129,6 +135,8 @@ export interface BrowserSnapshot {
   text: string;
   elements: BrowserElement[];
   image?: BrowserImage;
+  /** Why a Bot's snapshot has no image, or what its image covers (a Bot browser only). */
+  imageNote?: string;
   diagnostics: BrowserDiagnostic[];
   accessibilityTree?: unknown;
   consoleEntries?: unknown[];

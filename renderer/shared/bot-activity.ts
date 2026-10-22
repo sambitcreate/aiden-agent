@@ -82,12 +82,24 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
   ["web_search", "searching"],
   ["computer_use", "computer"],
   ["form_fill", "computer"],
+  // The Bot's own computer and browser are not the person's Mac: they read as apps.
+  ["computer", "app"],
+  ["computer_shell", "command"],
+  ["browser", "app"],
   ["inspect_image", "photo"],
   ["subagent", "helper"],
   ["bot_memory", "remembering"],
   ["routines", "routine"],
   ["routine_notes", "routine"],
   ["ask_user_question", "waiting"],
+  ["hand_off", "waiting"],
+  ["sign_in", "waiting"],
+]);
+
+/** Fixed tools whose finished step reads differently from their phase's: a hand-off is not a question. */
+const TOOL_STEP_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
+  ["hand_off", "Handed you a step"],
+  ["sign_in", "Asked you to sign in"],
 ]);
 
 const PHASE_IDS: ReadonlySet<string> = new Set(BOT_ACTIVITY_PHASES);
@@ -108,8 +120,23 @@ const MCP_AGENT_TOOL = /^([a-z0-9]+(?:_[a-z0-9]+)*)__[A-Za-z0-9_]+$/u;
 const MCP_PREFIX_COLLISION = /_[0-9a-f]{6}$/u;
 const MCP_PREFIX_DIGIT_LEAD = /^mcp_(?=[0-9])/u;
 
-/** The connection label of an MCP or Composio tool, or undefined for Aiden's own tools. */
+/** Aiden's own tools that read as using an app ("Using its computer"). */
+const TOOL_APPS: ReadonlyMap<string, string> = new Map<string, string>([
+  ["computer", "its computer"],
+  ["browser", "its browser"],
+]);
+
+/**
+ * The Bot browser's tools (`browser_snapshot`, `browser_click`, …) behind its
+ * `browser` gateway. Single underscores only: a connection tool always has a
+ * `__`, so a server named "Browser Base" (`browser_base__search`) keeps its own app.
+ */
+const BROWSER_TOOL = /^browser_[a-z]+(?:_[a-z]+)*$/u;
+
+/** The app label of a tool: the Bot's own computer or browser, or an MCP or Composio tool's connection; else undefined. */
 export function botToolApp(toolName: string): string | undefined {
+  const fixed = TOOL_APPS.get(BROWSER_TOOL.test(toolName) ? "browser" : toolName);
+  if (fixed) return fixed;
   const prefix = MCP_AGENT_TOOL.exec(toolName)?.[1];
   if (!prefix) return undefined;
   const base = prefix.replace(MCP_PREFIX_COLLISION, "") || prefix;
@@ -126,7 +153,7 @@ export function botToolApp(toolName: string): string | undefined {
 
 /** The phase an active tool puts its Bot in (§5.1). */
 export function botToolPhase(toolName: string, app?: string): BotToolPhase {
-  return TOOL_PHASES.get(toolName) ?? (app ? "app" : "working");
+  return TOOL_PHASES.get(BROWSER_TOOL.test(toolName) ? "browser" : toolName) ?? (app ? "app" : "working");
 }
 
 /** The status line's word for a phase; `app` fills "Using {app}". */
@@ -190,6 +217,11 @@ function stepPhrases(kind: BotToolPhase, app?: string): StepPhrases {
 export function botStepPhrase(kind: BotToolPhase, count: number, app?: string): string {
   const phrases = stepPhrases(kind, app);
   return count <= 1 ? phrases.one : phrases.many(count);
+}
+
+/** One finished call, past tense: its tool's own phrase ("Handed you a step"), else its phase's ("Read 1 file"). */
+export function botToolStepLabel(toolName: string, kind: BotToolPhase, app?: string): string {
+  return TOOL_STEP_LABELS.get(toolName) ?? botStepPhrase(kind, 1, app);
 }
 
 /** The bare verb phrase for "Couldn’t …" and "Blocked: …". */

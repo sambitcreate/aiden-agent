@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
+import { BotPanelHandoff } from "./bot-panel-handoff";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
@@ -187,7 +188,7 @@ test("a new epoch from a reopened Bot replaces the view with a fresh snapshot", 
 test("an interrupted Bot offers Resume and Dismiss, each sent once with a request id, and the card leaves on the click", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1" } }),
-    // Still paused after the Resume (say, the readmission was refused): the card comes back.
+    // Still interrupted after the Resume (say, the readmission was refused): the card comes back.
     "bots:resume": () => ({ kind: "interrupted", submissionId: "s1" }),
     "bots:dismiss": () => ({ kind: "idle" }),
   });
@@ -406,7 +407,7 @@ test("Resume clicked twice, or Resume then Dismiss, sends one request until the 
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
   assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 0);
   assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null, "the card is gone while main answers");
-  // Answered as still paused: the card is back and works again.
+  // Answered as still interrupted: the card is back and works again.
   answer({ kind: "interrupted", submissionId: "s1" });
   const back = await screen.findByRole("group", { name: "Planner was interrupted" });
   fireEvent.click(within(back).getByRole("button", { name: "Dismiss" }));
@@ -1036,6 +1037,400 @@ test("an open chat keeps its Bot read: a reply that finishes while it is open is
   assert.equal(stored().seenReplyAt["bot-1"], replyAt, "leaving never claims a reply the chat didn't show");
 });
 
+const BANK_HANDOFF = {
+  botId: "bot-1",
+  waitId: "wait-h",
+  toolCallId: "tool-h",
+  kind: "action" as const,
+  action: "Enter the 2FA code for your bank",
+  why: "Only you get the code on your phone.",
+  open: { url: "https://bank.example/verify" },
+  source: "tool" as const,
+};
+
+const RUNNING = { kind: "running", submissionId: "s1" } as const;
+
+/** The test DOM does not mount sonner's viewport, so observe the error toasts the person would be shown. */
+function captureErrorToasts() {
+  const shown: string[] = [];
+  const original = toast.error;
+  toast.error = ((message: unknown) => {
+    shown.push(String(message));
+    return "toast";
+  }) as typeof toast.error;
+  return { shown, restore: () => void (toast.error = original) };
+}
+
+const handoffAnswers = (calls: ReadonlyArray<{ channel: string; args: unknown[] }>) =>
+  calls.filter((call) => call.channel === "bots:answerHandoff").map((call) => call.args[0]);
+
+test("a hand-off card waits above the composer, Open asks for its page, and Done answers it once by wait id", async () => {
+  let release: (value: { answered: boolean }) => void = () => undefined;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+    "bots:openHandoff": () => ({ opened: "external" }),
+    "bots:answerHandoff": () => new Promise((resolve) => (release = resolve)),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(within(card).getByText("Your turn: Enter the 2FA code for your bank"));
+  assert.ok(within(card).getByText("Only you get the code on your phone."));
+  const note = screen.getByPlaceholderText("Add a note and send to mark it done");
+  assert.ok(
+    within(card).getByRole("button", { name: "Done" }).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the composer stays, for a note, and Tab reaches it after the card's buttons",
+  );
+
+  fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:openHandoff")?.args, [{ botId: "bot-1", waitId: "wait-h" }]),
+  );
+  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "Done" }) as HTMLButtonElement).disabled, false));
+
+  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+  assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done" }], "a second press waits for the first");
+  await act(async () => release({ answered: true }));
+
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "handoff", handoff: null }));
+  await waitFor(() => assert.equal(document.body.textContent?.includes("Your turn:"), false));
+  act(() =>
+    emitBotTestNotification("bots:live:event", {
+      botId: "bot-1",
+      epoch: "epoch-1",
+      seq: 2,
+      type: "entry",
+      entry: { id: "handoff:tool-h", type: "handoff_result", kind: "action", outcome: "done", action: BANK_HANDOFF.action },
+    }),
+  );
+  await waitFor(() => assert.equal(document.body.textContent?.includes("You did this: Enter the 2FA code for your bank"), true));
+  assert.ok(screen.getByPlaceholderText("Ask Planner"), "the composer asks the Bot again");
+});
+
+test("Skip answers the card as skipped, and a card answered elsewhere says so", async () => {
+  const errors = captureErrorToasts();
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: { ...BANK_HANDOFF, open: undefined } }),
+      "bots:answerHandoff": () => ({ answered: false }),
+    });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    assert.equal(within(card).queryByRole("button", { name: /^Open/u }), null, "no page, no Open");
+    fireEvent.click(within(card).getByRole("button", { name: "Skip" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."]));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "skipped" }]);
+  } finally {
+    errors.restore();
+  }
+});
+
+test("typing while a hand-off waits answers it Done with that note, never as a queued or steering message", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+    "bots:answerHandoff": () => ({ answered: true }),
+    "bots:stop": () => ({ kind: "idle" }),
+  });
+  const box = await screen.findByPlaceholderText("Add a note and send to mark it done");
+  assert.equal(screen.queryByRole("button", { name: "Queue message" }), null, "the note answers the card, so there is no Queue or Steer");
+  fireEvent.change(box, { target: { value: "  Code entered, it said 'verified'.  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+  assert.deepEqual(handoffAnswers(calls), [
+    { botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Code entered, it said 'verified'." },
+  ]);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false, "the note never reaches the Bot as a message of its own");
+  assert.equal(document.querySelector("[data-bot-pending-send]"), null, "nor shows as a message being sent");
+
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
+});
+
+test("a note sent while Open is on its way keeps the card's buttons waiting for the note, so Done can't answer twice", async () => {
+  const errors = captureErrorToasts();
+  try {
+    let opened: (value: { opened: string }) => void = () => undefined;
+    let answered: (value: { answered: boolean }) => void = () => undefined;
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:openHandoff": () => new Promise((resolve) => (opened = resolve)),
+      "bots:answerHandoff": () => new Promise((resolve) => (answered = resolve)),
+    });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    const done = () => within(card).getByRole("button", { name: "Done" }) as HTMLButtonElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
+    await waitFor(() => assert.equal(done().disabled, true));
+    const box = screen.getByPlaceholderText("Add a note and send to mark it done");
+    fireEvent.change(box, { target: { value: "Entered it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+
+    await act(async () => opened({ opened: "external" }));
+    assert.equal(done().disabled, true, "the note is still on its way");
+    fireEvent.click(done());
+    await act(async () => answered({ answered: true }));
+    await waitFor(() => assert.equal(done().disabled, false));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Entered it." }]);
+    assert.deepEqual(errors.shown, [], "no 'already answered' for an answer the person sent once");
+  } finally {
+    errors.restore();
+  }
+});
+
+test("the floating panel's copy of the card waits for a note sent from the composer, so its Done can't answer twice", async () => {
+  const errors = captureErrorToasts();
+  try {
+    let opened: (value: { opened: string }) => void = () => undefined;
+    let answered: (value: { answered: boolean }) => void = () => undefined;
+    const calls = installBotTestIpc({
+      "bots:get": () => botFixture(),
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:openHandoff": () => new Promise((resolve) => (opened = resolve)),
+      "bots:answerHandoff": () => new Promise((resolve) => (answered = resolve)),
+    });
+    // The panel floating over a narrow chat carries the card's buttons; the composer stays below.
+    await mountWithBotRouter(<BotChatRoute botId="bot-1" />, {
+      initialPath: "/bots/bot-1/chat",
+      sidebar: <BotPanelHandoff botId="bot-1" name="Planner" avatar={botFixture().avatar} />,
+    });
+    await waitFor(() => assert.equal(screen.getAllByRole("group", { name: "Planner needs you" }).length, 2));
+    // The panel's copy carries the title and buttons, not the card's reason.
+    const panel = screen.getAllByRole("group", { name: "Planner needs you" }).find((group) => !within(group).queryByText(BANK_HANDOFF.why))!;
+    const done = () => within(panel).getByRole("button", { name: "Done" }) as HTMLButtonElement;
+    fireEvent.click(within(panel).getByRole("button", { name: "Open bank.example" }));
+    await waitFor(() => assert.equal(done().disabled, true));
+    fireEvent.change(screen.getByPlaceholderText("Add a note and send to mark it done"), { target: { value: "Entered it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
+
+    await act(async () => opened({ opened: "external" }));
+    assert.equal(done().disabled, true, "the note from the composer is still on its way");
+    fireEvent.click(done());
+    await act(async () => answered({ answered: true }));
+    await waitFor(() => assert.equal(done().disabled, false));
+    assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done", note: "Entered it." }]);
+    assert.deepEqual(errors.shown, []);
+  } finally {
+    errors.restore();
+  }
+});
+
+test("a note the card could not take stays in the composer", async () => {
+  const errors = captureErrorToasts();
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:answerHandoff": () => ({ answered: false }),
+    });
+    const box = (await screen.findByPlaceholderText("Add a note and send to mark it done")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "Done on my phone." } });
+    fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."], "said once"));
+    assert.equal(handoffAnswers(calls).length, 1);
+    await waitFor(() => assert.equal(box.value, "Done on my phone."));
+  } finally {
+    errors.restore();
+  }
+});
+
+const CREDENTIALS_HANDOFF = {
+  botId: "bot-1",
+  waitId: "wait-c",
+  toolCallId: "tool-c",
+  kind: "action" as const,
+  action: "Enter a password or 2FA code, or change account security",
+  why: "Planner was about to type into the bank's code field.",
+  source: "rule" as const,
+  rule: { id: "locked.credentials", label: "Enter a password or 2FA code, or change account security" },
+};
+
+test("a card that takes a note says the Bot reads it, so a password, code or card number stays out of the chat", async () => {
+  // A money rule's card takes a note too (a payment reference), so it names card numbers.
+  const payment = { ...CREDENTIALS_HANDOFF, waitId: "wait-m", rule: { id: "locked.money", label: "Move money or enter card details" } };
+  for (const handoff of [BANK_HANDOFF, payment]) {
+    await mountChat({ "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff }) });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    assert.ok(
+      within(card).getByText("Planner reads any note you send. Enter passwords, codes and card numbers on the page, never in the chat."),
+      handoff.waitId,
+    );
+    cleanup();
+  }
+});
+
+test("a password-or-code card takes no note: the composer points to the card, and Done answers it without one", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: CREDENTIALS_HANDOFF }),
+    "bots:answerHandoff": () => ({ answered: true }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(
+    screen.getByText("Enter it yourself, then choose Done above. This card takes no note, so a password or code never reaches Planner.", {
+      selector: "[role=status]",
+    }),
+    "the composer says where to answer",
+  );
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  assert.equal(within(card).queryByText(/reads any note you send/u), null, "no note to warn about");
+  const box = screen.getByRole("textbox");
+  fireEvent.change(box, { target: { value: "481516" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(handoffAnswers(calls).length, 0, "the code typed in the chat is never sent");
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-c", outcome: "done" }]));
+});
+
+test("a photo sent while a hand-off waits is refused and kept with the note, and the card stays unanswered", async () => {
+  const errors = captureErrorToasts();
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+      "bots:answerHandoff": () => ({ answered: true }),
+    });
+    // The pasted image reaches the composer the way the preload's attachment reader returns it.
+    (window as unknown as { aidenAPI: Record<string, unknown> }).aidenAPI.attachments = {
+      readClipboardImages: async () => [
+        { id: "img-1", name: "verified.png", mimeType: "image/png", kind: "image", size: 4, data: "AAECAw==" },
+      ],
+    };
+    const box = (await screen.findByPlaceholderText("Add a note and send to mark it done")) as HTMLTextAreaElement;
+    const image = new File([new Uint8Array([0, 1, 2, 3])], "verified.png", { type: "image/png" });
+    fireEvent.paste(box, {
+      clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => image }], getData: () => "" },
+    });
+    await waitFor(() => assert.equal(document.body.textContent?.includes("1 attachment is ready."), true));
+    fireEvent.change(box, { target: { value: "It said verified." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["Send photos after you answer the card."]));
+    assert.equal(handoffAnswers(calls).length, 0, "the card is not answered without the photo");
+    assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+    await waitFor(() => assert.equal(box.value, "It said verified."));
+    assert.ok(screen.getByRole("group", { name: "Planner needs you" }), "the card still waits");
+  } finally {
+    errors.restore();
+  }
+});
+
+const GITHUB_SIGN_IN = {
+  botId: "bot-1",
+  waitId: "wait-s",
+  toolCallId: "tool-s",
+  kind: "sign_in" as const,
+  action: "Sign in to github.com",
+  why: "I need your GitHub account to read your issues.",
+  open: { url: "https://github.com" },
+  origin: "https://github.com",
+  target: "browser" as const,
+  source: "tool" as const,
+};
+
+test("a sign-in card opens the site in the Bot's browser, brings its panel forward, and I'm signed in answers it", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+    "bots:openHandoff": () => ({ opened: "browser" }),
+    "bots:answerHandoff": () => ({ answered: true }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(within(card).getByText("Sign in to github.com for Planner"));
+  const panel = document.getElementById("bot-panel");
+  assert.equal(panel?.getAttribute("data-state"), "closed");
+
+  fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:openHandoff")?.args, [{ botId: "bot-1", waitId: "wait-s" }]),
+  );
+  await waitFor(() => assert.equal(document.getElementById("bot-panel")?.getAttribute("data-state"), "open"));
+
+  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "I’m signed in" }) as HTMLButtonElement).disabled, false));
+  fireEvent.click(within(card).getByRole("button", { name: "I’m signed in" }));
+  await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-s", outcome: "done" }]));
+});
+
+// This DOM lays nothing out, so the chat measures no room beside the panel and the panel floats over it.
+test("a panel floating over the chat carries the sign-in's buttons, so I'm signed in stays in reach", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+    "bots:openHandoff": () => ({ opened: "browser" }),
+    "bots:answerHandoff": () => ({ answered: true }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs you" });
+  fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+  const panel = document.getElementById("bot-panel");
+  assert.ok(panel);
+  await waitFor(() => assert.equal(panel.getAttribute("data-state"), "open"));
+  assert.equal(panel.getAttribute("data-surface-mode"), "tools-floating");
+
+  const inPanel = within(panel).getByRole("group", { name: "Planner needs you" });
+  assert.ok(within(inPanel).getByText("Sign in to github.com for Planner"));
+  fireEvent.click(within(inPanel).getByRole("button", { name: "I’m signed in" }));
+  await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-s", outcome: "done" }]));
+
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "handoff", handoff: null }));
+  await waitFor(() => assert.equal(within(panel).queryByRole("group", { name: "Planner needs you" }), null));
+});
+
+test("a panel docked beside the chat leaves the hand-off to its card, with no second set of buttons", async () => {
+  const measure = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function wide() {
+    return { x: 0, y: 0, top: 0, left: 0, right: 1400, bottom: 900, width: 1400, height: 900, toJSON: () => ({}) } as DOMRect;
+  };
+  try {
+    await mountChat({ "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }) });
+    await screen.findByRole("group", { name: "Planner needs you" });
+    fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+    const panel = document.getElementById("bot-panel");
+    assert.ok(panel);
+    assert.equal(panel.getAttribute("data-state"), "open");
+    assert.equal(panel.getAttribute("data-surface-mode"), "tools-pinned");
+    assert.equal(within(panel).queryByRole("group", { name: "Planner needs you" }), null);
+    assert.equal(screen.getAllByRole("button", { name: "I’m signed in" }).length, 1);
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = measure;
+  }
+});
+
+test("while a sign-in waits the composer takes no note, so a password typed there never reaches the Bot", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+    "bots:answerHandoff": () => ({ answered: true }),
+    "bots:stop": () => ({ kind: "idle" }),
+  });
+  await screen.findByRole("group", { name: "Planner needs you" });
+  assert.ok(
+    screen.getByText("Sign in for Planner with Open sign-in above, then choose I’m signed in.", { selector: "[role=status]" }),
+    "the composer says where to answer",
+  );
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  const box = screen.getByRole("textbox");
+  fireEvent.change(box, { target: { value: "hunter2" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(handoffAnswers(calls).length, 0);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
+});
+
+test("a sign-in page that couldn't open says so, and the card keeps waiting", async () => {
+  const errors = captureErrorToasts();
+  try {
+    await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
+      "bots:openHandoff": () => ({ opened: "none" }),
+    });
+    const card = await screen.findByRole("group", { name: "Planner needs you" });
+    fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["Aiden couldn’t open the sign-in page."]));
+    assert.equal(document.getElementById("bot-panel")?.getAttribute("data-state"), "closed");
+    assert.ok(screen.getByRole("group", { name: "Planner needs you" }));
+  } finally {
+    errors.restore();
+  }
+});
+
 test("a sent message shows at once as a pending echo, which settles when its entry arrives", async () => {
   let answer: (result: unknown) => void = () => undefined;
   const calls = await mountChat({
@@ -1113,4 +1508,3 @@ test("Retry hides the failed card and echoes the message at once, under one requ
   const [first, second] = calls.filter((call) => call.channel === "bots:send").map((call) => (call.args[0] as { requestId: string }).requestId);
   assert.equal(first, second, "the same failed turn retries under one request id");
 });
-

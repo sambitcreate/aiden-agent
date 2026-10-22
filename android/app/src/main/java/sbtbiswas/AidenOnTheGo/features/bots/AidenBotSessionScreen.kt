@@ -38,6 +38,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -49,6 +52,7 @@ import sbtbiswas.AidenOnTheGo.features.chat.AidenQuestionCard
 import sbtbiswas.AidenOnTheGo.features.chat.AidenRunInputSplitButton
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
@@ -173,7 +177,34 @@ private fun AidenBotSessionContent(
         controller.start()
         onDispose { controller.stopFollowing() }
     }
+    // The Mac shapes the feed by the grants this phone holds when it opens (cards, Chat activity,
+    // hand-offs and the paused state). This chat can open from the pairing's saved features while
+    // it connects, before this connection has negotiated a grant (`bot:handoffs` after the Mac
+    // updates); once `/server` has answered, every grant is negotiated and saved, and a feed that
+    // opened without one opens again.
+    val feedOpenedWith = remember(controller) { aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) }
+    val grantsSettled = serverInfo != null
+    LaunchedEffect(controller, grantsSettled) {
+        if (grantsSettled && aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) != feedOpenedWith) {
+            controller.reopenFeed()
+        }
+    }
     val ui by controller.state.collectAsStateWithLifecycle()
+    // Revision 37 (G24): a hand-off that arrives while the app is in the background, with this
+    // chat still open behind it, posts one local notification that opens the chat.
+    val appContext = LocalContext.current.applicationContext
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val handoffNotifier = remember(appContext) { AidenScheduledRunNotifier(appContext) }
+    val botName by rememberUpdatedState(identity.name)
+    DisposableEffect(controller, lifecycleOwner) {
+        controller.onHandoffArrived = { handoff ->
+            val instanceId = coordinator.activeInstanceId
+            if (instanceId != null && !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                handoffNotifier.postBotHandoff(instanceId, botId, botName, handoff)
+            }
+        }
+        onDispose { controller.onHandoffArrived = null }
+    }
     val activitySupported = activitySupportedNow
     LaunchedEffect(controller, activitySupported) { controller.setActivitySupported(activitySupported) }
     // The wording comes from the Bot's detail: cached first, then the Mac's. Only a Mac that
@@ -435,6 +466,21 @@ private fun AidenBotSessionContent(
                     )
                 }
                 item(key = "status") { AidenBotStatusLine(ui) }
+                // Revision 37: a Bot the person paused. Resume lifts it; a reply it cut short then
+                // shows the interrupted card below.
+                if (ui.isPaused) {
+                    item(key = "paused") {
+                        AidenBotPausedCard(
+                            botName = identity.name,
+                            busy = ui.isUnpausing,
+                            canResume = aidenBotPausedChatOffersResume(
+                                canWriteBots = coordinator.installationStore.activeInstallation?.canWriteBots == true,
+                                ui = ui
+                            ),
+                            onResume = { scope.launch { controller.unpause() } }
+                        )
+                    }
+                }
                 if (ui.isInterrupted) {
                     item(key = "interrupted") {
                         AidenBotInterruptedCard(
@@ -468,6 +514,20 @@ private fun AidenBotSessionContent(
                         }
                     }
                 }
+                ui.handoff?.let { handoff ->
+                    item(key = "handoff-${handoff.waitId}") {
+                        AidenBotHandoffCard(
+                            handoff = handoff,
+                            canAnswer = !ui.isAnsweringHandoff,
+                            isFinishing = ui.isFinishingHandoffOnMac,
+                            macOpened = ui.handoffMacPrompt?.takeIf { it.waitId == handoff.waitId }?.opened,
+                            // Done without a note; the composer's Send is Done with one (iOS parity).
+                            onDone = { scope.launch { controller.answerHandoff(AidenBotHandoffOutcome.DONE) } },
+                            onSkip = { scope.launch { controller.answerHandoff(AidenBotHandoffOutcome.SKIPPED) } },
+                            onFinishOnMac = { scope.launch { controller.finishHandoffOnMac() } }
+                        )
+                    }
+                }
                 if (ui.needsModel) {
                     item(key = "needs-model") { AidenBotNeedsModelCard(busy = openingAdvanced, onSetUp = ::openAdvanced) }
                 }
@@ -479,22 +539,35 @@ private fun AidenBotSessionContent(
                 }
             }
             AidenBotConnectionHintRow(aidenBotConnectionHint(ui, System.currentTimeMillis()), onTryAgain = { scope.launch { controller.refetch() } })
+            val composerMode = ui.composerMode
             AidenBotSessionComposer(
                 draft = draft,
                 onDraftChange = { draft = it.take(AidenBotSessionWire.MAX_MESSAGE_LENGTH) },
-                placeholder = aidenBotChatPlaceholder(identity.name),
-                enabled = ui.canSend,
-                busy = ui.offersBusyModes,
+                placeholder = when (composerMode) {
+                    AidenBotComposerMode.MESSAGE -> aidenBotChatPlaceholder(identity.name)
+                    AidenBotComposerMode.HANDOFF_NOTE -> stringResource(R.string.bot_handoff_note_placeholder)
+                    AidenBotComposerMode.HELD_FOR_SIGN_IN -> stringResource(R.string.bot_handoff_sign_in_placeholder)
+                    AidenBotComposerMode.PAUSED -> stringResource(R.string.bot_paused_placeholder, identity.name)
+                },
+                enabled = ui.composerEnabled,
+                // A hand-off note is one answer, never Steer or Queue.
+                busy = ui.offersBusyModes && composerMode == AidenBotComposerMode.MESSAGE,
                 busyMode = busyMode,
                 onPickBusyMode = { busyMode = it },
                 onSend = {
                     // The draft clears at once and the bubble shows (R14); a refused message comes back.
                     val text = draft
-                    val mode = if (ui.offersBusyModes) busyMode else null
                     draft = ""
-                    justSent = true
-                    scope.launch {
-                        if (!controller.send(text, mode) && draft.isEmpty()) draft = text
+                    if (composerMode == AidenBotComposerMode.HANDOFF_NOTE) {
+                        scope.launch {
+                            if (!controller.answerHandoff(AidenBotHandoffOutcome.DONE, text) && draft.isEmpty()) draft = text
+                        }
+                    } else {
+                        val mode = if (ui.offersBusyModes) busyMode else null
+                        justSent = true
+                        scope.launch {
+                            if (!controller.send(text, mode) && draft.isEmpty()) draft = text
+                        }
                     }
                 }
             )

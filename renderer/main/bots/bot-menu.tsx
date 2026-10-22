@@ -1,11 +1,11 @@
 // The one Bot ••• menu (spec §10), for the chat header, sidebar rows (hover and
 // right-click) and the pinned Bot: Profile, Files, Memory, Routines, Advanced,
-// Pin to top/Unpin, then Delete Bot. Files, Memory and Routines open the side
-// panel on that tab, beside that Bot's chat.
+// Pin to top/Unpin, Pause Bot/Resume Bot, then Delete Bot. Files, Memory and
+// Routines open the side panel on that tab, beside that Bot's chat.
 
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { CalendarClock, Ellipsis, Files, Pin, PinOff, SlidersHorizontal, Trash2, UserRound } from "lucide-react";
+import { CalendarClock, Ellipsis, Files, Pause, Pin, PinOff, Play, SlidersHorizontal, Trash2, UserRound } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import {
   Button,
@@ -19,14 +19,26 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  toast,
 } from "../../components/ui";
 import { botChatPath, botChatRouteBotId } from "../../lib/bot-routes";
+import { botsApi } from "../../lib/ipc";
+import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { cn } from "../../lib/ui-utils";
 import type { BotDefinition } from "../../shared/bots";
 import { useBotPanelActions } from "./bot-panel-context";
 import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 
-export type BotMenuAction = "profile" | "files" | "memory" | "routines" | "advanced" | "pin" | "delete";
+export type BotMenuAction =
+  | "profile"
+  | "files"
+  | "memory"
+  | "routines"
+  | "advanced"
+  | "pin"
+  | "pause"
+  | "unpause"
+  | "delete";
 
 const PANEL_ACTIONS: ReadonlySet<BotMenuAction> = new Set(["files", "memory", "routines"]);
 
@@ -67,6 +79,21 @@ export function useBotMenuFocusGuard(): BotMenuFocusGuard {
   );
 }
 
+/**
+ * Pause the Bot (its running turn stops where it is and nothing new runs) or
+ * lift the pause. The Bot's state reaches every window through `bots:changed`.
+ */
+export async function setBotPaused(bot: Pick<BotDefinition, "id" | "name">, paused: boolean): Promise<void> {
+  try {
+    if (paused) await botsApi.pause(bot.id);
+    else await botsApi.unpause(bot.id);
+  } catch (error) {
+    toast.error(
+      userFacingErrorMessage(error, paused ? `Aiden couldn’t pause ${bot.name}.` : `Aiden couldn’t resume ${bot.name}.`),
+    );
+  }
+}
+
 /** The ••• button a menu item belongs to, which the panel returns focus to when it closes. */
 function menuTrigger(item: HTMLElement): HTMLElement | null {
   const id = item.closest('[role="menu"]')?.getAttribute("aria-labelledby");
@@ -75,6 +102,7 @@ function menuTrigger(item: HTMLElement): HTMLElement | null {
 
 export function BotMenuItems({
   pinned,
+  paused = false,
   Item,
   Separator,
   focusGuard,
@@ -82,6 +110,8 @@ export function BotMenuItems({
   onAction,
 }: {
   pinned: boolean;
+  /** The person paused this Bot: the item offers Resume instead of Pause. */
+  paused?: boolean;
   Item: typeof DropdownMenuItem | typeof ContextMenuItem;
   Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator;
   /** The guard whose `onCloseAutoFocus` is on this menu's content. */
@@ -125,6 +155,10 @@ export function BotMenuItems({
         {pinned ? <PinOff className={MENU_ICON} /> : <Pin className={MENU_ICON} />}
         {pinned ? "Unpin" : "Pin to top"}
       </Item>
+      <Item onSelect={choose(paused ? "unpause" : "pause")}>
+        {paused ? <Play className={MENU_ICON} /> : <Pause className={MENU_ICON} />}
+        {paused ? "Resume Bot" : "Pause Bot"}
+      </Item>
       <Separator />
       <Item color="status-red" onSelect={choose("delete")}>
         <Trash2 className={MENU_ICON} />
@@ -155,6 +189,7 @@ function openContextMenuFromKeyboard(event: React.KeyboardEvent<HTMLElement>): v
 export function BotRowMenus({
   bot,
   pinned,
+  paused = false,
   rowRef,
   moreClassName,
   onAction,
@@ -162,6 +197,7 @@ export function BotRowMenus({
 }: {
   bot: Pick<BotDefinition, "name">;
   pinned: boolean;
+  paused?: boolean;
   rowRef: React.RefObject<HTMLElement | null>;
   moreClassName?: string;
   onAction(action: BotMenuAction, returnFocus?: HTMLElement | null): void;
@@ -178,6 +214,7 @@ export function BotRowMenus({
         <ContextMenuContent onCloseAutoFocus={contextGuard.onCloseAutoFocus}>
           <BotMenuItems
             pinned={pinned}
+            paused={paused}
             Item={ContextMenuItem}
             Separator={ContextMenuSeparator}
             focusGuard={contextGuard}
@@ -204,6 +241,7 @@ export function BotRowMenus({
         <DropdownMenuContent align="end" onCloseAutoFocus={moreGuard.onCloseAutoFocus}>
           <BotMenuItems
             pinned={pinned}
+            paused={paused}
             Item={DropdownMenuItem}
             Separator={DropdownMenuSeparator}
             focusGuard={moreGuard}
@@ -239,6 +277,10 @@ export function useBotMenuActions(onDelete: (bot: BotDefinition) => void) {
           return;
         case "pin":
           botSidebarPreferenceActions.togglePin(bot.id);
+          return;
+        case "pause":
+        case "unpause":
+          void setBotPaused(bot, action === "pause");
           return;
         case "delete":
           onDelete(bot);

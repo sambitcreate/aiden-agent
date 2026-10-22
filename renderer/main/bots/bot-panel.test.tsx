@@ -106,7 +106,7 @@ test("the Bot panel comes back open on its last tab after a relaunch, under its 
 });
 
 test("a saved tab this build doesn't know, or a garbled open flag, opens closed on Activity", () => {
-  localStorage.setItem(BOT_PANEL_TAB_KEY, "browser");
+  localStorage.setItem(BOT_PANEL_TAB_KEY, "sketchbook");
   localStorage.setItem(BOT_PANEL_OPEN_KEY, "yes");
   render(
     <BotPanelProvider>

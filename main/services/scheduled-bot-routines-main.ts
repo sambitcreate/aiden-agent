@@ -41,6 +41,7 @@ export const botRoutineService = createBotRoutineService({
     const bot = await botApplicationService.get(botId);
     return bot !== null && bot.id === botId;
   },
+  isPaused: async (botId) => (await import("./bot-pause-main.js")).isBotPaused(botId),
   defaultTimezone: systemTimezone,
   // Routine changes ride the existing Bot invalidation channel so Bot views refresh.
   notifyChanged: (payload) => ipcMain.broadcast("bots:changed", payload),

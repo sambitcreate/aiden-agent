@@ -174,10 +174,17 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("This routine has no message.");
     if (signal.aborted) throw new Error("Routine was cancelled.");
-    const state = recovering ? { kind: "idle" as const } : await abortable(ports.state(task.botId), signal);
-    // A paused (interrupted) Bot turn belongs to the person: a routine must
-    // neither resume nor dismiss it, so the firing is recorded and dropped.
-    if (state.kind === "interrupted") {
+    const state = await abortable(ports.state(task.botId), signal);
+    // A new fire cannot start while the person has paused the whole Bot.
+    // An admitted fire remains pending so its reply can be observed after Resume.
+    if (state.kind === "paused") {
+      if (trigger.kind === "automatic" && existingSubmissionId)
+        throw new RoutineOutcomeUnknown("This Bot is paused by the person.");
+      return { result: "skipped", reason: "paused_by_person", output: "", surface: false };
+    }
+    // A routine must not resume or dismiss an interrupted turn. A previously
+    // admitted fire can still be observed by its Pi submission ID.
+    if (state.kind === "interrupted" && !existingSubmissionId) {
       return { result: "skipped", reason: "bot_paused", output: "", surface: false };
     }
     if (state.kind === "needs_model") {
@@ -203,9 +210,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
           signal,
         );
       } catch (error) {
-        // The Bot was interrupted between the state check and the send.
-        if ((error as { reason?: unknown } | null)?.reason === "bot_paused") {
-          return { result: "skipped", reason: "bot_paused", output: "", surface: false };
+        // The Bot was interrupted or paused between the state check and send.
+        const reason = (error as { reason?: unknown } | null)?.reason;
+        if (reason === "bot_paused" || reason === "paused_by_person") {
+          return { result: "skipped", reason, output: "", surface: false };
         }
         if (trigger.kind === "automatic") {
           // A failed send may have committed in Pi before its response was lost.
@@ -234,6 +242,13 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     }
     if (outcome.kind === "failed") throw new Error(outcome.error);
     if (outcome.kind === "interrupted") {
+      // Paused mid-run: the person stopped it on purpose, so nothing surfaces.
+      // Automatic fires remain pending so Resume can finish this same turn.
+      const after = await ports.state(task.botId).catch(() => undefined);
+      if (after?.kind === "paused") {
+        if (trigger.kind === "automatic") throw new RoutineOutcomeUnknown("This Bot is paused by the person.");
+        return { result: "skipped", reason: "paused_by_person", output: "", surface: false };
+      }
       if (recovering || trigger.kind === "catch_up")
         return { result: "skipped", reason: "bot_paused", output: "", surface: false };
       throw new Error("The Bot was interrupted while working on this routine.");
@@ -432,6 +447,13 @@ export interface BotRoutineDeleteInput {
   expectedUpdatedAt?: number;
 }
 
+/** Run now, from the "skipped while paused" notice. */
+export interface BotRoutineRunNowInput {
+  botId: string;
+  routineId: string;
+  expectedUpdatedAt?: number;
+}
+
 function invalid(label: string): never {
   throw new Error(`Invalid ${label}.`);
 }
@@ -507,6 +529,25 @@ export function parseBotRoutineUpdate(value: unknown): BotRoutineUpdateInput {
   };
 }
 
+export function parseBotRoutineRunNow(value: unknown): BotRoutineRunNowInput {
+  const fields = record(value, ["botId", "routineId"], ["expectedUpdatedAt"], "routine run");
+  if (
+    fields.expectedUpdatedAt !== undefined &&
+    (typeof fields.expectedUpdatedAt !== "number" ||
+      !Number.isSafeInteger(fields.expectedUpdatedAt) ||
+      fields.expectedUpdatedAt < 0)
+  ) {
+    invalid("routine revision");
+  }
+  return {
+    botId: parseBotRoutineBotId(fields.botId),
+    routineId: routineId(fields.routineId),
+    ...(fields.expectedUpdatedAt !== undefined
+      ? { expectedUpdatedAt: fields.expectedUpdatedAt as number }
+      : {}),
+  };
+}
+
 export function parseBotRoutineDelete(value: unknown): BotRoutineDeleteInput {
   const fields = record(value, ["botId", "id"], ["expectedUpdatedAt"], "routine removal");
   if (
@@ -537,8 +578,11 @@ export interface BotRoutineServiceDependencies {
       options?: { expectedUpdatedAt?: number },
     ): Promise<ScheduledTask>;
     remove(id: string, options?: { expectedUpdatedAt?: number }): Promise<void>;
+    runNow(id: string, options?: { runId?: string; expectedUpdatedAt?: number }): Promise<ScheduledRun>;
   };
   botExists(botId: string): Promise<boolean>;
+  /** Whether the person paused the Bot; throws when that can't be read, so Run now refuses. */
+  isPaused?(botId: string): Promise<boolean>;
   defaultTimezone(): string;
   notifyChanged(payload: { botId: string; routineId: string; removed?: boolean }): void;
   /** A routine was deleted: forget what belonged to it alone (its notes). */
@@ -695,6 +739,31 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
       return projectBotRoutine(task as ScheduledTask & { botId: string }, now());
     },
 
+    /**
+     * Start one manual run of the Bot's own routine and return its run id at
+     * once. The run itself reports like any routine run (its turn, notifications
+     * and run record). A paused Bot refuses it: the person's own Run now is
+     * never recorded as a fire the pause skipped.
+     */
+    async runNow(input: BotRoutineRunNowInput): Promise<{ runId: string }> {
+      await requireBot(input.botId);
+      const existing = await owned(input.botId, input.routineId);
+      if (await dependencies.isPaused?.(input.botId)) throw new Error("This Bot is paused. Resume it to continue.");
+      // Checked here: the scheduler checks it only once the run is under way,
+      // after this call has already answered with a run id.
+      if (input.expectedUpdatedAt !== undefined && existing.updatedAt !== input.expectedUpdatedAt) {
+        throw new Error("This routine changed. Refresh it before trying again.");
+      }
+      const runId = randomUUID();
+      // Throws at once when the routine is already running.
+      const completion = dependencies.service.runNow(existing.id, {
+        runId,
+        ...(input.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: input.expectedUpdatedAt } : {}),
+      });
+      void completion.catch(() => undefined);
+      return { runId };
+    },
+
     async delete(input: BotRoutineDeleteInput): Promise<void> {
       const existing = await owned(input.botId, input.id);
       await dependencies.service.remove(existing.id, {
@@ -783,8 +852,39 @@ export function createBotRoutineCatchUpTrigger(catchUp: (botId: string) => void)
     if (state.kind === "unavailable") return;
     const previous = last.get(botId);
     last.set(botId, state.kind);
-    if (state.kind === "interrupted") return;
-    if (previous !== undefined && previous !== "interrupted") return;
+    // A person-paused Bot is held like an interrupted one: nothing catches up
+    // until it runs again. Its own `paused_by_person` skips never catch up.
+    if (state.kind === "interrupted" || state.kind === "paused") return;
+    if (previous !== undefined && previous !== "interrupted" && previous !== "paused") return;
     catchUp(botId);
   };
+}
+
+// ---------------------------------------------------------------------------
+// Skipped while paused (plan §7.1, decision 4a)
+// ---------------------------------------------------------------------------
+
+/**
+ * The routines of `botId` that fired while it was paused (since `since`),
+ * with how many fires each skipped, for the notice written on unpause. The
+ * run records are the only state; routines with no such skip are left out.
+ */
+export async function countSkippedWhilePaused(
+  store: { list(): Promise<ScheduledTask[]>; runs(id: string): Promise<ScheduledRun[]> },
+  botId: string,
+  since: number,
+): Promise<{ routineId: string; name: string; count: number }[]> {
+  const skipped: { routineId: string; name: string; count: number }[] = [];
+  const tasks = (await store.list())
+    .filter((task) => task.botId === botId)
+    .sort((a, b) => a.createdAt - b.createdAt);
+  for (const task of tasks) {
+    let count = 0;
+    for (const run of await store.runs(task.id)) {
+      if (run.startedAt < since) continue;
+      if (run.result === "skipped" && run.reason === "paused_by_person") count += 1;
+    }
+    if (count > 0) skipped.push({ routineId: task.id, name: task.name?.trim() || "Routine", count });
+  }
+  return skipped;
 }

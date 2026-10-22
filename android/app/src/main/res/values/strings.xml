@@ -501,6 +501,11 @@
     <string name="bot_profile_choose_photo">Choose from Gallery</string>
     <string name="bot_profile_remove_photo">Remove photo</string>
     <string name="bot_profile_subtitle_placeholder">What it helps with</string>
+    <!-- Contract revision 37 (bot:handoffs): Pause and Resume in the profile menu, shared with iOS and desktop. -->
+    <string name="bot_menu_pause">Pause Bot</string>
+    <string name="bot_menu_resume">Resume Bot</string>
+    <string name="bot_profile_pause_failed">%1$s wasn’t paused. Please try again.</string>
+    <string name="bot_profile_resume_failed">%1$s wasn’t resumed. Please try again.</string>
 
     <!-- Bots: character -->
     <string name="bot_character_title">Character</string>
@@ -602,6 +607,9 @@
 
     <!-- Bots: routine notifications -->
     <string name="notification_bot_routine_body">%1$s: %2$s</string>
+    <!-- A Bot handed a step back while its chat wasn't on screen (contract revision 37). -->
+    <string name="notification_bot_handoff_action">Handed you a step</string>
+    <string name="notification_bot_handoff_sign_in">Needs you to sign in</string>
 
     <!-- Bots: advanced -->
     <string name="bot_advanced_title">Advanced</string>
@@ -706,6 +714,19 @@
     <string name="bot_session_check_mac">Check your Mac to finish.</string>
     <string name="bot_session_finish_on_mac">Finish on your Mac</string>
     <string name="bot_session_send">Send</string>
+    <!-- Bots: hand-offs and pause (contract revision 37), copy shared with iOS and desktop -->
+    <string name="bot_handoff_title">Your turn: %1$s</string>
+    <string name="bot_handoff_done">Done</string>
+    <string name="bot_handoff_skip">Skip</string>
+    <string name="bot_handoff_open">Open</string>
+    <string name="bot_handoff_open_host">Open %1$s</string>
+    <string name="bot_handoff_note_placeholder">Add a note and send to mark it done</string>
+    <string name="bot_handoff_sign_in_placeholder">Finish signing in on your Mac, or skip it.</string>
+    <string name="bot_handoff_mac_opened">Finish signing in on your Mac.</string>
+    <string name="bot_handoff_mac_closed">Open Aiden on your Mac to finish signing in.</string>
+    <string name="bot_paused_title">%1$s is paused.</string>
+    <string name="bot_paused_detail">%1$s won’t reply or run routines until you resume it.</string>
+    <string name="bot_paused_placeholder">%1$s is paused</string>
     <string name="bot_files_connect">Connect to your Mac to see files.</string>
     <string name="bot_files_unavailable">Files aren’t available for this Bot right now.</string>
     <string name="bot_files_loading">Loading files</string>

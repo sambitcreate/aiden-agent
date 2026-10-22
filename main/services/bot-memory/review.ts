@@ -6,8 +6,10 @@
 // inputs, counted from the transcript itself (so the count survives crashes)
 // since the later of the last `aiden.memory-review` entry and the last
 // successful in-turn `bot_memory` result. Routine and self-intro inputs never
-// count. A run always ends with an `aiden.memory-review` marker, even a failed
-// one, so a failing model backs off another 10 inputs.
+// count. A run ends with an `aiden.memory-review` marker, even a failed one,
+// so a failing model backs off another 10 inputs; a cancelled run (pause,
+// delete, shutdown) writes none. The marker is appended to the transcript,
+// never submitted, so it cannot start a paused or interrupted Bot's turn.
 //
 // Provenance: which inputs the person typed is read from the transcript's own
 // history, never from whoever is running now. Each routine or self-intro
@@ -504,7 +506,11 @@ export interface BotMemoryReview {
   afterReply(botId: string): void;
   /** Check (and maybe review) now. */
   runNow(botId: string): Promise<BotMemoryReviewOutcome>;
-  /** Stop a pending or running review (the Bot is being deleted). */
+  /**
+   * Stop a pending or running review (the Bot is paused or being deleted). A
+   * running review writes no marker after this, and no marker ever starts
+   * the Bot's scheduler.
+   */
   cancel(botId: string): void;
   shutdown(): void;
 }
@@ -517,9 +523,22 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
   const CANCELLED = new Error("The memory review was cancelled.");
   let closed = false;
 
-  async function writeMarker(botId: string, data: BotMemoryReviewEntryData): Promise<void> {
+  /**
+   * The run's watermark. Appended, never submitted: a write submission starts
+   * the Bot's scheduler, which would run a turn the person paused or that is
+   * waiting for Resume. A cancelled run (pause, delete, shutdown) writes
+   * nothing: the check runs again once the conversation is in hand, right
+   * before the append. False when cancelled.
+   */
+  async function writeMarker(botId: string, controller: AbortController, data: BotMemoryReviewEntryData): Promise<boolean> {
+    if (controller.signal.aborted) return false;
     const conversation = await deps.conversation(botId);
-    await conversation.submit({ type: "write", entry: { kind: BOT_MEMORY_REVIEW_ENTRY_KIND, data: { ...data } } }, BACKGROUND_CONTEXT);
+    if (controller.signal.aborted) return false;
+    await conversation.commit(
+      (tx) => tx.appendEntry(conversation.id, { kind: BOT_MEMORY_REVIEW_ENTRY_KIND, data: { ...data } }),
+      BACKGROUND_CONTEXT,
+    );
+    return true;
   }
 
   async function review(botId: string, controller: AbortController): Promise<BotMemoryReviewOutcome> {
@@ -551,15 +570,22 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
         // Access changed: stop here. A marker records only what was already saved;
         // with nothing saved, the next reply tries again once access is back.
         if (error instanceof BotMemoryAuthorityLostError) {
-          if (error.added > 0) await writeMarker(botId, { source: "review", added: error.added, targets: error.targets });
+          if (error.added > 0 && !(await writeMarker(botId, controller, { source: "review", added: error.added, targets: error.targets }))) {
+            return { kind: "aborted" };
+          }
           return { kind: "revoked", added: error.added, targets: error.targets };
         }
         // A model error or the timeout still writes the marker, so the next try waits another interval.
         deps.onError?.(botId, error);
-        await writeMarker(botId, { source: "review", added: 0, targets: [], failed: true });
+        if (!(await writeMarker(botId, controller, { source: "review", added: 0, targets: [], failed: true }))) {
+          return { kind: "aborted" };
+        }
         return { kind: "failed" };
       }
-      await writeMarker(botId, { source: "review", added: result.added, targets: result.targets });
+      // Cancelled once the answer was in (a pause): no marker, so the window is reviewed again later.
+      if (!(await writeMarker(botId, controller, { source: "review", added: result.added, targets: result.targets }))) {
+        return { kind: "aborted" };
+      }
       return { kind: "reviewed", added: result.added, targets: result.targets };
     } catch (error) {
       // Revoked before the run started (while reading the transcript).

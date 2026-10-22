@@ -5,11 +5,13 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, FileText, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleSlash, FileText, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
+import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
@@ -32,17 +34,25 @@ import {
   type BotTranscriptEntry,
 } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
+import {
+  BOT_HANDOFF_NOTE_MAX_CHARS,
+  botHandoffTakesNote,
+  type BotHandoffOutcome,
+  type BotPendingHandoff,
+} from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
+import { BotPausedCard, botPausedText } from "./bot-paused-card";
 import { BotActivityRecap } from "./bot-activity-recap";
 import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { useBotMenuActions } from "./bot-menu";
 import { useBotPanelActions } from "./bot-panel-context";
+import { useBotHandoffActions } from "./use-bot-handoff-actions";
 import { botSidebarPreferenceActions, useIsBotPinned } from "./use-bot-sidebar-preferences";
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
@@ -305,6 +315,32 @@ function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
   );
 }
 
+/** The person's answer to a hand-off card, on their side of the chat: what they did, then their note. */
+function BotHandoffResultBubble({
+  outcome,
+  signedIn,
+  text,
+  note,
+}: {
+  outcome: BotHandoffOutcome;
+  signedIn: boolean;
+  text: string;
+  note?: string;
+}) {
+  const Icon = outcome === "skipped" ? CircleSlash : signedIn ? LogIn : CircleCheck;
+  return (
+    <div className="flex justify-end" data-bot-handoff-result={outcome}>
+      <div className="flex max-w-[80%] select-text items-start gap-2 rounded-2xl bg-control px-4 py-2.5">
+        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-secondary" />
+        <div className="min-w-0 [overflow-wrap:anywhere]">
+          <p className="text-regular text-primary">{text}</p>
+          {note ? <p className="mt-0.5 whitespace-pre-wrap text-small text-secondary">{note}</p> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const QUEUED_PREVIEW_CHARS = 40;
 
 /** A follow-up waiting for the running turn: a faded bubble surface, "Queued", and Remove when it can be withdrawn. */
@@ -420,6 +456,7 @@ export function TranscriptEntries({
   onReply,
   onRetry,
   onOpenMemory,
+  onRunRoutine,
   onRespondToProposal,
   connectLabel,
   connecting,
@@ -439,6 +476,8 @@ export function TranscriptEntries({
   onReply(text: string): void;
   onRetry(failedId: string, text: string): void;
   onOpenMemory?(): void;
+  /** Run now on a routine skipped while paused; rejects when it didn't start. Absent where routines can't run. */
+  onRunRoutine?(routineId: string): Promise<void>;
   onRespondToProposal?(
     proposalId: string,
     decision: BotRoutineProposalDecision,
@@ -457,6 +496,23 @@ export function TranscriptEntries({
             return (
               <BotMessageActions key={row.id} text={row.text} from="You" align="end" onReply={onReply}>
                 <SafeMessageBubble role="user" content={row.text} showCopy={false} />
+              </BotMessageActions>
+            );
+          case "handoff_result":
+            return (
+              <BotMessageActions
+                key={row.id}
+                text={row.note ? `${row.text}\n${row.note}` : row.text}
+                from="You"
+                align="end"
+                onReply={onReply}
+              >
+                <BotHandoffResultBubble
+                  outcome={row.outcome}
+                  signedIn={row.signedIn}
+                  text={row.text}
+                  {...(row.note ? { note: row.note } : {})}
+                />
               </BotMessageActions>
             );
           case "routine":
@@ -535,6 +591,8 @@ export function TranscriptEntries({
             );
           case "memory_update":
             return onOpenMemory ? <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} /> : null;
+          case "routines_skipped":
+            return onRunRoutine ? <RoutinesSkippedCard key={row.id} routines={row.routines} onRunNow={onRunRoutine} /> : null;
           case "routine_proposal":
             return onRespondToProposal ? (
               <RoutineProposalCard
@@ -575,11 +633,12 @@ export function BotChatPane({ botId }: { botId: string }) {
   const menuAction = useBotMenuActions(() => setDeleteOpen(true));
   const [retrying, setRetrying] = React.useState(false);
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
-  // The paused card leaves the moment Resume or Dismiss is clicked and comes
-  // back only if that request fails; `pausedRequestIds` keeps one request id
-  // per paused turn so a second click after a failure replays, never doubles.
-  const [hiddenPausedSubmission, setHiddenPausedSubmission] = React.useState<string | null>(null);
-  const pausedRequestIds = React.useRef(new Map<string, string>());
+  // The interrupted card leaves the moment Resume or Dismiss is clicked and
+  // comes back only if that request fails; `interruptedRequestIds` keeps one
+  // request id per interrupted turn so a second click after a failure replays,
+  // never doubles. A Bot the person paused shows BotPausedCard instead.
+  const [hiddenInterruptedSubmission, setHiddenInterruptedSubmission] = React.useState<string | null>(null);
+  const interruptedRequestIds = React.useRef(new Map<string, string>());
   // Sends show at once as pending echoes, each under one request id. A send
   // that failed keeps its id, so the same words sent again are deduplicated by
   // main instead of delivered twice; Retry reuses one id per failed turn.
@@ -619,15 +678,17 @@ export function BotChatPane({ botId }: { botId: string }) {
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
   React.useEffect(() => {
-    // The card hides for one paused turn; a new state (running, idle, or a later pause) clears that.
-    if (hiddenPausedSubmission && (state?.kind !== "interrupted" || state.submissionId !== hiddenPausedSubmission)) {
-      setHiddenPausedSubmission(null);
+    // The card hides for one interrupted turn; any other state (running, idle,
+    // paused by the person, or a later interruption) clears that.
+    if (hiddenInterruptedSubmission && (state?.kind !== "interrupted" || state.submissionId !== hiddenInterruptedSubmission)) {
+      setHiddenInterruptedSubmission(null);
     }
-  }, [hiddenPausedSubmission, state]);
+  }, [hiddenInterruptedSubmission, state]);
 
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
+  const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
@@ -660,6 +721,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             <BotChatActions
               bot={current}
               pinned={pinned}
+              paused={state?.kind === "paused"}
               onAction={(action, returnFocus) => menuAction(current, action, returnFocus)}
             />
           </>
@@ -673,6 +735,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         state?.kind,
         approvals.prompts.length,
         snapshot?.question?.waitId,
+        snapshot?.handoff?.waitId,
         snapshot?.activity?.phase,
         snapshot?.queued?.length ?? 0,
         pendingSends.length,
@@ -733,6 +796,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   }
 
   const question = snapshot.question;
+  const handoff = snapshot.handoff ?? null;
+  const signInWaits = handoff?.kind === "sign_in";
+  // A sign-in or a password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
+  const noteRefused = signInWaits || (handoff !== null && !botHandoffTakesNote(handoff));
   const chatActivity = resolveBotChatActivity(current.chatActivity);
   // While the reply's visible words stream, the words are the signal (§5.2). The
   // partial text can outlast narration into a tool call, so a running step keeps the line.
@@ -792,34 +859,34 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  /** One request id per paused turn and action, so a retry after a failure replays instead of doubling. */
-  const pausedRequestId = (action: "resume" | "dismiss", submissionId: string) => {
+  /** One request id per interrupted turn and action, so a retry after a failure replays instead of doubling. */
+  const interruptedRequestId = (action: "resume" | "dismiss", submissionId: string) => {
     const key = `${action}:${submissionId}`;
-    const existing = pausedRequestIds.current.get(key);
+    const existing = interruptedRequestIds.current.get(key);
     if (existing) return existing;
     const minted = crypto.randomUUID();
-    pausedRequestIds.current.set(key, minted);
+    interruptedRequestIds.current.set(key, minted);
     return minted;
   };
 
-  const paused = async (action: "resume" | "dismiss") => {
-    if (state?.kind !== "interrupted" || hiddenPausedSubmission) return;
+  const answerInterrupted = async (action: "resume" | "dismiss") => {
+    if (state?.kind !== "interrupted" || hiddenInterruptedSubmission) return;
     const { submissionId } = state;
     // The card leaves now; main's state event confirms it, and a failure brings it back.
-    setHiddenPausedSubmission(submissionId);
+    setHiddenInterruptedSubmission(submissionId);
     try {
       const after =
         action === "resume"
-          ? await botsApi.resume(current.id, pausedRequestId(action, submissionId))
-          : await botsApi.dismiss(current.id, pausedRequestId(action, submissionId));
+          ? await botsApi.resume(current.id, interruptedRequestId(action, submissionId))
+          : await botsApi.dismiss(current.id, interruptedRequestId(action, submissionId));
       // Main answered, so the id is spent: main remembers its answer (even a refusal) per id,
       // and the next click after, say, fixing access must be a new request. Only a thrown
       // IPC error keeps the id for a replay.
-      pausedRequestIds.current.delete(`${action}:${submissionId}`);
-      // Main's answer is the state now: a turn still paused (for example, blocked) shows its card again.
-      if (after.kind === "interrupted") setHiddenPausedSubmission(null);
+      interruptedRequestIds.current.delete(`${action}:${submissionId}`);
+      // Main's answer is the state now: a turn still interrupted (for example, blocked) shows its card again.
+      if (after.kind === "interrupted") setHiddenInterruptedSubmission(null);
     } catch (error) {
-      setHiddenPausedSubmission((hidden) => (hidden === submissionId ? null : hidden));
+      setHiddenInterruptedSubmission((hidden) => (hidden === submissionId ? null : hidden));
       toast.error(
         userFacingErrorMessage(
           error,
@@ -828,8 +895,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       );
     }
   };
-  const resume = () => paused("resume");
-  const dismiss = () => paused("dismiss");
+  const resume = () => answerInterrupted("resume");
+  const dismiss = () => answerInterrupted("dismiss");
 
   const answerQuestion = async (question: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
     setAnswering(true);
@@ -841,6 +908,30 @@ export function BotChatPane({ botId }: { botId: string }) {
     } finally {
       setAnswering(false);
     }
+  };
+
+  /**
+   * What the person types while a hand-off card waits answers it as Done, with
+   * their words as the note, whichever way the composer sends. A throw keeps
+   * the draft in the composer, which shows the error's message.
+   */
+  const answerHandoffWithNote = async (pending: BotPendingHandoff, text: string, attachments: Attachment[]) => {
+    // Never a note for a sign-in or a password-or-code card: whatever is typed here reaches the Bot.
+    if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name, pending));
+    if (!botHandoffTakesNote(pending)) throw new Error(handoffNoNoteComposerText(current.name));
+    if (attachments.length > 0) {
+      throw new Error(
+        attachments.some((attachment) => attachment.kind === "image")
+          ? "Send photos after you answer the card."
+          : "Send files after you answer the card.",
+      );
+    }
+    const note = text.trim();
+    if ([...note].length > BOT_HANDOFF_NOTE_MAX_CHARS) {
+      throw new Error(`Keep the note under ${BOT_HANDOFF_NOTE_MAX_CHARS.toLocaleString()} characters.`);
+    }
+    const problem = await handoffActions.send(pending, "done", note || undefined);
+    if (problem) throw new Error(problem);
   };
 
   /**
@@ -927,6 +1018,16 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  /** Run now: a routine that came due while the Bot was paused runs once, now. */
+  const runRoutine = async (routineId: string) => {
+    try {
+      await botsApi.routines.runNow(current.id, routineId);
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t run that routine."));
+      throw error;
+    }
+  };
+
   const dismissConnection = async (pluginId: string) => {
     try {
       await botsApi.dismissConnection(current.id, pluginId);
@@ -937,8 +1038,20 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const footer = (
     <div className="flex flex-col">
-      {approvals.prompts.length > 0 ? (
+      {approvals.prompts.length > 0 || handoff ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
+          {handoff ? (
+            <HandoffCard
+              key={handoff.waitId}
+              botId={current.id}
+              name={current.name}
+              avatar={current.avatar}
+              handoff={handoff}
+              busy={handoffActions.busy}
+              onOpen={() => void handoffActions.open(handoff)}
+              onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
+            />
+          ) : null}
           {approvals.prompts.map((prompt) => (
             <BotApprovalCard
               key={prompt.waitId}
@@ -975,21 +1088,48 @@ export function BotChatPane({ botId }: { botId: string }) {
       ) : (
         <Composer
           key={`bot:${current.id}`}
-          ready={!state || state.kind !== "unavailable"}
-          readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
+          // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
+          ready={!noteRefused && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          readinessMessage={
+            state?.kind === "unavailable"
+              ? BOT_UNAVAILABLE_LABEL
+              : state?.kind === "paused"
+                ? botPausedText(current.name)
+                : signInWaits
+                  ? handoffSignInComposerText(current.name, handoff ?? undefined)
+                  : noteRefused
+                    ? handoffNoNoteComposerText(current.name)
+                    : undefined
+          }
           hasMessages={snapshot.entries.length > 0}
           chatId={`bot:${current.id}`}
-          placeholder={`Ask ${current.name}`}
-          onSend={(text, attachments) => send(text, attachments)}
-          onQueue={(text, attachments) => send(text, attachments, "followUp")}
-          onSteer={(text, attachments) => send(text, attachments, "steer")}
+          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${current.name}`}
+          onSend={(text, attachments) =>
+            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments)
+          }
+          onQueue={(text, attachments) =>
+            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments, "followUp")
+          }
+          onSteer={(text, attachments) =>
+            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments, "steer")
+          }
           onStop={stop}
-          isGenerating={running}
+          // While a hand-off waits, sending answers the card: a plain Send, never Queue or Steer.
+          isGenerating={running && !handoff}
           canStopGeneration={running}
           inputRef={composerRef}
           surfaces={BOT_CHAT_COMPOSER_SURFACES}
         />
       )}
+      {/* The composer's send answers the card, so Stop lives here while it waits. */}
+      {handoff && !question && running ? (
+        <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
+          <Button variant="filled" size="small" onClick={stop}>
+            <Square aria-hidden="true" />
+            Stop
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 
@@ -1022,6 +1162,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onReply={reply}
           onRetry={(failedId, text) => void retry(failedId, text)}
           onOpenMemory={openMemory}
+          onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
         />
         {pendingSends.map((send) => (
@@ -1037,7 +1178,8 @@ export function BotChatPane({ botId }: { botId: string }) {
           onLayoutChange={setStatusLayout}
         />
       ) : null}
-      {state?.kind === "interrupted" && hiddenPausedSubmission !== state.submissionId ? (
+      {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
+      {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId ? (
         <BotInterruptedCard
           name={current.name}
           {...(state.blocked ? { blocked: state.blocked } : {})}

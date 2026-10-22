@@ -25,6 +25,7 @@ class AidenBotHomeBehaviorTest {
         avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.DEFAULT)),
         health = AidenBotHealth.READY,
         sessionState = sessionState,
+        paused = sessionState == AidenBotSessionState.PAUSED,
         createdAt = t0.minusSeconds(86_400),
         updatedAt = updated,
         revision = "r1"
@@ -67,14 +68,22 @@ class AidenBotHomeBehaviorTest {
     fun durableSessionStateLeadsTheRowSubtitle() {
         val rows = aidenBotHomeRows(
             bots = listOf(
-                bot("paused", "Paused", sessionState = AidenBotSessionState.INTERRUPTED),
+                bot("interrupted", "Cut short", sessionState = AidenBotSessionState.INTERRUPTED),
+                // Revision 37: a Bot the person paused, beside its last message.
+                bot("paused", "Resting", sessionState = AidenBotSessionState.PAUSED, updated = t0.minusSeconds(5)),
                 bot("new", "New", sessionState = AidenBotSessionState.NEEDS_MODEL, updated = t0.minusSeconds(10)),
                 bot("busy", "Busy", sessionState = AidenBotSessionState.RUNNING, updated = t0.minusSeconds(20))
             ),
-            conversations = listOf(chat("chat-p", "paused", "Last words", updated = t0.minusSeconds(30))),
+            conversations = listOf(
+                chat("chat-i", "interrupted", "Last words", updated = t0.minusSeconds(30)),
+                chat("chat-p", "paused", "See you soon", updated = t0.minusSeconds(40))
+            ),
             query = ""
         ).associateBy { it.bot.id }
-        assertEquals("Paused — tap to resume", rows.getValue("paused").preview)
+        // G2: the same words as iOS and desktop.
+        assertEquals("Interrupted — tap to resume", rows.getValue("interrupted").preview)
+        assertEquals("Paused", rows.getValue("paused").preview)
+        assertFalse(rows.getValue("paused").isWorking)
         assertEquals("Needs an AI model", rows.getValue("new").preview)
         assertEquals("Say hi to Busy", rows.getValue("busy").preview)
         assertTrue(rows.getValue("busy").isWorking)

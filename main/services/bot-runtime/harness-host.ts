@@ -29,6 +29,8 @@ import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE, BOT_PROFILE_GUARD_FILE } 
 export const BOT_SESSION_FILE = "session.sqlite";
 export const DEFAULT_BOT_IDLE_CLOSE_MS = 600_000;
 const DESTROY_ABORT_TIMEOUT_MS = 10_000;
+/** How long `suspend` waits for a harness to close: the same budget as quit. */
+export const DEFAULT_BOT_SUSPEND_TIMEOUT_MS = 5_000;
 const MAX_BOT_ID_LENGTH = 200;
 const PLAIN_DIRECTORY_CHARACTER = /^[A-Za-z0-9_-]$/u;
 const ENCODED_DIRECTORY_NAME = /^(?:[A-Za-z0-9_-]|~[0-9a-f]{2})+$/u;
@@ -78,6 +80,15 @@ export interface BotHarnessHost {
   /** Startup scan: every Bot with unfinished work. Never resumes anything. */
   interruptedBots(): Promise<BotInterruption[]>;
   close(botId: string): Promise<void>;
+  /**
+   * Pause support: close the Bot's harness even while a turn is live, bounded
+   * like quit. Closing signals every task and joins it without writing, so a
+   * running turn stays placed and is reported `interrupted` once reopened;
+   * nothing is aborted or dismissed. `timed_out`: a task ignored its signal;
+   * the close keeps running, and later opens of this Bot wait behind it.
+   * Unlike `destroy`, the Bot can be reopened at once.
+   */
+  suspend(botId: string, timeoutMs?: number): Promise<"closed" | "timed_out" | "not_open">;
   /** Abort the live submission, close, and remove `bots/<id>/`. */
   destroy(botId: string): Promise<void>;
   /** Remove Bot directories with no known Bot record. Returns the removed directory names. */
@@ -403,6 +414,29 @@ export async function createBotHarnessHost(
     close(botId) {
       return admit(() => serialize(botId, () => closeEntry(botId)));
     },
+
+    suspend(botId, timeoutMs = DEFAULT_BOT_SUSPEND_TIMEOUT_MS) { return admit(async () => {
+      assertBotId(botId);
+      const closing = serialize(botId, async () => {
+        if (!open.has(botId)) return "not_open" as const;
+        await closeEntry(botId);
+        return "closed" as const;
+      });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<"timed_out">((resolve) => {
+        timer = setTimeout(() => resolve("timed_out"), timeoutMs);
+      });
+      try {
+        const outcome = await Promise.race([closing, timedOut]);
+        if (outcome === "timed_out") {
+          opts.onReport?.(botId, new Error(`The Bot's session did not close within ${timeoutMs} ms; it keeps closing.`));
+          void closing.catch((error: unknown) => opts.onReport?.(botId, error));
+        }
+        return outcome;
+      } finally {
+        clearTimeout(timer);
+      }
+    }); },
 
     destroy(botId) { return admit(async () => {
       assertBotId(botId);

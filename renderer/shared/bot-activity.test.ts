@@ -23,12 +23,19 @@ const SPEC_TOOL_PHASES: ReadonlyArray<[string, string]> = [
   ["web_search", "searching"],
   ["computer_use", "computer"],
   ["form_fill", "computer"],
+  ["computer", "app"],
+  ["computer_shell", "command"],
+  ["browser", "app"],
+  ["browser_snapshot", "app"],
+  ["browser_click", "app"],
   ["inspect_image", "photo"],
   ["subagent", "helper"],
   ["bot_memory", "remembering"],
   ["routines", "routine"],
   ["routine_notes", "routine"],
   ["ask_user_question", "waiting"],
+  ["hand_off", "waiting"],
+  ["sign_in", "waiting"],
   ["share_image", "working"],
   ["suggest_connection", "working"],
   ["skill_meal_planning", "working"],
@@ -55,6 +62,24 @@ test("a connection tool is Using {app}, named from the connection, and bounded",
   // Not a minted connection tool name: no app.
   assert.equal(botToolApp("web_search"), undefined);
   assert.equal(botToolApp("Notion__search"), undefined);
+});
+
+test("the Bot's own computer reads as Using its computer, never as the person's Mac", () => {
+  const app = botToolApp("computer");
+  assert.equal(app, "its computer");
+  assert.equal(botActivityDisplay(botToolPhase("computer", app), "follows", app).word, "Using its computer");
+  assert.equal(botStepPhrase("app", 1, app), "Used its computer");
+  assert.equal(botStepInfinitive("app", app), "use its computer");
+  assert.equal(botActivityDisplay(botToolPhase("computer_use"), "follows").word, "Using your Mac");
+  assert.equal(botActivityDisplay(botToolPhase("computer_shell"), "follows").word, "Running a command");
+  // The Bot's own browser likewise, rather than a bare "Working".
+  assert.equal(botActivityDisplay(botToolPhase("browser_click", botToolApp("browser_click")), "follows", botToolApp("browser_click")).word, "Using its browser");
+  assert.equal(botStepPhrase("app", 2, botToolApp("browser_snapshot")), "Used its browser 2 times");
+  assert.equal(botToolApp("browser_wait_for"), "its browser");
+  // A connection whose server name starts with "browser" or "computer" keeps its own app.
+  assert.equal(botToolApp("browser_base__search"), "Browser Base");
+  assert.equal(botToolApp("browser__open_tab"), "Browser");
+  assert.equal(botToolApp("computer__list_files"), "Computer");
 });
 
 test("when tools run in parallel, the most recently started one wins", () => {

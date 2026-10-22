@@ -1,0 +1,2 @@
+[2026-10-21T09:14:03Z] ERROR: Failed to start VM name=aiden-bot-7d793037a0760186 error=Error Domain=VZErrorDomain Code=6 "The virtual machine failed to start." UserInfo={NSLocalizedFailure=The virtual machine failed to start., NSLocalizedFailureReason=The number of virtual machines exceeds the limit. The maximum supported number of active virtual machines has been reached.}
+Error: The virtual machine failed to start.

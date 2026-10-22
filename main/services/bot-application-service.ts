@@ -146,6 +146,8 @@ export interface BotApplicationDependencies {
   ) => Promise<void>;
   /** Bot delete: erase the Bot's canonical photo (every revision). Idempotent. */
   deleteBotPhoto?: (botId: string) => Promise<void>;
+  /** Bot delete: close the Bot's browser tabs and clear its browser profile (cookies, storage, cache). Idempotent. */
+  deleteBotBrowserProfile?(botId: string): Promise<void>;
   /**
    * One-time startup wipe of transcripts written by the retired Bot run path.
    * Production persists `isDone` in a marker file so it never repeats.
@@ -642,15 +644,16 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   /**
    * Bot delete, after the runtime has destroyed the Bot's session and removed
-   * its routines and bindings. Order: photo, managed home, access, chat rows,
-   * then the Bot record last, so a crash leaves the Bot listed and the pending
-   * operation rolls the delete forward on the next start. Every step is
-   * idempotent.
+   * its routines and bindings. Order: photo, browser profile, managed home,
+   * access, chat rows, then the Bot record last, so a crash leaves the Bot
+   * listed and the pending operation rolls the delete forward on the next
+   * start. Every step is idempotent.
    */
   const finishDeleteBot = async (operation: BotLifecycleOperation): Promise<void> => {
     const { botId } = operation;
     deps.capabilityStore.invalidateBotAuthority(botId);
     await deps.deleteBotPhoto?.(botId);
+    await deps.deleteBotBrowserProfile?.(botId);
     await deps.managedWorkspace.deleteHome(botId);
     await deps.capabilityStore.deleteBotAuthority(botId);
     for (const chat of await deps.chatStore.listByBot(botId)) {

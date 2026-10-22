@@ -96,7 +96,22 @@ export function rendererDocumentOwner(
   ) {
     throw invalidRequest();
   }
+  return documentOwner(sender, frame);
+}
 
+/**
+ * The document a window shows right now, for main-initiated work that needs
+ * an owner without an IPC request (a Bot's browser when no window shows that
+ * Bot). It is invalidated like any other owner when the document goes away.
+ */
+export function windowDocumentOwner(webContents: Electron.WebContents): RendererDocumentOwner {
+  if (webContents.isDestroyed()) throw new Error("The application window is no longer active.");
+  const frame = webContents.mainFrame;
+  if (!isCurrentMainFrame(webContents, frame)) throw new Error("The application window is no longer active.");
+  return documentOwner(webContents, frame);
+}
+
+function documentOwner(sender: Electron.WebContents, frame: Electron.WebFrameMain): RendererDocumentOwner {
   const documentState = rendererDocumentState(sender);
   const documentEpoch = documentState.epoch;
   const isInvalidated = (): boolean =>

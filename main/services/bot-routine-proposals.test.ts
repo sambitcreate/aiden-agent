@@ -326,3 +326,31 @@ test("a routine created by an interrupted Add routine is never hidden behind a N
   // Neither stuck proposal still holds one of the two waiting slots.
   assert.ok((await restarted.propose("bot-a", { ...dailyPlan, name: "Third" })).ok);
 });
+
+test("a suggestion the Bot makes settles a card a cut-short Add routine left open through its own call, never through the Bot's session", async () => {
+  const { proposals, routines, failures, appended } = harness();
+  const first = await proposals.propose("bot-a", dailyPlan);
+  assert.ok(first.ok);
+  failures.statusAppend = true;
+  await assert.rejects(proposals.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" }), /disk full/u);
+  failures.statusAppend = false;
+  const [created] = await routines.list("bot-a");
+  assert.ok(created);
+
+  // The Bot's own routines call: its writes land in the conversation it runs in.
+  const throughSession = appended.length;
+  const throughCall: Array<{ kind: string; data: Record<string, unknown> }> = [];
+  const next = await proposals.propose("bot-a", { ...dailyPlan, name: "Daily check-in" }, async (kind, data) => {
+    throughCall.push({ kind, data });
+  });
+  assert.ok(next.ok);
+  assert.equal(appended.length, throughSession, "the Bot's session, which a pause may hold, is never asked");
+  assert.deepEqual(
+    throughCall.map(({ kind, data }) => [kind, data.status ?? data.name]),
+    [
+      [BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND, "accepted"],
+      [BOT_ROUTINE_PROPOSAL_ENTRY_KIND, "Daily check-in"],
+    ],
+  );
+  assert.equal(throughCall[0]!.data.routineId, created.id);
+});

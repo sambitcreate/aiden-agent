@@ -36,6 +36,8 @@ const VERBS: Record<string, VerbPair> = {
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using computer", complete: "Used computer" },
+  computer: { active: "Using its computer", complete: "Used its computer" },
+  computer_shell: { active: "Running in its computer", complete: "Ran in its computer" },
   browser: { active: "Loading browser tools", complete: "Loaded browser tools" },
   browser_status: { active: "Checking browser", complete: "Checked browser" },
   browser_open: { active: "Opening browser", complete: "Opened browser" },
