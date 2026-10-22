@@ -10,6 +10,7 @@ import { parseChatContextPressureNotification } from "../shared/context-pressure
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import { parseSubagentRunSnapshot, type SubagentRunSnapshot } from "../shared/subagent-runs";
 import { parseToolApprovalScope } from "../shared/tool-approval-scope";
+import { parseToolApprovalPreview } from "../shared/tool-approval-preview";
 import { parseTodoSnapshotView } from "../shared/todo";
 import { restoreUndeliveredGuidance, undeliveredGuidanceFromTerminal } from "./composer-draft-store";
 import type { ApprovalPrompt, ChatStatusPhase, StreamCallbacks, ToolPhase } from "./ipc";
@@ -233,6 +234,10 @@ export function subscribeGenerationStream(
           toolName: p.toolName,
           summary: p.summary,
           details: p.details,
+          ...(() => {
+            const preview = parseToolApprovalPreview(p.preview);
+            return preview ? { preview } : {};
+          })(),
           // Offered allow scopes ("this chat", "always"); absent means once only.
           ...(Array.isArray(p.scopes) ? { scopes: p.scopes.filter((entry) => parseToolApprovalScope(entry)) } : {}),
           ...(typeof p.canAllow === "boolean" ? { canAllow: p.canAllow } : {}),

@@ -122,6 +122,18 @@ test("CLI lease reclaims null owner metadata under a free guard", (t) => {
   } finally { release(); }
 });
 
+test("daemon approval summaries read like the desktop's without hiding any argument", () => {
+  assert.equal(api.daemonApprovalSummary("bash", { command: "npm test" }), "Run command: npm test");
+  assert.equal(api.daemonApprovalSummary("read", { path: "src/a.ts" }), "Read file: src/a.ts");
+  assert.equal(api.daemonApprovalSummary("ls", { path: "src" }), "List folder: src");
+  // Any other argument, tool or shape keeps the exact request.
+  assert.equal(api.daemonApprovalSummary("bash", { command: "sleep 9", timeout: 5 }), 'bash: {"command":"sleep 9","timeout":5}');
+  assert.equal(api.daemonApprovalSummary("read", { path: "a.ts", offset: 40 }), 'read: {"path":"a.ts","offset":40}');
+  assert.equal(api.daemonApprovalSummary("ls", {}), "ls: {}");
+  assert.equal(api.daemonApprovalSummary("bash", { command: "  " }), 'bash: {"command":"  "}');
+  assert.equal(api.daemonApprovalSummary("edit", { path: "a.ts", oldText: "a", newText: "b" }), 'edit: {"path":"a.ts","oldText":"a","newText":"b"}');
+});
+
 test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
   const dir = temporary(t), workspace = await api.workspaceCommand(dir, ["add", dir]);
   assert.equal(api.accessFor(dir, dir), "ask");

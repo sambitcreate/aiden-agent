@@ -148,7 +148,9 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 37)
+        // Revision 39 is provisional and may be re-claimed when it merges.
+        XCTAssertGreaterThanOrEqual(fixture.contractRevision, 39)
+        XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)
@@ -1446,6 +1448,273 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(expired.notice, "Question expired on Mac")
         XCTAssertNil(try loser(status: 403, #"{"error":{"code":"capability_denied","message":"No.","requestId":"r2","retryable":false}}"#))
         XCTAssertNil(AidenForeignRunResolution.loser(from: AidenRemoteClientError.invalidResponse))
+    }
+
+    // MARK: Contract revision 39: scheduled-task approval cards (`schedule:cards`)
+
+    private func decodedSharedFixture() throws -> AidenRemoteContractFixture {
+        try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: XCTUnwrap(sharedContractFixtureURL))
+        )
+    }
+
+    private func scheduleCardsSection() throws -> [String: Any] {
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: XCTUnwrap(sharedContractFixtureURL)))
+        return try XCTUnwrap((object as? [String: Any])?["scheduleCards"] as? [String: Any])
+    }
+
+    private func milliseconds(_ date: Date?) -> Int? {
+        date.map { Int(($0.timeIntervalSince1970 * 1_000).rounded()) }
+    }
+
+    func testRevision39FixtureCardsDecodeAndRoundTripExactly() throws {
+        let section = try XCTUnwrap(try decodedSharedFixture().scheduleCards)
+        XCTAssertEqual(section.capability, .scheduleCards)
+        let raw = try XCTUnwrap(try scheduleCardsSection()["cards"] as? [[String: Any]])
+        XCTAssertFalse(raw.isEmpty)
+        XCTAssertEqual(section.cards.map(\.label), raw.map { $0["label"] as? String })
+
+        for (card, object) in zip(section.cards, raw) {
+            let encoded = try JSONEncoder().encode(card.schedule)
+            let reread = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? NSDictionary)
+            XCTAssertEqual(reread, try XCTUnwrap(object["schedule"] as? NSDictionary), "\(card.label) keeps every key and value")
+            XCTAssertEqual(
+                try AidenRemoteJSONDecoder.decode(AidenApprovalSchedule.self, from: encoded),
+                card.schedule,
+                card.label
+            )
+        }
+
+        let cards = Dictionary(uniqueKeysWithValues: section.cards.map { ($0.label, $0.schedule) })
+        let briefing = try XCTUnwrap(cards["create-read-only-project"])
+        XCTAssertEqual(briefing.action, .create)
+        XCTAssertEqual(briefing.permission, .readOnly)
+        XCTAssertEqual(briefing.workspaceName, "Aiden Agent")
+        XCTAssertEqual(milliseconds(briefing.nextRun), 1_792_771_200_000, "2026-10-23T16:00:00.000Z")
+        XCTAssertFalse(briefing.truncated)
+
+        let audit = try XCTUnwrap(cards["scheduling-off"])
+        XCTAssertEqual(audit.mode, .script)
+        XCTAssertNil(audit.nextRunAt)
+        XCTAssertNil(audit.prompt)
+        XCTAssertNotNil(audit.script)
+        XCTAssertFalse(audit.schedulerEnabled)
+
+        let digest = try XCTUnwrap(cards["truncated-prompt"])
+        XCTAssertTrue(digest.truncated)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(digest.prompt).utf16.count, 2_000)
+    }
+
+    /// Every card the host's validator rejects is dropped, and the approval it
+    /// rides on still arrives with the same answer rights.
+    func testRevision39RejectedCardsDropTheCardButNeverTheApproval() throws {
+        let section = try scheduleCardsSection()
+        let rejected = try XCTUnwrap(section["rejected"] as? [[String: Any]])
+        XCTAssertFalse(rejected.isEmpty)
+        let valid = try XCTUnwrap((section["cards"] as? [[String: Any]])?.first?["schedule"])
+        let streamObject = try XCTUnwrap((section["streamApproval"] as? [String: Any])?["approval"] as? [String: Any])
+        let runFrame = try XCTUnwrap((section["phoneRunEvents"] as? [[String: Any]])?.first {
+            ($0["payload"] as? [String: Any])?["schedule"] != nil
+        })
+        let runPayload = try XCTUnwrap(runFrame["payload"] as? [String: Any])
+
+        func streamApproval(carrying schedule: Any) throws -> AidenStreamPendingApproval {
+            var approval = streamObject
+            approval["schedule"] = schedule
+            let data = try JSONSerialization.data(withJSONObject: ["approval": approval])
+            return try XCTUnwrap(AidenRemoteJSONDecoder.decode(AidenStreamApprovalSnapshot.self, from: data).approval)
+        }
+        func runApproval(carrying schedule: Any) throws -> AidenRemoteRunApproval {
+            var payload = runPayload
+            payload["schedule"] = schedule
+            var frame = runFrame
+            frame["payload"] = payload
+            let event = try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: JSONSerialization.data(withJSONObject: frame))
+            guard case let .approvalRequired(approval) = event.kind else {
+                throw AidenRemoteContractError.unsafePayloadField("not an approval")
+            }
+            return approval
+        }
+
+        // The wrappers carry a valid card through.
+        XCTAssertNotNil(try streamApproval(carrying: valid).schedule)
+        XCTAssertNotNil(try runApproval(carrying: valid).schedule)
+
+        for entry in rejected {
+            let label = entry["label"] as? String ?? "unlabelled"
+            let schedule = try XCTUnwrap(entry["schedule"], label)
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(
+                    AidenApprovalSchedule.self,
+                    from: JSONSerialization.data(withJSONObject: schedule)
+                ),
+                "\(label) is refused on its own"
+            )
+
+            let streamed = try streamApproval(carrying: schedule)
+            XCTAssertNil(streamed.schedule, label)
+            XCTAssertEqual(streamed.approvalId, streamObject["approvalId"] as? String, label)
+            XCTAssertEqual(streamed.canAllow, streamObject["canAllow"] as? Bool, label)
+            XCTAssertEqual(streamed.scopes, streamObject["scopes"] as? [String], label)
+
+            let run = try runApproval(carrying: schedule)
+            XCTAssertNil(run.schedule, label)
+            XCTAssertEqual(run.approvalId, runPayload["approvalId"] as? String, label)
+            XCTAssertEqual(run.canAllow, runPayload["canAllow"] as? Bool, label)
+            XCTAssertEqual(run.scopes?.map(\.rawValue), runPayload["scopes"] as? [String], label)
+        }
+    }
+
+    /// The phone reads a card exactly as the host's `parseAidenRemoteApprovalSchedule`
+    /// does: lengths in UTF-16 units, JavaScript `trim()`, and `Date.parse`.
+    func testRevision39CardValidationMirrorsTheHostValidator() throws {
+        let section = try scheduleCardsSection()
+        let base = try XCTUnwrap((section["cards"] as? [[String: Any]])?.first?["schedule"] as? [String: Any])
+        func decodes(_ object: [String: Any]) -> Bool {
+            guard let data = try? JSONSerialization.data(withJSONObject: object) else { return false }
+            return (try? AidenRemoteJSONDecoder.decode(AidenApprovalSchedule.self, from: data)) != nil
+        }
+        func with(_ changes: [String: Any], dropping dropped: Set<String> = []) -> [String: Any] {
+            base.merging(changes) { $1 }.filter { !dropped.contains($0.key) }
+        }
+        let calendarGlyph = "\u{1F4C5}" // two UTF-16 code units
+
+        let accepted: [(String, [String: Any])] = [
+            ("the fixture card", base),
+            ("a 2,000-unit prompt", with(["prompt": String(repeating: "p", count: 2_000)])),
+            ("a name of 60 two-unit characters", with(["name": String(repeating: calendarGlyph, count: 60)])),
+            ("tabs and line breaks in a prompt", with(["prompt": "Step one\tthen\r\nstep two"])),
+            ("only the required keys", with([:], dropping: ["nextRunAt", "workspaceName", "providerName", "modelName", "prompt"])),
+            ("a script", with(["mode": "script", "script": "npm test"], dropping: ["prompt", "providerName", "modelName"])),
+            ("a run now", with(["action": "run_now"])),
+            ("a next run at 24:00", with(["nextRunAt": "2026-10-23T24:00:00Z"])),
+            ("a next run with nine fraction digits", with(["nextRunAt": "2026-10-23T16:00:00.123456789Z"])),
+            ("a truncated prompt", with(["truncated": true])),
+        ]
+        for (reason, object) in accepted {
+            XCTAssertTrue(decodes(object), reason)
+        }
+
+        let refused: [(String, [String: Any])] = [
+            ("a 2,001-unit prompt", with(["prompt": String(repeating: "p", count: 2_001)])),
+            ("a name of 61 two-unit characters", with(["name": String(repeating: calendarGlyph, count: 61)])),
+            ("a tab in a name", with(["name": "Morning\tbriefing"])),
+            ("a leading no-break space", with(["name": "\u{00A0}Morning briefing"])),
+            ("a trailing byte-order mark", with(["cadence": "Weekdays at 9:00 AM\u{FEFF}"])),
+            ("a C1 control", with(["name": "Morning\u{0085}briefing"])),
+            ("a bidirectional isolate", with(["name": "Morning \u{2066}briefing"])),
+            ("a line separator in a prompt", with(["prompt": "One\u{2028}two"])),
+            ("a blank time zone", with(["timezone": " "])),
+            ("a null workspace", with(["workspaceName": NSNull()])),
+            ("a null prompt", with(["prompt": NSNull()])),
+            ("a numeric flag", with(["notify": 1])),
+            ("a missing scheduler flag", with([:], dropping: ["schedulerEnabled"])),
+            ("a missing connector list", with([:], dropping: ["connectors"])),
+            ("a connector that is not text", with(["connectors": [1]])),
+            ("an unknown action", with(["action": "archive"])),
+            ("an unknown mode", with(["mode": "agent"])),
+            ("a model on a script", with(["mode": "script", "script": "npm test"], dropping: ["prompt"])),
+            ("truncated without content", with(["truncated": true], dropping: ["prompt"])),
+            ("a next run on day 32", with(["nextRunAt": "2026-10-32T00:00:00Z"])),
+            ("a next run in month 13", with(["nextRunAt": "2026-13-01T00:00:00Z"])),
+            ("a next run at 24:00:01", with(["nextRunAt": "2026-10-23T24:00:01Z"])),
+            ("a next run at 24:00 with a fraction", with(["nextRunAt": "2026-10-23T24:00:00.0001Z"])),
+            ("a next run with ten fraction digits", with(["nextRunAt": "2026-10-23T16:00:00.1234567891Z"])),
+            ("a next run without seconds", with(["nextRunAt": "2026-10-23T16:00Z"])),
+        ]
+        for (reason, object) in refused {
+            XCTAssertFalse(decodes(object), reason)
+        }
+
+        // Instants read as JavaScript's `Date.parse` reads them.
+        XCTAssertEqual(milliseconds(AidenApprovalSchedule.utcInstant("2026-02-30T00:00:00Z")), 1_772_409_600_000, "rolls into March 2")
+        XCTAssertEqual(milliseconds(AidenApprovalSchedule.utcInstant("2026-10-23T24:00:00Z")), 1_792_800_000_000, "the next midnight")
+        XCTAssertEqual(milliseconds(AidenApprovalSchedule.utcInstant("2026-10-23T16:00:00.123456789Z")), 1_792_771_200_123, "milliseconds kept, finer digits dropped")
+        XCTAssertEqual(milliseconds(AidenApprovalSchedule.utcInstant("2026-02-29T12:00:00.5Z")), 1_772_366_400_500)
+        XCTAssertEqual(milliseconds(AidenApprovalSchedule.utcInstant("0000-01-01T00:00:00Z")), -62_167_219_200_000)
+        XCTAssertNil(AidenApprovalSchedule.utcInstant("2026-10-23T09:00:00+02:00"))
+    }
+
+    /// Only the `schedule_task` approval in the phone run carries a card; the
+    /// automation approval keeps the summary card, and gap snapshots restate it.
+    func testRevision39PhoneRunGivesACardToScheduledTaskApprovalsOnly() throws {
+        let section = try XCTUnwrap(try decodedSharedFixture().scheduleCards)
+        let events = section.phoneRunEvents
+        let approvals = events.compactMap { event -> AidenRemoteRunApproval? in
+            guard case let .approvalRequired(approval) = event.kind else { return nil }
+            return approval
+        }
+        XCTAssertEqual(approvals.map(\.toolName), ["schedule_task", "edit_automation"])
+        XCTAssertEqual(approvals.map { $0.schedule != nil }, [true, false])
+
+        let runId = try XCTUnwrap(events.first?.runId)
+        var projection = AidenForeignRunProjection(runId: runId)
+        for event in events.prefix(2) { _ = projection.apply(event) }
+        let scheduled = try XCTUnwrap(projection.pendingApproval)
+        let card = try XCTUnwrap(scheduled.schedule)
+        XCTAssertEqual(card.name, "Inbox triage")
+        XCTAssertEqual(card.permission, .full)
+        XCTAssertEqual(card.connectors, ["Gmail", "Linear"])
+        XCTAssertTrue(scheduled.canAllow)
+        XCTAssertEqual(scheduled.scopes, [.once, .chat])
+
+        for event in events[2...3] { _ = projection.apply(event) }
+        let automation = try XCTUnwrap(projection.pendingApproval)
+        XCTAssertEqual(automation.toolName, "edit_automation")
+        XCTAssertNil(automation.schedule)
+        XCTAssertFalse(automation.canAllow)
+        XCTAssertNil(automation.scopes)
+        // Even a card on another tool is never shown.
+        XCTAssertNil(AidenApprovalSchedule.card(card, toolName: "edit_automation"))
+        XCTAssertEqual(AidenApprovalSchedule.card(card, toolName: "schedule_task"), card)
+
+        // A gap snapshot restates the pending approval with its card.
+        let cardJSON = try XCTUnwrap(String(data: JSONEncoder().encode(card), encoding: .utf8))
+        let snapshot = #"{"protocolVersion":1,"streamId":"run-1","sequence":0,"timestamp":"2026-10-22T19:10:00Z","type":"snapshot","terminal":false,"payload":{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":["approval-1"],"pendingQuestionIds":[],"approvals":[{"approvalId":"approval-1","summary":"Create scheduled task","toolName":"schedule_task","canAllow":true,"scopes":["once"],"schedule":\#(cardJSON)}],"questions":[],"nextSequence":1}}"#
+        let frame = try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: Data(snapshot.utf8))
+        var restated = AidenForeignRunProjection(runId: "run-1")
+        XCTAssertEqual(restated.apply(frame), [.reconcile])
+        XCTAssertEqual(restated.pendingApproval?.schedule, card)
+    }
+
+    /// The stream approval's card reaches the pending approval the card renders,
+    /// and never changes what the phone may allow.
+    func testRevision39StreamApprovalCardReachesThePendingApprovalOnly() throws {
+        let section = try XCTUnwrap(try decodedSharedFixture().scheduleCards)
+        let wire = try XCTUnwrap(section.streamApproval.approval)
+        let card = try XCTUnwrap(wire.schedule)
+        XCTAssertEqual(card, section.cards.first { $0.label == "create-read-only-project" }?.schedule)
+
+        let now = wire.expiresAt.addingTimeInterval(-60)
+        func resolve(_ approval: AidenStreamPendingApproval) -> AidenPendingApproval? {
+            AidenPendingApprovalResolution.resolve(approval, streamId: wire.streamId, chatId: wire.chatId, now: now)
+        }
+        let withCard = try XCTUnwrap(resolve(wire))
+        XCTAssertEqual(withCard.kind, .scheduledTask)
+        XCTAssertEqual(withCard.schedule, card)
+
+        var bare = wire
+        bare.schedule = nil
+        let summaryOnly = try XCTUnwrap(resolve(bare))
+        XCTAssertNil(summaryOnly.schedule)
+        XCTAssertEqual(summaryOnly.summary, withCard.summary)
+        XCTAssertEqual(summaryOnly.canAllow, withCard.canAllow)
+        XCTAssertEqual(summaryOnly.scopes, withCard.scopes)
+
+        let automation = AidenStreamPendingApproval(
+            approvalId: wire.approvalId,
+            streamId: wire.streamId,
+            chatId: wire.chatId,
+            summary: wire.summary,
+            toolCallId: wire.toolCallId,
+            toolName: "edit_automation",
+            expiresAt: wire.expiresAt,
+            canAllow: wire.canAllow,
+            scopes: wire.scopes,
+            schedule: card
+        )
+        XCTAssertNil(resolve(automation)?.schedule, "only schedule_task approvals show a card")
     }
 
     func testGenericAidenJSONDecodeHasOneMiBBodyCeiling() throws {

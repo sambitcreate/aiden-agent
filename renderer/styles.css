@@ -644,6 +644,22 @@ body {
   corner-shape: squircle;
 }
 
+/* The approval card takes the composer's shape; its wells nest inside that radius. */
+.approval-well {
+  border-radius: calc(var(--radius-composer) - 16px);
+  corner-shape: squircle;
+}
+
+.approval-icon-tile {
+  border-radius: 14px;
+  corner-shape: squircle;
+}
+
+/* A diff's line bands run to the well's edge; a scrollbar appears only when it overflows. */
+.approval-diff {
+  scrollbar-gutter: auto;
+}
+
 .composer-shell:focus-within {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
 }

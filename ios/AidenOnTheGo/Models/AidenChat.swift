@@ -1078,11 +1078,15 @@ enum AidenAgentActivityPresentation {
     }
 
     static func summary(_ timeline: AidenGenerationTimeline) -> String {
-        let tools = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
-        guard !tools.isEmpty else {
+        let toolSteps = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
+        guard !toolSteps.isEmpty else {
             return timeline.status == .running ? "Thinking" : "Thought \(duration(timeline.steps.compactMap(\.durationMs).reduce(0, +)))"
         }
         let running = timeline.status == .running
+        // Matches desktop: a denied or blocked call never ran, so it is
+        // counted as skipped. A call still waiting for approval is not counted yet.
+        let skipped = toolSteps.filter { $0.status == .blocked }
+        let tools = toolSteps.filter { $0.status != .blocked && $0.status != .awaitingApproval }
         let files = tools.filter { $0.toolName == "read_file" }.count
         let searches = tools.filter { $0.toolName == "grep" || $0.toolName == "glob" }.count
         let directories = tools.filter { $0.toolName == "list_dir" }.count
@@ -1112,7 +1116,13 @@ enum AidenAgentActivityPresentation {
         if mac > 0 { clauses.append("\(mac) Computer Use action\(mac == 1 ? "" : "s")") }
         if compactions > 0 { clauses.append(running ? "compacting context" : "compacted context") }
         if other > 0 { clauses.append("\(other) tool call\(other == 1 ? "" : "s")") }
-        if clauses.isEmpty { return running ? "Working" : "Used \(tools.count) tool\(tools.count == 1 ? "" : "s")" }
+        if !skipped.isEmpty {
+            let noun = skipped.allSatisfy { $0.toolName == "run_command" }
+                ? "command"
+                : skipped.allSatisfy { $0.toolName == "write_file" || $0.toolName == "edit_file" } ? "file change" : "action"
+            clauses.append("skipped \(skipped.count) \(noun)\(skipped.count == 1 ? "" : "s")")
+        }
+        if clauses.isEmpty { return running ? "Waiting for approval" : "No activity" }
         let sentence = clauses.joined(separator: ", ")
         guard explored.isEmpty, let first = sentence.first else { return sentence }
         return first.uppercased() + sentence.dropFirst()
@@ -2387,6 +2397,30 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
     /// Contract revision 17. Raw scope names so an unknown future scope never
     /// fails decoding; `AidenApprovalScope.offered(_:)` keeps the known ones.
     var scopes: [String]? = nil
+    /// Contract revision 39 (`schedule:cards`): the display-only card on a
+    /// scheduled-task approval. Nil when absent or when it fails validation.
+    var schedule: AidenApprovalSchedule? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case approvalId, streamId, chatId, summary, toolCallId, toolName, expiresAt, canAllow, scopes, schedule
+    }
+}
+
+extension AidenStreamPendingApproval {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        approvalId = try values.decode(String.self, forKey: .approvalId)
+        streamId = try values.decode(String.self, forKey: .streamId)
+        chatId = try values.decode(String.self, forKey: .chatId)
+        summary = try values.decode(String.self, forKey: .summary)
+        toolCallId = try values.decode(String.self, forKey: .toolCallId)
+        toolName = try values.decode(String.self, forKey: .toolName)
+        expiresAt = try values.decode(Date.self, forKey: .expiresAt)
+        canAllow = try values.decode(Bool.self, forKey: .canAllow)
+        scopes = try values.decodeIfPresent([String].self, forKey: .scopes)
+        // A card that fails validation is dropped; the approval still decodes.
+        schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
+    }
 }
 
 struct AidenStreamApprovalSnapshot: Codable, Equatable, Sendable {
@@ -2585,6 +2619,11 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     let hostCanAllow: Bool
     let canAllow: Bool
     var scopes: [AidenApprovalScope] = [.once]
+    /// The host's tool name, used only to word the card. Empty when unknown.
+    var toolName: String = ""
+    /// Contract revision 39: the structured card for a `schedule_task` approval.
+    /// Display-only; it never changes `canAllow` or `scopes`.
+    var schedule: AidenApprovalSchedule? = nil
 }
 
 enum AidenApprovalKind: Equatable, Sendable {
@@ -2629,14 +2668,13 @@ enum AidenApprovalResponseAuthorization: Equatable, Sendable {
     }
 }
 
-enum AidenApprovalPresentation {
-    static func oneLineSummary(_ summary: String) -> String {
-        let collapsed = summary
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-        return collapsed.isEmpty ? String(localized: "Review requested action") : collapsed
-    }
+/// Why an approval card cannot be fully answered on this device, with its SF Symbol.
+struct AidenApprovalLimit: Equatable {
+    let text: String
+    let symbol: String
+}
 
+enum AidenApprovalPresentation {
     static func title(for kind: AidenApprovalKind) -> String {
         switch kind {
         case .action: String(localized: "Approval needed")
@@ -2647,10 +2685,31 @@ enum AidenApprovalPresentation {
     static func detail(for kind: AidenApprovalKind) -> String {
         switch kind {
         case .action:
-            String(localized: "Review this one action before Aiden continues.")
+            String(localized: "Aiden is paused until you choose.")
         case .scheduledTask:
             String(localized: "Check the exact schedule and unattended access before Aiden saves it.")
         }
+    }
+
+    /// A reason the card cannot be fully answered here, shown in place of the note.
+    static func limit(
+        kind: AidenApprovalKind,
+        canRespond: Bool,
+        hasRequiredWriteCapability: Bool,
+        canAllow: Bool
+    ) -> AidenApprovalLimit? {
+        if !canRespond {
+            return AidenApprovalLimit(text: String(localized: "This paired device can review approvals but cannot respond."), symbol: "lock.fill")
+        }
+        if kind == .scheduledTask && !hasRequiredWriteCapability {
+            return AidenApprovalLimit(text: String(localized: "Schedule write access is required to approve this task."), symbol: "lock.fill")
+        }
+        if !canAllow {
+            return kind == .scheduledTask
+                ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired desktop."), symbol: "desktopcomputer")
+                : AidenApprovalLimit(text: String(localized: "Allow this on your Mac. You can deny it here."), symbol: "desktopcomputer")
+        }
+        return nil
     }
 
     static func denyTitle(for kind: AidenApprovalKind) -> String {
@@ -2672,6 +2731,261 @@ enum AidenApprovalPresentation {
         case .once: String(localized: "Allow once")
         case .chat: String(localized: "Allow for this chat")
         case .always: String(localized: "Always allow")
+        }
+    }
+
+    /// What a remembered scope covers, under its menu title. A command rule
+    /// matches only that exact command, but a file rule matches the tool and
+    /// path, so it also covers later changes with different contents.
+    static func scopeDetail(_ scope: AidenApprovalScope, toolName: String) -> String? {
+        switch (scope, toolName) {
+        case (.once, _): nil
+        case (.chat, "run_command"): String(localized: "This exact command, until Aiden quits")
+        case (.always, "run_command"): String(localized: "This exact command in this workspace")
+        case (.chat, "edit_file"): String(localized: "Any edit to this file, until Aiden quits")
+        case (.always, "edit_file"): String(localized: "Any edit to this file in this workspace")
+        case (.chat, "write_file"): String(localized: "Any write to this file, until Aiden quits")
+        case (.always, "write_file"): String(localized: "Any write to this file in this workspace")
+        case (.chat, _): String(localized: "This exact action, until Aiden quits")
+        case (.always, _): String(localized: "This exact action in this workspace")
+        }
+    }
+
+    /// Host summary prefixes that name the tool, which the card's title already says.
+    /// Desktop hosts write the first four; the CLI daemon writes the last three.
+    private static let actionPrefixes: [String: String] = [
+        "run_command": "Run command: ",
+        "edit_file": "Edit file: ",
+        "write_file": "Create or replace file: ",
+        "share_image": "Share image in chat: ",
+        "bash": "Run command: ",
+        "read": "Read file: ",
+        "ls": "List folder: ",
+    ]
+
+    /// The exact action the host asks about, without a prefix the title repeats.
+    static func requestedAction(toolName: String, summary: String) -> String {
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let prefix = actionPrefixes[toolName], trimmed.hasPrefix(prefix) {
+            let rest = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rest.isEmpty { return rest }
+        }
+        return trimmed.isEmpty ? String(localized: "Review requested action") : trimmed
+    }
+
+    /// The card's title: the requested action as a plain question.
+    static func headline(toolName: String, kind: AidenApprovalKind, summary: String) -> String {
+        switch toolName {
+        case "schedule_task": return String(localized: "Save this scheduled task?")
+        case "edit_automation": return String(localized: "Change this automation?")
+        default: break
+        }
+        guard kind == .action else { return title(for: kind) }
+        switch toolName {
+        case "run_command", "bash":
+            return String(localized: "Run this command?")
+        case "edit_file", "edit":
+            return fileName(toolName: toolName, summary: summary).map { String(localized: "Edit \($0)?") }
+                ?? String(localized: "Edit files?")
+        case "write_file", "write":
+            return fileName(toolName: toolName, summary: summary).map { String(localized: "Write \($0)?") }
+                ?? String(localized: "Write a file?")
+        case "delete_file": return String(localized: "Delete files?")
+        case "move_file": return String(localized: "Move files?")
+        case "read_file", "read": return String(localized: "Read a file?")
+        case "ls": return String(localized: "List a folder?")
+        case "grep", "find": return String(localized: "Search files?")
+        case "web_fetch": return String(localized: "Open a web page?")
+        case "generate_image": return String(localized: "Generate an image?")
+        case "share_image": return String(localized: "Share this image in the chat?")
+        default: return title(for: kind)
+        }
+    }
+
+    /// The SF Symbol in the card's icon tile.
+    static func symbol(toolName: String, kind: AidenApprovalKind) -> String {
+        guard kind == .action else { return "calendar.badge.clock" }
+        switch toolName {
+        case "run_command", "bash": return "terminal"
+        case "edit_file", "edit": return "pencil"
+        case "write_file", "write": return "doc.badge.plus"
+        default: return "lock.shield"
+        }
+    }
+
+    /// A short file name for the title, only when the host summary names one path.
+    private static func fileName(toolName: String, summary: String) -> String? {
+        guard let prefix = actionPrefixes[toolName],
+              summary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(prefix) else { return nil }
+        let path = requestedAction(toolName: toolName, summary: summary)
+        guard !path.contains(where: \.isNewline),
+              let name = path.split(separator: "/").last.map(String.init),
+              !name.isEmpty, name.count <= 60 else { return nil }
+        return name
+    }
+}
+
+/// Contract revision 39: what the structured scheduled-task approval card says.
+/// It matches the desktop card: the action as a question, what runs and when,
+/// where and with what access, the instructions or script, and a note when the
+/// task will not run on its own.
+struct AidenScheduleCardPresentation: Equatable {
+    /// One fact in the card's grouped list, read as one element ("Access, Full access").
+    struct Row: Equatable, Identifiable {
+        let label: String
+        let value: String
+        let symbol: String
+        var isWarning = false
+
+        var id: String { label }
+        var accessibilityLabel: String { "\(label), \(value)" }
+    }
+
+    enum Note: Equatable {
+        case schedulerOff
+        case paused
+
+        var text: String {
+            switch self {
+            case .schedulerOff:
+                String(localized: "Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.")
+            case .paused:
+                String(localized: "This task stays paused.")
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .schedulerOff: "exclamationmark.triangle"
+            case .paused: "pause.circle"
+            }
+        }
+
+        var isWarning: Bool { self == .schedulerOff }
+    }
+
+    static let footnote = String(localized: "Scheduled work runs on your desktop while Aiden is open and the computer is awake.")
+    static let truncatedNote = String(localized: "Shortened to fit. The full text is on your computer.")
+
+    let title: String
+    let name: String
+    let cadence: String
+    /// "tomorrow at 9:00 AM", shown after "Next run" only while the task runs on its own.
+    let nextRun: String?
+    let runsIn: Row
+    let access: Row
+    /// "Model" for instructions (omitted when the host names neither part), or "Runs: Script".
+    let model: Row?
+    let notifications: Row
+    let timeZone: Row
+    /// "Instructions" or "Script", with the text the task runs.
+    let contentTitle: String
+    let content: String?
+    let contentIsScript: Bool
+    let isTruncated: Bool
+    let note: Note?
+
+    var isFullAccess: Bool { access.isWarning }
+    var rows: [Row] { [runsIn, access] + (model.map { [$0] } ?? []) + [notifications, timeZone] }
+
+    init(
+        _ schedule: AidenApprovalSchedule,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        locale: Locale = .current
+    ) {
+        title = Self.title(for: schedule.action)
+        name = schedule.name
+        cadence = schedule.cadence
+        // The task's state once approved: a resume runs again and a pause stops,
+        // as the Mac sends it, whatever `enabled` says.
+        let enabledOnceApproved = schedule.action == .resume || (schedule.action != .pause && schedule.enabled)
+        // The host sends a next run only for a task that will start on its own;
+        // the card holds to that rule even if one arrives anyway.
+        let runsOnItsOwn = enabledOnceApproved && schedule.schedulerEnabled && schedule.action != .remove
+        nextRun = runsOnItsOwn
+            ? schedule.nextRun.map { Self.nextRunText($0, now: now, calendar: calendar, locale: locale) }
+            : nil
+        runsIn = Self.runsIn(schedule)
+        let full = schedule.permission == .full
+        access = Row(
+            label: String(localized: "Access"),
+            value: full ? String(localized: "Full access") : String(localized: "Read-only"),
+            symbol: full ? "exclamationmark.shield" : "checkmark.shield",
+            isWarning: full
+        )
+        switch schedule.mode {
+        case .script:
+            model = Row(label: String(localized: "Runs"), value: String(localized: "Script"), symbol: "terminal")
+        case .llm:
+            let parts = [schedule.providerName, schedule.modelName].compactMap { $0 }
+            model = parts.isEmpty ? nil : Row(label: String(localized: "Model"), value: parts.joined(separator: " · "), symbol: "cpu")
+        }
+        notifications = Row(
+            label: String(localized: "Notifications"),
+            value: schedule.notify ? String(localized: "On") : String(localized: "Off"),
+            symbol: schedule.notify ? "bell" : "bell.slash"
+        )
+        timeZone = Row(label: String(localized: "Time zone"), value: schedule.timezone, symbol: "globe")
+        contentIsScript = schedule.mode == .script
+        contentTitle = contentIsScript ? String(localized: "Script") : String(localized: "Instructions")
+        content = contentIsScript ? schedule.script : schedule.prompt
+        isTruncated = schedule.truncated && content != nil
+        if !schedule.schedulerEnabled {
+            note = .schedulerOff
+        } else if !enabledOnceApproved && schedule.action != .remove && schedule.action != .pause {
+            // A pause says so in its question.
+            note = .paused
+        } else {
+            note = nil
+        }
+    }
+
+    /// The card's question, by what approving would do.
+    static func title(for action: AidenApprovalSchedule.Action) -> String {
+        switch action {
+        case .create: String(localized: "Save this scheduled task?")
+        case .update: String(localized: "Update this scheduled task?")
+        case .pause: String(localized: "Pause this scheduled task?")
+        case .resume: String(localized: "Resume this scheduled task?")
+        case .remove: String(localized: "Delete this scheduled task?")
+        case .runNow: String(localized: "Run this scheduled task now?")
+        }
+    }
+
+    /// Where the task runs: its project, else its connectors, else anywhere on
+    /// the computer for Full access (the host's global scope), else no project.
+    static func runsIn(_ schedule: AidenApprovalSchedule) -> Row {
+        let label = String(localized: "Runs in")
+        if let workspaceName = schedule.workspaceName {
+            return Row(label: label, value: workspaceName, symbol: "folder")
+        }
+        if !schedule.connectors.isEmpty {
+            return Row(label: label, value: schedule.connectors.joined(separator: ", "), symbol: "powerplug")
+        }
+        if schedule.permission == .full {
+            return Row(label: label, value: String(localized: "Anywhere on your computer"), symbol: "desktopcomputer")
+        }
+        return Row(label: label, value: String(localized: "No project"), symbol: "folder")
+    }
+
+    /// "today at 9:00 AM", "tomorrow at 9:00 AM", or "Thu, Oct 23 at 9:00 AM",
+    /// in this phone's time zone.
+    static func nextRunText(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+        var style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        let time = date.formatted(style.hour().minute())
+        let days = calendar.dateComponents(
+            [.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)
+        ).day ?? .min
+        switch days {
+        case 0: return String(localized: "today at \(time)")
+        case 1: return String(localized: "tomorrow at \(time)")
+        default:
+            style = style.weekday(.abbreviated).month(.abbreviated).day()
+            if calendar.component(.year, from: date) != calendar.component(.year, from: now) {
+                style = style.year()
+            }
+            return String(localized: "\(date.formatted(style)) at \(time)")
         }
     }
 }
@@ -2700,7 +3014,9 @@ enum AidenPendingApprovalResolution {
             hasRequiredWriteCapability: hasRequiredWriteCapability,
             hostCanAllow: approval.canAllow,
             canAllow: canAllow,
-            scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once]
+            scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once],
+            toolName: approval.toolName,
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
         )
     }
 }

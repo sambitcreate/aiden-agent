@@ -1354,16 +1354,32 @@ export function ScrollArea({
         </div>
       ) : null}
       {footer ? (
+        // Nothing scrolls the footer, so it never grows under the toolbar; a child
+        // that opts in with min-h-0 (a tall approval) shrinks to the room left.
+        // Anything still too tall overflows through the top, keeping the
+        // composer's input and actions at the bottom in view.
         <div
           ref={footerRef}
-          className="absolute inset-x-0 bottom-0 z-10"
-          style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
+          className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+          style={{
+            maxHeight: `calc(100% - ${toolbarHeight}px)`,
+            ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+          }}
         >
           {footer}
         </div>
       ) : null}
     </div>
   );
+}
+
+/**
+ * A ScrollArea footer's rows as one column that can give up room: a row that
+ * opts in with min-h-0 (a pending approval) shrinks first, and anything still
+ * too tall leaves through the top so the last row (the composer) stays in view.
+ */
+export function ScrollAreaFooterStack({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("flex min-h-0 flex-col justify-end", className)} {...props} />;
 }
 
 export type DialogLayer = "default" | "onboarding";

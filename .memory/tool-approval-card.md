@@ -1,0 +1,46 @@
+# Tool approval card redesign — 2026-10-22
+
+Branch `claude/project-thread-khrad6`. The owner asked for a better-looking Allow/Deny prompt on desktop and iPhone, after a reference screenshot (centered icon tile, title, big code block, centered note, two equal buttons). On desktop the card follows the composer's corner radius, and Allow keeps a dropdown for the remembered scopes.
+
+- **Desktop** (`renderer/components/chat-approval-card.tsx`):
+  - The card is `composer-shell`, with `.approval-well` and `.approval-icon-tile` in `renderer/styles.css`.
+  - `approvalHeadline` asks a plain question. `approvalCommand` strips "Run command: " from a paired host's summary.
+  - Deny and Allow once are equal `size="large"` buttons. Deny keeps initial focus.
+  - The chevron menu lists "Allow for this chat" and "Always allow in this workspace", each with a one-line hint.
+  - Hints must match `toolApprovalRuleTarget`: a command rule is the exact command, but a file rule is tool + path, so it covers any later edit/write to that file ("any edit to forecast.ts"). iOS/Android `scopeDetail(scope, toolName)` say the same. Pullfrog flagged the earlier "this exact action" wording as understating file grants.
+  - Specialized approvals (schedule, classifier, subagent grants, form fill, MCP mutation) keep their own bodies inside the shell.
+- **Desktop-only preview** (`renderer/shared/tool-approval-preview.ts`):
+  - `llm-client.ts` adds `preview` to the approval descriptor only for calls without `details`.
+  - A preview is the exact command, or a bounded diff: 40 lines of up to 400 characters, with 2 context lines.
+  - `aiden-remote-streams.ts` and `host-run-registry.ts` copy only named fields, so phones and run observers never receive it.
+  - It must stay a separate field: putting it in `details` would make phones unable to allow.
+- **iOS and Android**:
+  - `AidenApprovalCard` (iOS) and `AidenApprovalCardContent` (Android, shared by the chat banner and the Bot card) use the same layout.
+  - Wording comes from `AidenApprovalPresentation.headline` / `requestedAction`, matched to the desktop strings. Prefixes are stripped only for the tool that writes them.
+  - iOS `AidenPendingApproval` gained `toolName`.
+  - Android `AidenSplitButton` gained `fillWidth`.
+  - A long request folds to 6 lines on both phones. An expanded request scrolls in a bounded box (Android 200dp, iOS 240pt) because the Android workspace chat and the iOS Bot chat keep the card in a non-scrolling footer. While the end is out of view, "Scroll for more" shows beside Show less (Android `requestScroll.canScrollForward`, iOS `onScrollGeometryChange`). `AidenApprovalCardUiTest` (androidTest) checks Show less, the buttons, and that the cue appears and goes away at the end.
+  - Scheduled-task headlines match desktop: schedule_task "Save this scheduled task?", edit_automation "Change this automation?".
+  - iOS card shadow sits on the background shape only; on the whole card SwiftUI also shadows every glyph (a faint halo in light mode, seen in the first phone screenshots).
+  - Screenshots: every UI change gets shots before approval. Desktop is captured in the cloud; phones via Remote Control on the owner's Mac. Gallery page: https://claude.ai/artifact/Dj1BLmcUCtZLZZdk7jGGDY
+- **Rich scheduled-task card** (branch `claude/project-thread-dz5a7e`, stacked on khrad6). The owner found the summary-only schedule card bland and asked for a rich view on desktop, iOS and Android.
+  - Desktop: `renderer/components/scheduled-task-approval.tsx` (`ScheduledTaskApproval`, `scheduleApprovalHeadline`, `formatScheduleNextRun`) replaces the old schedule body in `chat-approval-card.tsx`; the icon tile is `CalendarClock` (`ApprovalIcon` takes an optional `icon`). It covers `scheduled-task` and `assistant-automation` details. Ids show as tertiary mono under the names because the desktop authorizes the exact host scope.
+  - Merged into khrad6 on 2026-10-22. On review, the host card was widened to the Assistant's own `schedule_task` proposals (`assistant-automation` details with action create; edits stay summary-only because phones show cards only on `schedule_task`), and the desktop title for an Assistant create was fixed to "Save this scheduled task?" (it said "Change this automation?"). Android schedule-body and folding-text scroll states are keyed per approval.
+  - Phones get the card only through contract revision 39 (`schedule:cards`, provisional, re-claim at merge): `main/services/aiden-remote-approval-schedule.ts` builds a display-only, id-free `schedule` object on the host and `parseAidenRemoteApprovalSchedule` is the wire validator iOS and Android mirror. It is a separate field, never `details`, and never changes `canAllow`. An invalid card decodes as nil and the phone keeps the summary card.
+  - Shared rules on all three: "Runs in" is project, else connectors, else "Anywhere on your computer" for Full, else "No project"; Next run only while enabled once approved, scheduling on and not removing; "Scheduling is off…" warning note beats "This task stays paused."; footer "Scheduled work runs on your desktop while Aiden is open and the computer is awake."
+  - "Enabled once approved": pause and resume proposals carry the task's state while it waits (`schedule-tool.ts` copies `existing.enabled`), so every surface asks `scheduledTaskEnabledAfterApproval` (resume → true, pause → false, else `enabled`). The phone card's `enabled` is sent that way, and the phones derive it again. A pause gets no "stays paused" note; a run-now of a paused task does.
+  - Desktop height: the approval sits in `ScrollArea`'s fixed, non-scrolling footer above the composer, so `ScrollArea` caps its footer at `calc(100% - toolbarHeight)` as a `justify-end` flex column (justify-end matters: without it a composer taller than the room overflowed downward and hid Send, Pullfrog round 5), and both chat footers wrap their rows in `ScrollAreaFooterStack` (`ui.tsx`: `flex min-h-0 flex-col justify-end`; a nested wrapper without justify-end hid Send in the paired-host chat, Pullfrog round 6). The approval chain (`EventPresence` in chat-pane, the card's outer div and section) is `min-h-0` so the card shrinks to what the composer leaves. A schedule review scrolls as the "Task details" group with a floor of `min(7rem, 12dvh)`; below that the section itself scrolls (`overflow-y-auto`) from the question. A fixed `100dvh - 13.5rem` cap was tried first and failed once a multi-line draft grew the composer (Pullfrog, card at y = -75). Covered by the short-window test in `tests/e2e/assistant-scheduled-profile.spec.ts` (empty composer and a ten-line draft).
+  - `ScheduledTaskApprovalDetails.script` must be single-line (the guard calls `safeApprovalText` without multiline); a multi-line script renders as an invalid approval.
+- **CLI daemon**: `daemonApprovalSummary` writes "Run command: X", "Read file: X" or "List folder: X" only when that one argument is the whole call. Anything else stays `${tool}: ${json}`, so nothing is hidden.
+- **Activity summary** (desktop `summarizeActivity`, iOS and Android `summary`):
+  - A `blocked` call counts as "skipped N command(s)/file change(s)/action(s)".
+  - `awaiting_approval` calls are not counted, and the summary reads "Waiting for approval" while a call waits.
+  - `cancelled` calls still count, because they may have run partway.
+- After a Deny, the composer placeholder reads "Tell Aiden what to do instead" until the next send (`DENIED_APPROVAL_COMPOSER_PLACEHOLDER`).
+- **Tests**:
+  - `renderer/components/chat-approval-card.test.tsx` and `renderer/shared/tool-approval-preview.test.ts` (both in `test:tool-approval-card`, CI lane `renderer-other`).
+  - A phone-isolation case in `aiden-remote-streams.test.ts`.
+  - A CLI parity case for the summary.
+  - iOS `AidenChatTests` and Android `AidenChatTest` cover headline and skipped cases.
+  - Rich schedule card: the schedule cases in `chat-approval-card.test.tsx`; `main/services/aiden-remote-approval-schedule.test.ts` (builder and wire validator) plus the opt-in cases in the remote protocol, streams and host-runs suites; Android `AidenScheduleCardsContractTest` (unit) and the schedule cases in `AidenApprovalCardUiTest`; iOS `AidenRemotePhase0Tests` (fixture decode), `AidenRemoteClientTests` (negotiation) and `AidenChatTests` (presentation).
+  - Screenshots for this round are on the orphan branch `claude/approval-card-screenshots` under `shots/desktop`, `shots/ios` and `shots/android`.
