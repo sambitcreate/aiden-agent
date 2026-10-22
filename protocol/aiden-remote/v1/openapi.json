@@ -16521,6 +16521,10 @@
               }
             },
             "additionalProperties": false
+          },
+          "takesNote": {
+            "description": "Contract revision 38: present, and false, only on a card whose answer may carry no note (one the Bot's password-or-code rule opened). Clients hide the note box for it; a note with its answer is 400 invalid_request.",
+            "const": false
           }
         },
         "additionalProperties": false

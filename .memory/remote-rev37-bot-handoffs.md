@@ -66,3 +66,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
 - `routines_skipped` is sent to no device.
 - A legacy phone keeps the notice line in its local list until its next snapshot.
 - Remote has no Bot-routine run route. The generic schedules API already 404s Bot routines.
+
+## Revision 38: `takesNote` (owner answer 5a, 2026-10-22)
+- `AidenRemoteBotHandoff.takesNote?: false`; `toRemoteBotHandoff` sets it when `botHandoffTakesNote(prompt)` is false (the locked `credentials` rule's card). Parsers on all three clients accept the key only as `false`; absent means true.
+- No opt-in: revision 37 shipped in no release. `AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 38` is the contract revision; re-claim at merge if `main` moved.
+- Fixture `botHandoffs.noNoteHandoff`. Desktop peer (`remote-bot-chat-view.tsx`), iOS (`composerHeldForNoNote`) and Android (`AidenBotComposerMode.HELD_FOR_NO_NOTE`) hold the composer ("Enter it yourself, then tap Done.") and refuse a note in `answerHandoff`.

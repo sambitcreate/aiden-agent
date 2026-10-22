@@ -72,9 +72,12 @@ const CREDENTIAL_RULE_IDS: ReadonlySet<string> = new Set(
  * words to the Bot: it reaches the model with the answer. A card a
  * password-or-code rule opened takes none, so a password or code typed as a
  * note can never reach the Bot; it is answered on the card itself. (A sign-in
- * may still carry a note with Skip; no composer sends one with it.)
+ * may still carry a note with Skip; no composer sends one with it.) A paired
+ * Mac's card names no rule and says `takesNote: false` instead (Remote
+ * contract revision 38).
  */
-export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule">): boolean {
+export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule"> & { takesNote?: boolean }): boolean {
+  if (handoff.takesNote === false) return false;
   return handoff.rule === undefined || !CREDENTIAL_RULE_IDS.has(handoff.rule.id);
 }
 

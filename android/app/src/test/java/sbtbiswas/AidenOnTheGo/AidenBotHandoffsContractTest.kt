@@ -202,6 +202,15 @@ class AidenBotHandoffsContractTest {
         )) {
             refuses(handoff.with("open" to JsonObject(mapOf("url" to JsonPrimitive(url)))))
         }
+        refuses(handoff.with("takesNote" to JsonPrimitive(true)))
+        refuses(handoff.with("takesNote" to JsonPrimitive("false")))
+        refuses(handoff.with("takesNote" to JsonNull))
+        // Revision 38: a password-or-code card says it takes no note, only ever as false.
+        val noNote = handoffs.getValue("noNoteHandoff").jsonObject
+        val decodedNoNote = AidenBotHandoff.parse(noNote)
+        assertEquals(false, decodedNoNote.takesNote)
+        assertEquals(noNote, decodedNoNote.toJson())
+        assertEquals(true, AidenBotHandoff.parse(handoff).takesNote)
         // Both optional fields may be left out.
         val bare = wire.decodeFromString(AidenBotSession.serializer(), session.with("handoff" to handoff.without("why").without("open")).toString())
         assertEquals(AidenBotHandoff(waitId, AidenBotHandoffKind.ACTION, "Enter the 2FA code your bank sent you"), bare.handoff)

@@ -7,7 +7,12 @@
 // the revision-35 view: a paused Bot reads as unavailable, and a waiting
 // hand-off reads as one assistant line asking the person to go to the Mac.
 
-import { isBotHandoffOpenUrl, normalizeBotHandoffAction, type BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import {
+  botHandoffTakesNote,
+  isBotHandoffOpenUrl,
+  normalizeBotHandoffAction,
+  type BotPendingHandoff,
+} from "../../renderer/shared/bot-handoffs.js";
 import {
   parseAidenRemoteBotHandoff,
   type AidenRemoteBotDetail,
@@ -49,7 +54,8 @@ function cardPage(url: string): string | undefined {
  * A waiting hand-off card as a `bot:handoffs` device sees it. A link that is
  * not a safe https page is left out, and so is a rule card's page: it is the
  * Bot's own tab on the Mac, and in the device's browser the step would act on
- * the person's own session.
+ * the person's own session. A card that takes no note says so (revision 38),
+ * so the device hides its note box.
  */
 export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHandoff {
   const url = prompt.source === "rule" || prompt.open === undefined ? undefined : cardPage(prompt.open.url);
@@ -60,6 +66,7 @@ export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHan
     action: prompt.action,
     ...(why ? { why: prompt.why } : {}),
     ...(url !== undefined ? { open: { url } } : {}),
+    ...(botHandoffTakesNote(prompt) ? {} : { takesNote: false }),
   });
 }
 

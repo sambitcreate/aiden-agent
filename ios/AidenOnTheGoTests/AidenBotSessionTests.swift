@@ -4754,6 +4754,29 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, "That card was already answered or closed.")
     }
 
+    func testACardThatTakesNoNoteHoldsTheComposerAndIsAnsweredOnlyBare() async throws {
+        let (model, transport) = await loadedModel(try session { object in
+            var card = try XCTUnwrap(object["handoff"] as? [String: Any])
+            card["takesNote"] = false
+            object["handoff"] = card
+        })
+        XCTAssertEqual(model.handoff?.takesNote, false)
+        XCTAssertFalse(model.composerAnswersHandoff, "a code typed in the composer would reach the Bot")
+        XCTAssertTrue(model.composerHeldForNoNote)
+
+        let fromComposer = await model.answerHandoffFromComposer("123456", connected: true)
+        XCTAssertFalse(fromComposer)
+        let withNote = await model.answerHandoff(.done, note: "123456")
+        XCTAssertFalse(withNote)
+        XCTAssertTrue(transport.answers.isEmpty, "a note never leaves the phone for this card")
+        XCTAssertEqual(model.handoff?.waitId, waitID, "the card still waits")
+
+        let done = await model.answerHandoff(.done)
+        XCTAssertTrue(done)
+        XCTAssertEqual(transport.answers.first?.request, try AidenBotHandoffAnswerRequest(outcome: .done))
+        XCTAssertFalse(model.composerHeldForNoNote)
+    }
+
     func testASignInIsFinishedOnTheMacOrSkippedNeverMarkedDone() async throws {
         let (model, transport) = await loadedModel(try session { object in
             var card = try XCTUnwrap(object["handoff"] as? [String: Any])

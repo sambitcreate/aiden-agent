@@ -221,6 +221,8 @@ enum AidenBotSessionCopy {
     static let handoffOpen = "Open"
     static let handoffNotePlaceholder = "Add a note and send to mark it done"
     static let signInPlaceholder = "Finish signing in on your Mac, or skip it."
+    /// Revision 38: a password-or-code card takes no note, so the composer waits.
+    static let handoffNoNotePlaceholder = "Enter it yourself, then tap Done."
     static let handoffExpired = "That card was already answered or closed."
     static let handoffNotSent = "That answer wasn’t sent. Please try again."
     static let handoffNoteTooLong = "Keep the note under 4,000 characters."
@@ -2010,8 +2012,13 @@ final class AidenBotSessionModel {
     }
 
     /// While a step (not a sign-in) waits, the composer's text is its note:
-    /// Send marks the step done (desktop parity).
-    var composerAnswersHandoff: Bool { handoff?.kind == .action }
+    /// Send marks the step done (desktop parity). A card that takes no note
+    /// (revision 38) holds the composer instead (`composerHeldForNoNote`).
+    var composerAnswersHandoff: Bool { handoff?.kind == .action && handoff?.takesNote != false }
+
+    /// Revision 38: a password-or-code card waits. A code typed in the
+    /// composer would reach the Bot, so the composer waits for Done or Skip.
+    var composerHeldForNoNote: Bool { handoff?.kind == .action && handoff?.takesNote == false }
 
     /// Answers the waiting hand-off: Done or Skip, with an optional note. A
     /// sign-in is finished on the Mac, so a phone can only skip it. The card
@@ -2025,6 +2032,8 @@ final class AidenBotSessionModel {
         guard canAnswerHandoff, let shown = handoff else { return false }
         if outcome == .done, shown.kind == .signIn { return false }
         let trimmed = rawNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A card that takes no note is answered bare: a code typed as a note never leaves the phone.
+        if !trimmed.isEmpty, !shown.takesNote { return false }
         guard trimmed.unicodeScalars.count <= AidenBotHandoffWire.maxNoteLength,
               let request = try? AidenBotHandoffAnswerRequest(outcome: outcome, note: trimmed.isEmpty ? nil : trimmed) else {
             errorMessage = AidenBotSessionCopy.handoffNoteTooLong

@@ -722,6 +722,7 @@
     <string name="bot_handoff_open_host">Open %1$s</string>
     <string name="bot_handoff_note_placeholder">Add a note and send to mark it done</string>
     <string name="bot_handoff_sign_in_placeholder">Finish signing in on your Mac, or skip it.</string>
+    <string name="bot_handoff_no_note_placeholder">Enter it yourself, then tap Done.</string>
     <string name="bot_handoff_mac_opened">Finish signing in on your Mac.</string>
     <string name="bot_handoff_mac_closed">Open Aiden on your Mac to finish signing in.</string>
     <string name="bot_paused_title">%1$s is paused.</string>

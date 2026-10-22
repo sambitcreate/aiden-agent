@@ -309,6 +309,11 @@ enum class AidenBotComposerMode {
     HANDOFF_NOTE,
     /** A sign-in hand-off waits: it is finished on the Mac, or skipped on its card. */
     HELD_FOR_SIGN_IN,
+    /**
+     * Revision 38: a card a password-or-code rule opened waits. It takes no note, so the composer
+     * holds: a code typed here would reach the Bot. Done and Skip on the card answer it.
+     */
+    HELD_FOR_NO_NOTE,
     /** The person paused the Bot: nothing is sent until Resume. */
     PAUSED
 }
@@ -374,8 +379,10 @@ data class AidenBotSessionUiState(
 
     /** Revision 37: the step the Bot handed back, while it waits. */
     val handoff: AidenBotHandoff? get() = session?.handoff
-    /** The composer's text goes to an action hand-off as Done's note. */
-    val composerAnswersHandoff: Boolean get() = handoff?.kind == AidenBotHandoffKind.ACTION
+    /** The composer's text goes to an action hand-off as Done's note, unless the card takes none. */
+    val composerAnswersHandoff: Boolean get() = handoff?.kind == AidenBotHandoffKind.ACTION && handoff?.takesNote != false
+    /** Revision 38: the waiting card takes no note, so the composer waits for Done or Skip. */
+    val composerHeldForNoNote: Boolean get() = handoff?.kind == AidenBotHandoffKind.ACTION && handoff?.takesNote == false
     /** A sign-in hand-off is finished on the Mac: the composer waits for it (Skip still answers). */
     val composerHeldForSignIn: Boolean get() = handoff?.kind == AidenBotHandoffKind.SIGN_IN
 
@@ -384,6 +391,7 @@ data class AidenBotSessionUiState(
         get() = when {
             isPaused -> AidenBotComposerMode.PAUSED
             composerHeldForSignIn -> AidenBotComposerMode.HELD_FOR_SIGN_IN
+            composerHeldForNoNote -> AidenBotComposerMode.HELD_FOR_NO_NOTE
             composerAnswersHandoff -> AidenBotComposerMode.HANDOFF_NOTE
             else -> AidenBotComposerMode.MESSAGE
         }
@@ -393,7 +401,7 @@ data class AidenBotSessionUiState(
         get() = when (composerMode) {
             AidenBotComposerMode.MESSAGE -> canSend
             AidenBotComposerMode.HANDOFF_NOTE -> !isAnsweringHandoff
-            AidenBotComposerMode.HELD_FOR_SIGN_IN, AidenBotComposerMode.PAUSED -> false
+            AidenBotComposerMode.HELD_FOR_SIGN_IN, AidenBotComposerMode.HELD_FOR_NO_NOTE, AidenBotComposerMode.PAUSED -> false
         }
 
     /** The transcript to draw: the Mac's, or the cached one while connecting. */
@@ -1508,6 +1516,8 @@ class AidenBotSessionController(
         val handoff = _state.value.session?.handoff ?: return false
         if (outcome == AidenBotHandoffOutcome.DONE && handoff.kind == AidenBotHandoffKind.SIGN_IN) return false
         val trimmed = note?.trim()?.takeIf { it.isNotEmpty() }
+        // A card that takes no note (revision 38) is answered bare: a code typed as a note never leaves the phone.
+        if (trimmed != null && !handoff.takesNote) return false
         if (trimmed != null && trimmed.codePointCount(0, trimmed.length) > AidenBotHandoffWire.MAX_NOTE_LENGTH) {
             _state.update { it.copy(actionError = HANDOFF_NOTE_TOO_LONG) }
             return false
