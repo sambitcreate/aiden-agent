@@ -103,3 +103,41 @@ experiments only if measured overhead or failures justify them.
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.
+
+## Self-hosted Mac runner
+
+The macOS jobs in `CI` (build, verify, desktop test lanes, Apple Foundation Models
+and iOS) and the two TestFlight workflows can run on the
+maintainer's Mac Studio instead of GitHub's hosted `macos-26` runners. Hosted Macs
+are capped at five concurrent jobs per account and a full run needs ten, so bursts
+of merges queued Mac jobs for over an hour.
+
+Electron E2E always stays on `macos-26`. Both Studio runners share one macOS login,
+so parallel shards would share the system clipboard and window focus, and some
+specs copy text and check the clipboard. Moving E2E to the Studio needs each runner
+in its own macOS account first.
+
+The repository variable `AIDEN_MAC_RUNNER` is the switch:
+
+- `on`: `CI` macOS jobs use runners labelled `aiden-studio`. This applies to pushes,
+  manual runs, and pull requests whose head branch is in this repository. PRs from
+  forks always stay on hosted runners. The manually started TestFlight workflows
+  follow the switch alone.
+- Any other value, or unset: every job uses `macos-26`.
+
+GitHub does not fall back to hosted runners when the Studio is offline. Jobs
+queue instead, so turn the switch off before the Mac is asleep or away.
+
+Routing is not the security boundary. A fork PR runs its own copy of the workflow
+and could target the runner, so the repository requires approval before workflows
+from any external contributor run. Don't approve a fork PR that changes
+`.github/`. `release.yml` and every Linux job stay on hosted runners: Linux
+release provenance is verified with `--deny-self-hosted-runners` (`install.sh`),
+and signed public builds come from a clean machine.
+
+Runner host setup: a separate standard `ci` macOS account that stays logged in
+(Fast User Switching), runners `studio-1` and `studio-2` installed with `svc.sh`,
+`/Applications/Xcode_26.6.app` present to match the workflows' `DEVELOPER_DIR`, and
+`DEVELOPER_DIR` set to that Xcode in each runner's `.env`, so jobs that don't name
+an Xcode match hosted runners. The timing report totals self-hosted minutes
+separately from `macos-26`.
