@@ -102,8 +102,11 @@ Grant connection tools only from servers you trust to describe them honestly.
   the person set, so the Bot doesn't run any step its rules would check, and
   is told "This Bot's rules couldn't be read, so this action didn't run." The
   rules editor shows the defaults with an alert, and the next change starts
-  again from them and replaces the file. A file that can't be read at all
+  again from them and replaces the file. Before replacing it, Aiden keeps the
+  damaged bytes beside it as `rules.json.unreadable` (then
+  `rules.json.unreadable.2`, and so on, never over an earlier copy), so rules
+  the person wrote can be recovered by hand. A file that can't be read at all
   (permissions, a directory in its place) fails closed the same way, and the
   editor offers Try again.
-- Deleting the Bot removes the file and refuses later writes.
+- Deleting the Bot removes the file and its kept copies, and refuses later writes.
 - Phones don't show rules yet.

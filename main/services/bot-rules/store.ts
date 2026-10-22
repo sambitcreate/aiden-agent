@@ -6,14 +6,17 @@
 // that does not parse exactly fails closed: the Bot's calls can't read their
 // rules (so a call a rule would check doesn't run), the editor shows the
 // defaults marked `unreadable`, and its next change starts again from them,
-// replacing the file. Every edit names the revision it was made against, so
-// two editors never overwrite each other silently.
+// replacing the file. That change first keeps the damaged bytes beside it as
+// `rules.json.unreadable` (then `.2`, `.3`, ...), so rules the person wrote can
+// still be recovered by hand. Every edit names the revision it was made
+// against, so two editors never overwrite each other silently.
 //
 // The Bot's directory is shared with its session database, which deleting the
 // Bot removes. This store never brings that directory back for a deleted Bot:
 // it writes only for a Bot the Bot store still knows, `forgetBot` refuses
 // every later write in this process (checked again right before publishing),
-// and it removes the file and the directory it may have recreated.
+// and it removes the file, its kept copies and the directory it may have
+// recreated.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -40,6 +43,8 @@ import { createKeyedSerial, botSessionDirectory } from "../bot-routine-notes.js"
 import { contentStems } from "./words.js";
 
 export const BOT_RULES_FILE = "rules.json";
+/** A damaged rules file is kept under this name (then `.2`, `.3`, ...) before a change replaces it. */
+export const BOT_RULES_UNREADABLE_COPY = `${BOT_RULES_FILE}.unreadable`;
 const FILE_VERSION = 1;
 
 export interface BotRuleStore {
@@ -143,6 +148,8 @@ function parseRulesFile(value: unknown): RulesFile | undefined {
 interface StoredRules {
   file: RulesFile;
   unreadable: boolean;
+  /** The damaged file's bytes, kept aside before a change replaces them. */
+  damaged?: string;
 }
 
 function viewOf(botId: string, stored: StoredRules): BotRulesView {
@@ -209,6 +216,8 @@ function applyChange(file: RulesFile, change: BotRuleChange): Applied {
   }
 }
 
+const UNREADABLE_COPY_NAME = /^rules\.json\.unreadable(?:\.[1-9]\d*)?$/u;
+
 function errorCode(error: unknown): string | undefined {
   return error !== null && typeof error === "object" ? (error as NodeJS.ErrnoException).code : undefined;
 }
@@ -234,7 +243,20 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
     } catch {
       parsed = undefined;
     }
-    return parsed === undefined ? { file: EMPTY, unreadable: true } : { file: parsed, unreadable: false };
+    return parsed === undefined ? { file: EMPTY, unreadable: true, damaged: text } : { file: parsed, unreadable: false };
+  }
+
+  /** Keeps a damaged file's bytes under the first free copy name, never over an earlier copy. */
+  async function keepDamagedCopy(botId: string, bytes: string): Promise<void> {
+    for (let n = 1; ; n += 1) {
+      const name = n === 1 ? BOT_RULES_UNREADABLE_COPY : `${BOT_RULES_UNREADABLE_COPY}.${n}`;
+      try {
+        await fs.writeFile(path.join(directory(botId), name), bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        return;
+      } catch (error) {
+        if (errorCode(error) !== "EEXIST") throw error;
+      }
+    }
   }
 
   async function ensureDirectory(botId: string): Promise<void> {
@@ -272,6 +294,7 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
         const applied = applyChange(current.file, change);
         if (!applied.ok) return { ok: false, reason: applied.reason, view: viewOf(botId, current) };
         await ensureDirectory(botId);
+        if (current.damaged !== undefined) await keepDamagedCopy(botId, current.damaged);
         await writeJsonAtomic(fileOf(botId), applied.file, {
           mode: 0o600,
           space: 2,
@@ -286,6 +309,11 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
       forgotten.add(botId);
       return serial(botId, async () => {
         await fs.rm(fileOf(botId), { force: true });
+        const names = await fs.readdir(directory(botId)).catch((error: unknown) => {
+          if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return [] as string[];
+          throw error;
+        });
+        await Promise.all(names.filter((name) => UNREADABLE_COPY_NAME.test(name)).map((name) => fs.rm(path.join(directory(botId), name), { force: true })));
         // A write that raced the Bot's deletion may have recreated an empty directory.
         await fs.rmdir(directory(botId)).catch((error: unknown) => {
           if (errorCode(error) !== "ENOENT" && errorCode(error) !== "ENOTEMPTY" && errorCode(error) !== "EEXIST") throw error;
