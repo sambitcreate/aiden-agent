@@ -351,15 +351,7 @@ void app.whenReady().then(async () => {
   const rememberedScroll = { right: await scrollTo(rowNamed("hunt")), wrong: await scrollTo(rowNamed("zzzz")) };
   shownAs.push(await shownTable());
   const shownTableSnapshot = await snapshot(botTab);
-  // A page that marks the saved card month: a Bot's wait can't test which one.
-  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
-  const savedMonth = {
-    right: await waitFor("#exp option:nth-child(5)[selected]"),
-    wrong: await waitFor("#exp option:nth-child(6)[selected]"),
-    role: await waitFor("internal:role=checkbox[checked=true]"),
-  };
   const remembered = {
-    savedMonth,
     shownAs,
     wait: rememberedWait,
     scroll: rememberedScroll,
@@ -367,6 +359,14 @@ void app.whenReady().then(async () => {
       leaked: JSON.stringify([shownTableSnapshot.text, shownTableSnapshot.elements, shownTableSnapshot.accessibilityTree]).includes("hunter2xyz"),
       found: await Promise.all(shownTableSnapshot.elements.map((element) => waitFor(element.selector))),
     },
+  };
+
+  // A page that marks the saved card month: a Bot's wait can't test which one.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const savedMonth = {
+    right: await waitFor("#exp option:nth-child(5)[selected]"),
+    wrong: await waitFor("#exp option:nth-child(6)[selected]"),
+    role: await waitFor("internal:role=checkbox[checked=true]"),
   };
 
   // 6. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
@@ -388,6 +388,7 @@ void app.whenReady().then(async () => {
         hold: { heldState, held, personMayUse, afterRelease, heldTraces },
         reveal,
         remembered,
+        savedMonth,
         cleared,
         expected: {
           heldRefusal: boundary.BROWSER_HELD_TAB_REFUSED,

@@ -153,7 +153,7 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.remembered.wait).toEqual({ right: timedOut, wrong: timedOut });
   // Nor which option a server-rendered card-expiry list marked selected; role states still work.
   const stateRefusal = result.expected.stateRefusal;
-  expect(result.remembered.savedMonth).toEqual({ right: stateRefusal, wrong: stateRefusal, role: "ran" });
+  expect(result.savedMonth).toEqual({ right: stateRefusal, wrong: stateRefusal, role: "ran" });
   expect(result.remembered.scroll.right).not.toBe("ran");
   expect(result.remembered.scroll.right).toBe(result.remembered.scroll.wrong);
   expect(result.remembered.snapshot.leaked).toBe(false);
