@@ -106,6 +106,9 @@ export interface BotRoutineExecutorPorts extends BotRoutinePorts {
 export interface BotRoutineExecutorDependencies {
   store: {
     recordRun(run: Omit<ScheduledRun, "id"> & { id?: string }): Promise<ScheduledRun>;
+    runById(taskId: string, runId: string): Promise<ScheduledRun | undefined>;
+    get(taskId: string): Promise<ScheduledTask | undefined>;
+    settleRoutineFire(taskId: string, requestId: string): Promise<void>;
   };
   /** Late-bound so the Bot runtime can be swapped in after the scheduler is built. */
   ports(): BotRoutineExecutorPorts | Promise<BotRoutineExecutorPorts>;
@@ -121,7 +124,11 @@ interface BotRoutineOutcome {
   error?: string;
   /** Whether the person should hear about this run. */
   surface: boolean;
+  /** The Pi admission or reply may have committed; retry by request id later. */
+  uncertain?: boolean;
 }
+
+class RoutineOutcomeUnknown extends Error {}
 
 function message(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 4_096);
@@ -161,11 +168,13 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     requestId: string,
     ports: BotRoutineExecutorPorts,
     signal: AbortSignal,
+    recovering: boolean,
+    existingSubmissionId?: string,
   ): Promise<BotRoutineOutcome> {
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("This routine has no message.");
     if (signal.aborted) throw new Error("Routine was cancelled.");
-    const state = await abortable(ports.state(task.botId), signal);
+    const state = recovering ? { kind: "idle" as const } : await abortable(ports.state(task.botId), signal);
     // A paused (interrupted) Bot turn belongs to the person: a routine must
     // neither resume nor dismiss it, so the firing is recorded and dropped.
     if (state.kind === "interrupted") {
@@ -177,39 +186,65 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     if (state.kind === "unavailable") {
       throw new Error("Bots are open in another Aiden window.");
     }
-    const notes = ports.routineNotes ? await abortable(ports.routineNotes(task.botId, task.id), signal) : "";
-    const label = routineLabel(task, trigger);
     let submission: { submissionId: string; deduped: boolean };
-    try {
-      submission = await abortable(
-        ports.send(task.botId, {
-          text: botRoutineMessage(prompt, notes),
-          requestId,
-          ifNotInterrupted: true,
-          ...(label ? { label } : {}),
-        }),
-        signal,
-      );
-    } catch (error) {
-      // The Bot was interrupted between the state check and the send.
-      if ((error as { reason?: unknown } | null)?.reason === "bot_paused") {
-        return { result: "skipped", reason: "bot_paused", output: "", surface: false };
+    if (existingSubmissionId !== undefined) {
+      submission = { submissionId: existingSubmissionId, deduped: true };
+    } else {
+      const notes = ports.routineNotes ? await abortable(ports.routineNotes(task.botId, task.id), signal) : "";
+      const label = routineLabel(task, trigger);
+      try {
+        submission = await abortable(
+          ports.send(task.botId, {
+            text: botRoutineMessage(prompt, notes),
+            requestId,
+            ifNotInterrupted: true,
+            ...(label ? { label } : {}),
+          }),
+          signal,
+        );
+      } catch (error) {
+        // The Bot was interrupted between the state check and the send.
+        if ((error as { reason?: unknown } | null)?.reason === "bot_paused") {
+          return { result: "skipped", reason: "bot_paused", output: "", surface: false };
+        }
+        if (trigger.kind === "automatic") {
+          // A failed send may have committed in Pi before its response was lost.
+          // Read by the stable request ID before deciding whether this is a
+          // terminal pre-admission failure or an outcome to recover later.
+          let admitted: string | undefined;
+          try {
+            admitted = await ports.submissionForRequest(task.botId, requestId);
+          } catch {
+            throw new RoutineOutcomeUnknown(message(error));
+          }
+          if (admitted) throw new RoutineOutcomeUnknown(message(error));
+        }
+        throw error;
       }
-      throw error;
     }
-    if (submission.deduped) {
+    if (submission.deduped && !recovering) {
       return { result: "skipped", reason: "duplicate", output: "", surface: false };
     }
-    const outcome = await abortable(
-      ports.awaitReply(task.botId, submission.submissionId, signal),
-      signal,
-    );
+    let outcome: Awaited<ReturnType<BotRoutineExecutorPorts["awaitReply"]>>;
+    try {
+      outcome = await abortable(ports.awaitReply(task.botId, submission.submissionId, signal), signal);
+    } catch (error) {
+      if (trigger.kind === "automatic") throw new RoutineOutcomeUnknown(message(error));
+      throw error;
+    }
     if (outcome.kind === "failed") throw new Error(outcome.error);
     if (outcome.kind === "interrupted") {
+      if (recovering || trigger.kind === "catch_up")
+        return { result: "skipped", reason: "bot_paused", output: "", surface: false };
       throw new Error("The Bot was interrupted while working on this routine.");
     }
     if (isSilentBotRoutineReply(outcome.text)) {
-      await ports.markSilent(task.botId, submission.submissionId);
+      try {
+        await ports.markSilent(task.botId, submission.submissionId);
+      } catch (error) {
+        if (trigger.kind === "automatic") throw new RoutineOutcomeUnknown(message(error));
+        throw error;
+      }
       return { result: "silent", output: "", surface: false };
     }
     return { result: "success", output: outcome.text, surface: true };
@@ -224,28 +259,88 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       const startedAt = now();
       const trigger = options.trigger ?? { kind: "manual", key: options.runId ?? randomUUID() };
       const requestId = botRoutineRequestId(task.id, trigger);
+      const recovering = trigger.kind === "automatic" && options.runId === requestId;
       let ports: BotRoutineExecutorPorts | undefined;
       let outcome: BotRoutineOutcome;
       try {
-        ports = await dependencies.ports();
-        outcome = await execute(task as ScheduledTask & { botId: string }, trigger, requestId, ports, options.signal);
+        if (recovering) {
+          let prior: ScheduledRun | undefined;
+          try {
+            prior = await dependencies.store.runById(task.id, requestId);
+          } catch (error) {
+            throw new RoutineOutcomeUnknown(message(error));
+          }
+          if (prior) {
+            try {
+              // The run file and task summary are separate durable writes. A
+              // crash between them leaves the answer saved but the routine's
+              // visible last result stale.
+              const current = await dependencies.store.get(task.id);
+              if (current && (current.lastRunAt ?? 0) <= prior.finishedAt && (
+                current.lastRunAt !== prior.finishedAt || current.lastResult !== prior.result ||
+                current.lastError !== prior.error
+              )) await dependencies.store.recordRun(prior);
+              if (prior.result === "success" || prior.result === "error") {
+                const deliveryPorts = await dependencies.ports();
+                await deliveryPorts.deliverResult?.({
+                  botId: task.botId,
+                  requestId,
+                  routineName: task.name?.trim() || "Routine",
+                  text: prior.result === "error" ? BOT_ROUTINE_FAILED_PREVIEW : prior.output,
+                });
+              }
+              await dependencies.store.settleRoutineFire(task.id, requestId);
+            } catch {
+              // The saved answer must never be replaced by an error merely
+              // because summary repair or delivery is temporarily unavailable.
+              return prior;
+            }
+            return prior;
+          }
+        }
+        try {
+          ports = await dependencies.ports();
+        } catch (error) {
+          if (recovering) throw new RoutineOutcomeUnknown(message(error));
+          throw error;
+        }
+        const previous = trigger.kind === "catch_up"
+          ? await dependencies.store.runById(task.id, requestId)
+          : undefined;
+        let existingSubmissionId: string | undefined;
+        if (recovering) {
+          try {
+            existingSubmissionId = await ports.submissionForRequest(task.botId, requestId);
+          } catch (error) {
+            throw new RoutineOutcomeUnknown(message(error));
+          }
+        }
+        outcome = recovering && !task.enabled && task.routineSchedule?.kind !== "once" && !existingSubmissionId
+          ? { result: "blocked", output: "", error: "Routine was paused.", surface: false }
+          : await execute(
+            task as ScheduledTask & { botId: string }, trigger, requestId, ports, options.signal,
+            recovering || (previous?.result === "skipped" && previous.reason === "bot_paused"),
+            existingSubmissionId,
+          );
       } catch (error) {
         const cancelled = options.signal.aborted;
+        const uncertain = error instanceof RoutineOutcomeUnknown || (cancelled && trigger.kind === "automatic");
         outcome = {
-          result: cancelled ? "blocked" : "error",
+          result: cancelled || uncertain ? "blocked" : "error",
           output: "",
           error: cancelled ? "Routine was cancelled." : message(error),
           // Failures always surface; a cancellation is the person's own action.
-          surface: !cancelled,
+          surface: !cancelled && !uncertain,
+          uncertain,
         };
       }
       // A scheduled fire skipped while the Bot was paused is recorded under
       // its own request id, so the catch-up after Resume submits that exact
       // id and any repeat of the catch-up dedupes against it.
-      const missedFire =
-        outcome.reason === "bot_paused" && trigger.kind === "automatic" && options.runId === undefined;
       const run = await dependencies.store.recordRun({
-        id: missedFire ? requestId : options.runId,
+        id: outcome.reason === "duplicate" || outcome.uncertain
+          ? undefined
+          : trigger.kind === "automatic" || trigger.kind === "catch_up" ? requestId : options.runId,
         taskId: task.id,
         startedAt,
         finishedAt: now(),
@@ -256,15 +351,23 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       });
       if (outcome.surface) {
         dependencies.notify(task, outcome.error ?? outcome.output);
-        await ports
-          ?.deliverResult?.({
+        try {
+          await ports
+            ?.deliverResult?.({
             botId: task.botId,
             requestId,
             routineName: task.name?.trim() || "Routine",
             text: outcome.error !== undefined ? BOT_ROUTINE_FAILED_PREVIEW : outcome.output,
-          })
-          .catch(() => undefined);
+            });
+        } catch {
+          // The run is durable. Keep its fire receipt so startup can retry the
+          // idempotent delivery handoff without re-running the Bot.
+          dependencies.broadcast({ taskId: task.id, botId: task.botId, run });
+          return run;
+        }
       }
+      if (trigger.kind === "automatic" && !outcome.uncertain)
+        await dependencies.store.settleRoutineFire(task.id, requestId);
       dependencies.broadcast({ taskId: task.id, botId: task.botId, run });
       return run;
     },
@@ -292,6 +395,10 @@ export interface BotRoutine {
   lastRunAt?: number;
   lastResult?: ScheduledRunResult;
   lastError?: string;
+  /** A claimed fire still being reconciled or handed to delivery. */
+  pendingFireCount: number;
+  /** The next scheduled fire is late enough to indicate a stopped scheduler. */
+  overdueSince?: number;
   updatedAt: number;
 }
 
@@ -472,6 +579,10 @@ export function projectBotRoutine(task: ScheduledTask & { botId: string }, now: 
     ...(task.lastRunAt !== undefined ? { lastRunAt: task.lastRunAt } : {}),
     ...(task.lastResult !== undefined ? { lastResult: task.lastResult } : {}),
     ...(task.lastError !== undefined ? { lastError: task.lastError } : {}),
+    pendingFireCount: task.pendingRoutineFires?.length ?? 0,
+    ...(task.enabled && task.nextRunAt !== undefined && task.nextRunAt < now - 15 * 60_000
+      ? { overdueSince: task.nextRunAt }
+      : {}),
     updatedAt: task.updatedAt,
   };
 }
@@ -636,7 +747,8 @@ export interface BotRoutineCatchUpDependencies {
 
 /**
  * Re-runs, once, the newest fire each enabled routine skipped while its Bot
- * was paused. The run records are the only state: a routine qualifies when
+ * was paused, including a one-time routine spent by that fire. The run
+ * records are the only state: a routine qualifies when
  * its newest run is a `bot_paused` skip less than 7 days old, so several
  * misses coalesce into one, and a later run of any kind ends the catch-up.
  */
@@ -646,7 +758,7 @@ export function createBotRoutineCatchUp(dependencies: BotRoutineCatchUpDependenc
     async catchUp(botId: string): Promise<Array<{ taskId: string; completion: Promise<ScheduledRun> }>> {
       const dispatched: Array<{ taskId: string; completion: Promise<ScheduledRun> }> = [];
       for (const task of await dependencies.store.list()) {
-        if (task.botId !== botId || !task.enabled) continue;
+        if (task.botId !== botId || (!task.enabled && task.routineSchedule?.kind !== "once")) continue;
         const [newest] = await dependencies.store.runs(task.id);
         if (newest?.result !== "skipped" || newest.reason !== "bot_paused") continue;
         if (now() - newest.startedAt >= BOT_ROUTINE_CATCH_UP_WINDOW_MS) continue;

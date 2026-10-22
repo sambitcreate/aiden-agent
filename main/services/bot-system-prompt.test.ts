@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
+  botRoutineGuidance,
   resolveBotForGeneration,
   withBotPersona,
   withBotRuntimeInstructions,
@@ -17,6 +18,18 @@ const bot = {
   createdAt: 1,
   updatedAt: 2,
 };
+
+test("Bot wake-up guidance follows the tools offered to this turn", () => {
+  const unavailable = botRoutineGuidance(new Set());
+  assert.match(unavailable, /this turn has no routines tool/u);
+  assert.match(unavailable, /Routines page or enable Schedules/u);
+  assert.doesNotMatch(unavailable, /call routines with action propose/u);
+  const guidance = botRoutineGuidance(new Set(["routines"]));
+  assert.match(guidance, /one-time or recurring request.*action propose/u);
+  assert.match(guidance, /accepts the Add routine card/u);
+  assert.match(guidance, /same Bot chat/u);
+  assert.match(guidance, /running on an awake computer/u);
+});
 
 test("bot persona composition preserves the base prompt and escapes structural delimiters", () => {
   const base = "You are Pi. Existing workspace authority remains exact.";

@@ -28,6 +28,7 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 - Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.
 - Treats the desktop host as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
 - Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
+- A Bot can suggest a one-time or recurring routine in its chat. The person accepts the proposal before Aiden schedules future turns in that Bot's durable conversation; execution depends on the desktop scheduler and current Bot access. Each due fire is saved before the schedule advances and reconciled with Pi after a restart; the Bot's Routines page shows pending or overdue work.
 
 The standalone CLI can explicitly migrate its Bot host to the shared durable session core. Migration is opt-in, preserves legacy data, and advertises only supported session, routine, preset and memory endpoints; see [CLI durable Bots](docs/cli-durable-bots.md). Private verification receipts and workflow lesson drafts are evaluation infrastructure, not an automatic skill-learning or workflow-adoption feature.
 

@@ -53,17 +53,31 @@ class FakeBotSession implements BotRoutinePorts {
   resumeCalls = 0;
   dismissCalls = 0;
   private submissions = new Map<string, string>();
+  failAfterNextAdmission = false;
+  failBeforeNextAdmission = false;
 
   async state(botId: string): Promise<BotSessionState> {
     return this.states.get(botId) ?? { kind: "idle" };
   }
 
+  async submissionForRequest(_botId: string, requestId: string): Promise<string | undefined> {
+    return this.submissions.get(requestId);
+  }
+
   async send(botId: string, input: { text: string; requestId: string; label?: string }) {
+    if (this.failBeforeNextAdmission) {
+      this.failBeforeNextAdmission = false;
+      throw new Error("The Bot profile is unavailable.");
+    }
     const existing = this.submissions.get(input.requestId);
     if (existing) return { submissionId: existing, deduped: true };
     const submissionId = `sub-${this.submissions.size + 1}`;
     this.submissions.set(input.requestId, submissionId);
     this.sends.push({ botId, ...input });
+    if (this.failAfterNextAdmission) {
+      this.failAfterNextAdmission = false;
+      throw new Error("The Pi admission response was lost.");
+    }
     return { submissionId, deduped: false };
   }
 
@@ -77,8 +91,13 @@ class FakeBotSession implements BotRoutinePorts {
 
   /** What the routine handed to the Bot's other surfaces (its Telegram chat). */
   deliveries: BotRoutineResultDelivery[] = [];
+  failNextDelivery = false;
 
   async deliverResult(delivery: BotRoutineResultDelivery): Promise<void> {
+    if (this.failNextDelivery) {
+      this.failNextDelivery = false;
+      throw new Error("The delivery queue is unavailable.");
+    }
     this.deliveries.push(delivery);
   }
 
@@ -93,7 +112,7 @@ class FakeBotSession implements BotRoutinePorts {
   }
 }
 
-function harness(options: { bots?: string[] } = {}) {
+function harness(options: { bots?: string[]; pendingRetryIntervalMs?: number } = {}) {
   const bots = new Set(options.bots ?? ["bot-chef", "bot-scout"]);
   const store = createScheduleStore(
     new MemoryPersistence<unknown[]>([]),
@@ -131,6 +150,7 @@ function harness(options: { bots?: string[] } = {}) {
     broadcast: () => undefined,
     warn: () => undefined,
     error: () => undefined,
+    pendingRetryIntervalMs: options.pendingRetryIntervalMs,
   });
   const routines = createBotRoutineService({
     store,
@@ -147,6 +167,302 @@ function jobFor(taskId: string) {
   assert.ok(job, "the routine should be scheduled");
   return job;
 }
+
+async function waitForRoutineRun(h: ReturnType<typeof harness>, taskId: string, runId: string) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const run = await h.store.runById(taskId, runId);
+    if (run && !(await h.store.get(taskId))?.pendingRoutineFires?.length) return run;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("the pending routine fire did not settle");
+}
+
+test("restart recovers a claimed one-time fire before Pi submission", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "One-time reminder",
+    schedule: { kind: "once", date: "2027-01-02", time: "09:00" },
+    prompt: "Tell me to call Mom.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, undefined);
+  assert.equal((await h.store.get(routine.id))?.enabled, false);
+
+  await h.scheduler.start();
+  const run = await waitForRoutineRun(h, routine.id, `routine:${routine.id}:${due}`);
+  assert.equal(run.result, "success");
+  assert.equal(h.session.sends.length, 1);
+  assert.equal(h.session.sends[0]?.text.startsWith("Tell me to call Mom."), true);
+  assert.equal((await h.store.get(routine.id))?.enabled, false);
+});
+
+test("restart observes a Pi submission already admitted for the same fire", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.session.send("bot-chef", { text: "Check the inbox.", requestId });
+  h.session.replies.push({ kind: "completed", text: "One urgent message." });
+
+  await h.scheduler.start();
+  const run = await waitForRoutineRun(h, routine.id, requestId);
+  assert.equal(run.output, "One urgent message.");
+  assert.equal(h.session.sends.length, 1, "the recovered fire must not admit a second Pi submission");
+  assert.equal(h.session.deliveries.length, 1);
+});
+
+test("a paused recurring routine never admits an unfinished claimed fire on restart", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  await h.store.setEnabled(routine.id, false);
+
+  await h.scheduler.start();
+  const run = await waitForRoutineRun(h, routine.id, `routine:${routine.id}:${due}`);
+  assert.equal(run.result, "blocked");
+  assert.equal(h.session.sends.length, 0);
+});
+
+test("a paused recurring routine observes a fire Pi had already admitted", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.session.send("bot-chef", { text: "Check the inbox.", requestId });
+  await h.store.setEnabled(routine.id, false);
+  h.session.replies.push({ kind: "completed", text: "One urgent message." });
+
+  await h.scheduler.start();
+  const run = await waitForRoutineRun(h, routine.id, requestId);
+  assert.equal(run.result, "success");
+  assert.equal(h.session.sends.length, 1);
+  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+});
+
+test("restart completes delivery after a run was recorded without re-running Pi", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.store.recordRun({
+    id: requestId, taskId: routine.id, startedAt: due, finishedAt: Date.now(),
+    result: "success", output: "One urgent message.",
+  });
+  await h.store.updateRuntime(routine.id, { lastRunAt: undefined, lastResult: undefined });
+
+  await h.scheduler.start();
+  await waitForRoutineRun(h, routine.id, requestId);
+  assert.equal(h.session.sends.length, 0);
+  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.equal((await h.store.get(routine.id))?.lastResult, "success");
+  assert.equal((await h.store.get(routine.id))?.lastRunAt, (await h.store.runById(routine.id, requestId))?.finishedAt);
+});
+
+test("an unavailable runtime cannot overwrite a saved answer awaiting delivery", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.store.recordRun({
+    id: requestId, taskId: routine.id, startedAt: due, finishedAt: Date.now(),
+    result: "success", output: "One urgent message.",
+  });
+  const unavailable = createBotRoutineExecutor({
+    store: h.store,
+    ports: async () => { throw new Error("Bot runtime unavailable."); },
+    notify: () => undefined,
+    broadcast: () => undefined,
+  });
+  const previous = await unavailable.run((await h.store.get(routine.id))!, {
+    runId: requestId, trigger: { kind: "automatic", fireTime: due }, signal: new AbortController().signal,
+  });
+  assert.equal(previous.result, "success");
+  assert.equal((await h.store.runById(routine.id, requestId))?.output, "One urgent message.");
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length, 1);
+
+  await h.scheduler.start();
+  await waitForRoutineRun(h, routine.id, requestId);
+  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+});
+
+test("recovery waits for another run on the Bot routine and still submits its pending fire", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  let finishManual: (outcome: BotRoutineSubmissionOutcome) => void = () => {};
+  h.session.replies.push(new Promise<BotRoutineSubmissionOutcome>((resolve) => { finishManual = resolve; }));
+  const manual = h.scheduler.runNow(routine.id);
+  for (let attempt = 0; h.session.sends.length === 0 && attempt < 100; attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(h.session.sends.length, 1);
+
+  await h.scheduler.start();
+  finishManual({ kind: "completed", text: "Manual check complete." });
+  await manual;
+  const run = await waitForRoutineRun(h, routine.id, `routine:${routine.id}:${due}`);
+  assert.equal(run.result, "success");
+  assert.equal(h.session.sends.length, 2, "the pending fire must not be dropped behind the manual run");
+});
+
+test("an ambiguous Pi admission stays pending and restart observes its original submission", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  h.session.failAfterNextAdmission = true;
+  const requestId = `routine:${routine.id}:${due}`;
+  const first = await h.run((await h.store.get(routine.id))!, requestId, { kind: "automatic", fireTime: due });
+  assert.equal(first.result, "blocked");
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length, 1);
+  h.session.replies.push({ kind: "completed", text: "One urgent message." });
+
+  await h.scheduler.start();
+  const recovered = await waitForRoutineRun(h, routine.id, requestId);
+  assert.equal(recovered.result, "success");
+  assert.equal(h.session.sends.length, 1);
+  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+});
+
+test("a pending fire retries while Aiden stays open after an ambiguous admission", async (t) => {
+  const h = harness({ pendingRetryIntervalMs: 20 });
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  await h.scheduler.start();
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  h.session.failAfterNextAdmission = true;
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.run((await h.store.get(routine.id))!, requestId, { kind: "automatic", fireTime: due });
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length, 1);
+  h.session.replies.push({ kind: "completed", text: "One urgent message." });
+
+  const recovered = await waitForRoutineRun(h, routine.id, requestId);
+  assert.equal(recovered.result, "success");
+  assert.equal(h.session.sends.length, 1);
+  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+});
+
+test("an automatic send failure before Pi admission is a visible terminal error", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  h.session.failBeforeNextAdmission = true;
+  const run = await h.run((await h.store.get(routine.id))!, undefined, { kind: "automatic", fireTime: due });
+  assert.equal(run.result, "error");
+  assert.match(run.error ?? "", /profile is unavailable/u);
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0);
+  assert.equal(h.session.sends.length, 0);
+  assert.equal(h.session.deliveries.length, 1);
+});
+
+test("cancelling an admitted automatic turn leaves the fire for idempotent recovery", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  let finishReply: (outcome: BotRoutineSubmissionOutcome) => void = () => {};
+  h.session.replies.push(new Promise<BotRoutineSubmissionOutcome>((resolve) => { finishReply = resolve; }));
+  const controller = new AbortController();
+  const requestId = `routine:${routine.id}:${due}`;
+  const first = h.executor.run((await h.store.get(routine.id))!, {
+    runId: requestId, trigger: { kind: "automatic", fireTime: due }, signal: controller.signal,
+  });
+  for (let attempt = 0; h.session.sends.length === 0 && attempt < 100; attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(h.session.sends.length, 1);
+  controller.abort();
+  const interrupted = await first;
+  assert.equal(interrupted.result, "blocked");
+  assert.equal(await h.store.runById(routine.id, requestId), undefined);
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length, 1);
+  finishReply({ kind: "completed", text: "One urgent message." });
+  h.session.replies.push({ kind: "completed", text: "One urgent message." });
+
+  await h.scheduler.start();
+  const recovered = await waitForRoutineRun(h, routine.id, requestId);
+  assert.equal(recovered.result, "success");
+  assert.equal(h.session.sends.length, 1);
+  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+});
+
+test("a failed delivery handoff leaves the saved result for restart", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  h.session.failNextDelivery = true;
+  h.session.replies.push({ kind: "completed", text: "One urgent message." });
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.run((await h.store.get(routine.id))!, undefined, { kind: "automatic", fireTime: due });
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length, 1);
+
+  await h.scheduler.start();
+  await waitForRoutineRun(h, routine.id, requestId);
+  assert.equal(h.session.sends.length, 1);
+  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+});
 
 /**
  * Cron fires a routine only once its next fire time arrives, and an automatic
@@ -325,6 +641,34 @@ test("a one-off routine runs once and then switches itself off", async (t) => {
     scheduledJobs.some((entry) => entry.name === `scheduled:${routine.id}` && entry.isRunning()),
     false,
   );
+});
+
+test("a one-off fire skipped by a paused Bot catches up once after Resume", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const nextYear = new Date().getUTCFullYear() + 1;
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Party reminder",
+    schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+    prompt: "Remind me to buy candles.",
+  });
+  h.session.states.set("bot-chef", { kind: "interrupted", submissionId: "paused" });
+  await h.scheduler.start();
+  await fireWhenDue(t, jobFor(routine.id));
+
+  const [missed] = await h.store.runs(routine.id);
+  assert.equal(missed?.reason, "bot_paused");
+  assert.equal((await h.store.get(routine.id))?.enabled, false);
+  assert.equal(h.session.sends.length, 0);
+
+  h.session.states.set("bot-chef", { kind: "idle" });
+  const catchUp = createBotRoutineCatchUp({ store: h.store, scheduler: h.scheduler, now: () => missed!.startedAt + 1 });
+  await settle(await catchUp.catchUp("bot-chef"));
+  assert.equal(h.session.sends.length, 1);
+  assert.equal(h.session.sends[0]?.requestId, missed?.id);
+  assert.equal((await h.store.get(routine.id))?.enabled, false);
+  assert.deepEqual(await catchUp.catchUp("bot-chef"), []);
 });
 
 test("a deferred startup catch-up the Cron already covered never turns the next fire into a duplicate", async (t) => {

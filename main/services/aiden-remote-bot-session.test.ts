@@ -716,6 +716,7 @@ test("a connection request for an app Aiden can't connect is refused without bot
 
 test("a routine change with a stale If-Match is a revision conflict that changes nothing", async () => {
   const routine: BotRoutine = {
+    pendingFireCount: 0,
     id: "routine_1", botId: BOT_ID, name: "Brief", prompt: "Brief me", schedule: { kind: "daily", time: "08:00" },
     timezone: "UTC", label: "Every day at 8:00 AM", enabled: true, updatedAt: 5_000,
   };

@@ -290,6 +290,10 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   const task = await api.scheduleCommand(dir, ["save", input]);
   assert.equal(task.name, "Review"); assert.equal(task.enabled, false);
   assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
+  const status = await api.scheduleCommand(dir, ["status"]);
+  assert.equal(status.nextRunAt, null);
+  assert.deepEqual(status.overdueTaskIds, []);
+  assert.equal(status.pendingRoutineFires, 0);
   assert.equal((await api.scheduleCommand(dir, ["preview", "0 9 * * *", "UTC"])).length, 5);
   await api.scheduleCommand(dir, ["remove", task.id]);
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);

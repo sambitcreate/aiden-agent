@@ -35,7 +35,7 @@ import {
 } from "../bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "../bot-runtime-authority.js";
 import { botStore } from "../bot-store.js";
-import { withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
+import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
@@ -228,7 +228,7 @@ const extension: BotExtensionDeps = {
         base,
         withBotPersona("", bot).trim(),
         withBotManagedWorkspace("", workspace, fileAuthority).trim(),
-        tools.guidance(bot.id, offered.toolNames),
+        [botRoutineGuidance(toolNames), tools.guidance(bot.id, offered.toolNames)].filter(Boolean).join("\n\n"),
       ];
     });
   },

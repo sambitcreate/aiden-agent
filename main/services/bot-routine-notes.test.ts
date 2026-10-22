@@ -182,6 +182,7 @@ function routineHarness(notes: ReturnType<typeof notesStore>) {
   const sends: Array<{ text: string; requestId: string }> = [];
   const ports: BotRoutinePorts & { routineNotes(botId: string, taskId: string): Promise<string> } = {
     state: async () => ({ kind: "idle" }),
+    submissionForRequest: async () => undefined,
     send: async (_botId, input) => {
       sends.push(input);
       return { submissionId: `sub-${sends.length}`, deduped: false };

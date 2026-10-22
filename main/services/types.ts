@@ -518,6 +518,13 @@ export interface ScheduledTask {
   cron: string;
   timezone: string;
   nextRunAt?: number;
+  /** A claimed Bot fire awaiting a durable run receipt and delivery handoff. */
+  pendingRoutineFires?: Array<{
+    fireTime: number;
+    requestId: string;
+    prompt: string;
+    name: string;
+  }>;
   lastRunAt?: number;
   workspaceId?: string;
   providerId?: string;

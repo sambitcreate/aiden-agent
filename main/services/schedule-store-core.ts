@@ -295,6 +295,9 @@ function normalizeInput(
     cron,
     timezone,
     nextRunAt,
+    ...(botId !== undefined && existing?.pendingRoutineFires?.length
+      ? { pendingRoutineFires: existing.pendingRoutineFires }
+      : {}),
     lastRunAt: existing?.lastRunAt,
     workspaceId,
     providerId,
@@ -333,6 +336,19 @@ function isRunResult(value: unknown): value is ScheduledRunResult {
 
 function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
   return value === "bot_paused" || value === "duplicate";
+}
+
+function storedRoutineFires(value: unknown, taskId: string): ScheduledTask["pendingRoutineFires"] {
+  if (!Array.isArray(value)) return undefined;
+  const fires = value.filter((item): item is NonNullable<ScheduledTask["pendingRoutineFires"]>[number] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const fire = item as Record<string, unknown>;
+    return Number.isSafeInteger(fire.fireTime) && (fire.fireTime as number) >= 0 &&
+      fire.requestId === `routine:${taskId}:${fire.fireTime}` &&
+      typeof fire.prompt === "string" && fire.prompt.length <= 32 * 1024 &&
+      typeof fire.name === "string" && fire.name.length <= 120;
+  });
+  return fires.length ? fires.slice(0, RUNS_PER_TASK) : undefined;
 }
 
 function normalizeStoredTask(value: unknown): ScheduledTask | null {
@@ -443,6 +459,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     cron: task.cron,
     timezone: task.timezone,
     nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
+    ...(botId !== undefined ? { pendingRoutineFires: storedRoutineFires(task.pendingRoutineFires, task.id) } : {}),
     lastRunAt: finiteTimestamp(task.lastRunAt),
     workspaceId,
     // Resolve aliases only after config has had a chance to protect an edited
@@ -682,6 +699,54 @@ export function createScheduleStore(
 
     updateRuntime,
 
+    /** Claim and advance one Bot fire in the same durable task-file write. */
+    async claimRoutineFire(
+      id: string,
+      fireTime: number,
+      nextRunAt: number | undefined,
+      isCurrent: () => boolean = () => true,
+    ): Promise<ScheduledTask> {
+      return tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.botId || !existing.enabled || existing.nextRunAt !== fireTime)
+          throw new Error("This routine fire is no longer due.");
+        const pending = existing.pendingRoutineFires ?? [];
+        if (pending.length >= RUNS_PER_TASK) throw new Error("This routine has too many unsettled fires.");
+        const claimed: ScheduledTask = {
+          ...existing,
+          enabled: existing.routineSchedule?.kind === "once" ? false : existing.enabled,
+          nextRunAt: existing.routineSchedule?.kind === "once" ? undefined : nextRunAt,
+          pendingRoutineFires: [...pending, {
+            fireTime,
+            requestId: `routine:${id}:${fireTime}`,
+            prompt: existing.prompt ?? "",
+            name: existing.name,
+          }],
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+        draft[index] = claimed;
+        return structuredClone(claimed);
+      }, isCurrent);
+    },
+
+    async settleRoutineFire(id: string, requestId: string): Promise<void> {
+      await tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.pendingRoutineFires?.some((fire) => fire.requestId === requestId)) return;
+        draft[index] = {
+          ...existing,
+          pendingRoutineFires: existing.pendingRoutineFires.filter((fire) => fire.requestId !== requestId),
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+      });
+    },
+
+    async runById(taskId: string, runId: string): Promise<ScheduledRun | undefined> {
+      return (await runs.load()).map(normalizeStoredRun).find((run) => run?.taskId === taskId && run.id === runId) ?? undefined;
+    },
+
     async ensureChatId(
       id: string,
       create: (claimedChatId: string) => Promise<{ id: string }>,
@@ -744,6 +809,7 @@ export function createScheduleStore(
       run: Omit<ScheduledRun, "id"> & { id?: string },
       isCurrent: () => boolean = () => true,
     ): Promise<ScheduledRun> {
+      const pendingIds = new Set((await get(run.taskId))?.pendingRoutineFires?.map((fire) => fire.requestId) ?? []);
       const stored: ScheduledRun = {
         ...run,
         id: run.id ?? randomUUID(),
@@ -754,11 +820,13 @@ export function createScheduleStore(
         const normalized = draft
           .map(normalizeStoredRun)
           .filter((value): value is ScheduledRun => value !== null);
+        const previous = normalized.findIndex((value) => value.taskId === stored.taskId && value.id === stored.id);
+        if (previous >= 0) normalized.splice(previous, 1);
         normalized.push(stored);
-        const retained = normalized
+        const sorted = normalized
           .filter((value) => value.taskId === stored.taskId)
-          .sort((a, b) => b.startedAt - a.startedAt)
-          .slice(0, RUNS_PER_TASK);
+          .sort((a, b) => b.startedAt - a.startedAt);
+        const retained = sorted.filter((value, index) => index < RUNS_PER_TASK || pendingIds.has(value.id));
         const other = normalized.filter((value) => value.taskId !== stored.taskId);
         draft.splice(0, draft.length, ...other, ...retained);
       }, isCurrent);

@@ -12,6 +12,8 @@ import type { BotSessionState } from "./bot-runtime/bot-session-service.js";
 export type { BotSessionState };
 
 export interface BotRoutineSessionPort {
+  /** Read-only Pi admission lookup; never starts or resumes the Bot. */
+  submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(
     botId: string,
     input: {
