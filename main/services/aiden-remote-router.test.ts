@@ -6069,3 +6069,36 @@ test("a fully wired host tells every device type at most the server feature budg
     assert.deepEqual([...announced].sort(), [...unrestricted].sort(), type);
   }
 });
+
+test("a paired desktop's host feed carries paused Bot rows only when it holds bot:handoffs on a host that serves them", async () => {
+  const cases: Array<[grants: AidenRemoteCapability[], wired: boolean, expected: boolean]> = [
+    [[...HOST_GRANTS, "bot:read", "bot:handoffs"], true, true],
+    [[...HOST_GRANTS, "bot:read"], true, false],
+    [[...HOST_GRANTS, "bot:read", "bot:handoffs"], false, false],
+  ];
+  for (const [grants, wired, expected] of cases) {
+    const audiences: Array<boolean | undefined> = [];
+    const mac = await fixture({
+      hostFeed: {
+        open: async (device, _cursor, response) => {
+          audiences.push(device.botHandoffs);
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end();
+        },
+      },
+      deviceType: "mac",
+      acceptsProgressCapabilities: true,
+      acceptsBotCapabilities: true,
+      capabilities: grants,
+      botSessions: recordingHandoffSessions([], wired),
+    });
+    try {
+      const feed = await fetch(`${mac.base}/host/events`, { headers: HOST_HEADERS });
+      assert.equal(feed.status, 200);
+      await feed.text();
+      assert.deepEqual(audiences, [expected], JSON.stringify({ grants, wired }));
+    } finally {
+      await mac.close();
+    }
+  }
+});

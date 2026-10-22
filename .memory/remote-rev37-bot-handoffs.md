@@ -30,7 +30,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md`, package P4 (host side).
   - `AidenRemoteBotService.sessionStates` (service-main) and `projectAidenRemoteBotSummary`, which adds `paused: true`;
   - the projector's `state`;
   - idempotency ledger results.
-  It is projected per device at the edge: the router for `/bots`, detail routes and from-preset; the host feed with `LEGACY_AUDIENCE`, so desktops always get revision-35 rows; and the session service after the ledger returns.
+  It is projected per device at the edge: the router for `/bots`, detail routes and from-preset; the host feed per audience (owner answer 3a, 2026-10-22): the source sends `bots` (legacy) and `handoffBots` (holder), journal entries carry `audience` (`all`/`legacy`/`handoffs`), a change both read alike is one entry, and the router passes `botHandoffs: holdsBotHandoffs(device)` to `open`; and the session service after the ledger returns.
 
 ## Session service (`aiden-remote-bot-session.ts`)
 - `Audience.handoffs`. The broadcast cache key is `cards:activity:handoffs`.

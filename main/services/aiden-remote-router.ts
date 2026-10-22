@@ -4039,7 +4039,12 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "host:events");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.hostFeed) throw hostRunsUnavailable();
-        await dependencies.hostFeed.open(device, cursor, response, admitDevice(device.id));
+        await dependencies.hostFeed.open(
+          { id: device.id, capabilities: device.capabilities, botHandoffs: holdsBotHandoffs(device, dependencies) },
+          cursor,
+          response,
+          admitDevice(device.id),
+        );
         return;
       }
       const chatMessagesMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/messages$/u.exec(path);
