@@ -151,8 +151,14 @@ export function OnboardingFlow({
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
   const visibleFeatureBentos = React.useMemo(
-    () => visibleOnboardingFeatures(onboardingFeatures, { bots: capabilities.bots, computerUse: capabilities.computerUse, platform: capabilities.platform }),
-    [capabilities.bots, capabilities.computerUse, capabilities.platform],
+    () =>
+      visibleOnboardingFeatures(onboardingFeatures, {
+        bots: capabilities.bots,
+        botComputers: capabilities.botComputers,
+        computerUse: capabilities.computerUse,
+        platform: capabilities.platform,
+      }),
+    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.platform],
   );
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();

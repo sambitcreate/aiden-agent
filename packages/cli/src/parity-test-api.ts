@@ -19,7 +19,9 @@ export * from "./extensions/artifacts.ts";
 export { SessionManager, ModelRegistry, SettingsManager } from "@earendil-works/pi-coding-agent";
 export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 
-export { mcpCommand, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature } from "./mcp.ts";
+export { mcpCommand, mcpLogin, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature, cliMcpOAuthLoopback } from "./mcp.ts";
+export { mcpOAuthBindingForServer } from "../../../main/services/mcp-oauth-identity.js";
+export { startFakeOAuthServer } from "../../../main/services/mcp-oauth-test-server.js";
 
 export { importSession } from "./session-import.ts";
 export { createCurrentPiSessionRepository } from "../../../main/services/pi-session-repository-port.js";
@@ -51,3 +53,13 @@ export { migrateCliAzureConfig } from "./azure-config-migration.ts";
 export { createTodoInlineExtension } from "./extensions/todo.ts";
 export { createAgentSession, DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 export { buildOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
+
+export * from "./bot-durable-migration.ts";
+export { createCliRemoteBots } from "./remote-bots.ts";
+export { AidenIdempotencyLedger } from "../../../main/services/aiden-remote-operation-contract.js";
+
+export { cliDurableBotToolContext } from "./bot-durable.ts";
+
+export { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+export { capturePersistedSubagentContext } from "../../../main/services/subagents/forked-context.js";
+export { createAdvisorInlineExtension } from "./extensions/advisor.ts";

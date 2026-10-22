@@ -34,6 +34,21 @@ test("unread is independent of state so a working chat can still carry an earlie
   ]);
 });
 
+test("an unseen failed turn says Failed in place of the new-reply dot", () => {
+  const failed = renderToStaticMarkup(<ChatRowStatus state="idle" unread failed />);
+  assert.deepEqual(labels(failed), ["Failed"]);
+  assert.match(failed, />Failed</u);
+  assert.match(failed, /bg-status-red-surface/u);
+  assert.doesNotMatch(failed, /\bborder\b|\boutline\b|\bring-/u);
+  // A failure the user already saw is just an idle row.
+  assert.equal(renderToStaticMarkup(<ChatRowStatus state="idle" unread={false} failed />), "");
+  // A new run keeps its live state next to the earlier failure.
+  assert.deepEqual(labels(renderToStaticMarkup(<ChatRowStatus state="working" unread failed />)), [
+    "Working",
+    "Failed",
+  ]);
+});
+
 test("attention pills use soft status fills without decorative borders", () => {
   for (const state of ["needs_approval", "needs_input"] as const) {
     const markup = renderToStaticMarkup(<ChatRowStatus state={state} unread={false} />);

@@ -18,6 +18,7 @@ import {
   type BotCapabilityCatalog,
 } from "../../shared/bot-capabilities";
 import { firstAvailableModel } from "./bot-access-draft";
+import { addBotToCache } from "./bot-identity";
 import {
   botFullAccess,
   botModelUsable,
@@ -266,11 +267,14 @@ export function BotCreateFlow({
         },
         access,
       });
-      qc.setQueryData(queryKeys.bot(bot.id), bot);
-      await qc.invalidateQueries({ queryKey: queryKeys.bots });
-      await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
-      // The one-time self-intro: only for a Bot made here, and only when it has a model.
-      if (hasModel) await botsApi.introduce(bot.id).catch(() => false);
+      // The new Bot is listed and its chat opens now; the list and catalog
+      // rereads, and the one-time self-intro (only for a Bot made here, and
+      // only when it has a model), follow in the background. The intro is a
+      // full send, so the chat shows it arriving instead of waiting for it.
+      addBotToCache(qc, bot);
+      void qc.invalidateQueries({ queryKey: queryKeys.bots });
+      void qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+      if (hasModel) void botsApi.introduce(bot.id).catch(() => false);
       onOpenChange(false);
       await onCreated(bot, { needsModel: !hasModel });
     } catch (caught) {

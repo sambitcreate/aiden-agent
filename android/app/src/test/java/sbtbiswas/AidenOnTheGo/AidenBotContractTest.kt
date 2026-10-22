@@ -183,6 +183,9 @@ class AidenBotContractTest {
             chatSummaries.summaries.map { it.displayRowState }
         )
         assertEquals(listOf(false, true), chatSummaries.summaries.map { it.unread })
+        // Revision 36: lastRunFailed is sent only when true; the other row omits it.
+        assertEquals(listOf(false, true), chatSummaries.summaries.map { it.lastRunFailed })
+        assertEquals(listOf(false, true), chatSummaries.summaries.map { it.showsFailed })
         assertTrue(requireNotNull(chatSummaries.nextCursor).length <= AidenRemoteProtocol.MAX_CHAT_SUMMARY_CURSOR_LENGTH)
         assertEquals("bot_fixture_01", fixture.botSummary.id)
         assertEquals(256, fixture.botList.maxBots)

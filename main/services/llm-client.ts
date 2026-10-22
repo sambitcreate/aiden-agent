@@ -145,6 +145,7 @@ import {
   type ResolvedModelRuntime,
 } from "./model-runtime.js";
 import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admission-core.js";
+import { isBotPaused } from "./bot-pause-main.js";
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
@@ -294,9 +295,10 @@ import {
   scheduledProviderFingerprint,
 } from "./schedule-provider-binding.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
+import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
-import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
+import { assistantSettingsSections } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
@@ -586,6 +588,8 @@ interface ActiveGeneration {
   releaseBotAuthority: () => void;
   /** Runs that take no mid-flight input (Design Studio). */
   inputClosed: boolean;
+  /** A steered send stops this run's still-running subagents. */
+  stopSubagentsForGuidance?: () => void;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -625,12 +629,55 @@ const geminiContextCache = new GeminiContextCache({
   onWarning: (message, error) => logger.warn("pi", message, error),
 });
 
+/**
+ * Work that holds the chat's turn. A cancelled subagent that is still draining
+ * is left out: its parent already settled it, so it must not trap queued sends
+ * or new turns behind a stuck provider stream.
+ */
 function chatHasGenerationOwnership(chatId: string): boolean {
   return (
     [...initializing.values()].some((entry) => entry.chatId === chatId) ||
     [...active.values()].some((entry) => entry.chatId === chatId) ||
-    subagentRuntimeRegistry.hasChatChildren(chatId)
+    subagentRuntimeRegistry.hasLiveChatChildren(chatId)
   );
+}
+
+/** A started turn, or the chat's turn is held by live generation work. */
+function chatTurnIsHeld(chatId: string): boolean {
+  return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+}
+
+/**
+ * Wait until `busy()` is false, waking early once the chat's running
+ * generations complete. False when the settlement grace ran out first.
+ */
+async function waitForChatSettlement(chatId: string, busy: () => boolean): Promise<boolean> {
+  const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
+  while (busy()) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    const completions = [...active.values()]
+      .filter((entry) => entry.chatId === chatId && entry.completion)
+      .map((entry) => entry.completion!);
+    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    if (completions.length > 0) {
+      await Promise.race([Promise.allSettled(completions), pause]);
+    } else {
+      await pause;
+    }
+  }
+  return true;
+}
+
+/** Cancel every starting and running generation of the chat, and its subagents. */
+function cancelChatGenerations(chatId: string, origin: GenerationCancellationOrigin): void {
+  for (const [streamId, entry] of [...initializing.entries()]) {
+    if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
+  }
+  for (const [streamId, entry] of [...active.entries()]) {
+    if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
+  }
+  subagentRuntimeRegistry.abortChat(chatId);
 }
 
 function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
@@ -663,7 +710,7 @@ function botWorkspacePromptAuthority(
 
 function botHasOrdinaryCapability(
   context: BotGenerationAuthorityContext,
-  kind: "web" | "browser" | "computer_use" | "schedules" | "subagents" | "tasks",
+  kind: "web" | "browser" | "computer_use" | "computer" | "schedules" | "subagents" | "tasks",
 ): boolean {
   return context.admission.authority.otherCapabilities.some((grant) => grant.kind === kind);
 }
@@ -1462,6 +1509,9 @@ async function prepareGeneration(
     { approval: BrowserToolApproval; args: Record<string, unknown> }
   >();
   const browserSelection: { initialized: boolean; tabId?: string } = { initialized: false };
+  // Legacy Bot generations stay without browser tools: a Bot's browser (its
+  // own profile, masked snapshots, no scripts) is offered only on durable Bot
+  // turns, through `bot-runtime/bot-browser-tools.ts`.
   const browserEligible =
     workspace &&
     canUseBrowserTools({ permission, rendererOwner, assistantMode, bot: Boolean(botContext) });
@@ -2270,6 +2320,12 @@ export const llmClient = {
         if (canonical?.id !== chat.id) {
           throw new Error("This historical Bot chat is read-only. Open the Bot's current chat.");
         }
+        // A paused Bot runs no turn on this path either (plan §7). Checked once
+        // this generation is registered, so a pause recorded after the check
+        // finds it and stops it (`stopChatWork`).
+        if (await isBotPaused(authoritativeBot.id)) {
+          throw new Error("This Bot is paused. Resume it to continue.");
+        }
         const providerId = chat.providerId;
         const model = chat.model;
         const botId = authoritativeBot.id;
@@ -2672,7 +2728,10 @@ export const llmClient = {
               : undefined,
             providerFailure,
             timeline:
-              finalTimeline.steps.length || finalTimeline.status === "cancelled"
+              // A failed status is kept so a partial reply still reads as Failed in the chat list.
+              finalTimeline.steps.length ||
+              finalTimeline.status === "cancelled" ||
+              finalTimeline.status === "failed"
                 ? finalTimeline
                 : undefined,
             turnStats: {
@@ -2821,11 +2880,15 @@ export const llmClient = {
             ? undefined
             : await configStore.getWorkspace(generationChat.workspaceId);
           const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
-          await memoryStore.replaceChatMetadata(
+          const indexing = await memoryStore.replaceChatMetadata(
             scope,
             generationChat.id,
             memoryMetadataForChat(generationChat),
           );
+          if (indexing.rejected || indexing.evicted) writeDiagnosticEvent({
+            level: "info", area: "persistence", event: "memory-indexed", outcome: "completed",
+            fields: { accepted: indexing.accepted, rejected: indexing.rejected, evicted: indexing.evicted, truncated: indexing.atCapacity },
+          });
           const provenance = memoryProvenanceForGeneration(
             generationChat,
             options.turnId,
@@ -3040,9 +3103,10 @@ export const llmClient = {
           ? (designWiring?.baseSystemPrompt ?? "")
           : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              settingsSections: devicesEnabled()
-                ? SETTINGS_SECTIONS
-                : SETTINGS_SECTIONS.filter((section) => section !== "simulator"),
+              settingsSections: assistantSettingsSections({
+                devices: devicesEnabled(),
+                botComputers: hostPlatformCapabilities().botComputers,
+              }),
               settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
@@ -3304,6 +3368,7 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
+      let attendedToolRecoveryRequested = false;
       if (canWarmForegroundChat({
         enabled: cacheWarmingEnabled,
         local: isLocalModelProvider(runtime.provider),
@@ -3494,6 +3559,7 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
+        ...(attendedAssistant ? { finishTurn: endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested) } : {}),
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
           attended: attendedAssistant,
@@ -3507,6 +3573,7 @@ export const llmClient = {
             return mcpServersSection.apply(prepared);
           },
           onRecovery: () => {
+            attendedToolRecoveryRequested = true;
             logger.warn(
               "pi",
               `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
@@ -4412,6 +4479,7 @@ export const llmClient = {
         }
       }
     };
+    subagentSupervisor?.observePendingUserGuidance(() => agent.hasUndeliveredSteer());
     const activeGeneration: ActiveGeneration = {
       agent,
       chatId: params.chatId,
@@ -4425,6 +4493,13 @@ export const llmClient = {
       computerUse,
       formFill,
       inputClosed: designWiring?.inputClosed ?? false,
+      ...(subagentSupervisor
+        ? {
+            stopSubagentsForGuidance: () => {
+              subagentSupervisor.stopLiveChildrenForGuidance();
+            },
+          }
+        : {}),
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -4745,6 +4820,9 @@ export const llmClient = {
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
+          // A run that ended for any reason (failure included) owns no more
+          // child work; nothing may keep acting for it after it settles.
+          subagentRuntimeRegistry.abortGeneration(streamId);
           unregisterAcpHost?.();
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
@@ -4896,8 +4974,13 @@ export const llmClient = {
     return runInputAdmission.admit(input);
   },
 
+  /**
+   * Any work on the chat, including a cancelled subagent still draining (it
+   * may be inside a tool call), so deletion, copy, export and workspace moves
+   * wait for it.
+   */
   isChatBusy(chatId: string): boolean {
-    return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+    return chatTurnIsHeld(chatId) || subagentRuntimeRegistry.hasChatChildren(chatId);
   },
 
   /** Whether this exact generation is still starting or running, whoever owns it. */
@@ -4917,51 +5000,34 @@ export const llmClient = {
     );
   },
 
-  /** Wait for terminal persistence without cancelling work owned by another document. */
+  /**
+   * Wait for terminal persistence without cancelling work owned by another
+   * document. Only the turn matters here, so a draining child never holds the
+   * queue or a waiting send.
+   */
   async waitForChatIdle(chatId: string): Promise<boolean> {
-    const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
-    while (this.isChatBusy(chatId)) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return false;
-      const completions = [...active.values()]
-        .filter((entry) => entry.chatId === chatId && entry.completion)
-        .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
-      if (completions.length > 0) {
-        await Promise.race([Promise.allSettled(completions), pause]);
-      } else {
-        await pause;
-      }
-    }
-    return true;
+    return waitForChatSettlement(chatId, () => chatTurnIsHeld(chatId));
   },
 
   /** Stop and drain foreground work before cross-store chat deletion begins. */
   async cancelChat(chatId: string): Promise<void> {
     await btwService.forget(chatId);
-    for (const [streamId, entry] of [...initializing.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
+    cancelChatGenerations(chatId, "chat_deletion");
+    if (!(await waitForChatSettlement(chatId, () => this.isChatBusy(chatId)))) {
+      throw new Error("Aiden could not stop this chat before deletion.");
     }
-    for (const [streamId, entry] of [...active.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
-    }
-    subagentRuntimeRegistry.abortChat(chatId);
-    const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
-    while (this.isChatBusy(chatId)) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        throw new Error("Aiden could not stop this chat before deletion.");
-      }
-      const completions = [...active.values()]
-        .filter((entry) => entry.chatId === chatId && entry.completion)
-        .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
-      if (completions.length > 0) {
-        await Promise.race([Promise.allSettled(completions), pause]);
-      } else {
-        await pause;
-      }
-    }
+  },
+
+  /**
+   * Stop a chat's foreground work and keep the chat, for a Bot the person
+   * paused (plan §7): its starting and running generations end as a Stop,
+   * with their tools and subagents, and this waits until nothing runs on the
+   * chat. Side questions are kept. Never throws: `false` means work was still
+   * settling when the grace ran out.
+   */
+  async stopChatWork(chatId: string): Promise<boolean> {
+    cancelChatGenerations(chatId, "user_stop");
+    return waitForChatSettlement(chatId, () => this.isChatBusy(chatId));
   },
 
   /** Close generation admission before chat deletion performs its first await. */

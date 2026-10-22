@@ -312,7 +312,7 @@ function initialEnvironmentSurfaceState(
 }
 
 export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) {
-  const { activeId } = useActiveWorkspace();
+  const { activeId, active: activeWorkspace } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const [contextDetails, setContextDetails] = React.useState<ChatContextDetails | null>(null);
   const { subagents: subagentsEnabled, devices: devicesEnabled } = useAppCapabilities();
@@ -586,7 +586,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
 
   const openFile = React.useCallback(
     (path: string) => {
-      if (activeId) {
+      if (activeId && path) {
         setFileRequest({
           id: ++fileRequestIdRef.current,
           path,
@@ -1256,7 +1256,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   return (
     <EnvironmentPanelContext.Provider value={value}>
-      <LinkOpenerProvider workspaceId={activeId ?? null}>
+      <LinkOpenerProvider
+        workspaceId={activeId ?? null}
+        workspaceFolder={activeWorkspace?.folderPath ?? null}
+        onOpenWorkspaceFile={openFile}
+      >
         {subagentsEnabled ? (
           <SubagentLiveAnnouncer
             ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}

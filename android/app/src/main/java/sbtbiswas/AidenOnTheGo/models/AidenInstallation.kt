@@ -156,6 +156,18 @@ data class AidenServer(
         get() = features.contains(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE) && capabilities.contains(AidenRemoteCapability.BOT_ACTIVITY)
 
     /**
+     * The Mac offers `bot:handoffs` (revision 37). There is no `/server` feature token: the
+     * offer in `serverCapabilities` is the whole signal, and this phone asks for it in a call of
+     * its own, so a Mac that refuses the name can't take another grant down with it.
+     */
+    val offersBotHandoffs: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFFS) == true
+
+    /** Offered and held: show hand-off cards, the paused state, and Pause and Resume. */
+    val supportsBotHandoffs: Boolean
+        get() = offersBotHandoffs && capabilities.contains(AidenRemoteCapability.BOT_HANDOFFS)
+
+    /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.
      */

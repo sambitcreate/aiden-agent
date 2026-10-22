@@ -530,6 +530,26 @@ test("Full authority includes Web Search only after its explicit durable grant",
   assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), ["web"]);
 });
 
+test("Full authority includes the Bot's own browser once agent browser access makes it available", async () => {
+  const closed = fixture();
+  const before = await closed.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" });
+  assert.equal(before.authority.otherCapabilities.some(({ kind }) => kind === "browser"), false);
+
+  const base = inventory();
+  const withBrowser = buildBotCapabilityCatalogSnapshot({
+    inventory: {
+      ...base,
+      otherCapabilities: base.otherCapabilities.map((entry) => (entry.kind === "browser" ? { ...entry, available: true } : entry)),
+    },
+    notice: acceptedNotice(),
+    mintOpaqueId: mint,
+  });
+  const open = fixture({ currentSnapshot: withBrowser });
+  const { authority } = await open.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" });
+  // Web Search still needs its own grant; the browser follows its availability.
+  assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), ["browser"]);
+});
+
 test("legacy chats retain visible workspace identity but receive the managed home", async () => {
   const app = fixture({ chatWorkspaceId: "legacy-visible-workspace" });
   const admission = await app.resolver.admit({

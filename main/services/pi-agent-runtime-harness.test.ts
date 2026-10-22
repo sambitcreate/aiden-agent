@@ -1,3 +1,5 @@
+import { buildCodingTools } from "./coding-tools.js";
+import { toolOutputScope } from "./tool-output-store.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import { applyCustomModelToolPolicy } from "../../renderer/shared/custom-model-options.js";
 import assert from "node:assert/strict";
@@ -2495,12 +2497,16 @@ test("managed steering is accepted only while active and queued input is durable
     message: { role: "user", content: "start", timestamp: 1 },
   });
   await atTool;
+  assert.equal(harness.hasUndeliveredSteer(), false);
   assert.deepEqual(harness.queueSteer({ role: "user", content: "new instruction", timestamp: 2 }), {
     accepted: true,
     queue: "steer",
   });
+  // Pi holds steering until the running tool returns.
+  assert.equal(harness.hasUndeliveredSteer(), true);
   releaseTool();
   assert.equal((await running).kind, "completed");
+  assert.equal(harness.hasUndeliveredSteer(), false);
   const users = (await session.buildContext()).messages.filter(
     (message) => message.role === "user",
   );
@@ -3850,4 +3856,43 @@ test("an MCP server that finished discovery after the turn started is searchable
   assert.deepEqual(outputs[0].tools.map((entry: { name: string }) => entry.name), ["late_docs"]);
   assert.equal(outputs[1].isError, false);
   assert.match(JSON.stringify(outputs[1]), /late document/u);
+});
+
+test("real command process receipts never promote tool success or model claims to task acceptance", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-command-check-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = await effectStoreFixture(t);
+  const command = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
+  const { harness } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("run_command", { command: "printf checked; exit 0" }, { id: "success" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { command: "exit 7" }, { id: "failure" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("All task acceptance predicates passed."),
+  ], { tools: [command], identity: { runId: "command-run", sessionId: "command-session", lane: "foreground" }, effects: { store, chatId: "command-chat" } });
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run checks", timestamp: Date.now() } });
+  assert.equal(outcome.kind, "completed");
+  const scope = toolOutputScope({ runId: "command-run", sessionId: "command-session" });
+  const receipts = await store.verification.list("command-chat", scope);
+  assert.deepEqual(receipts.filter((row) => row.kind === "tool_execution").map((row) => row.result), ["passed", "failed"]);
+  assert.ok(receipts.filter((row) => row.kind === "tool_execution").every((row) => row.limitations.includes("command_only")));
+  assert.equal(receipts.filter((row) => row.kind === "task_predicate").length, 0);
+  assert.match(await store.verification.readEvidence("command-chat", scope, receipts[0]!.checkId), /checked/);
+  await harness.dispose();
+});
+
+test("a receipt that cannot be written never fails the command or the run", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-command-check-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = await effectStoreFixture(t);
+  // Deleting the chat's evidence fences every later receipt write for it.
+  await store.verification.deleteByChat("fenced-chat");
+  const command = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
+  const { harness } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("run_command", { command: "printf checked; exit 0" }, { id: "success" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], { tools: [command], identity: { runId: "fenced-run", sessionId: "fenced-session", lane: "foreground" }, effects: { store, chatId: "fenced-chat" } });
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run checks", timestamp: Date.now() } });
+  assert.equal(outcome.kind, "completed");
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "run_command");
+  assert.equal(result?.role === "toolResult" && result.isError, false);
+  await harness.dispose();
 });

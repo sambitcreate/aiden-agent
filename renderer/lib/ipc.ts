@@ -15,6 +15,19 @@ import type {
   FirstMessageWorktreeResult,
 } from "../shared/worktree-on-send";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
+import {
+  BOT_COMPUTER_CHANNELS,
+  BOT_COMPUTERS_CHANGED_CHANNEL,
+  parseBotComputerPointer,
+  parseBotComputerStatus,
+  parseBotComputersStatus,
+  parseBotComputerViewerGrant,
+  type BotComputerPointer,
+  type BotComputersSettings,
+  type BotComputersStatus,
+  type BotComputerStatus,
+  type BotComputerViewerGrant,
+} from "../shared/bot-computers.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
@@ -256,6 +269,7 @@ import type {
   PeerRunTarget,
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
+import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../shared/peer-bot-session";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import type {
   WorkspaceArtifactsChangedEvent,
@@ -322,6 +336,13 @@ export const peerHostsApi = {
     invoke<PeerRunSubscription>("remote:peerRunSubscribe", hostId, target, afterSequence),
   runUnsubscribe: (subscriptionId: string) =>
     invoke<boolean>("remote:peerRunUnsubscribe", subscriptionId),
+  /** Follow a host Bot's durable conversation; frames arrive on `onBotSession`. */
+  botSessionSubscribe: (hostId: string, botId: string) =>
+    invoke<PeerBotSessionSubscription>("remote:peerBotSessionSubscribe", hostId, botId),
+  botSessionUnsubscribe: (subscriptionId: string) =>
+    invoke<boolean>("remote:peerBotSessionUnsubscribe", subscriptionId),
+  onBotSession: (handler: (message: PeerBotSessionMessage) => void) =>
+    onNotification<PeerBotSessionMessage>("remote:peer-bot-session", handler),
   onHostFeed: (handler: (message: PeerHostFeedMessage) => void) =>
     onNotification<PeerHostFeedMessage>("remote:host-feed", handler),
   onRunFrame: (handler: (message: PeerRunFrameMessage) => void) =>
@@ -419,6 +440,9 @@ export const providersApi = {
       request,
     ),
   logout: (providerId: string) => invoke<unknown>("providers:logout", providerId),
+  /** Settings → Providers: let custom connectors use this provider's saved API key. */
+  setConnectorKeySharing: (providerId: string, allowed: boolean) =>
+    invoke<{ connectorKeySharing: boolean }>("providers:setConnectorKeySharing", providerId, allowed),
   onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
     onNotification("providers:auth:prompt", handler),
   onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>
@@ -598,7 +622,8 @@ export const mcpApi = {
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
-  authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
+  /** `connectionError`: signed in and stored, but the follow-up connection failed for another reason. */
+  authorize: (server: McpServer) => invoke<{ authorized: boolean; connectionError?: string }>("mcp:authorize", server),
   /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
   cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
   /** Forget this server's OAuth session and disconnect it. */
@@ -614,7 +639,7 @@ export const mcpApi = {
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>
-    invoke<{ authorized: boolean; needsSignIn?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+    invoke<{ authorized: boolean; needsSignIn?: boolean; hasSession?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
   providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
@@ -973,6 +998,59 @@ export const browserApi = {
   setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
+  openFileExternal: (workspaceId: string, path: string) => invoke<void>("browser:open-file-external", workspaceId, path),
+};
+
+async function botComputersStatus(channel: string): Promise<BotComputersStatus> {
+  const status = parseBotComputersStatus(await invoke<unknown>(channel));
+  if (!status) throw new Error("Aiden returned an invalid Bot computer status.");
+  return status;
+}
+
+async function botComputer(channel: string, botId: string): Promise<BotComputerStatus> {
+  const computer = parseBotComputerStatus(await invoke<unknown>(channel, botId));
+  if (!computer) throw new Error("Aiden returned an invalid Bot computer.");
+  return computer;
+}
+
+/** Settings → Bot computers and the profile's Computer section (Apple silicon only). */
+export const botComputersApi = {
+  status: () => botComputersStatus(BOT_COMPUTER_CHANNELS.status),
+  setUp: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUp),
+  cancelSetUp: () => invoke<void>(BOT_COMPUTER_CHANNELS.cancelSetUp),
+  updateBase: () => botComputersStatus(BOT_COMPUTER_CHANNELS.updateBase),
+  removeEverything: () => botComputersStatus(BOT_COMPUTER_CHANNELS.removeEverything),
+  updateSettings: (patch: Partial<BotComputersSettings>) =>
+    invoke<BotComputersSettings>(BOT_COMPUTER_CHANNELS.updateSettings, patch),
+  give: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.give, botId),
+  reset: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.reset, botId),
+  remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
+  stop: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.stop, botId),
+  /** The Computer tab's stream target. `start` boots a stopped computer; only a person's switch to the tab passes it. */
+  viewerGrant: async (botId: string, options: { start: boolean }): Promise<BotComputerViewerGrant> => {
+    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.viewerGrant, botId, options));
+    if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
+    return grant;
+  },
+  takeOver: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.takeOver, botId),
+  giveBack: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.giveBack, botId),
+  pointer: async (botId: string): Promise<BotComputerPointer | null> =>
+    parseBotComputerPointer(await invoke<unknown>(BOT_COMPUTER_CHANNELS.pointer, botId)),
+  /** Element control (the guest driver lane) on a ready base without it; progress arrives as broadcasts. */
+  setUpElementControl: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUpElementControl),
+  checkPermissions: () => invoke<void>(BOT_COMPUTER_CHANNELS.checkPermissions),
+  skipPermissions: () => invoke<void>(BOT_COMPUTER_CHANNELS.skipPermissions),
+  /** The base computer's screen while setup waits for the person's grants. */
+  baseViewerGrant: async (): Promise<BotComputerViewerGrant> => {
+    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.baseViewerGrant));
+    if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
+    return grant;
+  },
+  onChanged: (handler: (status: BotComputersStatus) => void) =>
+    onNotification<unknown>(BOT_COMPUTERS_CHANGED_CHANNEL, (payload) => {
+      const status = parseBotComputersStatus(payload);
+      if (status) handler(status);
+    }),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
@@ -1498,6 +1576,10 @@ export const botsApi = {
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
   stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Pause the Bot (its turn, routines and replies) until `unpause`; the button reads Resume. */
+  pause: (botId: string) => invoke<BotSessionState>("bots:pause", botId),
+  /** Clear the pause. An interrupted turn then shows its Resume card again. */
+  unpause: (botId: string) => invoke<BotSessionState>("bots:unpause", botId),
   /** Remove a queued message before its turn starts. */
   withdraw: (botId: string, submissionId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>("bots:withdraw", {
@@ -1513,6 +1595,28 @@ export const botsApi = {
    */
   answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
     invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  /**
+   * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
+   * optional note; `answered` is false once the card is no longer waiting.
+   */
+  answerHandoff: (
+    botId: string,
+    waitId: string,
+    outcome: import("../shared/bot-handoffs").BotHandoffOutcome,
+    note?: string,
+  ) =>
+    invoke<{ answered: boolean }>("bots:answerHandoff", {
+      botId,
+      waitId,
+      outcome,
+      ...(note === undefined ? {} : { note }),
+    }),
+  /** Open on a hand-off card: its page in the Bot's browser or the system browser. */
+  openHandoff: (botId: string, waitId: string) =>
+    invoke<{ opened: import("../../main/services/bot-runtime/bot-handoff-open").BotHandoffOpened }>("bots:openHandoff", {
+      botId,
+      waitId,
+    }),
   pendingApprovals: (botId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
       "bots:pendingApprovals",
@@ -1555,6 +1659,13 @@ export const botsApi = {
       invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
     delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
       invoke<void>("bots:routines:delete", input),
+    /** Start one run now (Run now on the "skipped while paused" notice). */
+    runNow: (botId: string, routineId: string, expectedUpdatedAt?: number) =>
+      invoke<{ runId: string }>("bots:routines:runNow", {
+        botId,
+        routineId,
+        ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
+      }),
   },
   /** What a Bot remembers (USER.md and MEMORY.md), and the person's edits to it. */
   memory: {
@@ -1562,6 +1673,17 @@ export const botsApi = {
     /** A replace, remove or clear; a stale entry id answers `entry_not_found` with the fresh view. */
     edit: (input: import("../shared/bot-memory").BotMemoryEditInput) =>
       invoke<import("../shared/bot-memory").BotMemoryEditResult>("bots:memory:edit", input),
+  },
+  /** A Bot's rules: what it must ask about first or hand to the person. */
+  rules: {
+    get: (botId: string) => invoke<import("../shared/bot-rules").BotRulesView>("bots:rules:get", botId),
+    /** One change against the view's revision; a refused change answers its reason with the fresh view. */
+    update: (input: import("../shared/bot-rules").BotRulesUpdateInput) =>
+      invoke<import("../shared/bot-rules").BotRulesUpdateResult>("bots:rules:update", input),
+  },
+  /** A Bot's own browser: its workspace for the `browser:*` channels, or null when the Bot is gone. */
+  browser: {
+    workspace: (botId: string) => invoke<{ workspaceId: string } | null>("bots:browser:workspace", botId),
   },
   /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
   onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>

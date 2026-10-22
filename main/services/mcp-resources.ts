@@ -1,41 +1,75 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
+  JSON_RPC_ERROR_CODES,
   McpError,
-  ErrorCode,
-  ListResourcesResultSchema,
-  ListResourceTemplatesResultSchema,
-  type ListResourcesRequest,
-  type ListResourceTemplatesRequest,
-  type ListResourcesResult,
-  type ListResourceTemplatesResult,
-} from "@modelcontextprotocol/sdk/types.js";
-import { LenientCursorSchema, mcpListCursor } from "./mcp-tool-inventory.js";
+  type ReadResourceResult,
+  type Resource,
+  type ResourceTemplate,
+} from "@earendil-works/pi-mcp";
+import { mcpRequest, type McpCallOptions, type McpRequester } from "./mcp-client.js";
+import { mcpListCursor } from "./mcp-tool-inventory.js";
 import type { McpConfigurationLease } from "./mcp-config-lease.js";
 import type { McpServer } from "./types.js";
 import { mcpResourceImages } from "./mcp-tool-result.js";
 import { truncateMiddle } from "./tool-output-context.js";
 
 export const MCP_RESOURCE_LIMITS = Object.freeze({ pages: 4, entries: 128, bytes: 32_000, field: 2048 });
-type ResourceClient = Pick<Client, "readResource"> & {
-  listResources(params: ListResourcesRequest["params"], options?: RequestOptions): Promise<{ resources: ListResourcesResult["resources"]; nextCursor?: string | null }>;
-  listResourceTemplates(params: ListResourceTemplatesRequest["params"], options?: RequestOptions): Promise<{ resourceTemplates: ListResourceTemplatesResult["resourceTemplates"]; nextCursor?: string | null }>;
+type ListParams = { cursor?: string } | undefined;
+type ResourceClient = {
+  listResources(params: ListParams, options?: McpCallOptions): Promise<{ resources: readonly Pick<Resource, "name" | "uri">[]; nextCursor?: string | null }>;
+  listResourceTemplates(params: ListParams, options?: McpCallOptions): Promise<{ resourceTemplates: readonly Pick<ResourceTemplate, "name" | "uriTemplate">[]; nextCursor?: string | null }>;
+  readResource(params: { uri: string }, options?: McpCallOptions): Promise<ReadResourceResult>;
 };
 
-const LenientListResourcesResultSchema = ListResourcesResultSchema.extend({ nextCursor: LenientCursorSchema });
-const LenientListResourceTemplatesResultSchema = ListResourceTemplatesResultSchema.extend({ nextCursor: LenientCursorSchema });
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
-/** One resources/list page; a `null` or empty `nextCursor` ends the list instead of failing it. */
-export function listMcpResourcesPage(client: Pick<Client, "request">, params: ListResourcesRequest["params"], options?: RequestOptions) {
-  return client.request({ method: "resources/list", params }, LenientListResourcesResultSchema, options);
+/** One page of a list: the items under `key`; a `null` or empty `nextCursor` ends the list. */
+function listPage(method: string, key: string, value: unknown, isItem: (item: Record<string, unknown>) => boolean) {
+  const items = isRecord(value) ? value[key] : undefined;
+  if (!isRecord(value) || !Array.isArray(items)) throw new Error(`Invalid MCP ${method} result.`);
+  for (const item of items) if (!isRecord(item) || !isItem(item)) throw new Error(`Invalid entry in MCP ${method} result.`);
+  const nextCursor = mcpListCursor(value.nextCursor);
+  if (nextCursor !== undefined && typeof nextCursor !== "string") throw new Error(`Invalid MCP ${method} cursor.`);
+  return { items: items as Record<string, unknown>[], ...(nextCursor === undefined ? {} : { nextCursor }) };
+}
+
+// `name` is required by the spec, but some servers omit it; the URI stands in.
+const optionalName = (item: Record<string, unknown>) => item.name === undefined || typeof item.name === "string";
+
+/** One resources/list page. */
+export async function listMcpResourcesPage(client: McpRequester, params: ListParams, options?: McpCallOptions) {
+  const page = listPage("resources/list", "resources", await mcpRequest<unknown>(client, "resources/list", params, options),
+    (item) => typeof item.uri === "string" && optionalName(item));
+  const resources = page.items.map((item) => ({ ...item, name: (item.name as string | undefined) ?? item.uri })) as unknown as Resource[];
+  return { resources, ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) };
 }
 
 /** One resources/templates/list page, with the same end-of-list leniency. */
-export function listMcpResourceTemplatesPage(client: Pick<Client, "request">, params: ListResourceTemplatesRequest["params"], options?: RequestOptions) {
-  return client.request({ method: "resources/templates/list", params }, LenientListResourceTemplatesResultSchema, options);
+export async function listMcpResourceTemplatesPage(client: McpRequester, params: ListParams, options?: McpCallOptions) {
+  const page = listPage("resources/templates/list", "resourceTemplates", await mcpRequest<unknown>(client, "resources/templates/list", params, options),
+    (item) => typeof item.uriTemplate === "string" && optionalName(item));
+  const resourceTemplates = page.items.map((item) => ({ ...item, name: (item.name as string | undefined) ?? item.uriTemplate })) as unknown as ResourceTemplate[];
+  return { resourceTemplates, ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) };
+}
+
+/** resources/read, with every content block checked for a URI and text or blob. */
+export async function readMcpResource(client: McpRequester, params: { uri: string }, options?: McpCallOptions): Promise<ReadResourceResult> {
+  const value = await mcpRequest<unknown>(client, "resources/read", { uri: params.uri }, options);
+  if (!isRecord(value) || !Array.isArray(value.contents)) throw new Error("Invalid MCP resources/read result.");
+  for (const contents of value.contents) {
+    if (!isRecord(contents) || typeof contents.uri !== "string" || (typeof contents.text !== "string" && typeof contents.blob !== "string")) {
+      throw new Error("Invalid contents in MCP resources/read result.");
+    }
+  }
+  return value as unknown as ReadResourceResult;
+}
+
+function isMethodNotFound(error: unknown): boolean {
+  return error instanceof McpError && error.code === JSON_RPC_ERROR_CODES.methodNotFound;
 }
 type Entry = { handle: string; name: string; uri?: string; uriTemplate?: string };
 type Inventory = Readonly<{ entries: readonly Readonly<Entry>[]; truncated: boolean }>;
@@ -131,18 +165,18 @@ export function createMcpResourceTool(
       const cursors = new Set<string>();
       for (let page = 0; page < MCP_RESOURCE_LIMITS.pages; page += 1) {
         guard(signal);
-        const options = { signal, timeout: 10_000, maxTotalTimeout: 10_000 };
+        const options = { signal, timeoutMs: 10_000 };
         const params = cursor === undefined ? undefined : { cursor };
         const result = kind === "resources"
           ? await client.listResources(params, options).catch((error: unknown) => {
-              if (error instanceof McpError && error.code === ErrorCode.MethodNotFound) return { resources: [], nextCursor: undefined };
+              if (isMethodNotFound(error)) return { resources: [], nextCursor: undefined };
               throw error;
             }).then(({ resources, nextCursor }) => ({
               items: resources.slice(0, MCP_RESOURCE_LIMITS.entries + 1).map(({ name, uri }) => ({ name, uri, uriTemplate: undefined })),
               more: resources.length > MCP_RESOURCE_LIMITS.entries, nextCursor,
             }))
           : await client.listResourceTemplates(params, options).catch((error: unknown) => {
-              if (error instanceof McpError && error.code === ErrorCode.MethodNotFound) return { resourceTemplates: [], nextCursor: undefined };
+              if (isMethodNotFound(error)) return { resourceTemplates: [], nextCursor: undefined };
               throw error;
             }).then(({ resourceTemplates, nextCursor }) => ({
               items: resourceTemplates.slice(0, MCP_RESOURCE_LIMITS.entries + 1).map(({ name, uriTemplate }) => ({ name, uri: undefined, uriTemplate })),
@@ -224,7 +258,7 @@ export function createMcpResourceTool(
       }
       if (!uri) throw new Error("Invalid resource handle.");
       guard(operationSignal);
-      const result = await client.readResource({ uri }, { signal: operationSignal, timeout: 10_000, maxTotalTimeout: 10_000 });
+      const result = await client.readResource({ uri }, { signal: operationSignal, timeoutMs: 10_000 });
       guard(operationSignal);
       const listed = result.contents.slice(0, MCP_RESOURCE_LIMITS.entries);
       const images = mcpResourceImages(listed);

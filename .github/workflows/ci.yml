@@ -136,7 +136,7 @@ jobs:
         run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
       - name: Upload sanitized E2E failure receipt
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -359,6 +359,19 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           CODE_SIGNING_ALLOWED=NO
+
+      - name: Print failed iOS simulator test messages
+        if: failure()
+        shell: bash
+        run: |
+          # Parallel test runs print only test names; the failure messages
+          # live in the result bundle.
+          xcrun xcresulttool get test-results summary --compact \
+            --path '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult' | python3 -c '
+          import json, sys
+          for failure in json.load(sys.stdin).get("testFailures", []):
+              print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
+          ' || true
 
       - name: Preserve failed iOS simulator test results
         if: failure()
@@ -701,7 +714,7 @@ jobs:
 
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() && matrix.arch == 'x64' }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
 
       - name: Upload sanitized E2E failure receipt
         if: ${{ failure() && matrix.arch == 'x64' }}

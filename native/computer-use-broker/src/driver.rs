@@ -85,6 +85,9 @@ fn allowed_driver_environment() -> Vec<String> {
         "CUA_DRIVER_RS_TELEMETRY_ENABLED=0".to_owned(),
         "CUA_TELEMETRY_ENABLED=0".to_owned(),
         "CUA_DRIVER_RS_UPDATE_CHECK=false".to_owned(),
+        // 0.35 turns run_script on by default; Aiden never forwards it, and
+        // off it is also absent from tools/list.
+        "CUA_DRIVER_DISABLE_RUN_SCRIPT=1".to_owned(),
         // Upstream's cross-tool opt-out; it takes precedence over every other
         // telemetry switch, including persisted driver configuration.
         "DO_NOT_TRACK=1".to_owned(),
@@ -603,7 +606,7 @@ mod tests {
         assert_eq!(bytes.len(), 272);
         assert_eq!(
             format!("{:x}", Sha256::digest(bytes)),
-            "7cd4189a267910cc8c341ee9796536d1e2b82b2ed24f9f2996b38228339f5d3d"
+            "6961457c7a7ba4d30c962591fc5c10fd2b4f55a58102c8115c708e0d81a222a8"
         );
         assert_eq!(
             DRIVER_ARGUMENTS,
@@ -767,6 +770,7 @@ mod tests {
             "CUA_DRIVER_RS_TELEMETRY_ENABLED=0",
             "CUA_TELEMETRY_ENABLED=0",
             "CUA_DRIVER_RS_UPDATE_CHECK=false",
+            "CUA_DRIVER_DISABLE_RUN_SCRIPT=1",
         ] {
             assert!(
                 environment.contains(&opt_out.to_owned()),

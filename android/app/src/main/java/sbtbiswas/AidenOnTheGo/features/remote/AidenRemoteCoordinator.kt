@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.OkHttpClient
 import java.io.File
@@ -87,6 +88,51 @@ internal fun aidenProgressCapabilitiesToRequest(
         .flatMap { (_, grants) -> grants }
         .filterNot { installation.hasNegotiatedAccess(it) }
         .distinct()
+
+/**
+ * Revision 37: a Mac that offers `bot:handoffs` in `serverCapabilities` is asked for it, in a
+ * call of its own after the progress grants, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestBotHandoffs(server: AidenServer, installation: AidenInstallation): Boolean =
+    server.offersBotHandoffs &&
+        !server.capabilities.contains(AidenRemoteCapability.BOT_HANDOFFS) &&
+        !installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_HANDOFFS)
+
+/** What asking a Mac for `bot:handoffs` came to: its fresh `/server`, and the grants to keep once it lists them all. */
+internal data class AidenBotHandoffsNegotiation(val server: AidenServer, val granted: List<AidenRemoteCapability>?)
+
+/**
+ * Revision 37: asks [server] for `bot:handoffs` in a call of its own (`accepts` names nothing
+ * else), then reads `/server` again. Returns null when nothing was asked, the Mac refused (a 400
+ * or 404 only means it can't grant it), the read failed, or the pairing changed while it ran
+ * ([stillCurrent]). [AidenBotHandoffsNegotiation.granted] is set only once the Mac's own
+ * `serverCapabilities` lists every grant it returned. A 401 or a revoked credential is rethrown.
+ */
+internal suspend fun aidenRequestBotHandoffs(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenBotHandoffsNegotiation? {
+    if (!stillCurrent() || !aidenShouldRequestBotHandoffs(server, installation)) return null
+    return try {
+        val complete = client.updateDeviceCapabilities(listOf(AidenRemoteCapability.BOT_HANDOFFS))
+        if (!stillCurrent()) return null
+        val refreshed = client.server()
+        if (!stillCurrent()) return null
+        val listed = refreshed.serverCapabilities
+        AidenBotHandoffsNegotiation(refreshed, complete.takeIf { listed != null && listed.containsAll(complete) })
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: AidenRemoteClientException.Server) {
+        if (error.statusCode == 401 ||
+            error.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CREDENTIAL_REVOKED
+        ) throw error
+        null
+    } catch (_: Exception) {
+        null
+    }
+}
 
 /**
  * One pairing: the Mac, this phone's device id there, and when it was made. Unpairing and
@@ -151,6 +197,19 @@ class AidenRemoteCoordinator(
 
     private val _client = MutableStateFlow<AidenRemoteClient?>(null)
     val client: StateFlow<AidenRemoteClient?> = _client.asStateFlow()
+
+    /**
+     * The Mac's feature tokens: this connection's `/server` answer, else those the active pairing
+     * saved from its last answer, else null for a pairing that never heard `/server`. Gates read
+     * these so a connecting or cold open behaves like the last connected one instead of falling
+     * to a legacy path.
+     */
+    fun knownServerFeatures(server: AidenServer? = _serverInfo.value): List<String>? =
+        server?.features ?: installationStore.activeInstallation?.serverFeatures
+
+    /** Revision 25: Bots open their durable session, read from [knownServerFeatures]. */
+    fun supportsBotDurableSession(server: AidenServer? = _serverInfo.value): Boolean =
+        knownServerFeatures(server)?.contains(AidenRemoteProtocol.BOT_DURABLE_SESSION_FEATURE) == true
     /** The client [refreshClient] last made, with the pairing it was made for. */
     @Volatile
     private var clientOwner: Pair<AidenPairingIdentity, AidenRemoteClient>? = null
@@ -352,11 +411,20 @@ class AidenRemoteCoordinator(
                     deviceCapabilities = server.capabilities,
                     serverFeatures = server.features
                 )
-                val negotiatedServer = negotiateProgressCapabilities(
+                val progressServer = negotiateProgressCapabilities(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = server
+                )
+                // Revision 37: `bot:handoffs` goes in a call of its own, after the others. A Mac
+                // that doesn't know a name refuses the whole batch, so asking for it with the
+                // progress grants could cost this phone those grants on an older Mac.
+                val negotiatedServer = negotiateBotHandoffs(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = progressServer
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
@@ -436,6 +504,33 @@ class AidenRemoteCoordinator(
         } catch (_: Exception) {
             server
         }
+    }
+
+    /**
+     * Revision 37: asks a Mac that offers `bot:handoffs` for it, alone, when this pairing doesn't
+     * hold it yet. A 400 or 404 means only that the Mac can't grant it; the pairing carries on
+     * with what it has, and a Bot's hand-offs reach this phone as notices instead.
+     */
+    private suspend fun negotiateBotHandoffs(
+        generation: Long,
+        installation: AidenInstallation,
+        client: AidenRemoteClient,
+        server: AidenServer
+    ): AidenServer {
+        val outcome = aidenRequestBotHandoffs(client, server, installation) {
+            isCurrent(generation, installation.id, client)
+        } ?: return server
+        val granted = outcome.granted ?: return outcome.server
+        val refreshed = outcome.server
+        installationStore.updateServerCapabilities(
+            instanceId = installation.instanceId,
+            serverCapabilities = refreshed.serverCapabilities ?: refreshed.capabilities,
+            serverName = refreshed.name,
+            deviceCapabilities = refreshed.capabilities,
+            serverFeatures = refreshed.features
+        )
+        installationStore.updateDeviceCapabilities(installation.instanceId, granted)
+        return refreshed
     }
 
     fun refreshWorkspaces(expectedGeneration: Long = activationGeneration) {

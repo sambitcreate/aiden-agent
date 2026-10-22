@@ -16,9 +16,20 @@ import { runCuaDriverCommand } from "./process.js";
 
 // Security pins are compiled into Aiden. The packaged artifact JSON is release
 // provenance for humans/build tooling, never runtime security authority.
-const CUA_DRIVER_BINARY_SHA256 = "56bc881744bfb956d44386e6f6ccb2f6fc7f5cef47be25cc056e08265cdf4c7d";
+const CUA_DRIVER_BINARY_SHA256 = "87c7e782e69703d95524e4ceb7ceba03c8a159caabf1f1ce2c118eade7d2a5ec";
 const CUA_DRIVER_UPSTREAM_SIGNING_IDENTIFIER = "cua-driver";
 const CUA_DRIVER_UPSTREAM_SIGNING_TEAM_ID = "YCK386LBJ7";
+
+/**
+ * The pinned upstream driver's identity, for a copy Aiden checks somewhere
+ * other than this Mac: a Bot computer's guest verifies the copied
+ * executable against these before it is put in place (docs/bot-computers.md).
+ */
+export const CUA_DRIVER_UPSTREAM_PIN = Object.freeze({
+  version: CUA_DRIVER_VERSION,
+  binarySha256: CUA_DRIVER_BINARY_SHA256,
+  signingRequirement: `anchor apple generic and identifier "${CUA_DRIVER_UPSTREAM_SIGNING_IDENTIFIER}" and certificate leaf[subject.OU] = "${CUA_DRIVER_UPSTREAM_SIGNING_TEAM_ID}"`,
+});
 
 export interface CuaDriverPathOptions {
   appPath: string;
@@ -193,6 +204,72 @@ export async function verifyCuaDriverBridgeProcess(
       "The running Computer Use bridge signature could not be verified.",
     );
   });
+}
+
+function vendoredHelperAppPath(options: CuaDriverPathOptions): string {
+  return options.isPackaged
+    ? path.resolve(options.resourcesPath, "..", "Helpers", "CuaDriver.app")
+    : path.join(options.appPath, "build", "computer-use", "CuaDriver.app");
+}
+
+/**
+ * The cua-driver licence notice the vendor step puts inside the helper
+ * bundle (`Contents/Resources/LICENSE.cua-driver.md`, which the package
+ * verifier requires). A copy of the driver made elsewhere, such as in a Bot
+ * computer's guest, carries this notice beside it.
+ */
+export function vendoredCuaDriverNoticePath(options: CuaDriverPathOptions): string {
+  return path.join(vendoredHelperAppPath(options), "Contents", "Resources", "LICENSE.cua-driver.md");
+}
+
+/**
+ * The vendored, untouched upstream `cua-driver` executable inside Aiden's
+ * helper bundle, after the same hash and signing-requirement checks the
+ * helper gets. Bot computers copy this one file into a guest; the broker is
+ * never copied, since it authenticates the Aiden process it runs under.
+ */
+export async function resolveVendoredCuaDriverExecutable(
+  options: CuaDriverPathOptions,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfAborted(signal);
+  if (options.platform !== "darwin") {
+    throw new CuaDriverError("unsupported_platform", "The guest driver is copied only from a Mac.");
+  }
+  const brokerAppPath = vendoredHelperAppPath(options);
+  const driverPath = path.join(brokerAppPath, "Contents", "MacOS", "cua-driver");
+  const missing = options.isPackaged
+    ? "The packaged cua-driver executable is missing or invalid."
+    : "The pinned cua-driver has not been vendored. Run npm run computer-use:vendor.";
+  // As for the helper itself: a symlinked bundle is never the vendored one.
+  try {
+    const appInfo = await lstat(brokerAppPath);
+    throwIfAborted(signal);
+    if (!appInfo.isDirectory() || appInfo.isSymbolicLink()) throw new Error("invalid app");
+  } catch {
+    throwIfAborted(signal);
+    throw new CuaDriverError("driver_missing", missing);
+  }
+  await verifyRegularExecutable(driverPath, missing, signal);
+  const resolvedApp = await realpath(brokerAppPath);
+  const resolvedDriver = await realpath(driverPath);
+  if (!resolvedDriver.startsWith(`${resolvedApp}${path.sep}Contents${path.sep}MacOS${path.sep}`)) {
+    throw new CuaDriverError("invalid_driver_path", "The cua-driver executable escaped its helper bundle.");
+  }
+  if ((await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_BINARY_SHA256) {
+    throw new CuaDriverError(
+      "driver_integrity_failed",
+      `The cua-driver executable does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
+    );
+  }
+  await verifyCode(resolvedDriver, CUA_DRIVER_UPSTREAM_PIN.signingRequirement, signal).catch((error: unknown) => {
+    if (error instanceof CuaDriverError && error.code === "cancelled") throw error;
+    throw new CuaDriverError(
+      "driver_integrity_failed",
+      "The cua-driver executable failed its pinned signing requirement.",
+    );
+  });
+  return resolvedDriver;
 }
 
 export async function resolveCuaDriverInstallation(

@@ -47,6 +47,7 @@ function fakeProjection() {
     notifyState: () => undefined,
     refresh: async () => undefined,
     refreshQuestion: async () => undefined,
+    refreshHandoff: async () => undefined,
     notifyStopping: () => undefined,
     notifyResuming: () => undefined,
     cancelStopping: () => undefined,

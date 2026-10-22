@@ -110,7 +110,9 @@ export function createDaemonChats(agentDir: string) {
         const chat = await chatStore.get(params.chatId);
         if (!chat) throw new Error("The chat is unavailable.");
         if (chat.botId) {
+          bots?.assertLegacyChatAllowed?.();
           if (!bots || !options.botAudienceId) throw new Error("This chat requires a Bot capability audience.");
+          await bots.assertNotPaused(chat.botId);
           botAdmission = await bots.authority.admit({ audienceId: options.botAudienceId, botId: chat.botId, chatId: chat.id });
           assertBotRuntimeProviderSelection(botAdmission.authority.provider, { providerId: params.providerId, model: params.model });
           const cancel = () => { entry.abort.abort(); void entry.session?.abort(); };

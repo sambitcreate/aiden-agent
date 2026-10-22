@@ -135,6 +135,11 @@ struct AidenBotProfileView: View {
     @State private var mutationError: String?
     @State private var saver: AidenBotIdentitySaver?
     @State private var isDeleting = false
+    /// Revision 37: a Pause or Resume is on its way to the Mac.
+    @State private var isChangingPause = false
+    /// The key of a Pause or Resume that may have reached the Mac, so trying
+    /// the same change again is deduplicated there.
+    @State private var pauseAttempt: AidenBotPauseAttempt?
     @State private var loadGeneration: UInt = 0
     @State private var nameText = ""
     @State private var subtitleText = ""
@@ -169,6 +174,13 @@ struct AidenBotProfileView: View {
 
     private var canDelete: Bool {
         AidenBotDeletion.isAvailable(coordinator: coordinator) && detail != nil && !isDeleting
+    }
+
+    /// Revision 37: Pause and Resume, when the Mac serves `bot:handoffs` to
+    /// this phone and reports the Bot's session state.
+    private var canPause: Bool {
+        canWrite && detail?.sessionState != nil && !isChangingPause
+            && coordinator.server?.supportsBotHandoffs == true
     }
 
     var body: some View {
@@ -300,6 +312,14 @@ struct AidenBotProfileView: View {
         Menu {
             Button("Advanced", systemImage: "slider.horizontal.3") {
                 isShowingAdvanced = true
+            }
+            if canPause, let detail {
+                Button(
+                    detail.paused ? AidenBotSessionCopy.resumeBot : AidenBotSessionCopy.pauseBot,
+                    systemImage: detail.paused ? "play.circle" : "pause.circle"
+                ) {
+                    Task { await setPaused(!detail.paused) }
+                }
             }
             if canDelete {
                 Button("Delete Bot", systemImage: "trash", role: .destructive) {
@@ -726,6 +746,41 @@ struct AidenBotProfileView: View {
         }
     }
 
+    /// Pauses or resumes this Bot on the Mac, then re-reads it so the page
+    /// shows what the Mac now says. A change that may have arrived keeps its key.
+    @MainActor
+    private func setPaused(_ pause: Bool) async {
+        guard canPause, let context = capturedContext, let detail else { return }
+        let key: UUID
+        if let attempt = pauseAttempt, attempt.pause == pause {
+            key = attempt.key
+        } else {
+            key = UUID()
+            pauseAttempt = AidenBotPauseAttempt(pause: pause, key: key)
+        }
+        isChangingPause = true
+        defer { isChangingPause = false }
+        do {
+            let client = try coordinator.remoteClient(for: context)
+            let botID = botID
+            _ = try await aidenBotWithin(.seconds(12)) { () async throws -> AidenBotSessionStateView in
+                if pause { return try await client.pauseBot(botId: botID, idempotencyKey: key) }
+                return try await client.unpauseBot(botId: botID, idempotencyKey: key)
+            }
+            pauseAttempt = nil
+            onChanged()
+            await load(for: sessionIdentity)
+        } catch is CancellationError {
+            return
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { pauseAttempt = nil }
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            mutationError = pause
+                ? "\(detail.name) wasn’t paused. Please try again."
+                : "\(detail.name) wasn’t resumed. Please try again."
+        }
+    }
+
     @MainActor
     private func deleteBot() async {
         guard canDelete, let detail else { return }
@@ -801,4 +856,10 @@ struct AidenBotInstructionsEditorView: View {
             }
         }
     }
+}
+
+/// A Pause or Resume whose answer was lost: the same change reuses its key.
+struct AidenBotPauseAttempt: Equatable {
+    let pause: Bool
+    let key: UUID
 }

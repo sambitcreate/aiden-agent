@@ -1,5 +1,7 @@
+/* global console */
+
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -70,6 +72,58 @@ test("a failing lane fails the run without skipping its sibling or running prese
     const order = await events(log);
     assert.ok(order.includes("end beta"), "the sibling lane still finishes");
     assert.ok(!order.includes("start preserved"));
+  });
+});
+
+// A real node:test file in a one-lane plan, with the runner's output captured.
+async function runFixtureLane(directory, source) {
+  // node:test reports the resolved path (macOS's tmpdir is under the /var -> /private/var link).
+  const file = path.join(await realpath(directory), "fixture.test.mjs");
+  await writeFile(file, source);
+  const plan = buildPlan({ lanes: [{ name: "fixture", files: [file] }], prerequisites: [], preserved: [] }, parseArguments(["--lane", "fixture", "--parallel"]));
+  const output = [];
+  const write = process.stdout.write;
+  const log = console.log;
+  // This file runs under node --test, whose marker would make the lane's own run skip its files.
+  const context = process.env.NODE_TEST_CONTEXT;
+  delete process.env.NODE_TEST_CONTEXT;
+  process.stdout.write = (chunk) => output.push(String(chunk)) > 0;
+  console.log = (...parts) => output.push(`${parts.join(" ")}\n`);
+  try {
+    const result = await executePlan(plan, parseArguments(["--lane", "fixture", "--parallel"])).then(() => "passed", (error) => error.message);
+    return { result, file, output: output.join("") };
+  } finally {
+    process.stdout.write = write;
+    console.log = log;
+    if (context !== undefined) process.env.NODE_TEST_CONTEXT = context;
+  }
+}
+
+test("a failed lane ends by listing each failed test with its file, line and error", async () => {
+  await withDirectory(async (directory) => {
+    const { result, file, output } = await runFixtureLane(directory, [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'test("the fixture that passes", () => {});',
+      'test("the fixture that fails", () => {',
+      '  assert.equal(1 + 1, 3, "the sum the digest quotes");',
+      "});",
+    ].join("\n"));
+    assert.match(result, /fixture:tests exited with status 1/u);
+    const digest = output.slice(output.lastIndexOf("Failed tests in fixture:tests:"));
+    assert.ok(digest.startsWith("Failed tests in fixture:tests:"), "the list comes after the lane's own output");
+    assert.match(digest, /not ok the fixture that fails/u);
+    assert.ok(digest.includes(`at ${file}:4:1`), "it names where the test is");
+    assert.match(digest, /the sum the digest quotes/u);
+    assert.doesNotMatch(digest, /the fixture that passes/u);
+  });
+});
+
+test("a lane that passes lists no failed tests", async () => {
+  await withDirectory(async (directory) => {
+    const { result, output } = await runFixtureLane(directory, 'import test from "node:test";\ntest("the fixture that passes", () => {});\n');
+    assert.equal(result, "passed");
+    assert.doesNotMatch(output, /Failed tests in/u);
   });
 });
 

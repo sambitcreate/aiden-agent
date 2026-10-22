@@ -4,7 +4,12 @@ import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import readline from "node:readline";
-import { FakeCuaDriver, TOOL_DEFINITIONS, toolListResult } from "./cua-driver-catalog.mjs";
+import {
+  FakeCuaDriver,
+  TOOL_DEFINITIONS,
+  UNFORWARDED_TOOLS,
+  toolListResult,
+} from "./cua-driver-catalog.mjs";
 
 const argv = process.argv.slice(2);
 function option(name) {
@@ -34,8 +39,10 @@ const command = argv.includes("--bridge")
     : argv.find((value) => explicitCommands.has(value)) ?? "unknown";
 
 // The native bridge forwards only Aiden's allowlist, so the fake lists exactly
-// those tools in their 0.34.1 shapes.
-const ALLOWED_TOOLS = Object.keys(TOOL_DEFINITIONS);
+// those tools in their 0.36.0 shapes and drops the upstream-only batch tools.
+const ALLOWED_TOOLS = Object.keys(TOOL_DEFINITIONS).filter(
+  (name) => !UNFORWARDED_TOOLS.has(name),
+);
 const driver = new FakeCuaDriver({
   hostBundleId: process.env.CUA_DRIVER_HOST_BUNDLE_ID,
 });
@@ -276,7 +283,7 @@ if (command === "hold-stdio") {
           result: {
             protocolVersion: message.params?.protocolVersion ?? "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "fake-aiden-cua-bridge", version: "0.34.1" },
+            serverInfo: { name: "fake-aiden-cua-bridge", version: "0.36.0" },
           },
         });
       } else if (message.method === "notifications/initialized") {

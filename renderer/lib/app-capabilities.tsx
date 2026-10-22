@@ -7,6 +7,8 @@ export interface AppCapabilities {
   bots: boolean;
   appUpdates: boolean;
   computerUse: boolean;
+  /** A macOS VM per Bot (Apple silicon only). */
+  botComputers: boolean;
   dockIcon: boolean;
   accessibilityPaste: boolean;
   dictationHoldToTalk: boolean;
@@ -26,6 +28,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   bots: false,
   appUpdates: false,
   computerUse: false,
+  botComputers: false,
   dockIcon: false,
   accessibilityPaste: false,
   dictationHoldToTalk: false,
@@ -51,6 +54,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     bots: record.bots === true,
     appUpdates: record.appUpdates === true,
     computerUse: record.computerUse === true,
+    botComputers: record.botComputers === true,
     dockIcon: record.dockIcon === true,
     accessibilityPaste: record.accessibilityPaste === true,
     dictationHoldToTalk: record.dictationHoldToTalk === true,

@@ -181,3 +181,26 @@ test("reply times read as today, yesterday, or a date, each with the time", () =
   assert.ok(formatBotActivityWhen(older.getTime(), now).startsWith(`${olderDay}, `), "an older reply names its date");
   assert.equal(formatBotActivityWhen(undefined, now), "Earlier");
 });
+
+test("a hand-off is the person's step, not the Bot's: the reply after it is titled Hand-off and the card is no step", () => {
+  const log = botActivityLog(
+    [
+      message("u1", "Move the savings"),
+      working("a1", [call("c1", "hand_off", "waiting", "Handed you a step"), call("c2", "grep", "reading", "Read 1 file")]),
+      result("c2", "ok"),
+      { id: "handoff:c1", type: "handoff_result", kind: "action", outcome: "done", action: "Enter the 2FA code", at: 300 },
+      working("a2", [call("c3", "web_search", "searching", "Searched the web", "transfer status")]),
+      result("c3", "ok"),
+      answer("a3", "The transfer is through."),
+    ],
+    { running: false },
+  );
+  assert.deepEqual(
+    log.map((reply) => [reply.title, reply.steps.map((step) => `${step.label} ${step.status}`)]),
+    [
+      ["Hand-off", ["Searched the web ok"]],
+      ["Move the savings", ["Read 1 file ok"]],
+    ],
+  );
+  assert.equal(log[0]!.at, 300);
+});

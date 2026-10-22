@@ -30,6 +30,7 @@ import {
   applyShortcutFromSettings,
   disposeShortcut,
   initShortcutBindingsChanged,
+  isDictationShortcutActive,
 } from "./services/shortcut.js";
 import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
@@ -56,7 +57,7 @@ import { modelPaceRecorder } from "./services/model-pace-runtime.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
-import { disposeDictation, toggleDictation } from "./services/dictation.js";
+import { disposeDictation, prepareDictationPill, toggleDictation } from "./services/dictation.js";
 import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
@@ -135,6 +136,7 @@ import {
 import {
   reconcileExternalMcpCredentialChanges,
   reconcilePendingMcpCredentialCleanup,
+  cleanupRetiredMcpServerCredentials,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
@@ -509,6 +511,18 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
           );
       })(),
       browserService.shutdown(),
+      // Every running Bot computer is asked to stop, then forced, inside the budget;
+      // a computer that never started (or no Apple silicon) resolves at once.
+      Promise.race([
+        import("./services/bot-computers/bot-computers-main.js")
+          .then(({ shutdownBotComputers }) => shutdownBotComputers(4_000))
+          .then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000).unref()),
+      ])
+        .then((stopped) => {
+          if (!stopped) logger.warn("bot-computers", "Bot computers did not stop within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("bot-computers", "Bot computers did not stop cleanly.", error)),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
       // the budget are still signalled by their transports' close.
@@ -2076,6 +2090,13 @@ if (!ownsSingleInstanceLock) {
         trackConnectionSetupFocus,
         logError: (message, error) => logger.error("bots", message, error),
       });
+      // Bot computers left running by an earlier launch stop, and interrupted ones are
+      // marked for Reset. Apple silicon only; a Mac that never chose Set up runs no Lume.
+      if (hostPlatformCapabilities().botComputers) {
+        void import("./services/bot-computers/bot-computers-main.js")
+          .then(({ reconcileBotComputers }) => reconcileBotComputers())
+          .catch((error) => logger.warn("bot-computers", "Bot computer startup check did not finish.", error));
+      }
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
       try {
@@ -2170,6 +2191,11 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      try {
+        await cleanupRetiredMcpServerCredentials();
+      } catch (error) {
+        logger.error("mcp", "Could not remove credentials of retired SSE MCP servers.", error);
+      }
       // Env and header values still written in config.json move into the keychain.
       await sealPlaintextMcpServerFields().catch((error: unknown) =>
         logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
@@ -2218,6 +2244,12 @@ if (!ownsSingleInstanceLock) {
         );
       }
       refreshFoundationModelsStatus();
+      // Voice warm-up, a few seconds after launch so it never competes with the
+      // first window: the hidden dictation pill and the on-device voice model.
+      setTimeout(() => {
+        if (isDictationShortcutActive()) void prepareDictationPill();
+        void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
+      }, 3_000).unref();
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 

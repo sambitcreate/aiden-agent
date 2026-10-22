@@ -143,6 +143,11 @@ export function MemorySettings() {
           can retrieve from the current chat. That context may be sent to your chat model when the
           conversation continues. Current-chat recall works independently of memory below.
         </Text>
+        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
+          When you come back to a chat over 100K tokens after its prompt cache expired, pi-vcc
+          compacts it right away. With LLM Compaction, Aiden asks “Compact first?” instead, since
+          summarizing uses model tokens.
+        </Text>
       </FieldSet>
 
       <CompactionBudgetSettings

@@ -37,6 +37,8 @@ import {
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
+import { mcpProviderKeySharingIds, setMcpProviderKeySharing } from "../services/mcp-provider-auth.js";
+import { registerProviderKeySharingHandler } from "./mcp-provider-auth.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
 import { providerModelInfo } from "../services/provider-model-info.js";
@@ -110,7 +112,15 @@ async function saveProvider(
 }
 
 async function listProviders() {
-  return listConfiguredProviders();
+  const [providers, sharing] = await Promise.all([
+    listConfiguredProviders(),
+    mcpProviderKeySharingIds().catch(() => new Set<string>()),
+  ]);
+  return providers.map((provider) =>
+    provider.isBuiltin && provider.credentialType === "api_key" && sharing.has(provider.id)
+      ? { ...provider, connectorKeySharing: true }
+      : provider,
+  );
 }
 
 async function refreshProviderCatalogs(providerIds?: readonly string[], force = true) {
@@ -159,8 +169,12 @@ export function registerProviderHandlers(): void {
   ipcMain.handle("providers:logout", async (event, providerId: unknown) => {
     // Logout is a credential mutation, so reject requests queued by a document
     // that navigation or renderer replacement has already made stale.
-    providerAuthOwner(event);
-    return providerAuthFlow.logout(parseProviderAuthProviderId(providerId));
+    const owner = providerAuthOwner(event);
+    const id = parseProviderAuthProviderId(providerId);
+    const result = await providerAuthFlow.logout(id);
+    // The opt-in belongs to the removed key; a later key must be opted in again.
+    await setMcpProviderKeySharing(id, false, () => !owner.isDestroyed()).catch(() => undefined);
+    return result;
   });
 
   ipcMain.handle(
@@ -248,6 +262,12 @@ export function registerProviderHandlers(): void {
       return listModels(provider, key);
     },
   );
+
+  registerProviderKeySharingHandler<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: providerAuthOwner,
+    set: setMcpProviderKeySharing,
+  });
 
   registerProviderCatalogHandlers(ipcMain, {
     providerAuthOwner,

@@ -39,6 +39,7 @@ export function parseSidebarMachineFilter(value: unknown): SidebarMachineFilter 
 export const SIDEBAR_ATTENTION_TIERS = [
   "needs_approval",
   "needs_input",
+  "failed",
   "working",
   "unread",
   "none",
@@ -48,15 +49,24 @@ export type SidebarAttention = (typeof SIDEBAR_ATTENTION_TIERS)[number];
 export const SIDEBAR_ATTENTION_LABELS: Readonly<Record<SidebarAttention, string>> = {
   needs_approval: "Needs approval",
   needs_input: "Needs input",
+  failed: "Failed",
   working: "Working",
   unread: "Unread",
   none: "Other chats",
 };
 
-/** A live row state outranks unread output: a chat still working is not "done". */
-export function sidebarAttention(rowState: ChatRowState, unread: boolean): SidebarAttention {
+/**
+ * A live row state outranks unread output: a chat still working is not "done".
+ * Unseen output from a failed turn ranks above working chats, which need nothing.
+ */
+export function sidebarAttention(
+  rowState: ChatRowState,
+  unread: boolean,
+  failed = false,
+): SidebarAttention {
   if (rowState !== "idle") return rowState;
-  return unread ? "unread" : "none";
+  if (!unread) return "none";
+  return failed ? "failed" : "unread";
 }
 
 /**

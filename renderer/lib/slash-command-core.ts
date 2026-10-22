@@ -209,7 +209,11 @@ function firstToken(
   if (start < 0 || (draft[start] !== "/" && draft[start] !== "$")) return null;
   const relativeEnd = draft.slice(start).search(/\s/u);
   const end = relativeEnd < 0 ? draft.length : start + relativeEnd;
-  return { start, end, token: draft.slice(start, end), trigger: draft[start] };
+  const token = draft.slice(start, end);
+  // A second slash makes the word a path such as /tmp/build.sh or $HOME/notes,
+  // not a command or skill name, wherever the caret sits inside it.
+  if (token.includes("/", 1)) return null;
+  return { start, end, token, trigger: draft[start] };
 }
 
 export function updateSlashSessionTracker(

@@ -55,8 +55,8 @@ function normalize(value: unknown): StoredOutput[] {
 /** Private bounded text snapshots. Handles carry no authority without their host scope. */
 export class ToolOutputStore {
   private readonly data: DataStore<StoredOutput[]>;
-  constructor(root?: () => string, private readonly now = Date.now) {
-    this.data = new DataStore("tool-output-spills.json", [], root, {
+  constructor(root?: () => string, private readonly now = Date.now, filename = "tool-output-spills.json") {
+    this.data = new DataStore(filename, [], root, {
       fileMode: 0o600, maxBytes: 32_000_000, normalize,
     });
   }
@@ -96,6 +96,14 @@ export class ToolOutputStore {
     await this.data.update((rows) => {
       const kept = rows.filter((row) => row.chat !== chat && row.createdAt > this.now() - RETENTION_MS);
       rows.splice(0, rows.length, ...kept);
+    });
+  }
+
+  async reconcileChats(validChatIds: ReadonlySet<string>): Promise<void> {
+    const valid = new Set([...validChatIds].map((id) => toolOutputScope(id)));
+    await this.data.update((rows) => {
+      const retained = rows.filter((row) => valid.has(row.chat) && row.createdAt > this.now() - RETENTION_MS);
+      rows.splice(0, rows.length, ...retained);
     });
   }
 

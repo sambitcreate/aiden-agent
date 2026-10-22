@@ -2,14 +2,19 @@ import assert from "node:assert/strict";
 import childProcess, { type ChildProcess } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { EventEmitter, getEventListeners } from "node:events";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { codesignVerifyArguments, resolveCuaDriverInstallation } from "./binary.js";
+import {
+  codesignVerifyArguments,
+  resolveCuaDriverInstallation,
+  resolveVendoredCuaDriverExecutable,
+  vendoredCuaDriverNoticePath,
+} from "./binary.js";
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
   CuaDriverError,
@@ -23,7 +28,12 @@ import {
 } from "./host.testing.js";
 import { CuaDriverHost, type CuaDriverHostOptions } from "./host.js";
 import { runCuaDriverCommand } from "./process.js";
-import { pngHeaderBase64, toolListResult } from "./fixtures/cua-driver-catalog.mjs";
+import {
+  TOOL_DEFINITIONS,
+  UNFORWARDED_TOOLS,
+  pngHeaderBase64,
+  toolListResult,
+} from "./fixtures/cua-driver-catalog.mjs";
 import {
   CUA_DRIVER_MAX_CLIENT_MESSAGE_BYTES,
   CUA_DRIVER_MAX_SERVER_MESSAGE_BYTES,
@@ -95,7 +105,7 @@ function fragmentedImageBridge(imageBytes: number, fragmentBytes: number): {
           result: {
             protocolVersion: message.params?.protocolVersion ?? "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "fragmented-image-bridge", version: "0.34.1" },
+            serverInfo: { name: "fragmented-image-bridge", version: "0.36.0" },
           },
         });
       } else if (message.method === "tools/list") {
@@ -184,11 +194,11 @@ function assertProcessRunning(pid: number): void {
 function pendingMcpResponseHandlers(session: CuaDriverSession): number {
   const client = (
     session as unknown as {
-      client: { _responseHandlers: Map<number, unknown> } | null;
+      client: { pending: Map<number, unknown> } | null;
     }
   ).client;
   assert.ok(client, "the ready Computer Use session should retain its MCP client");
-  return client._responseHandlers.size;
+  return client.pending.size;
 }
 
 async function killExactProcess(pid: number | undefined): Promise<void> {
@@ -246,6 +256,7 @@ test("buildCuaDriverEnvironment strips secrets and disables telemetry and update
   assert.equal(env.CUA_DRIVER_RS_TELEMETRY_ENABLED, "0");
   assert.equal(env.CUA_TELEMETRY_ENABLED, "0");
   assert.equal(env.CUA_DRIVER_RS_UPDATE_CHECK, "false");
+  assert.equal(env.CUA_DRIVER_DISABLE_RUN_SCRIPT, "1");
   assert.equal(env.DO_NOT_TRACK, "1");
   assert.equal(env.OPENAI_API_KEY, undefined);
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
@@ -255,12 +266,15 @@ test("buildCuaDriverEnvironment strips secrets and disables telemetry and update
 });
 
 test("tool catalog parsing retains pinned versions, exact schemas, and capabilities", () => {
-  // The 0.34.1 tools/list wire shape, including fields Aiden ignores
-  // (`enforcement_adapters`, per-tool `risk` and `outputSchema`).
-  const listing = toolListResult([...CUA_DRIVER_ALLOWED_TOOLS]) as {
+  // The unfiltered 0.36.0 tools/list wire shape, including fields Aiden
+  // ignores (`enforcement_adapters`, per-tool `risk` and `outputSchema`) and
+  // the batch/script tools the broker would drop.
+  const listing = toolListResult(Object.keys(TOOL_DEFINITIONS)) as {
     tools: Array<Record<string, unknown>>;
   };
   const tools = listing.tools;
+  assert.ok(tools.some((tool) => tool.name === "run_steps"));
+  assert.ok(tools.some((tool) => tool.name === "run_script"));
   const forbiddenTools = ["launch_app", "kill_app", "move_cursor", "get_desktop_state"].map(
     (name) => ({
       name,
@@ -277,7 +291,7 @@ test("tool catalog parsing retains pinned versions, exact schemas, and capabilit
   );
   assert.equal(catalog.tools.get("get_window_state")?.readOnly, true);
   assert.equal(catalog.tools.get("click")?.destructive, true);
-  // 0.34 admits `session` on every closed schema, so every tool receives it.
+  // 0.36 admits `session` on every closed schema, so every tool receives it.
   for (const name of CUA_DRIVER_ALLOWED_TOOLS) {
     assert.equal(cuaDriverToolDeclaresSession(catalog.tools.get(name)!), true, name);
   }
@@ -290,8 +304,14 @@ test("tool catalog parsing retains pinned versions, exact schemas, and capabilit
     false,
   );
   assert.deepEqual(new Set(catalog.tools.keys()), new Set(CUA_DRIVER_ALLOWED_TOOLS));
-  for (const name of ["launch_app", "kill_app", "move_cursor", "get_desktop_state"]) {
-    assert.equal(catalog.tools.has(name), false);
+  for (const name of [
+    "launch_app",
+    "kill_app",
+    "move_cursor",
+    "get_desktop_state",
+    ...UNFORWARDED_TOOLS,
+  ]) {
+    assert.equal(catalog.tools.has(name), false, name);
   }
   for (const name of ["click", "press_key", "scroll", "type_text", "get_window_state", "set_value"]) {
     assert.equal(
@@ -400,6 +420,57 @@ test("driver installation resolution rejects unsupported platforms and symlinked
   }
 });
 
+test("the driver a Bot computer's guest gets is only the vendored, pinned executable inside a real helper bundle", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-guest-copy-"));
+  const options = { appPath: root, isPackaged: false, platform: "darwin" as const, resourcesPath: root };
+  const helper = path.join(root, "build", "computer-use", "CuaDriver.app");
+  const driver = path.join(helper, "Contents", "MacOS", "cua-driver");
+  try {
+    // Nothing vendored yet: the person is told how to vendor, and nothing is copied.
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing" && /computer-use:vendor/u.test(error.message),
+    );
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable({ ...options, platform: "linux" }),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "unsupported_platform",
+    );
+
+    // A file in the right place that isn't the pinned release is refused before any signature check.
+    await mkdir(path.dirname(driver), { recursive: true });
+    await writeFile(driver, "#!/bin/sh\necho not the pinned driver\n", { mode: 0o755 });
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) =>
+        error instanceof CuaDriverError && error.code === "driver_integrity_failed" && /pinned 0\.36\.0 release/u.test(error.message),
+    );
+
+    // A helper bundle that is a symlink to another folder is never the vendored one.
+    const elsewhere = path.join(root, "elsewhere.app");
+    await rename(helper, elsewhere);
+    await symlink(elsewhere, helper);
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing",
+    );
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options, cancelled.signal),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "cancelled",
+    );
+    // The licence notice travels with the copy, from inside the same helper bundle.
+    assert.equal(vendoredCuaDriverNoticePath(options), path.join(helper, "Contents", "Resources", "LICENSE.cua-driver.md"));
+    assert.equal(
+      vendoredCuaDriverNoticePath({ ...options, isPackaged: true, resourcesPath: "/Applications/Aiden Agent.app/Contents/Resources" }),
+      "/Applications/Aiden Agent.app/Contents/Helpers/CuaDriver.app/Contents/Resources/LICENSE.cua-driver.md",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("live codesign verification avoids unsupported strict process requirements", () => {
   assert.deepEqual(codesignVerifyArguments("+4242", "identifier test"), [
     "--verify",
@@ -458,6 +529,7 @@ test("each session owns an authenticated broker bridge and preserves MCP multimo
       pid: 42,
       window_id: 7,
       include_screenshot: true,
+      tree_format: "elements",
     })) as {
       content?: Array<{ type?: string; data?: string; mimeType?: string }>;
       structuredContent?: { screenshot_width?: number; elements?: unknown[] };
@@ -564,11 +636,11 @@ test("inbound MCP framing accepts the exact 64 MiB contract boundary and poisons
   const messages: unknown[] = [];
   const errors: Error[] = [];
   let closeNotifications = 0;
-  transport.onmessage = (message) => messages.push(message);
-  transport.onerror = (error) => errors.push(error);
-  transport.onclose = () => {
+  transport.onMessage((message) => messages.push(message));
+  transport.onError((error) => errors.push(error));
+  transport.onClose(() => {
     closeNotifications += 1;
-  };
+  });
 
   try {
     await transport.start();
@@ -739,7 +811,7 @@ test("session rejects non-allowlisted tools and private broker arguments", async
   await rm(root, { recursive: true, force: true });
 });
 
-test("schema-driven session injection binds every 0.34.1 tool call to Aiden's session", async () => {
+test("schema-driven session injection binds every 0.36.0 tool call to Aiden's session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "acu-session-schema-"));
   const logPath = path.join(root, "events.jsonl");
   const host = fakeHost(root, logPath);
@@ -748,7 +820,7 @@ test("schema-driven session injection binds every 0.34.1 tool call to Aiden's se
   try {
     const session = await host.createSession();
     sessionId = session.id;
-    // 0.34.1 admits `session` on every closed schema, so each call carries it.
+    // 0.36.0 admits `session` on every closed schema, so each call carries it.
     const calls: Array<[string, Record<string, unknown>]> = [
       ["health_report", { include: ["binary_version"] }],
       ["check_permissions", { prompt: false }],
@@ -756,6 +828,11 @@ test("schema-driven session injection binds every 0.34.1 tool call to Aiden's se
       ["list_windows", { on_screen_only: true }],
       ["bring_to_front", { pid: 42, window_id: 7 }],
       ["get_window_state", { pid: 42, window_id: 7, include_screenshot: false }],
+      // The 0.35 view options are part of the closed schema.
+      [
+        "get_window_state",
+        { pid: 42, window_id: 7, include_screenshot: false, tree_format: "elements", verbose: false },
+      ],
       // A caller-supplied label never replaces Aiden's own session.
       ["list_apps", { session: "caller-controlled" }],
     ];
@@ -768,19 +845,19 @@ test("schema-driven session injection binds every 0.34.1 tool call to Aiden's se
   const toolCalls = events.filter(
     (event) => event.event === "tool-call" && event.name !== "start_session" && event.name !== "end_session",
   );
-  assert.equal(toolCalls.length, 7);
+  assert.equal(toolCalls.length, 8);
   for (const call of toolCalls) {
     assert.equal((call.args as { session?: string }).session, sessionId, String(call.name));
   }
   assert.equal(
     events.some((event) => event.event === "driver-refused-arguments"),
     false,
-    "all calls must satisfy the strict 0.34.1 schemas",
+    "all calls must satisfy the strict 0.36.0 schemas",
   );
   await rm(root, { recursive: true, force: true });
 });
 
-test("the 0.34.1 fake refuses the removed element_index and unknown arguments as invalid_arguments", async () => {
+test("the 0.36.0 fake refuses the removed element_index and unknown arguments as invalid_arguments", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "acu-closed-schema-"));
   const logPath = path.join(root, "events.jsonl");
   const host = fakeHost(root, logPath);

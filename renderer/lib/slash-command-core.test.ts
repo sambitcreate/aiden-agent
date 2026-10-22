@@ -197,8 +197,25 @@ test("slash trigger requires the first non-whitespace token and a collapsed care
     argument: " task",
     sessionKey: "1:$review",
   });
-  assert.ok(deriveSlashSession(input("\n\t/Users/private")));
+  assert.ok(deriveSlashSession(input("\n\t/model")));
   assert.equal(deriveSlashSession(input("ordinary prose")), null);
+});
+
+test("a typed path never opens the command or skill palette", () => {
+  assert.equal(deriveSlashSession(input("/tmp/x")), null);
+  assert.equal(deriveSlashSession(input("\n\t/Users/private")), null);
+  assert.equal(deriveSlashSession(input("/etc/hosts is missing")), null);
+  // The caret before the second slash still sits in a path word.
+  assert.equal(deriveSlashSession(input("/etc/hosts", 3)), null);
+  assert.equal(deriveSlashSession(input("$HOME/notes")), null);
+  assert.equal(parseSubmittedSlashCommand("/btw/notes.md"), null);
+  // Typing toward a path closes the palette once the second slash lands.
+  assert.ok(deriveSlashSession(input("/tmp")));
+  assert.equal(deriveSlashSession(input("/tmp/")), null);
+  // A lone slash and ordinary commands still open it.
+  assert.ok(deriveSlashSession(input("/")));
+  // Only the first word counts, so an argument may still hold a path.
+  assert.equal(deriveSlashSession(input("/model openai/gpt", 3))?.query, "model");
 });
 
 test("escape remains sticky through caret and leading-space changes but a changed or retyped token resets it", () => {
@@ -249,6 +266,11 @@ test("commands and skills rank only inside their explicit trigger namespace", ()
     `slash-option-skill-${invocationId(1)}`,
   );
   assert.ok(rankSlashResults("mdl", skills, "command").results.length > 0);
+  // /mcp stays an alias of /connectors.
+  assert.equal(
+    rankSlashResults("mcp", skills, "command").results[0]?.id,
+    "slash-option-command-connectors",
+  );
   assert.equal(rankSlashResults("model", skills, "skill").results.length, 1);
   assert.ok(
     rankSlashResults("", skills, "command").results.every((result) => result.kind === "command"),

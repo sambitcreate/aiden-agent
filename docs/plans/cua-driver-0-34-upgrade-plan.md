@@ -2,6 +2,8 @@
 
 Status: merged in PR #431 (2026-10-09) and shipped in 0.56.0; `npm run test:computer-use` green (416 TS, 41 native). Owner-only packaged TCC acceptance pending.
 
+Superseded on 2026-10-19 by the [cua-driver 0.36 upgrade plan](cua-driver-0-36-upgrade-plan.md), which re-pins to 0.36.0.
+
 Moves Aiden's macOS Computer Use engine from the pinned `cua-driver-rs-v0.8.3` to `cua-driver-rs-v0.34.1` (published 2026-10-09, still flagged pre-release upstream like every cua-driver-rs release). The integration architecture in [`docs/computer-use-integration.md`](../computer-use-integration.md) is unchanged: one Hermes-shaped `computer_use` tool, the authenticated Rust broker/bridge, the embedded stdio MCP driver, and reviewed exact pins. Aiden is pre-1.0, so the adapter moves to the 0.34 contract outright with no 0.8.3 compatibility path.
 
 Scope chosen by the owner: **A** (re-pin and breaking-change migration), **B** (selected new driver tools), **C** (model guidance from upstream's MIT skills). Out of scope here: eval harness, Lume VM sandbox, Linux admission, form-fill unblock, cursor-motion replay.

@@ -58,10 +58,12 @@ Pairing a computer gives it full control of this computer's chats: it can read t
 - **Sidebar.** The paired computer's workspaces and chats appear in the sidebar with a globe marker. The **Organize sidebar** menu chooses the view (Workspaces, Recent or Needs attention), the sort orders, a machine filter and whether workspaces from the same repository on different machines are grouped together (**Group across machines**).
 - **Chats.** Open a remote chat to read it, load older messages, send, stop, approve or deny tools, answer questions and steer, as for a local chat. Runs started anywhere on the other computer appear live.
 - **New chats.** On a new chat, choose the computer in the composer's machine picker, then one of its workspaces and models. Attachments upload to that computer.
-- **Bots.** Paired computers' Bots appear in the Bots area below this Mac's own. The Assistant stays on its own computer.
+- **Bots.** Paired computers' Bots appear in the Bots area below this Mac's own, with **Working…** while one is running there. Opening one shows the same single conversation its own computer, phones and Telegram show: the Bot runs there, and this Mac sends messages, Stop, Resume, Dismiss, question answers and tool approvals to it. A tool that only its own computer may allow (Computer Use) can only be denied from here. Connect cards ask the Bot's computer to finish the connection there. If that computer runs an older Aiden, update it; an older Mac sending to a newer computer's Bot is told to update. When the Bot's computer offers hand-offs (contract revision 37), a step the Bot hands back ("Your turn: …") can be answered from here too: **Done** (with a note typed in the composer if you like), **Skip**, or **Open** for the page it names. A sign-in step offers **Finish on <computer>**, which brings it forward in the Bot's own browser there. The chat's **···** menu offers **Pause Bot** and **Resume Bot**, and a paused Bot shows a Resume card and holds the composer until it is resumed. The Assistant stays on its own computer.
 - **Not available remotely.** Terminal, the Environment browser, computer use and open-in-editor work only on the computer you are sitting at.
 
 ### Offline and identity changes
+
+On macOS, Aiden asks for Local Network access the first time it looks for other computers. Allow it, or finding computers on the same network fails (typed addresses and Tailscale still work); you can change it later in System Settings → Privacy & Security → Local Network.
 
 When a paired computer is asleep or unreachable, its rows stay in the sidebar marked stale and read-only, and actions are disabled until it returns. Aiden reconnects on its own after sleep, unlock or a network change; choose **Reconnect** to try at once. Nothing is queued while a computer is offline.
 
@@ -71,13 +73,17 @@ If a computer reached over the local network presents a different identity, Aide
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.
 
+## Bot hand-offs and pause on the phone
+
+When the paired Mac offers it (contract revision 37), Aiden On The Go for iPhone and Android shows a step a Bot hands back to you ("Your turn: Enter the code your bank sent you") as a card in the Bot's chat. **Done** marks it done: to add a note, type it in the composer and send it. **Skip** skips the step, and **Open** opens the page it names in the phone's browser. A sign-in step is finished in the Bot's own browser on the Mac: **Finish on your Mac** brings it forward there, or you can **Skip** it. If the Bot's chat is open while the app is in the background, a notification says the Bot needs you. The Bot's profile menu offers **Pause Bot** and **Resume Bot**. A paused Bot reads "Paused" in the Bots list, and its chat shows a Resume card and takes no messages until you resume it. An interrupted Bot reads "Interrupted — tap to resume". With an older Mac, the step appears as a "needs you on your Mac" message, and you answer it on the Mac.
+
 ## Paired-Mac voice input
 
 In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit microphone action. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
 
 The Mac processes that recording locally. Aiden does not persist the recording or transcript, include either in Remote Access diagnostics, or send them to Aiden's model-provider integrations or an Aiden-operated service. Normal chat submission remains a separate user action.
 
-If the selected local speech model is not installed, the mobile settings can ask the paired Mac to set it up. Aiden downloads only its fixed Parakeet release archive from the k2-fsa GitHub release host, caps that compressed download at 800 MiB, extracts it into staging, validates the required model files, and stores it in Aiden Agent's device-local model directory. The phone cannot provide a model URL or Mac destination. Model setup requires Aiden Agent to remain running and online.
+If the selected local speech model is not installed, the mobile settings can ask the paired Mac to set it up. Aiden downloads only that model's fixed, hash-pinned file: a release archive from the k2-fsa GitHub release host, or, for Parakeet on Metal on an Apple silicon Mac, one GGUF file from a fixed Hugging Face revision. It caps the download at 800 MiB, verifies its exact size and SHA-256, unpacks or moves it into staging, validates the required model files, and stores it in Aiden Agent's device-local model directory. The phone cannot provide a model URL or Mac destination. Model setup requires Aiden Agent to remain running and online.
 
 ## Troubleshooting
 

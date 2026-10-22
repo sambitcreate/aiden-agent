@@ -52,27 +52,36 @@ const CARGO_BUILD_TIMEOUT_MS = 10 * 60_000;
 const COMMAND_TERMINATE_GRACE_MS = 500;
 const COMMAND_KILL_GRACE_MS = 1_000;
 
+function defaultCommandEnvironment() {
+  return {
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    HOME: process.env.HOME,
+    TMPDIR: process.env.TMPDIR,
+    LANG: "C",
+    LC_ALL: "C",
+    CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
+    CUA_TELEMETRY_ENABLED: "0",
+    CUA_DRIVER_RS_UPDATE_CHECK: "false",
+  };
+}
+
+/**
+ * Run one fixed command in its own guarded process group. `env` replaces the
+ * fixed default environment entirely (it is never merged with process.env).
+ */
 export function runBoundedCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const {
       timeoutMs = COMMAND_TIMEOUT_MS,
       terminateGraceMs = COMMAND_TERMINATE_GRACE_MS,
       killGraceMs = COMMAND_KILL_GRACE_MS,
+      env = defaultCommandEnvironment(),
       ...spawnOptions
     } = options;
     const child = spawn(process.execPath, [commandGuardPath, JSON.stringify({ command, args })], {
       ...spawnOptions,
       detached: process.platform !== "win32",
-      env: {
-        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        HOME: process.env.HOME,
-        TMPDIR: process.env.TMPDIR,
-        LANG: "C",
-        LC_ALL: "C",
-        CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
-        CUA_TELEMETRY_ENABLED: "0",
-        CUA_DRIVER_RS_UPDATE_CHECK: "false",
-      },
+      env,
       shell: false,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
@@ -195,7 +204,7 @@ export async function validateVendoredBinary(binaryPath, runner = run, hashBinar
   }
 }
 
-// The 0.34 release tarball carries five signed members (cua-driver,
+// The 0.36.0 release tarball (like 0.34) carries five signed members (cua-driver,
 // cua-cursor-theme, libcua_driver_sdk.dylib, cua_driver_node_runtime.node,
 // cua_driver_abi.h). Aiden vendors only the top-level `cua-driver` member.
 export const CUA_DRIVER_ARCHIVE_MEMBER = "cua-driver";

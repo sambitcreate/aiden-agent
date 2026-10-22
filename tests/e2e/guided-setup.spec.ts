@@ -266,6 +266,42 @@ for (const platform of ["linux", "darwin"] as const) {
   });
 }
 
+for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel Mac", false]] as const) {
+  test(`the feature tour ${botComputers ? "introduces" : "leaves out"} Bot computers on ${host}`, async ({ aiden }) => {
+    // Only the platform capability IPC is substituted; the onboarding data, filter and tile render unchanged.
+    await aiden.app.evaluate(({ ipcMain }, hasBotComputers) => {
+      ipcMain.removeHandler("app:getInfo");
+      ipcMain.handle("app:getInfo", () => ({
+        name: "Aiden", version: "e2e", environment: "test",
+        capabilities: { platform: "darwin", bots: true, computerUse: true, botComputers: hasBotComputers },
+      }));
+    }, botComputers);
+    await aiden.page.reload();
+    const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
+    await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await skipBotsOnboardingStep(onboarding);
+    const tile = onboarding.getByRole("article", { name: /^Bot computers\./u });
+    if (!botComputers) {
+      await expect(onboarding.getByRole("article", { name: /^Meet your Bots\./u })).toBeVisible();
+      await expect(tile).toHaveCount(0);
+      return;
+    }
+    await aiden.page.emulateMedia({ reducedMotion: "reduce" });
+    await tile.scrollIntoViewIfNeeded();
+    // The still pose under Reduce Motion is the complete illustration: the Take over control and the Bot's pointer.
+    const art = tile.locator('[data-onboarding-art="botComputers"]');
+    await expect(art.getByText("Take over", { exact: true })).toBeVisible();
+    await expect(art.locator(".oa-bc-pointer svg")).toBeVisible();
+    await tile.focus();
+    const description = tile.locator("[data-onboarding-feature-description]");
+    await expect(description).toBeVisible();
+    await expect(description).toContainText("Set it up in Settings → Bot computers; nothing downloads until you choose Set up.");
+  });
+}
+
 test("feature tour explains image and classifier disclosure on rendered cards", async ({ aiden }) => {
   const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);

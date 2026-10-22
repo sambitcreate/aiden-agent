@@ -97,6 +97,7 @@ test("inventory ports project safe exact facts and conservative unavailable conn
   assert.equal(other.find(({ kind }) => kind === "web")?.available, true);
   assert.equal(other.find(({ kind }) => kind === "browser")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "computer_use")?.available, false);
+  assert.equal(other.find(({ kind }) => kind === "computer")?.available, false, "no Bot computers without the host's readiness");
   assert.equal(other.find(({ kind }) => kind === "schedules")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "tasks")?.available, true);
   assert.equal(other.find(({ kind }) => kind === "tasks")?.label, "Task tracking");
@@ -398,4 +399,74 @@ test("a model's Bot identity survives catalog metadata updates but not an image-
     thinkingLevels: ["low", "medium", "high"],
     contextLength: 272_000,
   }), bound);
+});
+
+test("the Browser capability is available exactly while Browser settings let agents browse", async () => {
+  const unused = async (): Promise<never> => {
+    throw new Error("not read by inspectOtherCapabilities");
+  };
+  let access = true;
+  const ports = createBotCapabilityInventoryPorts({
+    loadOpaqueSelectionKey: unused,
+    loadNoticeStatus: unused,
+    listProviders: unused,
+    providerCredentialSignature: unused,
+    listMcpServers: unused,
+    inspectMcpScopes: unused,
+    listSkills: unused,
+    listApprovedLocations: unused,
+    incarnations: { reconcileNamespace: unused },
+    getSettings: async () => ({}),
+    webSearchAvailability: async () => ({ ready: false }),
+    subagentsAvailable: () => false,
+    browserAgentAccess: async () => access,
+  });
+  const signal = new AbortController().signal;
+  const browserOf = async () => (await ports.inspectOtherCapabilities(signal)).find(({ kind }) => kind === "browser")!;
+  const allowed = await browserOf();
+  assert.equal(allowed.available, true);
+  assert.match(allowed.description ?? "", /its own browser/u);
+  access = false;
+  const off = await browserOf();
+  assert.equal(off.available, false);
+  // Bots holding the capability re-check it: its fingerprint moves with access.
+  assert.notEqual(off.capabilityFingerprint, allowed.capabilityFingerprint);
+});
+
+test("the Bot computer capability is available exactly while Bot computers are set up", async () => {
+  const unused = async (): Promise<never> => {
+    throw new Error("not read by inspectOtherCapabilities");
+  };
+  let ready: boolean | Error = false;
+  const ports = createBotCapabilityInventoryPorts({
+    loadOpaqueSelectionKey: unused,
+    loadNoticeStatus: unused,
+    listProviders: unused,
+    providerCredentialSignature: unused,
+    listMcpServers: unused,
+    inspectMcpScopes: unused,
+    listSkills: unused,
+    listApprovedLocations: unused,
+    incarnations: { reconcileNamespace: unused },
+    getSettings: async () => ({}),
+    webSearchAvailability: async () => ({ ready: false }),
+    subagentsAvailable: () => false,
+    botComputersReady: async () => {
+      if (ready instanceof Error) throw ready;
+      return ready;
+    },
+  });
+  const signal = new AbortController().signal;
+  const computerOf = async () => (await ports.inspectOtherCapabilities(signal)).find(({ kind }) => kind === "computer")!;
+  const before = await computerOf();
+  assert.equal(before.available, false);
+  assert.equal(before.label, "Bot computer");
+  ready = true;
+  const after = await computerOf();
+  assert.equal(after.available, true);
+  // Bots holding the capability re-check it: its fingerprint moves with readiness.
+  assert.notEqual(after.capabilityFingerprint, before.capabilityFingerprint);
+  ready = new Error("state unreadable");
+  const unreadable = await computerOf();
+  assert.equal(unreadable.available, false, "an unreadable state offers nothing and the catalog still loads");
 });

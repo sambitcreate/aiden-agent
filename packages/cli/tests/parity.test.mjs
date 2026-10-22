@@ -510,7 +510,8 @@ test("MCP validates transports and redacts configured secrets from listing", asy
   for (const id of ["+remote", "-remote"]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /cannot begin with/);
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "-Remote", transport: "stdio", command: "node", enabled: true }), /name cannot begin with/);
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", enabled: true }), /needs a url/);
-  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "not a url", enabled: true }), /not a valid URL/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "not a url", enabled: true }), /not a valid URL/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "https://example.com/sse", enabled: true }), /Unknown MCP transport/);
   writeFileSync(file, JSON.stringify({ id: "local", name: "Local", transport: "stdio", command: "node", enabled: false, env: { SECRET: "do-not-list" } }));
   await api.mcpCommand(dir, ["add", file]);
   const listed = await api.mcpCommand(dir, ["list"]);
@@ -729,6 +730,7 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   // The daemon forks without summaries, and the fork's next turn carries the copied history to the model.
   const features = (await request("/server")).data.features;
   assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));
+  assert.ok(!features.includes("bot-durable-session-v1")); assert.ok(!features.includes("bot-memory-v1")); assert.ok(!features.includes("bot-proactive-v1"));
   const forked = await request(`/chats/${created.data.id}/fork`, "POST", { messageId: chat.data.messages.at(-1).id, position: "after" }, "fork-cli-test-000001", { "if-match": chat.data.revision });
   assert.equal(forked.status, 201, JSON.stringify(forked));
   assert.equal(forked.data.chat.forkedFrom.chatId, created.data.id);
@@ -841,6 +843,71 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
   const resumed = await api.createCliBots(dir, daemon);
   try { assert.equal((await resumed.application.get(bot.id)).name, "Scoped helper"); assert.equal((await resumed.application.noticeStatus(audienceId)).requiresAcknowledgement, true); }
   finally { await resumed.stop(); }
+});
+
+test("a paused Bot stops its running turn, refuses new ones and runs again once unpaused", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir), requests = [];
+  let holdFirst = true, held;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const chunk = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: "bot", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    chunk({ role: "assistant", content: "Working" });
+    // The first reply never finishes on its own: only the pause ends it.
+    if (holdFirst) { holdFirst = false; held = response; return; }
+    chunk({}, "stop"); response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliBots(dir, daemon); daemon.setBots(runtime);
+  t.after(async () => { await runtime.stop(); await daemon.stop(); });
+  const audienceId = "cli:local", app = runtime.application;
+  const notice = await app.noticeStatus(audienceId);
+  await app.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await app.capabilityCatalog(audienceId);
+  const provider = catalog.providers.find((item) => item.label === "cli-test"); assert.ok(provider);
+  const custom = { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] };
+  const bot = await app.createBot({ audienceId, bot: { name: "Ada", instructions: "Help briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom } });
+  const chat = await app.createChat({ audienceId, botId: bot.id, providerId: "cli-test", model: "test" });
+  const preflight = { audienceId, botId: bot.id, chatId: chat.id, providerId: "cli-test", model: "test" };
+  const runTurn = async (streamId) => {
+    const events = [], turn = daemon.llmClient.beginChatTurn(chat.id, streamId, "bot-owner"); assert.ok(turn);
+    const owner = { id: 0, documentId: "bot-owner", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+    await daemon.chatStore.appendMessage(chat.id, { role: "user", content: "Hello" }); turn.settleAsyncWork();
+    assert.equal(await daemon.llmClient.start(streamId, { chatId: chat.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] }, owner, { usageSource: "chat", botAudienceId: audienceId }), true);
+    return { events, idle: async () => { await daemon.llmClient.waitForChatIdle(chat.id); turn.release(); return events; } };
+  };
+
+  // Pausing while a reply streams stops it where it is.
+  const running = await runTurn("before-pause");
+  for (let tries = 0; requests.length === 0 && tries < 200; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(requests.length, 1);
+  const paused = await runtime.command(["pause", bot.id]);
+  assert.deepEqual(Object.keys(paused).sort(), ["botId", "paused", "since"]);
+  assert.equal(paused.paused, true); assert.equal(typeof paused.since, "number");
+  assert.equal(await runtime.isPaused(bot.id), true);
+  const stopped = await running.idle();
+  assert.equal(stopped.filter((event) => event.channel === "chat:done").length, 0, "the held reply never finishes");
+  held.end();
+  assert.equal(statSync(join(dir, "bot-service", "bot-pauses.json")).mode & 0o777, 0o600);
+  assert.deepEqual(await runtime.command(["pause", bot.id]), paused, "pausing again keeps the first time");
+
+  // While paused: phones are refused before anything runs, and so is a CLI turn.
+  await assert.rejects(runtime.preflight(preflight), (error) => error.code === "operation_stale" && error.status === 409 && /Ada is paused/u.test(error.message));
+  const refused = await (await runTurn("while-paused")).idle();
+  assert.equal(refused.filter((event) => event.channel === "chat:error").length, 1, JSON.stringify(refused));
+  assert.equal(requests.length, 1, "a paused Bot makes no provider request");
+
+  assert.deepEqual(await runtime.command(["unpause", bot.id]), { botId: bot.id, paused: false });
+  assert.equal(await runtime.isPaused(bot.id), false);
+  await runtime.preflight(preflight);
+  const resumed = await (await runTurn("after-unpause")).idle();
+  assert.equal(resumed.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(resumed));
+  assert.equal(requests.length, 2);
+  await assert.rejects(runtime.command(["pause", "missing-bot"]), /no longer exists/u);
+  await assert.rejects(runtime.command(["pause"]), /Usage: bots pause/u);
 });
 
 test("isolated subagent inference executes only parent-owned tools with immutable fork context", async (t) => {
@@ -1099,7 +1166,7 @@ test("MCP connections survive token refreshes, rebuild on sign-out, and connect 
   const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
   api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
   const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
-  const store = (token) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: token, token_type: "Bearer" } }));
+  const store = (token, grantId = "sign-in-1") => credentials.write(id, JSON.stringify({ authorizationBinding: api.mcpOAuthBindingForServer(server), grantId, clientInformation: { client_id: "registered" }, tokens: { access_token: token, token_type: "Bearer" } }));
   await store("first");
   const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
   const client = await pool.connection(server);
@@ -1111,6 +1178,10 @@ test("MCP connections survive token refreshes, rebuild on sign-out, and connect 
   assert.equal(initializes, 1);
   assert.deepEqual(callAuthorizations, ["Bearer first", "Bearer refreshed"], "the retained transport sends the current persisted token");
   await api.mcpCommand(dir, ["logout", "remote"]);
+  // Signed out: the server is not contacted at all until the next sign-in.
+  await assert.rejects(pool.connection(server), /aiden mcp login remote/);
+  assert.equal(initializes, 1);
+  await store("second-account", "sign-in-2");
   const [first, second] = await Promise.all([pool.connection(server), pool.connection(server)]);
   assert.equal(first, second);
   assert.notEqual(first, client);
@@ -1121,7 +1192,7 @@ test("MCP Bot credential signatures ignore token refreshes and display fields bu
   const dir = temporary(t);
   const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
   const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
-  const store = (token, incarnation) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, incarnation, tokens: { access_token: token, refresh_token: `${token}-refresh`, token_type: "Bearer" } }));
+  const store = (token, grantId) => credentials.write(id, JSON.stringify({ authorizationBinding: api.mcpOAuthBindingForServer(server), clientInformation: { client_id: "registered" }, grantId, tokens: { access_token: token, refresh_token: `${token}-refresh`, token_type: "Bearer" } }));
   await store("first", "sign-in-1");
   const signed = await api.mcpCredentialSignature(dir, server);
   await store("refreshed", "sign-in-1");
@@ -1142,7 +1213,7 @@ test("MCP shutdown during credential resolution starts no connection and sends n
   t.after(() => { http.closeAllConnections(); http.close(); });
   const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
   api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
-  await api.insightCredentials(dir).write(api.mcpCredentialId(server), JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: "secret", token_type: "Bearer" } }));
+  await api.insightCredentials(dir).write(api.mcpCredentialId(server), JSON.stringify({ authorizationBinding: api.mcpOAuthBindingForServer(server), clientInformation: { client_id: "registered" }, tokens: { access_token: "secret", token_type: "Bearer" } }));
   // Pause the second credential-file open: the provider read after incarnation resolution.
   const fsPromises = createRequire(import.meta.url)("node:fs/promises"), open = fsPromises.open;
   let opens = 0, reached, release;
@@ -1228,6 +1299,90 @@ test("MCP remove and endpoint edits delete the server's stored credential", asyn
   await credentials.write(api.mcpCredentialId(moved), "{}");
   await api.mcpCommand(dir, ["remove", "remote"]);
   assert.equal(await credentials.read(api.mcpCredentialId(moved)), undefined);
+});
+
+function retiredSseInventory() {
+  const local = { id: "local", name: "Local", enabled: true, transport: "stdio", command: "example" };
+  const hex = "ab".repeat(16);
+  const sse = [
+    { id: "old-disabled", name: "Old disabled", enabled: false, transport: "sse", url: "https://old.example/sse" },
+    { id: "old-oauth", name: "Old OAuth", enabled: true, transport: "sse", url: "https://older.example/sse", oauth: true, oauthClientId: "client", oauthClientSecret: `aiden-secret:v1:${hex}` },
+  ];
+  return { local, sse, servers: [sse[0], local, sse[1]], secretCredential: `mcp-oauth-client-secret-${hex}` };
+}
+
+async function storeRetiredCredentials(dir, inventory) {
+  const credentials = api.insightCredentials(dir);
+  for (const server of inventory.sse) await credentials.write(api.mcpCredentialId(server), JSON.stringify({ tokens: { access_token: `token-${server.id}`, token_type: "Bearer" } }));
+  await credentials.write(inventory.secretCredential, "old-client-secret");
+  return credentials;
+}
+
+async function assertRetiredCredentialsRemoved(credentials, inventory) {
+  for (const server of inventory.sse) assert.equal(await credentials.read(api.mcpCredentialId(server)), undefined, `${server.id} sign-in removed`);
+  assert.equal(await credentials.read(inventory.secretCredential), undefined, "the retired client secret is removed");
+}
+
+test("retired SSE entries in aiden-mcp.json are dropped with their credentials, and the remaining servers load", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.listServers()).map(({ id }) => id), ["local"]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [inventory.local], "the pruned list is persisted");
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["local"]);
+  await api.mcpCommand(dir, ["remove", "local"]);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
+test("retired SSE entries in a legacy mcp.json migrate away with their credentials", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify(inventory.servers));
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), [inventory.local]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [inventory.local]);
+  assert.equal(existsSync(join(dir, "mcp.json")), false);
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  await api.mcpCommand(dir, ["remove", "local"]);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
+test("a retired SSE entry whose credentials could not be deleted stays until a later read deletes them", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  api.atomicJson(join(dir, "aiden-mcp.json"), inventory.servers);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  // A directory where the credential file belongs makes the delete fail for
+  // every user, root included (directory permissions would not stop root).
+  const credentialFile = join(dir, "credentials", "insights.json"), held = `${credentialFile}.held`;
+  renameSync(credentialFile, held);
+  mkdirSync(credentialFile);
+  const restore = () => { if (existsSync(held)) { rmSync(credentialFile, { recursive: true, force: true }); renameSync(held, credentialFile); } };
+  t.after(restore);
+  const { value, stderr } = await captureStderr(() => api.mcpCommand(dir, ["list"]));
+  assert.deepEqual(value.map(({ id }) => id), ["local"], "the remaining servers still load");
+  assert.match(stderr, /could not remove retired SSE MCP servers yet/u);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), inventory.servers, "the entries wait for their cleanup");
+  // An ordinary write in the meantime keeps them too.
+  writeFileSync(join(dir, "other.json"), JSON.stringify({ id: "other", name: "Other", enabled: false, transport: "stdio", command: "example" }));
+  await captureStderr(() => api.mcpCommand(dir, ["add", join(dir, "other.json")]));
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).filter(({ transport }) => transport === "sse"), inventory.sse);
+  restore();
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["local", "other"]);
+  await assertRetiredCredentialsRemoved(credentials, inventory);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")).map(({ id }) => id), ["local", "other"]);
+});
+
+test("a remaining server that shares a retired entry's sign-in and client secret keeps them", async (t) => {
+  const dir = temporary(t), inventory = retiredSseInventory();
+  const [, retired] = inventory.sse;
+  const live = { ...retired, transport: "http", name: "Same endpoint over HTTP" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [retired, live]);
+  const credentials = await storeRetiredCredentials(dir, inventory);
+  assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id, transport }) => [id, transport]), [[live.id, "http"]]);
+  assert.ok(await credentials.read(api.mcpCredentialId(live)), "the shared sign-in stays");
+  assert.equal(await credentials.read(inventory.secretCredential), "old-client-secret", "the shared client secret stays");
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), [live]);
 });
 
 test("MCP migration skips a malformed native mcp.json with a warning and leaves it untouched", async (t) => {
@@ -1438,6 +1593,16 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
     if (request.url.includes("oauth-protected-resource")) return response.end(JSON.stringify({ resource: `${issuer}/mcp`, authorization_servers: [oidc ? issuer : `${issuer}/wrong`] }));
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const body = Buffer.concat(chunks).toString();
+    if (request.url === "/mcp") {
+      // The protected MCP endpoint: a challenge without the issued token, JSON-RPC with it.
+      if (request.headers.authorization !== "Bearer new-token") {
+        response.writeHead(401, { "www-authenticate": `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp"` });
+        return response.end();
+      }
+      const message = JSON.parse(body);
+      if (message.id === undefined) { response.statusCode = 202; return response.end(); }
+      return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { protocolVersion: message.params.protocolVersion, capabilities: {}, serverInfo: { name: "metadata", version: "1" } } : {} }));
+    }
     if (request.url === "/register") {
       registration = JSON.parse(body);
       return response.end(JSON.stringify({ client_id: "registered", ...registration }));
@@ -1452,7 +1617,7 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${server.address().port}`;
   t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
-  writeFileSync(file, JSON.stringify({ id: "metadata", name: "Metadata", transport: "http", url: `${issuer}/mcp`, enabled: true, oauth: true, ...(oidc ? {} : { authServerMetadataUrl: `${issuer}/metadata` }), oauthClientName: "Approved Aiden CLI", description: "Documents" }));
+  writeFileSync(file, JSON.stringify({ id: "metadata", name: "Metadata", transport: "http", url: `${issuer}/mcp`, enabled: true, oauth: true, ...(oidc ? {} : { authServerMetadataUrl: `${issuer}/metadata` }), description: "Documents" }));
   await api.mcpCommand(dir, ["add", file]);
   const write = process.stderr.write;
   process.stderr.write = function(chunk, ...args) {
@@ -1478,13 +1643,110 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
     await callbackCheck;
   } finally { process.stderr.write = write; }
   assert.equal(tokenCalls, 1);
-  assert.equal(registration.client_name, "Approved Aiden CLI");
+  assert.equal(registration.client_name, "Aiden Agent", "every MCP OAuth registration uses the catalog's client name");
   assert.equal(requests.filter((path) => path === "/metadata").length, oidc ? 0 : 1);
   assert.equal(requests.some((path) => path.includes("openid-configuration")), oidc);
   assert.ok(requests.every((path) => !path.includes("wrong")));
   const [listed] = await api.mcpCommand(dir, ["list"]);
   assert.equal(listed.authServerMetadataUrl, oidc ? undefined : `${issuer}/metadata`);
   assert.equal(listed.description, "Documents");
+});
+
+/** A browser for the fake OAuth server: follows /authorize to the loopback callback without waiting for its page. */
+function fakeBrowser() {
+  const pages = [];
+  return { pages, open(url) { pages.push((async () => {
+    const consent = await fetch(url, { redirect: "manual" });
+    return (await fetch(consent.headers.get("location"))).text();
+  })()); } };
+}
+
+test("aiden mcp login registers a fresh client on a random loopback port, and stored tokens connect and refresh without registering", async (t) => {
+  const dir = temporary(t), oauth = await api.startFakeOAuthServer({ issueSecret: true, requireSecret: true, authMethods: ["client_secret_post"] });
+  t.after(() => oauth.close());
+  const server = { id: "remote", name: "Remote", transport: "http", url: oauth.serviceUrl, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  // Never signed in: nothing reaches the server, not even an MCP request or discovery.
+  await assert.rejects(pool.connection(server), /aiden mcp login remote/);
+  assert.equal(oauth.seen.requests.length, 0);
+  const browser = fakeBrowser();
+  assert.deepEqual(await api.mcpLogin(dir, server, { openBrowser: browser.open }), { authorized: true });
+  assert.match(await browser.pages[0], /Connected/);
+  assert.equal(oauth.seen.registrations.length, 1);
+  const [redirect] = oauth.seen.registrations[0].redirect_uris;
+  assert.match(redirect, /^http:\/\/127\.0\.0\.1:\d+\/callback$/u);
+  assert.notEqual(new URL(redirect).port, "41390", "a dynamically registered CLI client uses a random loopback port");
+  // The sign-in is stored encrypted, never as plaintext tokens.
+  assert.doesNotMatch(readFileSync(join(dir, "credentials", "insights.json"), "utf8"), /access-|refresh-|secret-/u);
+  assert.deepEqual((await pool.inspectTools(server)).map((tool) => tool.name), ["echo"]);
+  // An expired access token is refreshed with the stored confidential client, without a new registration.
+  await pool.close();
+  oauth.expireAccessTokens();
+  const again = api.createCliMcpPool(dir); t.after(() => again.close());
+  assert.deepEqual((await again.inspectTools(server)).map((tool) => tool.name), ["echo"]);
+  assert.equal(oauth.seen.registrations.length, 1);
+  const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
+  assert.deepEqual(refresh.map(({ status, presentedSecret }) => ({ status, presentedSecret })), [{ status: 200, presentedSecret: true }]);
+});
+
+test("a pre-registered OAuth client keeps its secret encrypted and signs in without registering", async (t) => {
+  const dir = temporary(t), file = join(dir, "server.json");
+  const oauth = await api.startFakeOAuthServer({ registration: false, requireSecret: true, authMethods: ["client_secret_post"], preRegistered: { clientId: "registered-by-hand", clientSecret: "hand-secret-value" } });
+  t.after(() => oauth.close());
+  writeFileSync(file, JSON.stringify({ id: "custom", name: "Custom", transport: "http", url: oauth.serviceUrl, enabled: true, oauth: true, oauthClientId: "registered-by-hand", oauthClientSecret: "hand-secret-value" }));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.doesNotMatch(readFileSync(join(dir, "aiden-mcp.json"), "utf8"), /hand-secret-value/u, "the client secret never lands in aiden-mcp.json");
+  const [listed] = await api.mcpCommand(dir, ["list"]);
+  assert.equal(listed.oauthClientId, "registered-by-hand");
+  assert.equal(listed.oauthClientSecret, undefined, "listing never prints the client secret, even as a marker");
+  assert.equal(listed.hasOAuthClientSecret, true);
+  const [saved] = JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8"));
+  // The provider must see the redirect URI the user registered: the fixed loopback, not a random port.
+  assert.equal(api.cliMcpOAuthLoopback(saved).redirectUri, "http://127.0.0.1:41390/callback");
+  assert.equal(api.cliMcpOAuthLoopback({ ...saved, oauthClientId: undefined, oauthClientSecret: undefined }).port, 0);
+  assert.equal(api.cliMcpOAuthLoopback({ ...saved, oauthClientId: undefined, oauthClientSecret: undefined }, "https://aiden.example/client.json").redirectUri, "http://127.0.0.1:41390/callback");
+  const browser = fakeBrowser();
+  // Port 0 stands in for the fixed port so the test never collides with a running Aiden.
+  await api.mcpLogin(dir, saved, { openBrowser: browser.open, loopback: { port: 0, redirectUri: "http://127.0.0.1/callback", timeoutMs: 30_000 } });
+  await browser.pages[0];
+  assert.equal(oauth.seen.registrations.length, 0);
+  assert.deepEqual(oauth.seen.tokenRequests.map(({ grant, clientId, presentedSecret, status }) => ({ grant, clientId, presentedSecret, status })),
+    [{ grant: "authorization_code", clientId: "registered-by-hand", presentedSecret: true, status: 200 }]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.inspectTools(saved)).map((tool) => tool.name), ["echo"]);
+  // Removing the server deletes its stored secret and sign-in.
+  await api.mcpCommand(dir, ["remove", "custom"]);
+  await assert.rejects(api.mcpLogin(dir, saved, { openBrowser: browser.open }), /client secret .* is missing/u);
+});
+
+test("a plaintext OAuth client secret in aiden-mcp.json is never listed or used", async (t) => {
+  const dir = temporary(t);
+  const server = { id: "edited", name: "Edited", transport: "http", url: "https://mcp.example.com/mcp", enabled: true, oauth: true, oauthClientId: "client", oauthClientSecret: "plaintext-secret" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  assert.doesNotMatch(JSON.stringify(await api.mcpCommand(dir, ["list"])), /plaintext-secret/u);
+  await assert.rejects(api.mcpLogin(dir, server, { openBrowser() { throw new Error("must not open"); } }), /plaintext oauthClientSecret .* aiden mcp add/u);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  await assert.rejects(pool.connection(server), /plaintext oauthClientSecret/u);
+});
+
+test("credential writes queue within a process and wait for another holder of the writer lease", async (t) => {
+  const dir = temporary(t), credentials = api.insightCredentials(dir);
+  // Concurrent writers in one process (two MCP servers refreshing at startup) all persist.
+  await Promise.all(Array.from({ length: 6 }, (_, index) => credentials.write(`source-${index}`, `value-${index}`)));
+  for (let index = 0; index < 6; index++) assert.equal(await credentials.read(`source-${index}`), `value-${index}`);
+  // A lease held elsewhere (another process) is waited for, not failed.
+  const release = api.acquireLease(join(dir, "credentials", "insights-writer"));
+  let written = false;
+  const pending = credentials.write("late", "after-release").then(() => { written = true; });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(written, false);
+  release();
+  await pending;
+  assert.equal(await credentials.read("late"), "after-release");
+  // Read-modify-write sees the value under the lease.
+  await Promise.all([credentials.update("counter", (value) => String(Number(value ?? 0) + 1)), credentials.update("counter", (value) => String(Number(value ?? 0) + 1))]);
+  assert.equal(await credentials.read("counter"), "2");
 });
 
 test("MCP migration validates one snapshot and restores a native replacement without deleting it", (t) => {
@@ -1772,6 +2034,325 @@ test("daemon releases sessions and authority when extension binding fails or is 
       prototype.bindExtensions = originalBind;
       admission.release();
       await daemon.stop();
+    }
+  }
+});
+
+test("durable CLI Bot migration preserves history, dedupes across restart, and fences revoked access", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir);
+  const oldEntry = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
+  let calls = 0, hold = false;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body);
+    const write = JSON.stringify(parsed.messages).includes("Write durable file") && !parsed.messages.some((message) => message.role === "tool");
+    calls++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: write ? { role: "assistant", tool_calls: [{ index: 0, id: "durable-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "durable.txt", content: "Written by the durable Bot" }) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
+    if (hold) return;
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: write ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  assert.equal(host.durable, undefined);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+  const bot = await host.application.createBot({ audienceId, bot: { name: "Durable helper", instructions: "Reply briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: catalog.fileScopes.filter((item) => item.kind === "bot_home").map((item) => item.id), shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } });
+  const legacy = await host.application.createChat({ audienceId, botId: bot.id, providerId: "cli-test", model: "test" });
+  await daemon.chatStore.appendMessage(legacy.id, { role: "user", content: "Keep this legacy history" });
+  mkdirSync(dirname(daemon.sessionPath(legacy.id)), { recursive: true });
+  writeFileSync(daemon.sessionPath(legacy.id), "legacy journal bytes\n");
+  const grantBefore = await host.application.getBotAccess(bot.id);
+  const migrated = await host.command(["enable-durable"]);
+  assert.equal(calls, 0, "migration never invokes a provider");
+  assert.equal(migrated.legacyChatsPreserved, 1);
+  assert.equal(statSync(join(migrated.backup, "legacy-chats.json")).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(readFileSync(join(migrated.backup, "legacy-chats.json"))).chats[0].journal, "legacy journal bytes\n");
+  assert.equal((await daemon.chatStore.get(legacy.id)).messages[0].content, "Keep this legacy history");
+  assert.throws(() => host.assertLegacyChatAllowed(), /durable sessions/);
+  await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  assert.deepEqual(await host.application.getBotAccess(bot.id), grantBefore);
+  const markerPath = join(dir, api.CLI_DURABLE_BOT_MARKER);
+  renameSync(markerPath, `${markerPath}.held`);
+  try { assert.throws(() => host.assertLegacyChatAllowed(), /durable sessions/, "an active durable host never falls back when its marker disappears"); }
+  finally { renameSync(`${markerPath}.held`, markerPath); }
+
+  const scheduler = api.createCliScheduler(dir); host.setScheduler(scheduler);
+  const ledger = new api.AidenIdempotencyLedger();
+  const remoteBots = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  assert.equal(remoteBots.botSessions.supportsRoutines, true);
+  assert.equal(remoteBots.botSessions.supportsPresets, true);
+  assert.equal(remoteBots.botSessions.supportsMemory, true);
+  assert.equal(remoteBots.botSessions.supportsProactive, false);
+  assert.equal(remoteBots.botSessions.supportsAttachments, false);
+  assert.equal(remoteBots.botSessions.supportsActivity, false);
+  await remoteBots.botSessions.close();
+  const routine = await host.routines.create({ botId: bot.id, name: "Read update", prompt: "Give a brief update", schedule: { kind: "daily", time: "12:00" }, timezone: "UTC" });
+  const routineRun = await scheduler.service.runNow(routine.id, { runId: "stable-routine-fire" });
+  assert.equal(routineRun.result, "success");
+  const duplicateRun = await scheduler.service.runNow(routine.id, { runId: "stable-routine-fire" });
+  assert.equal(duplicateRun.result, "skipped");
+  assert.equal(duplicateRun.reason, "duplicate");
+  await host.routines.delete({ botId: bot.id, id: routine.id });
+
+  const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
+  const sent = await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first", attachments: [{ type: "image", mimeType: "image/png", data: imageData }] });
+  assert.deepEqual(await host.durable.runtime.awaitReply(bot.id, sent.submissionId, new AbortController().signal), { kind: "completed", text: "Durable answer" });
+  const durableEntries = (await (await host.durable.runtime.conversation(bot.id)).context(api.BACKGROUND_CONTEXT)).entries;
+  const callContext = api.cliDurableBotToolContext([...durableEntries].reverse(), { chatId: legacy.id, botId: bot.id });
+  const forkSnapshot = await callContext.loadChat();
+  assert.equal(callContext.attachments[0].data, imageData);
+  assert.equal(forkSnapshot.messages.find((message) => message.role === "user").attachments[0].data, imageData);
+  assert.deepEqual(forkSnapshot.messages.slice(-2).map((message) => message.content), ["Hello", "Durable answer"]);
+  assert.ok(!JSON.stringify(forkSnapshot).includes("Keep this legacy history"));
+  assert.equal(api.capturePersistedSubagentContext(forkSnapshot).messages.length, forkSnapshot.messages.length);
+  forkSnapshot.messages.find((message) => message.role === "user").content = "caller mutated snapshot";
+  assert.equal((await callContext.loadChat()).messages.find((message) => message.role === "user").content, "Hello", "call snapshot cannot be mutated by another consumer");
+
+  const writeTurn = await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" });
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
+  assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
+  assert.equal((await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" })).deduped, true);
+  const afterFirst = calls;
+  assert.ok(afterFirst > 0);
+  assert.equal((await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first" })).deduped, true);
+  assert.equal(calls, afterFirst);
+  const memory = await host.durable.memory.apply(bot.id, "user", [{ action: "add", content: "Prefers concise replies" }]);
+  assert.equal(memory.ok, true);
+  const view = await host.durable.memory.view(bot.id);
+  const entry = view.user.entries[0]; assert.equal(entry.text, "Prefers concise replies");
+  const edit = await host.durable.memory.edit({ botId: bot.id, edit: { kind: "replace", target: "user", entryId: entry.id, text: "Prefers complete replies" } });
+  assert.equal(edit.ok, true);
+  await host.stop();
+  host = await api.createCliBots(dir, daemon);
+  assert.equal((await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first" })).deduped, true);
+  assert.equal((await host.durable.memory.view(bot.id)).user.entries[0].text, "Prefers complete replies");
+  assert.equal(calls, afterFirst, "reopen and duplicate delivery never dispatch inference");
+  await host.stop();
+  async function crashTurn(requestId) {
+    hold = true;
+    const before = calls;
+    const child = spawn(process.execPath, [join(pkg, "tests/fixtures/durable-bot-child.mjs"), dir, bot.id, requestId], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    let childError = ""; child.stderr.on("data", (data) => { childError += data; });
+    try {
+      const deadline = Date.now() + 15000;
+      while (calls <= before) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for durable Bot: ${childError}`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const exited = once(child, "exit"); child.kill("SIGKILL"); await exited;
+    } finally { if (child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; } }
+  }
+  await crashTurn("interrupted-resume-request");
+  const beforeResume = calls;
+  host = await api.createCliBots(dir, daemon);
+  const interrupted = await host.durable.runtime.state(bot.id);
+  assert.equal(interrupted.kind, "interrupted");
+  assert.equal(calls, beforeResume, "startup scans do not resume the interrupted task");
+  hold = false;
+  await host.durable.runtime.resume(bot.id, "resume-once");
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, interrupted.submissionId, new AbortController().signal)).kind, "completed");
+  const afterResume = calls;
+  assert.equal(afterResume, beforeResume + 1);
+  await host.durable.runtime.resume(bot.id, "resume-once");
+  assert.equal(calls, afterResume);
+  await host.stop();
+  await crashTurn("interrupted-dismiss-request");
+  const beforeReopen = calls;
+  host = await api.createCliBots(dir, daemon);
+  assert.equal((await host.durable.runtime.state(bot.id)).kind, "interrupted");
+  const pausedScheduler = api.createCliScheduler(dir); host.setScheduler(pausedScheduler);
+  const pausedRoutine = await host.routines.create({ botId: bot.id, name: "Paused update", prompt: "Give an update", schedule: { kind: "daily", time: "12:00" }, timezone: "UTC" });
+  const skipped = await pausedScheduler.service.runNow(pausedRoutine.id, { runId: "paused-fire" });
+  assert.equal(skipped.result, "skipped"); assert.equal(skipped.reason, "bot_paused");
+  assert.equal((await host.durable.runtime.state(bot.id)).kind, "interrupted");
+  await host.routines.delete({ botId: bot.id, id: pausedRoutine.id });
+  await host.durable.runtime.dismiss(bot.id, "dismiss-once");
+  await host.durable.runtime.dismiss(bot.id, "dismiss-once");
+  assert.equal(calls, beforeReopen, "dismiss and routine fire after process death never invoke a provider");
+  await host.application.revokeNoticeAudience(audienceId);
+  await assert.rejects(host.durable.runtime.send(bot.id, { text: "Forbidden", requestId: "revoked-request" }));
+  assert.equal(calls, beforeReopen);
+});
+
+test("a durable Bot paused from the CLI stops its running turn, refuses sends and waits for Resume once unpaused", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir);
+  const oldEntry = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
+  let calls = 0, hold = true;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    assert.ok(body.length > 0);
+    calls++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
+    // A held reply never finishes on its own: only the pause ends it.
+    if (hold) return;
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+  const bot = await host.application.createBot({ audienceId, bot: { name: "Ada", instructions: "Reply briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } });
+  await host.command(["enable-durable"]);
+  await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  const never = new AbortController().signal;
+
+  // Pausing while a reply streams stops it where it is and leaves it for Resume.
+  const running = await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "before-pause" });
+  for (let tries = 0; calls === 0 && tries < 500; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls, 1);
+  const paused = await host.command(["pause", bot.id]);
+  assert.deepEqual(Object.keys(paused).sort(), ["botId", "paused", "since"]);
+  assert.equal(paused.paused, true);
+  // Bounded: a pause that leaves the turn running would otherwise wait here for good.
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, running.submissionId, AbortSignal.timeout(20_000))).kind, "interrupted");
+  const state = await host.durable.runtime.state(bot.id);
+  assert.equal(state.kind, "paused"); assert.equal(state.by, "cli"); assert.equal(state.since, paused.since);
+  assert.equal(state.interrupted, running.submissionId);
+  assert.equal(await host.isPaused(bot.id), true, "the CLI's own check reads the same pause");
+  await assert.rejects(host.durable.runtime.send(bot.id, { text: "Again", requestId: "while-paused" }), (error) => error.reason === "paused_by_person");
+  assert.equal(calls, 1, "a paused Bot makes no provider request");
+
+  // The pause outlives the daemon.
+  await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  assert.equal((await host.durable.runtime.state(bot.id)).kind, "paused");
+  await assert.rejects(host.durable.runtime.send(bot.id, { text: "Again", requestId: "after-restart" }), (error) => error.reason === "paused_by_person");
+
+  // Unpausing leaves the stopped turn waiting for Resume; nothing runs on its own.
+  assert.deepEqual(await host.command(["unpause", bot.id]), { botId: bot.id, paused: false });
+  const interrupted = await host.durable.runtime.state(bot.id);
+  assert.equal(interrupted.kind, "interrupted"); assert.equal(interrupted.submissionId, running.submissionId);
+  assert.equal(calls, 1);
+  hold = false;
+  await host.durable.runtime.resume(bot.id, "resume-after-unpause");
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, running.submissionId, never)).kind, "completed");
+  assert.equal(calls, 2);
+
+  // A phone watching the idle Bot hears the pause and the unpause at once; without bot:handoffs it reads unavailable.
+  const remoteBots = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, new api.AidenIdempotencyLedger(), async () => {});
+  const sse = createServer((_request, response) => { void remoteBots.botSessions.openEvents("device_1", bot.id, response).catch(() => response.destroy()); });
+  await new Promise((resolve) => sse.listen(0, "127.0.0.1", resolve));
+  const frames = [], watching = new AbortController();
+  const reading = (async () => {
+    const response = await fetch(`http://127.0.0.1:${sse.address().port}/`, { signal: watching.signal });
+    let buffer = "";
+    for await (const chunk of response.body) {
+      buffer += Buffer.from(chunk).toString("utf8");
+      for (let index; (index = buffer.indexOf("\n\n")) >= 0; buffer = buffer.slice(index + 2)) {
+        const data = buffer.slice(0, index).split("\n").find((line) => line.startsWith("data: "));
+        if (data) frames.push(JSON.parse(data.slice(6)));
+      }
+    }
+  })().catch(() => {});
+  const states = () => frames.map((frame) => frame.type === "snapshot" ? frame.payload.session.state : frame.type === "state" ? frame.payload.state : undefined).filter(Boolean);
+  const until = async (predicate, what) => {
+    for (let tries = 0; !predicate(); tries += 1) {
+      if (tries > 1000) assert.fail(`Timed out waiting for ${what}; states: ${states().join(", ")}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  try {
+    await until(() => states().length > 0, "the snapshot");
+    assert.deepEqual(states(), ["idle"]);
+    await host.command(["pause", bot.id]);
+    await until(() => states().at(-1) === "unavailable", "the pause");
+    await host.command(["unpause", bot.id]);
+    await until(() => states().at(-1) === "idle", "the unpause");
+    assert.deepEqual(states(), ["idle", "unavailable", "idle"]);
+  } finally {
+    watching.abort(); sse.closeAllConnections(); sse.close(); await reading;
+    await remoteBots.botSessions.close();
+  }
+
+  // Deleting the Bot forgets its pause.
+  await host.command(["pause", bot.id]);
+  await host.command(["delete", bot.id]);
+  assert.equal(await host.isPaused(bot.id), false);
+});
+
+test("failed advisor attempts retain unknown usage and persist idempotently", async (t) => {
+  const dir = temporary(t);
+  const record = { source: "advisor", providerId: "test", providerLabel: "Test", modelId: "model", modelLabel: "Model", local: false, status: "failed", tokens: null, costStatus: "unavailable" };
+  await Promise.all([api.recordUsageRecord(dir, record, "attempt-one"), api.recordUsageRecord(dir, record, "attempt-one")]);
+  await api.recordUsageRecord(dir, { ...record, status: "cancelled" }, "attempt-two");
+  await api.recordUsageRecord(dir, { ...record, source: "chat", status: "completed", tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 2 }, costStatus: "reported", costUsd: 0.01 });
+  await api.recordUsageRecord(dir, record, "attempt-one");
+  const summary = await api.usageSummary(dir);
+  assert.equal(summary.totals.requests, 3);
+  assert.equal(summary.totals.failedRequests, 1);
+  assert.equal(summary.totals.cancelledRequests, 1);
+  assert.equal(summary.totals.unmeteredRequests, 2);
+  assert.equal(summary.totals.unpricedHostedRequests, 2);
+});
+
+test("durable migration fails closed on backup errors and can be completed explicitly", async (t) => {
+  const dir = temporary(t), journal = join(dir, "journal"), cancelled = [];
+  const chat = { id: "chat-migration", botId: "bot:migration", messages: [{ role: "user", content: "Original history" }] };
+  mkdirSync(journal);
+  const daemon = { chatStore: { list: async () => [chat], get: async () => chat },
+    llmClient: { cancelChat: async (id) => cancelled.push(id), waitForChatIdle: async () => {} }, sessionPath: () => journal };
+  await assert.rejects(api.enableCliDurableBots(dir, daemon), /directory|EISDIR/i);
+  const preparing = api.cliDurableBotMarker(dir);
+  assert.equal(preparing.state, "preparing");
+  assert.equal(existsSync(join(preparing.backup, "recovery.json")), false);
+  rmSync(journal, { recursive: true }); writeFileSync(journal, "Original journal");
+  const completed = await api.enableCliDurableBots(dir, daemon);
+  assert.equal(api.cliDurableBotMarker(dir).state, "enabled");
+  assert.notEqual(completed.backup, preparing.backup);
+  assert.equal(readFileSync(journal, "utf8"), "Original journal");
+  assert.equal(JSON.parse(readFileSync(join(completed.backup, "legacy-chats.json"))).chats[0].chat.messages[0].content, "Original history");
+  const replay = await api.enableCliDurableBots(dir, daemon);
+  assert.equal(replay.backup, completed.backup);
+  assert.deepEqual(cancelled, [chat.id, chat.id]);
+});
+
+test("CLI advisor failures and cancellation persist unknown attempts before marking usage", async (t) => {
+  const { fauxProvider } = await import("@earendil-works/pi-ai/providers/faux");
+  for (const mode of ["failed", "cancelled", "persistence-failed"]) {
+    const dir = temporary(t);
+    const controller = new AbortController();
+    const provider = fauxProvider({ api: "advisor-fixture", provider: "advisor-fixture", models: [{ id: "reviewer", contextWindow: 32000, maxTokens: 4096 }] });
+    const model = provider.getModel();
+    provider.provider.streamSimple = () => { if (mode === "cancelled") controller.abort(); throw new Error("Provider failed before response"); };
+    const ctx = { model: { ...model, id: "executor" }, scopedModels: [{ model }], hasUI: false,
+      sessionManager: { getBranch: () => [{ type: "message", message: { role: "user", content: "Review this fixture", timestamp: 1 } }] },
+      modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true }), getProvider: () => provider.provider },
+    };
+    const hooks = new Map(); let tool;
+    api.createAdvisorInlineExtension({ agentDir: dir, latestContext: () => ctx }).factory({ on: (name, handler) => hooks.set(name, handler), registerTool: (value) => { tool = value; } });
+    await hooks.get("before_agent_start")({ systemPrompt: "Fixture" }, ctx);
+    if (mode === "persistence-failed") mkdirSync(join(dir, "usage.json"));
+    await tool.execute("advisor-call", { providerId: model.provider, modelId: model.id }, controller.signal);
+    const attempt = JSON.parse(readFileSync(join(dir, "advisor", "advisor-attempts.json"), "utf8")).attempts[0];
+    assert.equal(attempt.state, mode === "cancelled" ? "cancelled" : "failed");
+    assert.equal(attempt.usageRecorded, mode !== "persistence-failed");
+    if (mode !== "persistence-failed") {
+      const summary = await api.usageSummary(dir);
+      assert.equal(summary.totals.requests, 1);
+      assert.equal(summary.totals.unmeteredRequests, 1);
+      assert.equal(summary.totals.unpricedHostedRequests, 1);
+      const ledger = JSON.parse(readFileSync(join(dir, "usage.json"), "utf8"));
+      assert.equal(ledger.accountedAttempts.length, 1);
     }
   }
 });

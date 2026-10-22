@@ -36,18 +36,28 @@ export interface BotToolCall {
    * returned on every later call of the same task, including after a restart.
    */
   memo<T extends JsonValue>(name: string, candidate: T): Promise<T>;
+  /**
+   * Request ids of the inputs the calling run serves (one per input; `undefined` for one without),
+   * when the registry reads them. The registry holds the attended tool set, so a tool that acts
+   * differently on routine or Telegram runs asks here.
+   */
+  runRequestIds?(): Promise<readonly (string | undefined)[]>;
 }
 
 export interface AdaptOptions {
   replay: ToolReplay;
   /** Build the tool for one call. `tool` still supplies the name, schema and description. */
   bind?: (call: BotToolCall) => AgentTool;
+  /** Reads the calling run's request ids, for `BotToolCall.runRequestIds`. */
+  runRequestIds?(api: ToolExecutionApi, context: Context): Promise<readonly (string | undefined)[]>;
 }
 
 const ENTRY_PAGE = 500;
 
-function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal): BotToolCall {
+function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, opts: AdaptOptions): BotToolCall {
+  const runRequestIds = opts.runRequestIds;
   return {
+    ...(runRequestIds === undefined ? {} : { runRequestIds: () => runRequestIds(api, context) }),
     callId: api.callId,
     signal,
     entries: () =>
@@ -135,7 +145,7 @@ export function adaptAidenTool(tool: AgentTool, opts: AdaptOptions): DurableTool
     async execute(args, api, context): Promise<ToolExecutionResult> {
       const { signal, dispose } = linkedSignal(context);
       try {
-        const target = opts.bind ? opts.bind(callApi(api, context, signal)) : tool;
+        const target = opts.bind ? opts.bind(callApi(api, context, signal, opts)) : tool;
         const result = await target.execute(api.callId, args, signal, createUpdateForwarder(api, context));
         const details = toJson(result.details);
         return {

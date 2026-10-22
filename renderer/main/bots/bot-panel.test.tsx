@@ -106,7 +106,7 @@ test("the Bot panel comes back open on its last tab after a relaunch, under its 
 });
 
 test("a saved tab this build doesn't know, or a garbled open flag, opens closed on Activity", () => {
-  localStorage.setItem(BOT_PANEL_TAB_KEY, "browser");
+  localStorage.setItem(BOT_PANEL_TAB_KEY, "sketchbook");
   localStorage.setItem(BOT_PANEL_OPEN_KEY, "yes");
   render(
     <BotPanelProvider>
@@ -1163,4 +1163,63 @@ test("another Bot's pin or visit leaves the open chat alone; its own pin redraws
   assert.equal(chatRenders(), before, "the transcript is not redrawn for another Bot");
   act(() => botSidebarPreferenceActions.togglePin("bot-1"));
   assert.ok(chatRenders() > before, "its own pin is shown in its menu");
+});
+
+test("coming back to a Bot shows its last view at once, marked stale, until the fresh snapshot lands", async () => {
+  let answer: (snapshot: BotLiveSnapshot) => void = () => undefined;
+  let opens = 0;
+  installBotTestIpc({
+    "bots:live:subscribe": () => {
+      opens += 1;
+      if (opens === 1) return liveSnapshot("bot-1", "Welcome back");
+      return new Promise<BotLiveSnapshot>((resolve) => (answer = resolve));
+    },
+    "bots:live:unsubscribe": () => undefined,
+  });
+  function StaleProbe() {
+    const live = useBotLive("bot-1");
+    return <p aria-label="Reopened">{live.snapshot ? `${live.snapshot.entries.length} entries ${live.stale ? "stale" : "fresh"}` : "loading"}</p>;
+  }
+  const first = render(<StaleProbe />);
+  await waitFor(() => assert.equal(screen.getByLabelText("Reopened").textContent, "1 entries fresh"));
+  first.unmount();
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  render(<StaleProbe />);
+  assert.equal(screen.getByLabelText("Reopened").textContent, "1 entries stale", "the remembered view shows on the first render");
+  await waitFor(() => assert.equal(opens, 2));
+  act(() => answer({ ...liveSnapshot("bot-1", "Welcome back"), entries: [...liveSnapshot("bot-1", "Welcome back").entries, { id: "a2", type: "assistant", text: "New", toolCalls: [], stopReason: "stop" }] }));
+  await waitFor(() => assert.equal(screen.getByLabelText("Reopened").textContent, "2 entries fresh"));
+});
+
+test("reload keeps the conversation on screen, marked stale, instead of blanking it", async () => {
+  let answer: (snapshot: BotLiveSnapshot) => void = () => undefined;
+  let opens = 0;
+  installBotTestIpc({
+    "bots:live:subscribe": () => {
+      opens += 1;
+      if (opens === 1) return liveSnapshot("bot-1", "Hello");
+      return new Promise<BotLiveSnapshot>((resolve) => (answer = resolve));
+    },
+    "bots:live:unsubscribe": () => undefined,
+  });
+  function ReloadProbe() {
+    const live = useBotLive("bot-1");
+    return (
+      <>
+        <p aria-label="View">{live.snapshot ? `${live.snapshot.entries.length} entries ${live.stale ? "stale" : "fresh"} ${live.failed ? "failed" : "ok"}` : "loading"}</p>
+        <button type="button" onClick={live.reload}>
+          Reload
+        </button>
+      </>
+    );
+  }
+  render(<ReloadProbe />);
+  await waitFor(() => assert.equal(screen.getByLabelText("View").textContent, "1 entries fresh ok"));
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  assert.equal(screen.getByLabelText("View").textContent, "1 entries stale ok");
+  await waitFor(() => assert.equal(opens, 2));
+  act(() => answer(liveSnapshot("bot-1", "Hello again")));
+  await waitFor(() => assert.equal(screen.getByLabelText("View").textContent, "1 entries fresh ok"));
 });

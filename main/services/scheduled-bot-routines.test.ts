@@ -14,7 +14,9 @@ import {
   createBotRoutineCatchUpTrigger,
   createBotRoutineExecutor,
   createBotRoutineService,
+  countSkippedWhilePaused,
   parseBotRoutineCreate,
+  parseBotRoutineRunNow,
   parseBotRoutineUpdate,
   type BotRoutineResultDelivery,
 } from "./scheduled-bot-routines.js";
@@ -136,6 +138,7 @@ function harness(options: { bots?: string[] } = {}) {
     store,
     service: scheduler,
     botExists: async (botId) => bots.has(botId),
+    isPaused: async (botId) => (await session.state(botId)).kind === "paused",
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
@@ -300,6 +303,184 @@ test("a routine that fires while its Bot is paused is skipped without touching t
   assert.equal(latest?.enabled, true);
   assert.ok((latest?.nextRunAt ?? 0) > Date.now());
 });
+
+const PERSON_PAUSED: BotSessionState = { kind: "paused", since: 1_700_000_000_000, by: "mac" };
+
+test("a routine that fires while the person paused its Bot is skipped quietly and never caught up", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Weekly meal prep",
+    schedule: { kind: "weekly", days: [0], time: "08:41" },
+    prompt: "Plan this week's dinners.",
+  });
+  h.session.states.set("bot-chef", { ...PERSON_PAUSED, interrupted: "sub-under-pause" });
+  await h.scheduler.start();
+
+  await fireWhenDue(t, jobFor(routine.id));
+
+  const [run] = await h.store.runs(routine.id);
+  assert.equal(run?.result, "skipped");
+  assert.equal(run?.reason, "paused_by_person");
+  assert.deepEqual(h.session.sends, [], "the paused Bot gets no input");
+  assert.equal(h.session.resumeCalls + h.session.dismissCalls, 0);
+  assert.deepEqual(h.notifications, []);
+  assert.deepEqual(h.session.deliveries, []);
+
+  h.session.states.set("bot-chef", { kind: "idle" });
+  const catchUp = createBotRoutineCatchUp({ store: h.store, scheduler: h.scheduler });
+  assert.deepEqual(await catchUp.catchUp("bot-chef"), [], "a person's pause is never caught up on its own");
+  assert.deepEqual(h.session.sends, []);
+});
+
+test("a Bot paused between the state check and the send records a pause skip", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Inbox check",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Anything new?",
+  });
+  h.session.send = async () => {
+    throw Object.assign(new Error("This Bot is paused. Resume it to continue."), {
+      name: "BotSessionError",
+      reason: "paused_by_person",
+    });
+  };
+  const run = await h.run((await h.store.get(routine.id))!, undefined, { kind: "automatic", fireTime: 1_800_000_000_000 });
+  assert.deepEqual([run.result, run.reason], ["skipped", "paused_by_person"]);
+  assert.deepEqual(h.notifications, []);
+});
+
+test("pausing a Bot while its routine runs records a pause skip instead of a failure", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Inbox check",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Anything new?",
+  });
+  h.session.awaitReply = async () => {
+    // The person pauses mid-reply: the turn is left interrupted under the pause.
+    h.session.states.set("bot-chef", { ...PERSON_PAUSED, interrupted: "sub-1" });
+    return { kind: "interrupted" };
+  };
+  const run = await h.run((await h.store.get(routine.id))!, undefined, { kind: "manual", key: "k1" });
+  assert.deepEqual([run.result, run.reason, run.error], ["skipped", "paused_by_person", undefined]);
+  assert.deepEqual(h.notifications, [], "a pause the person chose is not reported as a failure");
+  assert.deepEqual(h.session.deliveries, []);
+
+  // An interruption that is not a pause (a quit) is still a failure to surface.
+  h.session.states.set("bot-chef", { kind: "idle" });
+  h.session.awaitReply = async () => {
+    h.session.states.set("bot-chef", { kind: "interrupted", submissionId: "sub-2" });
+    return { kind: "interrupted" };
+  };
+  const quit = await h.run((await h.store.get(routine.id))!, undefined, { kind: "manual", key: "k2" });
+  assert.equal(quit.result, "error");
+  assert.equal(h.notifications.length, 1);
+});
+
+test("the skipped-while-paused count covers only this Bot's pause skips since the pause began", async () => {
+  const h = harness();
+  const since = 1_800_000_000_000;
+  const digest = await h.routines.create({
+    botId: "bot-chef",
+    name: "Daily digest",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Digest.",
+  });
+  const prep = await h.routines.create({
+    botId: "bot-chef",
+    name: "Meal prep",
+    schedule: { kind: "daily", time: "08:30" },
+    prompt: "Prep.",
+  });
+  const quiet = await h.routines.create({
+    botId: "bot-chef",
+    name: "Quiet one",
+    schedule: { kind: "daily", time: "09:30" },
+    prompt: "Nothing.",
+  });
+  const other = await h.routines.create({
+    botId: "bot-scout",
+    name: "Scout sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Sweep.",
+  });
+  const skip = (taskId: string, startedAt: number, reason: "paused_by_person" | "bot_paused" = "paused_by_person") =>
+    h.store.recordRun({ taskId, startedAt, finishedAt: startedAt, result: "skipped", reason, output: "" });
+  await skip(digest.id, since - 60_000); // before the pause
+  await skip(digest.id, since + 60_000);
+  await skip(digest.id, since + 120_000);
+  await skip(prep.id, since + 60_000);
+  await skip(quiet.id, since + 60_000, "bot_paused"); // an interruption, not the pause
+  await skip(other.id, since + 60_000);
+
+  assert.deepEqual(await countSkippedWhilePaused(h.store, "bot-chef", since), [
+    { routineId: digest.id, name: "Daily digest", count: 2 },
+    { routineId: prep.id, name: "Meal prep", count: 1 },
+  ]);
+  assert.deepEqual(await countSkippedWhilePaused(h.store, "bot-chef", since + 600_000), []);
+});
+
+test("Run now starts one run of the Bot's own routine and refuses another Bot's", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Daily digest",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Digest.",
+  });
+  await assert.rejects(h.routines.runNow({ botId: "bot-scout", routineId: routine.id }), /no longer exists/u);
+  // A routine edited since the card was drawn is refused, not reported as started.
+  await assert.rejects(
+    h.routines.runNow({ botId: "bot-chef", routineId: routine.id, expectedUpdatedAt: routine.updatedAt + 1 }),
+    /changed/u,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(await h.store.runs(routine.id), []);
+  assert.deepEqual(h.session.sends, []);
+
+  const { runId } = await h.routines.runNow({ botId: "bot-chef", routineId: routine.id });
+  await waitForRun(h, routine.id, runId);
+  assert.deepEqual(
+    h.session.sends.map(({ requestId, label }) => ({ requestId, label })),
+    [{ requestId: `routine:${routine.id}:manual-${runId}`, label: "Daily digest" }],
+  );
+  const [run] = await h.store.runs(routine.id);
+  assert.deepEqual([run?.id, run?.result], [runId, "success"]);
+});
+
+test("Run now on a paused Bot is refused, and records no skip for the next unpause to report", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Daily digest",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Digest.",
+  });
+  h.session.states.set("bot-chef", { kind: "paused", since: 1_000, by: "mac" });
+  await assert.rejects(h.routines.runNow({ botId: "bot-chef", routineId: routine.id }), /paused\. Resume it/u);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(await h.store.runs(routine.id), [], "nothing ran and nothing was recorded");
+  assert.deepEqual(h.session.sends, []);
+  assert.deepEqual(await countSkippedWhilePaused(h.store, "bot-chef", 0), []);
+
+  h.session.states.delete("bot-chef");
+  const { runId } = await h.routines.runNow({ botId: "bot-chef", routineId: routine.id });
+  await waitForRun(h, routine.id, runId);
+  assert.equal(h.session.sends.length, 1, "once resumed, Run now runs it");
+});
+
+async function waitForRun(h: ReturnType<typeof harness>, taskId: string, runId: string) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if ((await h.store.runs(taskId)).some((run) => run.id === runId)) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail("the run was never recorded");
+}
 
 test("a one-off routine runs once and then switches itself off", async (t) => {
   const h = harness();
@@ -548,6 +729,22 @@ test("routine IPC payloads are parsed strictly", () => {
     expectedUpdatedAt: 5,
     enabled: false,
   });
+  assert.deepEqual(parseBotRoutineRunNow({ botId: "bot", routineId: "r1" }), { botId: "bot", routineId: "r1" });
+  assert.deepEqual(parseBotRoutineRunNow({ botId: "bot", routineId: "r1", expectedUpdatedAt: 3 }), {
+    botId: "bot",
+    routineId: "r1",
+    expectedUpdatedAt: 3,
+  });
+  for (const invalid of [
+    null,
+    { botId: "bot" },
+    { botId: "../x", routineId: "r1" },
+    { botId: "bot", routineId: "r/1" },
+    { botId: "bot", routineId: "r1", expectedUpdatedAt: -1 },
+    { botId: "bot", routineId: "r1", runId: "chosen" },
+  ]) {
+    assert.throws(() => parseBotRoutineRunNow(invalid), /Invalid/u);
+  }
 });
 
 /** A routine whose scheduled fire was skipped because its Bot was paused. */
@@ -648,6 +845,27 @@ test("catch-up starts when a Bot leaves its paused state, not on ordinary state 
   // A Bot first seen running may have been paused before this listener existed.
   onState("bot-scout", { kind: "idle" });
   assert.deepEqual(caughtUp, ["bot-chef", "bot-chef", "bot-scout"]);
+});
+
+test("a person's pause holds catch-up like an interruption, and only running again releases it", () => {
+  const caughtUp: string[] = [];
+  const onState = createBotRoutineCatchUpTrigger((botId) => caughtUp.push(botId));
+
+  onState("bot-chef", { kind: "interrupted" });
+  onState("bot-chef", { kind: "paused" });
+  assert.deepEqual(caughtUp, [], "pausing an interrupted Bot does not catch up");
+  onState("bot-chef", { kind: "interrupted" });
+  assert.deepEqual(caughtUp, [], "unpausing back to the interrupted turn does not either");
+  onState("bot-chef", { kind: "running" });
+  assert.deepEqual(caughtUp, ["bot-chef"], "Resume after unpause");
+
+  onState("bot-chef", { kind: "idle" });
+  onState("bot-chef", { kind: "paused" });
+  onState("bot-chef", { kind: "idle" });
+  assert.deepEqual(caughtUp, ["bot-chef", "bot-chef"], "unpausing an idle Bot checks once");
+  // First seen paused: nothing runs until it is unpaused.
+  onState("bot-scout", { kind: "paused" });
+  assert.deepEqual(caughtUp, ["bot-chef", "bot-chef"]);
 });
 
 test("a visible reply or a failure reaches the Bot's other surfaces once; silence and skips do not", async () => {

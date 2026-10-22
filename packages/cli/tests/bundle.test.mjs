@@ -139,3 +139,12 @@ test("pi telemetry is removed, not just disabled", () => {
 	assert.ok(!everything.includes("38;2;62;151;246"), "hardcoded Aiden-blue truecolor must not ship");
 
 });
+
+test("the bundled MCP docs the model reads describe Aiden's MCP configuration, not Pi's native one", () => {
+	const mcp = readFileSync(join(appDir, "docs", "mcp.md"), "utf8");
+	assert.match(mcp, /aiden-mcp\.json/);
+	assert.match(mcp, /aiden mcp login <id>/);
+	const cli = readFileSync(join(appDir, "docs", "cli.md"), "utf8");
+	assert.doesNotMatch(cli, /pi mcp (add|login|list|remove|logout)|builtin:mcp/);
+	assert.match(cli, /aiden mcp add <server\.json>/);
+});

@@ -37,6 +37,8 @@ import {
   type PeerTrust,
 } from "./peer-transport.js";
 import {
+  AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
+  AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
   AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
@@ -103,10 +105,18 @@ export interface PeerClient {
 
 /**
  * Grants a desktop controller asks for after pairing, each gated by the
- * feature that proves the host serves it. Bot grants stay pairing-bound
- * (contract revision 19) and are never negotiated.
+ * feature that proves the host serves it. Bot authority (`bot:read`,
+ * `bot:write`) stays pairing-bound (contract revision 19) and is never
+ * negotiated; `bot:activity` is an opt-in that only adds the session's
+ * activity and queued frames to what this Mac is sent.
+ *
+ * `bot:handoffs` (contract revision 37) is an opt-in too: the session's
+ * hand-off card, the person's pause, and the routes that answer and lift them.
+ * It has no feature token of its own, so it is asked for only when the host
+ * lists it in `serverCapabilities`, and in a call of its own after the rest
+ * (`"own_call"`): a host that does not know a name refuses the whole request.
  */
-const NEGOTIATED_GRANTS: ReadonlyArray<readonly [string, string]> = [
+const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string, call?: "own_call"]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
   ["agents:read", AIDEN_REMOTE_CHAT_AGENTS_FEATURE],
   ["questions:respond", AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE],
@@ -114,9 +124,17 @@ const NEGOTIATED_GRANTS: ReadonlyArray<readonly [string, string]> = [
   ["host:events", AIDEN_REMOTE_HOST_EVENTS_FEATURE],
   ["runs:observe", AIDEN_REMOTE_RUN_STREAMS_FEATURE],
   ["runs:control", AIDEN_REMOTE_RUN_CONTROL_FEATURE],
+  ["bot:activity", AIDEN_REMOTE_BOT_ACTIVITY_FEATURE],
+  ["bot:handoffs", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
 ];
 
 /** Unary requests and streams (feed plus live runs) have separate budgets. */
+/**
+ * The most `/server.features` tokens this client accepts. Hosts send at most
+ * `AIDEN_REMOTE_MAX_SERVER_FEATURES` (32); the headroom keeps a host that
+ * announces a few more from making this Mac refuse the whole connection.
+ */
+export const PEER_MAX_SERVER_FEATURES = 64;
 export const PEER_UNARY_PER_HOST = 8;
 export const PEER_UNARY_TOTAL = 32;
 export const PEER_STREAMS_PER_HOST = 17;
@@ -189,7 +207,7 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
       name: storedPeerName(record.name),
       deviceId: hostIdentifier(record.deviceId),
       capabilities: peerStrings(record.capabilities),
-      features: peerStrings(record.features, 32),
+      features: peerStrings(record.features, PEER_MAX_SERVER_FEATURES),
       ...(record.routes === undefined ? {} : { routes: parsePeerRoutes(record.routes) }),
       ...(record.suppressedRoutes === undefined ? {} : { suppressedRoutes: peerStrings(record.suppressedRoutes, 2) }),
     };
@@ -437,27 +455,54 @@ export class PeerHostRegistry {
       throw mismatch;
     }
     const capabilities = peerStrings(server.capabilities);
-    const features = peerStrings(server.features ?? [], 32);
+    const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
     const advertised = Array.isArray(server.serverCapabilities)
       ? peerStrings(server.serverCapabilities)
       : undefined;
     await this.refreshGrants(host.id, capabilities, features, current);
     if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined) {
-      const routes = parsePeerRoutes(server.peerRoutes).map((route) => route.endpoint === host.endpoint
-        ? { ...route, serverSpkiSha256: host.serverSpkiSha256, caCertificateDerBase64: host.caCertificateDerBase64 }
-        : route);
-      await this.learnRoutes(host.id, routes, current);
+      // Route hints are optional: a malformed one is ignored, never a reason to drop the host.
+      let hinted: ReturnType<typeof parsePeerRoutes> | undefined;
+      try {
+        hinted = parsePeerRoutes(server.peerRoutes);
+      } catch {
+        hinted = undefined;
+      }
+      if (hinted) {
+        const routes = hinted.map((route) => route.endpoint === host.endpoint
+          ? { ...route, serverSpkiSha256: host.serverSpkiSha256, caCertificateDerBase64: host.caCertificateDerBase64 }
+          : route);
+        await this.learnRoutes(host.id, routes, current);
+      }
     }
     this.verified.add(verificationKey);
     if (this.negotiated.has(host.id)) return;
     this.negotiated.add(host.id);
-    const missing = NEGOTIATED_GRANTS.filter(
-      ([grant, feature]) =>
+    const wanted = NEGOTIATED_GRANTS.filter(
+      ([grant, feature, call]) =>
         !capabilities.includes(grant) &&
         features.includes(feature) &&
-        (advertised === undefined || advertised.includes(grant)),
-    ).map(([grant]) => grant);
-    if (missing.length === 0) return;
+        // A grant asked for alone has no feature token: only the host's own list names it.
+        (call === "own_call"
+          ? advertised?.includes(grant) === true
+          : advertised === undefined || advertised.includes(grant)),
+    );
+    const batch = wanted.filter(([, , call]) => call === undefined).map(([grant]) => grant);
+    const alone = wanted.filter(([, , call]) => call === "own_call").map(([grant]) => [grant]);
+    for (const accepts of batch.length > 0 ? [batch, ...alone] : alone) {
+      if (!current()) return;
+      await this.requestGrants(host, client, accepts, features, signal, current);
+    }
+  }
+  /** One `POST /device/capabilities`; the host answers with every grant this Mac now holds. */
+  private async requestGrants(
+    host: StoredPeerHost,
+    client: PeerClient,
+    accepts: string[],
+    features: string[],
+    signal: AbortSignal,
+    current: () => boolean,
+  ): Promise<void> {
     try {
       const upgraded = peerRecord(
         await client.json({
@@ -465,7 +510,7 @@ export class PeerHostRegistry {
           path: "/device/capabilities",
           credential: host.credential,
           signal,
-          body: { accepts: missing },
+          body: { accepts },
         }),
       );
       if (current())
@@ -475,8 +520,17 @@ export class PeerHostRegistry {
           features,
           current,
         );
-    } catch {
+    } catch (error) {
       // An older host without the route, or a refusal, leaves the existing grants in place.
+      // A lost answer is tried again on the next reconnect.
+      const answered = error instanceof PeerTransportError && error.code === "request_failed" && (error.status ?? 500) < 500;
+      if (!answered) this.negotiated.delete(host.id);
+      // A credential the host no longer takes fails the connection like any other call,
+      // so the Mac asks to pair again instead of sending on with it.
+      if (error instanceof PeerTransportError && error.code === "authentication_required") {
+        this.clearVerification(host.id);
+        throw error;
+      }
     }
   }
   /** Persist the grants and features a host reports, so views and gates stay current. */
@@ -625,7 +679,7 @@ export class PeerHostRegistry {
           ? { caCertificateDerBase64: input.trust.caCertificateDerBase64 }
           : {}),
         capabilities: input.grants.filter((grant) => serverGrants.includes(grant)),
-        features: peerStrings(server.features ?? [], 32),
+        features: peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES),
       },
     ])[0]!;
     return this.locked(async () => {
@@ -931,10 +985,17 @@ export class PeerHostRegistry {
     if (server.protocolVersion !== 1) throw new PeerTransportError("unsupported_protocol");
     if (server.instanceId !== id) throw new PeerTransportError("identity_changed");
     const current = () => !signal?.aborted && !this.closed && this.hosts?.some((host) => host.id === id && host.deviceId === credentialIdentity) === true;
-    const features = peerStrings(server.features ?? [], 32);
+    const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
     await this.refreshGrants(id, peerStrings(server.capabilities), features, current);
-    if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined)
-      await this.learnRoutes(id, parsePeerRoutes(server.peerRoutes), current);
+    if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined) {
+      let hinted: ReturnType<typeof parsePeerRoutes> | undefined;
+      try {
+        hinted = parsePeerRoutes(server.peerRoutes);
+      } catch {
+        // A malformed hint must not drop a host whose identity just checked out.
+      }
+      if (hinted) await this.learnRoutes(id, hinted, current);
+    }
   }
 
   /** A fallback checks a better route at most once per 30 seconds; failures do not disturb it. */

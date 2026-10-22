@@ -132,8 +132,8 @@ export function ScheduledTasksSettings() {
           </Select>
         </Field>
         <Field
-          label="Default MCP access"
-          description="Preselect every currently enabled MCP server for new Full Ask Aiden tasks."
+          label="Default connector access"
+          description="Preselect every currently enabled connector for new Full Ask Aiden tasks."
         >
           <div className="flex flex-col items-end gap-1">
             <Switch
@@ -151,14 +151,14 @@ export function ScheduledTasksSettings() {
                 mcpServers.isError ||
                 enabledMcpCount === 0
               }
-              aria-label="Enable MCP access for new scheduled tasks"
+              aria-label="Enable connector access for new scheduled tasks"
             />
             <Text variant="small" color={mcpServers.isError ? "red" : "tertiary"}>
               {mcpServers.isError
-                ? "MCP servers unavailable"
+                ? "Connectors unavailable"
                 : enabledMcpCount === 0
-                  ? "No enabled servers"
-                  : `${enabledMcpCount} enabled ${enabledMcpCount === 1 ? "server" : "servers"}`}
+                  ? "No enabled connectors"
+                  : `${enabledMcpCount} enabled ${enabledMcpCount === 1 ? "connector" : "connectors"}`}
             </Text>
           </div>
         </Field>

@@ -2,15 +2,18 @@
 // side panel's Activity log, so the two never disagree on when a reply was
 // stopped, cut short by a restart, or carried on.
 //
-// A turn starts at the person's message, their answer to a question, or a
-// routine, and ends at the next one or at a notice. A reply with no visible
+// A turn starts at the person's message, their answer to a question or a
+// hand-off card, or a routine, and ends at the next one or at a notice. A reply with no visible
 // input before it (the self-intro) starts its own turn. Tool calls become
 // steps whose status their results fill in.
 
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { botStepFromCall, type BotRecapStep } from "./bot-activity-steps";
 
-type BotTurnStart = Extract<BotTranscriptEntry, { type: "user" | "question_answer" | "routine" | "assistant" }>;
+type BotTurnStart = Extract<
+  BotTranscriptEntry,
+  { type: "user" | "question_answer" | "handoff_result" | "routine" | "assistant" }
+>;
 
 export interface BotTurn {
   /** The entry that started the turn. */
@@ -33,8 +36,10 @@ interface BotTurnVisitor {
   entry?(entry: BotTranscriptEntry, turn: BotTurn | null): void;
 }
 
-const startsTurn = (entry: BotTranscriptEntry): entry is Extract<BotTurnStart, { type: "user" | "question_answer" | "routine" }> =>
-  entry.type === "user" || entry.type === "question_answer" || entry.type === "routine";
+const startsTurn = (
+  entry: BotTranscriptEntry,
+): entry is Extract<BotTurnStart, { type: "user" | "question_answer" | "handoff_result" | "routine" }> =>
+  entry.type === "user" || entry.type === "question_answer" || entry.type === "handoff_result" || entry.type === "routine";
 
 /** Walks `entries` as turns; the turn still open at the end is live when `running`. */
 export function walkBotTurns(entries: readonly BotTranscriptEntry[], running: boolean, visitor: BotTurnVisitor): void {

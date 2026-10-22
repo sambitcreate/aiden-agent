@@ -54,6 +54,12 @@ test("all browser actions have readable activity labels", () => {
   }
 });
 
+test("a Bot's own computer reads as its computer, not the person's Mac", () => {
+  assert.equal(activityLine(step("c", 0, "computer", "running")).verb, "Using its computer");
+  assert.equal(activityLine(step("c", 0, "computer", "completed")).verb, "Used its computer");
+  assert.equal(activityLine(step("s", 0, "computer_shell", "completed")).verb, "Ran in its computer");
+});
+
 test("simulator device tools read as compact timeline rows", () => {
   const rows = [
     ["device_list", "List simulators", "Listed simulators"],

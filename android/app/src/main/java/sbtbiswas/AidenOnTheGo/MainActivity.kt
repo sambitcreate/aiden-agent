@@ -112,6 +112,24 @@ class MainActivity : ComponentActivity() {
                     navigator.navigate(AidenNavigationStack.Root)
                     return@LaunchedEffect
                 }
+                // A chat this device has saved opens at once, without waiting for the Mac;
+                // the detail rereads it as the connection comes up.
+                val requestedChat = request.destination as? AidenNavigationDestination.Chat
+                val cachedInstance = coordinator.activeInstanceId
+                if (requestedChat != null && cachedInstance != null) {
+                    val cached = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        chatCache.loadChat(cachedInstance, requestedChat.chatId)
+                    }
+                    if (cached != null && (cached.isBotChat || !coordinator.archiveStore.isArchived(cached.workspaceId, cachedInstance))) {
+                        navigationStore.setSelectedArea(
+                            cachedInstance,
+                            if (cached.isBotChat) AidenProductArea.BOTS else AidenProductArea.WORKSPACES
+                        )
+                        navigator.navigate(navigator.stack.resetTo(AidenScreen.ChatDetail(cached.id, request.startsVoice)))
+                        clearPendingNavigation()
+                        return@LaunchedEffect
+                    }
+                }
                 if (connectionState != sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState.CONNECTED) {
                     return@LaunchedEffect
                 }
@@ -147,7 +165,7 @@ class MainActivity : ComponentActivity() {
                         if (client == null) {
                             coordinator.presentError("Connect to Aiden Agent before opening this link.")
                         } else {
-                            if (coordinator.serverInfo.value?.supportsBotDurableSession == true) {
+                            if (coordinator.supportsBotDurableSession()) {
                                 navigationStore.setSelectedArea(
                                     coordinator.activeInstanceId.orEmpty(),
                                     AidenProductArea.BOTS

@@ -12,6 +12,7 @@ import { peerTlsOptions } from "../peer-transport.js";
 import {
   decideDeviceHubRoute,
   hubResponseHeaders,
+  rendererProxyOrigins,
   startDeviceHubProxy,
   type DeviceHubProxy,
   type DeviceHubUpstream,
@@ -47,6 +48,20 @@ async function startFakeHub(): Promise<FakeHub> {
     });
     request.on("end", () => {
       records.push({ method: request.method!, url: request.url!, headers: request.headers, body, upgrade: false });
+      if (request.url?.includes("still=1")) {
+        // serve-sim sends a frame only when the screen changes: one part, then silence.
+        response.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=frame" });
+        response.write("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nJPEG\r\n");
+        return;
+      }
+      if (request.url?.includes("mjpegreset=1")) {
+        // An MJPEG hub that dies after one frame, through the still-frame path.
+        response.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=frame" });
+        response.write("--frame\r\nContent-Length: 4\r\n\r\nJPEG\r\n", () =>
+          setTimeout(() => request.socket.destroy(), 10),
+        );
+        return;
+      }
       if (request.url?.includes("reset=1")) {
         // Promise more than is sent, then reset mid-body, as a hub that dies while streaming would.
         response.writeHead(200, { "content-type": "application/octet-stream", "content-length": "1000" });
@@ -89,7 +104,7 @@ interface Harness {
   hubRunning: { value: boolean };
 }
 
-async function withProxy(run: (harness: Harness) => Promise<void>) {
+async function withProxy(run: (harness: Harness) => Promise<void>, extra: { hubHeaders?: Record<string, string> } = {}) {
   const hub = await startFakeHub();
   const clock = { now: 1_000_000 };
   const hubRunning = { value: true };
@@ -97,6 +112,7 @@ async function withProxy(run: (harness: Harness) => Promise<void>) {
     resolveHub: (hostId) => (hostId === "local" && hubRunning.value ? hub.origin : null),
     allowedOrigins: ["file://", "http://localhost:5173"],
     now: () => clock.now,
+    ...extra,
   });
   try {
     await run({ hub, proxy, clock, hubRunning });
@@ -364,23 +380,55 @@ test("closing a host ends its open sockets and leaves other hosts alone", async 
 });
 
 test("a hub that resets mid-response ends that response without crashing the proxy", async () => {
+  const paths = ["/api/devices?reset=1", `/vendor/serve-sim/helper/${UDID}/stream.mjpeg?mjpegreset=1`];
+  await withProxy(async ({ proxy }) => {
+    for (const path of paths) {
+      const { token } = proxy.mintGrant();
+      await new Promise<void>((resolve) => {
+        const request = httpRequest(`${proxy.origin}${path}&t=${token}`, {
+          headers: { origin: "file://" },
+        });
+        request.once("response", (response) => {
+          assert.equal(response.statusCode, 200);
+          response.on("data", () => undefined);
+          response.once("error", () => resolve());
+          response.once("close", () => resolve());
+        });
+        request.once("error", () => resolve());
+        request.end();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Still serving: the reset reached only that one response.
+      assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200, path);
+    }
+  });
+});
+
+test("a still MJPEG frame reaches the client twice, so a browser paints it", { timeout: 5_000 }, async () => {
   await withProxy(async ({ proxy }) => {
     const { token } = proxy.mintGrant();
-    await new Promise<void>((resolve) => {
-      const request = httpRequest(`${proxy.origin}/api/devices?t=${token}&reset=1`, {
+    const body = await new Promise<string>((resolve, reject) => {
+      const request = httpRequest(`${proxy.origin}/vendor/serve-sim/helper/${UDID}/stream.mjpeg?t=${token}&still=1`, {
         headers: { origin: "file://" },
       });
       request.once("response", (response) => {
         assert.equal(response.statusCode, 200);
-        response.on("data", () => undefined);
-        response.once("error", () => resolve());
-        response.once("close", () => resolve());
+        let text = "";
+        response.setEncoding("latin1");
+        response.on("data", (chunk: string) => {
+          text += chunk;
+          if (text.split("JPEG\r\n").length - 1 >= 2) {
+            response.destroy();
+            resolve(text);
+          }
+        });
       });
-      request.once("error", () => resolve());
+      request.once("error", reject);
       request.end();
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    // Still serving: the reset reached only that one response.
+    const part = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nJPEG\r\n";
+    assert.equal(body, part + part);
+    // The proxy keeps serving after the client drops the stream.
     assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200);
   });
 });
@@ -415,6 +463,39 @@ test("allowlisted WebSocket upgrades are piped end to end", async () => {
     assert.equal(list.status, 101);
     list.socket!.destroy();
   });
+});
+
+test("main's hub headers reach a loopback hub on requests and upgrades, and the caller cannot supply or override them", async () => {
+  await withProxy(
+    async ({ proxy, hub }) => {
+      const { token } = proxy.mintGrant();
+      const response = await send(proxy, `/api/devices?t=${token}`, {
+        headers: { origin: "file://", "x-hub-key": "guessed" },
+      });
+      assert.equal(response.status, 200);
+      const connection = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}&host=local`, {
+        origin: "file://",
+        "x-hub-key": "guessed",
+      });
+      assert.equal(connection.status, 101);
+      await connection.firstFrame;
+      connection.socket!.destroy();
+      assert.deepEqual(
+        hub.records.map((record) => [record.upgrade, record.headers["x-hub-key"]]),
+        [
+          [false, "main-only"],
+          [true, "main-only"],
+        ],
+      );
+    },
+    { hubHeaders: { "x-hub-key": "main-only" } },
+  );
+});
+
+test("the renderer origins are the packaged file:// renderer plus a well-formed dev server", () => {
+  assert.deepEqual(rendererProxyOrigins({}), ["file://"]);
+  assert.deepEqual(rendererProxyOrigins({ AIDEN_RENDERER_URL: "http://localhost:5173/index.html" }), ["file://", "http://localhost:5173"]);
+  assert.deepEqual(rendererProxyOrigins({ AIDEN_RENDERER_URL: "not a url" }), ["file://"]);
 });
 
 test("a client that resets while its host resolves never crashes the proxy", async () => {

@@ -1,5 +1,6 @@
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
+import { withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
@@ -314,7 +315,7 @@ export function isMcpServer(value: unknown): value is McpServer {
     value.id.trim().length > 0 &&
     value.id.length <= MAX_CONFIG_ID_LENGTH &&
     typeof value.name === "string" &&
-    (value.transport === "stdio" || value.transport === "http" || value.transport === "sse") &&
+    (value.transport === "stdio" || value.transport === "http") &&
     typeof value.enabled === "boolean" &&
     (value.command === undefined || typeof value.command === "string") &&
     (value.args === undefined ||
@@ -330,6 +331,8 @@ export function isMcpServer(value: unknown): value is McpServer {
 export function isSkill(value: unknown): value is Skill {
   return isConfiguredSkill(value);
 }
+
+export { retiredMcpServerIds, withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 
 export function isMcpServerList(value: unknown): value is McpServer[] {
   return Array.isArray(value) && value.every(isMcpServer) && hasUniqueIds(value);
@@ -639,6 +642,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationSounds",
     "voiceTranslateToEnglish",
     "voiceTrimSilence",
+    "localVoicePreload",
     "showLocalModelReasoning",
     "memoryEnabled",
     "skillsEnabled",
@@ -1089,7 +1093,7 @@ you.
 | --- | --- |
 | \`providers\` | Custom provider connections: \`id\`, \`kind\`, \`label\`, \`baseUrl\`, \`needsKey\`, \`defaultModel\`, \`deployment\`. |
 | \`providerIdAliases\` | Append-only record of provider IDs Aiden has renamed. Leave it alone unless you know why it exists. |
-| \`mcpServers\` | MCP server definitions. Environment and header values are not stored here: each name keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Plugins. |
+| \`mcpServers\` | MCP server definitions. Environment and header values, and a custom server's OAuth client secret, are not stored here: each keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Connectors. |
 | \`skills\` | Inline skills: \`name\`, \`description\`, \`instructions\`, \`enabled\`. |
 
 Aiden rewrites this file when you change those settings in the UI, so it round
@@ -1332,8 +1336,9 @@ export function createPortableConfigStores(
       await ensureReadme();
       return false;
     }
-    const safeExistingMcpServers = isMcpServerList(existingPortable.mcpServers)
-      ? existingPortable.mcpServers
+    const existingMcpServers = withoutRetiredMcpServers(existingPortable.mcpServers);
+    const safeExistingMcpServers = isMcpServerList(existingMcpServers)
+      ? existingMcpServers
       : undefined;
     if (has("mcpServers") && !safeExistingMcpServers) {
       await ensureReadme();

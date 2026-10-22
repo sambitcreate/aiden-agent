@@ -12,6 +12,12 @@
 // filtered by `bot-tool-assembly.ts` against the Bot's Full/Custom authority.
 // Approvals go through `bot-approvals-main.ts` and resolve by `waitId`.
 //
+// Rules (plan §6): every call is checked against the Bot's rules, read fresh
+// from `<userData>/bots/<dir>/rules.json`, after its approval decision; a rule
+// can only add an ask or hand the call to the person (a hand-off card on the
+// shared bridge, its answer kept as an `aiden.handoff-result` entry). The
+// rules also render into the authority section so the Bot plans around them.
+//
 // Memory (spec 2026-10-09 §7–§10): every attended turn is offered the
 // main-owned `bot_memory` tool (never on routine or self-intro turns), the
 // `aiden-memory` section renders the service's frozen snapshot, a reply
@@ -19,15 +25,18 @@
 // its summary.
 
 import * as path from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { app, ipcMain, logger } from "../../platform.js";
+import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
+import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import { defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
+import { botPauses, isBotPaused } from "../bot-pause-main.js";
+import type { BotPauseRecord } from "../bot-pause-store.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
@@ -43,6 +52,11 @@ import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/te
 import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
+import { botHandoffs } from "./bot-handoffs-main.js";
+import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
+import { runBotPauseSteps } from "./bot-pause-steps.js";
+import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
+import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
@@ -58,6 +72,8 @@ import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { renderBotRulesSection } from "../bot-rules/prompt.js";
+import { botRules } from "../bot-rules/store-main.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
@@ -74,6 +90,8 @@ const profileDir = () => app.getPath("userData");
 setBotFileToolProtectedRoots(() => [path.join(profileDir(), "bots")]);
 const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
+// The pause store is shared with the legacy chat path (`bot-pause-main.ts`).
+export { isBotPaused };
 const resolvedModels = new Map<string, { ref: ModelRef; imageInput: boolean; at: number }>();
 
 let runtime: Promise<BotSessionRuntime> | undefined;
@@ -110,14 +128,6 @@ async function loadBot(botId: string): Promise<BotDefinition> {
   return bot;
 }
 
-async function connectCards(botId: string): Promise<ConnectCardEntry[]> {
-  const conversation = await (await botSessionRuntime()).conversation(botId);
-  const view = await conversation.context(BACKGROUND_CONTEXT);
-  return view.entries
-    .filter((entry) => entry.kind === BOT_CONNECT_CARD_ENTRY_KIND)
-    .map((entry) => entry.data as unknown as ConnectCardEntry);
-}
-
 /** Whether the Bot's resolved model takes images; false while it has none. */
 async function imageInput(botId: string): Promise<boolean> {
   const cached = resolvedModels.get(botId);
@@ -135,17 +145,25 @@ const toolSources = createBotToolSources({
   imageInput,
   admit,
   dismissals,
-  appendConnectCard: async (botId, card) => {
-    const conversation = await (await botSessionRuntime()).conversation(botId);
-    await conversation.submit(
-      { type: "write", entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { ...card } } },
-      BACKGROUND_CONTEXT,
-    );
-  },
-  connectCards,
+  botName: async (botId) => (await botStore.get(botId))?.name,
 });
 
-const tools = createBotToolAssembly({ admit, sources: toolSources });
+const tools = createBotToolAssembly({
+  admit,
+  sources: toolSources,
+  rules: (botId) => botRules.rules(botId),
+  botName: async (botId) => (await botStore.get(botId))?.name,
+});
+
+/** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
+async function promptRules(botId: string) {
+  try {
+    return await botRules.rules(botId);
+  } catch (error) {
+    logger.warn("bots", `Bot ${botId} rules could not be read for its prompt.`, error);
+    return defaultBotRules();
+  }
+}
 
 /**
  * Memory review and compaction work: admit the Bot's authority, keep the
@@ -194,10 +212,6 @@ const memoryReview = createBotMemoryReview({
 const compactionSteering = createBotCompactionSteering({
   memory,
   admit: admitMemoryWork,
-  appendEntry: async (botId, kind, data) => {
-    const conversation = await (await botSessionRuntime()).conversation(botId);
-    await conversation.submit({ type: "write", entry: { kind, data: { ...data } } }, BACKGROUND_CONTEXT);
-  },
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
 });
 
@@ -227,7 +241,9 @@ const extension: BotExtensionDeps = {
       return [
         base,
         withBotPersona("", bot).trim(),
-        withBotManagedWorkspace("", workspace, fileAuthority).trim(),
+        [withBotManagedWorkspace("", workspace, fileAuthority).trim(), renderBotRulesSection(bot.name, await promptRules(bot.id))]
+          .filter((part) => part.length > 0)
+          .join("\n\n"),
         tools.guidance(bot.id, offered.toolNames),
       ];
     });
@@ -250,6 +266,17 @@ const extension: BotExtensionDeps = {
   afterReply: (botId) => memoryReview.afterReply(botId),
   beforeCompact: compactionSteering,
   requestApproval: (request) => botApprovals.request(request),
+  // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
+  requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request)),
+  // Into the stopped call's own conversation, never through the harness host,
+  // whose per-Bot lock a pause or quit holds while it waits for this call.
+  recordHandoff: async (record, conversation) => {
+    try {
+      await recordRuleHandoffEntry(conversation, record);
+    } catch (error) {
+      logger.warn("bots", `Bot ${record.botId} hand-off row could not be written.`, error);
+    }
+  },
   async readmit(botId) {
     if (!(await botStore.get(botId))) return { ok: false, reason: "bot_missing" };
     try {
@@ -290,6 +317,57 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
     resolvedModels.delete(botId);
     throw error;
   }
+}
+
+/** Paired-desktop and Remote turns on the Bot's chat run on `llmClient`, which the harness close never reaches. */
+async function stopLegacyChatWork(botId: string): Promise<void> {
+  const [{ chatStore }, { llmClient }] = await Promise.all([import("../chat-store.js"), import("../llm-client.js")]);
+  await stopBotLegacyChatWork(botId, {
+    chatIds: async (id) => (await chatStore.listByBot(id)).map((chat) => chat.id),
+    stopChat: (chatId) => llmClient.stopChatWork(chatId),
+  });
+}
+
+/**
+ * Pause steps outside the Bot's harness, run once its running turn is closed.
+ * Waits inside the turn (questions, approvals and hand-offs, whether a tool or
+ * a rule opened them) need no step: the close signals their calls, which
+ * withdraws the cards, and Resume asks again under the same wait ids. Add a
+ * step here for anything that keeps going on its own, such as the Bot's
+ * computer.
+ */
+const afterBotPaused = runBotPauseSteps(
+  [
+    { run: stopLegacyChatWork },
+    // The Bot's computer starts stopping now, after its run, and a start still
+    // waiting for a slot gives up. A graceful stop can take half a minute, so
+    // the pause answers without waiting for it.
+    {
+      background: true,
+      run: async (botId) => (await import("../bot-computers/bot-computers-main.js")).pauseBotComputer(botId),
+    },
+  ],
+  (botId, error) => logger.warn("bots", `Bot ${botId} pause step failed.`, error),
+);
+
+/**
+ * Unpause: background memory review picks up again, and when routines fired
+ * while the Bot was paused, a notice lists them with Run now (decision 4a:
+ * nothing catches up on its own). Appended, so it never starts the Bot.
+ */
+async function afterBotUnpaused(botId: string, record: BotPauseRecord): Promise<void> {
+  memoryReview.afterReply(botId);
+  const [{ countSkippedWhilePaused }, { scheduleStore }] = await Promise.all([
+    import("../scheduled-bot-routines.js"),
+    import("../schedule-store.js"),
+  ]);
+  const routines = await countSkippedWhilePaused(scheduleStore, botId, record.since);
+  if (routines.length === 0) return;
+  await (await botSessionRuntime()).appendEntry(botId, BOT_NOTICE_ENTRY_KIND, {
+    notice: "routines_skipped",
+    since: record.since,
+    routines,
+  });
 }
 
 async function deleteRoutines(botId: string): Promise<void> {
@@ -337,6 +415,32 @@ botQuestions.onChange((botId) => {
   );
 });
 
+// A hand-off card opening or settling reaches open desktop chats the same way.
+botHandoffs.onChange((botId) => {
+  void liveProjection?.refreshHandoff(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} hand-off view report.`, error),
+  );
+});
+
+// A card that opens while no Aiden window is focused also says so in a Mac
+// notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
+const handoffNotifier = createBotHandoffNotifier({
+  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  show: ({ title, body, onClick }) => {
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({ title, body });
+    notification.on("click", onClick);
+    notification.show();
+  },
+  botName: async (botId) => (await botStore.get(botId))?.name,
+  onClick: async (botId) => {
+    await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
+  },
+  isPending: (botId, waitId) => botHandoffs.get(botId, waitId) !== undefined,
+  onError: (stage) => logger.warn("bots", `Hand-off notification ${stage} failed.`),
+});
+watchBotHandoffs(botHandoffs, handoffNotifier);
+
 // An approval appearing or settling changes the line to and from "Waiting for you".
 botApprovals.onChange((botId) => {
   void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
@@ -344,11 +448,12 @@ botApprovals.onChange((botId) => {
   );
 });
 
-// "Needs you" in the Bots sidebar follows questions and approvals as they
-// appear and settle; the renderer re-reads that Bot's summary.
+// "Needs you" in the Bots sidebar follows questions, approvals and hand-offs
+// as they appear and settle; the renderer re-reads that Bot's summary.
 wireBotAttention({
   questions: botQuestions,
   approvals: botApprovals,
+  handoffs: botHandoffs,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
 
@@ -365,6 +470,7 @@ export function botLiveProjection(): BotLiveProjection {
     state: async (botId) => (await botSessionRuntime()).state(botId),
     quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
+    handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     connectCardStatus,
     runStarts: botRunStarts,
@@ -391,6 +497,11 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     // Each harness open is a new session: the prompt re-reads memory.
     onSessionOpen: (botId) => memory.beginSession(botId),
     compactionInstructions: BOT_COMPACTION_FOCUS,
+    pauses: botPauses,
+    // No memory review runs or writes its marker while the Bot is paused.
+    onPaused: (botId) => memoryReview.cancel(botId),
+    afterPaused: afterBotPaused,
+    onUnpaused: afterBotUnpaused,
     deleteEffects: [
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),
@@ -405,6 +516,11 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
         resolvedModels.delete(botId);
       },
       deleteRoutines,
+      (botId) => botPauses.forgetBot(botId),
+      // Its rules file goes, and no later edit can bring its directory back.
+      (botId) => botRules.forgetBot(botId),
+      // Its computer stops and its VM is deleted before its home (the shared folder) goes.
+      async (botId) => (await import("../bot-computers/bot-computers-main.js")).deleteBotComputer(botId),
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
       eraseBotData,

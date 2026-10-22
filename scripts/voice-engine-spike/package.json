@@ -1,0 +1,26 @@
+{
+  "name": "aiden-voice-spike",
+  "private": true,
+  "type": "module",
+  "description": "Throwaway benchmark: sherpa-onnx (Aiden's current engine) against transcribe.cpp, offline and streaming.",
+  "scripts": {
+    "bench": "node bench.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "sherpa-onnx-node": "1.13.8",
+    "transcribe-cpp": "0.4.0"
+  },
+  "overrides": {
+    "sherpa-onnx-darwin-arm64": "1.13.8",
+    "sherpa-onnx-darwin-x64": "1.13.8",
+    "sherpa-onnx-linux-arm64": "1.13.8",
+    "sherpa-onnx-linux-x64": "1.13.8",
+    "@transcribe-cpp/darwin-arm64-metal": "0.4.0",
+    "@transcribe-cpp/darwin-x64-cpu": "0.4.0",
+    "@transcribe-cpp/linux-x64-cpu-vulkan": "0.4.0",
+    "@transcribe-cpp/linux-arm64-cpu-vulkan": "0.4.0"
+  }
+}

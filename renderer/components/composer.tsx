@@ -1,5 +1,6 @@
 import { readCachedAppearance } from "../lib/appearance-runtime";
-import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
+import { compactionEngineFrom, compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
+import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
 // current branch. The input
@@ -7,6 +8,7 @@ import { compactionEngineLabel, type CompactionEngine } from "../shared/compacti
 // picker, voice input, and send/stop.
 
 import * as React from "react";
+import { flushSync } from "react-dom";
 import {
   AlertDialog,
   Button,
@@ -42,6 +44,7 @@ import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
 import { WorkspacePicker, type WorkspaceMenuRequest } from "./workspace-picker";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
+import { dictationInsertion } from "../lib/dictation-insertion";
 import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
@@ -89,6 +92,7 @@ import {
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
 import { claimCompactionCommand } from "../lib/compaction-command-admission";
+import { useExpiredCacheReturn } from "../lib/use-expired-cache-return";
 import {
   loadComposerDraft,
   markComposerSubmission,
@@ -209,6 +213,11 @@ interface ComposerProps {
   thinkingControl?: React.ReactNode;
   /** Next-request context-pressure indicator, rendered next to the model picker. */
   contextMeter?: React.ReactNode;
+  /**
+   * This chat's context reading without the draft, when the surface compacts
+   * on return to an expired prompt cache. Null while it loads.
+   */
+  contextHistoryPressure?: ChatContextPressureV1 | null;
   /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
   onDraftChange?: (text: string, attachments: Attachment[]) => void;
   currentChatTitle?: string;
@@ -384,6 +393,7 @@ export function Composer({
   modelPicker,
   thinkingControl,
   contextMeter,
+  contextHistoryPressure,
   onDraftChange,
   currentChatTitle,
   latestAssistantResponse,
@@ -647,21 +657,70 @@ export function Composer({
       skillScopeId,
     ],
   );
-  const canSend =
-    (text.trim().length > 0 || attachments.length > 0) &&
-    submissionAllowed &&
-    !composing &&
-    (!selectedSkillState || selectedSkillState.state === "valid");
+  /**
+   * Where dictation lands, fixed when recording starts. Live words show at this
+   * spot in a read-only draft until the final text replaces them.
+   */
+  const [dictationAnchor, setDictationAnchor] = React.useState<{ start: number; end: number } | null>(null);
+  const dictationAnchorRef = React.useRef(dictationAnchor);
+  dictationAnchorRef.current = dictationAnchor;
+  const insertDictation = React.useCallback(
+    (transcript: string) => {
+      const input = inputRef?.current;
+      const anchor = dictationAnchorRef.current;
+      // Take the live words out of the textarea first, so the insert edits the real draft.
+      if (anchor) flushSync(() => setDictationAnchor(null));
+      const selection = anchor ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : null);
+      const active = document.activeElement;
+      const typingElsewhere =
+        active instanceof HTMLElement &&
+        active !== input &&
+        (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable);
+      if (input?.isConnected && !input.readOnly && !input.disabled && !typingElsewhere) {
+        const insertion = dictationInsertion(input.value, selection, transcript);
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(insertion.start, insertion.end);
+        // A native insert lands on the textarea's undo stack, so ⌘Z takes the dictation back out.
+        if (document.execCommand("insertText", false, insertion.insert)) {
+          input.setSelectionRange(insertion.caret, insertion.caret);
+          updateSelection({ start: insertion.caret, end: insertion.caret });
+          return;
+        }
+      }
+      setText((current) => dictationInsertion(current, selection, transcript).text);
+    },
+    [inputRef, setText, updateSelection],
+  );
   const voice = useVoiceRecorder(
     (heard) => {
       const transcript = applyDictationDictionary(
         heard,
         parseDictationDictionary(dictationDictionaryRef.current),
       );
-      if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+      if (!firstSendPendingRef.current) insertDictation(transcript);
     },
     { model: settings.data?.voiceModel },
   );
+  React.useLayoutEffect(() => {
+    if (!voice.recording) return;
+    const input = inputRef?.current;
+    setDictationAnchor((current) => current ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : selection));
+  }, [inputRef, selection, voice.recording]);
+  React.useEffect(() => {
+    if (!voice.recording && !voice.transcribing) setDictationAnchor(null);
+  }, [voice.recording, voice.transcribing]);
+  const liveDictation = [voice.liveTranscript.committed, voice.liveTranscript.tentative].filter(Boolean).join(" ");
+  const dictationPreviewing =
+    dictationAnchor !== null && liveDictation.length > 0 && !firstSendPending && (voice.recording || voice.transcribing);
+  const composerValue = dictationPreviewing ? dictationInsertion(text, dictationAnchor, liveDictation).text : text;
+  // While live words show, the draft on screen is not the draft that would be
+  // sent, so sending waits for the final text.
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) &&
+    submissionAllowed &&
+    !composing &&
+    !dictationPreviewing &&
+    (!selectedSkillState || selectedSkillState.state === "valid");
 
   React.useLayoutEffect(() => {
     slashPaletteBlockedRef.current = slashPaletteBlocked;
@@ -877,8 +936,9 @@ export function Composer({
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
 
+  const settleExpiredCacheRef = React.useRef<() => void>(() => {});
   const compactChat = React.useCallback(
-    async (engine?: CompactionEngine) => {
+    async (engine?: CompactionEngine, options?: { cacheExpired?: boolean }) => {
       if (
         !onCompactChat ||
         !claimCompactionCommand(sessionCommandBusyRef, sessionCommandBusy, compactionActive)
@@ -886,11 +946,17 @@ export function Composer({
         return;
       }
       setCompactionBusy(true);
+      let ran = false;
       setSessionCommandStatus(
-        engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
+        options?.cacheExpired && engine
+          ? `The prompt cache expired, so Aiden is compacting with ${compactionEngineLabel(engine)}…`
+          : engine
+            ? `Compacting with ${compactionEngineLabel(engine)}…`
+            : "Compacting chat…",
       );
       try {
         const result = await onCompactChat(engine);
+        ran = result.compacted || result.reason !== "busy";
         if (result.compacted) {
           const label = compactionEngineLabel(result.engine ?? engine ?? "llm");
           const size =
@@ -900,7 +966,8 @@ export function Composer({
           const duration =
             result.durationMs !== undefined ? ` · ${(result.durationMs / 1000).toFixed(1)}s` : "";
           toast.success(`${label} compaction complete${duration}${size}`);
-        } else {
+        } else if (!options?.cacheExpired || result.reason === "compaction_failed") {
+          // A compaction the user didn't ask for stays quiet unless it failed.
           const copy = {
             already_compact: "This chat is already compact enough.",
             busy: "Finish the current response or approval first.",
@@ -914,14 +981,56 @@ export function Composer({
           toast.info(copy[result.reason]);
         }
       } finally {
+        // Any compaction answers an expired cache window, so it is not offered again.
+        if (ran) settleExpiredCacheRef.current();
         sessionCommandBusyRef.current = false;
         setCompactionBusy(false);
         setSessionCommandStatus(null);
-        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+        // An automatic compaction never pulls focus from wherever the user went.
+        if (!options?.cacheExpired) requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
     [compactionActive, inputRef, onCompactChat, sessionCommandBusy],
   );
+
+  // Returning to a large chat whose prompt cache expired: pi-vcc compacts on
+  // its own, LLM compaction is offered as "Compact first?".
+  const expiredCacheReturn = useExpiredCacheReturn({
+    chatId,
+    pressure: contextHistoryPressure,
+    engine:
+      contextHistoryPressure !== undefined && settings.data ? compactionEngineFrom(settings.data.compactionEngine) : undefined,
+    idle:
+      Boolean(onCompactChat) &&
+      ready &&
+      !isGenerating &&
+      !hasQueuedMessages &&
+      !compactionActive &&
+      !sessionCommandBusy &&
+      !forkSummaryHold &&
+      !sending &&
+      !firstSendPending &&
+      !attaching &&
+      !voice.recording &&
+      !voice.transcribing &&
+      !configurationBusy &&
+      !permissionSaving &&
+      !gitOperationBusy,
+    compact: (engine, automatic) => {
+      // The IPC failing outright leaves nothing to report for a compaction nobody asked for.
+      void compactChat(engine, automatic ? { cacheExpired: true } : undefined).catch(() => {
+        if (!automatic) toast.error("Compaction failed.");
+      });
+    },
+  });
+  settleExpiredCacheRef.current = expiredCacheReturn.settle;
+  const typedRef = React.useRef(false);
+  React.useEffect(() => {
+    // Starting to type is a return too, unless it is a slash command.
+    const typed = text.trim().length > 0;
+    if (typed && !typedRef.current && !text.trimStart().startsWith("/")) expiredCacheReturn.markReturned();
+    typedRef.current = typed;
+  }, [expiredCacheReturn.markReturned, text]);
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -1655,6 +1764,10 @@ export function Composer({
 
   const submit = async (busyModeOverride?: BusySendMode) => {
     if (sendPendingRef.current || composing) return;
+    if (dictationPreviewing) {
+      blockSend("Wait for dictation to finish before sending.");
+      return;
+    }
     if (attachmentOperationRef.current.isBusy || attaching) {
       blockSend("Wait for the selected attachments to finish loading before sending.");
       return;
@@ -2123,25 +2236,34 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
-              value={text}
-              readOnly={composerInputLocked || firstSendPending}
-              aria-busy={composerInputLocked || firstSendPending || undefined}
+              value={composerValue}
+              readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
+              aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
               onChange={(event) => {
-                if (firstSendPendingRef.current) return;
+                if (firstSendPendingRef.current || dictationPreviewing) return;
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
                   end: event.target.selectionEnd,
                 });
+                // Until live words appear, dictation follows the caret.
+                if (dictationAnchorRef.current) {
+                  setDictationAnchor({ start: event.target.selectionStart, end: event.target.selectionEnd });
+                }
               }}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              onSelect={(event) =>
+              onSelect={(event) => {
+                // Positions inside live dictation words do not exist in the draft.
+                if (dictationPreviewing) return;
                 updateSelection({
                   start: event.currentTarget.selectionStart,
                   end: event.currentTarget.selectionEnd,
-                })
-              }
+                });
+                if (dictationAnchorRef.current) {
+                  setDictationAnchor({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
+                }
+              }}
               onCompositionStart={() => {
                 markSlashInteraction();
                 setComposing(true);
@@ -2210,6 +2332,28 @@ export function Composer({
                   : "The fork's summary didn't finish. Retry it or continue without it."}
                 {queueForForkSummary ? " Messages you send now wait until it's settled." : null}
               </Text>
+            ) : expiredCacheReturn.offer ? (
+              <div className="composer-context-chip-enter flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-1.5 pb-1">
+                <Text as="p" variant="small" color="tertiary" className="min-w-0 text-pretty">
+                  The prompt cache expired, so the next message resends ~
+                  {formatContextTokenCount(expiredCacheReturn.offer.contextTokens)} tokens.
+                </Text>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button type="button" variant="muted" size="small" onClick={expiredCacheReturn.accept}>
+                    Compact first?
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="transparent"
+                    size="small"
+                    iconOnly
+                    aria-label="Dismiss compaction suggestion"
+                    onClick={expiredCacheReturn.dismiss}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+              </div>
             ) : null}
             <Text
               as="p"
@@ -2396,18 +2540,7 @@ export function Composer({
                 ) : null}
               </div>
               <div className="composer-action-row ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5">
-                {voice.recording &&
-                (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
-                  <span
-                    className="max-w-56 truncate text-small"
-                    role="status"
-                    aria-live="polite"
-                    aria-label="Live transcription"
-                  >
-                    <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
-                    <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
-                  </span>
-                ) : voice.transcribing && voice.loadingModel ? (
+                {voice.transcribing && voice.loadingModel ? (
                   <span
                     className="max-w-56 truncate text-small text-secondary"
                     role="status"

@@ -319,3 +319,18 @@ test("values saved for another address fail closed instead of reaching a child's
     /changed outside Aiden/u,
   );
 });
+
+test("a pre-registered OAuth client secret echoed by a server never reaches a child, and rotating it is a new revision", async () => {
+  const secretMarker = `aiden-secret:v1:${"c".repeat(32)}`;
+  const server: McpServer = { id: "docs", name: "Docs", transport: "http", url: "https://docs.example.test/mcp", oauth: true, oauthClientId: "app", oauthClientSecret: secretMarker, enabled: true };
+  const sources = (value: string): SubagentMcpCredentialSources => ({
+    ...markerSources(),
+    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, {
+      bindings: { [mcpFieldSecretDestination(server)]: { [secretMarker]: { field: "oauth:client_secret", value } } },
+    }),
+  });
+  const boundary = await resolveSubagentMcpCredentialBoundary(server, new AbortController().signal, sources("pre-registered-client-secret"));
+  assert.doesNotMatch(boundary.redactText("echo: pre-registered-client-secret"), /pre-registered-client-secret/u);
+  const rotated = await resolveSubagentMcpCredentialBoundary(server, new AbortController().signal, sources("rotated-client-secret"));
+  assert.notEqual(rotated.revision, boundary.revision);
+});

@@ -58,6 +58,19 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
+    [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
+    [{ operation: "botSend", resourceId: "bot_1", idempotencyKey: KEY, body: { text: "hi" } }, "sendBotMessage"],
+    [{ operation: "botResume", resourceId: "bot_1", idempotencyKey: KEY }, "resumeBotSession"],
+    [{ operation: "botDismiss", resourceId: "bot_1", idempotencyKey: KEY }, "dismissBotSession"],
+    [{ operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY }, "stopBotSession"],
+    [{ operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }, "answerBotQuestion"],
+    [{ operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done" } }, "answerBotHandoff"],
+    [{ operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }, "openBotHandoffOnMac"],
+    [{ operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY }, "pauseBot"],
+    [{ operation: "botUnpause", resourceId: "bot_1", idempotencyKey: KEY }, "unpauseBot"],
+    [{ operation: "botConnectionRequest", resourceId: "bot_1", idempotencyKey: KEY, body: { pluginId: "notion" } }, "requestBotConnection"],
+    [{ operation: "uploadBotAttachment", resourceId: "bot_1", body: { name: "a.png" } }, "uploadBotAttachment"],
+    [{ operation: "removeBotAttachment", resourceId: "bot_1", itemId: `att_${"A".repeat(43)}` }, "removeBotAttachment"],
   ];
   for (const [operation, expected] of cases) {
     const request = peerOperationRequest(operation);
@@ -90,6 +103,16 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     "runRespondQuestion",
     "runInputs",
     "createBotChat",
+    "botSend",
+    "botResume",
+    "botDismiss",
+    "botStop",
+    "botAnswerQuestion",
+    "botAnswerHandoff",
+    "botHandoffOpenOnMac",
+    "botPause",
+    "botUnpause",
+    "botConnectionRequest",
   ])
     assert.throws(
       () =>
@@ -108,12 +131,61 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     { operation: "botConversations", limit: 51 },
     { operation: "botConversations", query: "q".repeat(201) },
     { operation: "attachmentContent", resourceId: "chat_1", itemId: "a/b" },
+    { operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait/1", idempotencyKey: KEY },
+    { operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY, body: { force: true } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait/1", idempotencyKey: KEY, body: { outcome: "done" } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "maybe" } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done", note: "   " } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done", password: "x" } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY },
+    { operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { url: "https://x" } },
+    { operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY, body: { by: "mac" } },
     { operation: "runCancel", resourceId: "../../server", idempotencyKey: KEY },
     { operation: "bots", url: "https://elsewhere" },
     { operation: "removeAttachment", resourceId: "chat_1", itemId: "att_short" },
     { operation: "removeAttachment", resourceId: "chat_1", itemId: `../${"A".repeat(43)}` },
   ])
     assert.throws(() => peerOperationRequest(invalid), JSON.stringify(invalid));
+});
+
+test("hand-off and pause operations send what the host's revision-37 routes take, and read their answers", async () => {
+  const fixture = contract.botHandoffs;
+  const answer = peerOperationRequest({
+    operation: "botAnswerHandoff",
+    resourceId: "bot_1",
+    itemId: fixture.answer.response.waitId,
+    idempotencyKey: KEY,
+    body: fixture.answer.request,
+  });
+  assert.equal(answer.path, `/bots/bot_1/handoffs/${fixture.answer.response.waitId}/answer`);
+  assert.deepEqual(answer.body, fixture.answer.request);
+  assert.throws(
+    () => peerOperationRequest({ operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", body: fixture.answer.request }),
+    /Invalid peer text/u,
+    "an answer without its key never leaves this Mac",
+  );
+  assert.deepEqual(
+    peerOperationRequest({ operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }).body,
+    fixture.openOnMac.request,
+  );
+  const pause = peerOperationRequest({ operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY });
+  assert.deepEqual([pause.method, pause.path, pause.body], ["POST", "/bots/bot_1/pause", fixture.pause.request]);
+  const unpause = peerOperationRequest({ operation: "botUnpause", resourceId: "bot_1", idempotencyKey: KEY, body: {} });
+  // Lifting a pause is a DELETE without a body, keyed like every other Bot session write.
+  assert.deepEqual([unpause.method, unpause.path, "body" in unpause, unpause.idempotencyKey], ["DELETE", "/bots/bot_1/pause", false, KEY]);
+
+  assert.deepEqual(await peerOperationResult({ operation: "botAnswerHandoff" }, fixture.answer.response), fixture.answer.response);
+  assert.deepEqual(await peerOperationResult({ operation: "botHandoffOpenOnMac" }, fixture.openOnMac.response), fixture.openOnMac.response);
+  assert.deepEqual(await peerOperationResult({ operation: "botPause" }, fixture.pause.response), fixture.pause.response);
+  assert.deepEqual(await peerOperationResult({ operation: "botUnpause" }, fixture.unpause.response), fixture.unpause.response);
+  for (const [operation, invalid] of [
+    ["botAnswerHandoff", { waitId: "wait/1" }],
+    ["botAnswerHandoff", { waitId: "wait-1", extra: true }],
+    ["botHandoffOpenOnMac", { waitId: "wait-1" }],
+    ["botPause", { state: "asleep", interrupted: false }],
+    ["botUnpause", {}],
+  ] as const)
+    await assert.rejects(peerOperationResult({ operation }, invalid), `${operation} ${JSON.stringify(invalid)}`);
 });
 
 test("only an attachment upload may send a body past the 1 MiB JSON cap", () => {
@@ -295,4 +367,63 @@ test("server reads strip route trust before crossing into the renderer", async (
   const result = await peerOperationResult({ operation: "server" }, server);
   assert.deepEqual(result, contract.server);
   await assert.rejects(peerOperationResult({ operation: "server" }, { ...server, nested: { credential: "still-forbidden" } }));
+});
+
+test("a newer host's Bot session reads here as far as this Mac understands it", async () => {
+  const session = (await peerOperationResult(
+    { operation: "botSession", resourceId: "bot_1" },
+    {
+      botId: "bot_1",
+      epoch: "e1",
+      seq: 3,
+      state: "hibernating",
+      interrupted: false,
+      entries: [
+        { type: "message", id: "m1", role: "assistant", text: "Done." },
+        { type: "hand_off", id: "h1", text: "Sign in" },
+      ],
+      hasOlder: false,
+      question: null,
+      approval: null,
+      rules: ["a field from a newer host"],
+    },
+  )) as { state: string; entries: { id: string }[] };
+  assert.equal(session.state, "unavailable");
+  assert.deepEqual(session.entries.map((entry) => entry.id), ["m1"]);
+  await assert.rejects(peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, { botId: "bot_1" }));
+});
+
+test("the host's real Bot session, send receipt and controls pass this Mac's contract check", async () => {
+  const fixtures = contract as unknown as Record<string, { response?: unknown } & Record<string, unknown>>;
+  for (const key of ["botSession", "botSessionNeedsModel", "botSessionCards"]) {
+    const session = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, fixtures[key])) as {
+      botId: string;
+    };
+    assert.equal(session.botId, (fixtures[key] as { botId: string }).botId, key);
+  }
+  // A holder of bot:handoffs reads the waiting card and the paused state. The
+  // host test checks these fixtures are what its sessions really send.
+  const handoffs = contract.botHandoffs;
+  const waiting = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.session)) as {
+    handoff?: unknown;
+  };
+  assert.deepEqual(waiting.handoff, handoffs.session.handoff, "the card reaches the paired Mac");
+  const paused = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.pausedSession)) as {
+    state?: string;
+    handoff?: unknown;
+  };
+  assert.deepEqual([paused.state, paused.handoff], [handoffs.pausedSession.state, handoffs.pausedSession.handoff]);
+  assert.equal(paused.state, "paused");
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botSend", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
+    fixtures.botSessionSend!.response,
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionResume!.response),
+    fixtures.botSessionResume!.response,
+  );
+  // A state alone stays closed: a receipt's fields are not a control's answer.
+  await assert.rejects(
+    peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
+  );
 });

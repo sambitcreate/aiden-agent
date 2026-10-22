@@ -1,0 +1,165 @@
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
+import { build } from "esbuild";
+import playwrightTest from "@playwright/test";
+import type * as PlaywrightTestModule from "@playwright/test";
+
+const { expect, test } =
+  playwrightTest as unknown as typeof PlaywrightTestModule;
+
+const RED = [255, 0, 0];
+
+/** Close to the boundary's gray, never the field's red. */
+function painted(rgb: number[]): boolean {
+  return rgb.every((channel) => Math.abs(channel - 0x8a) <= 6);
+}
+
+// A standalone native guest: the real browser service and Electron sessions,
+// without starting unrelated application services.
+test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds and is cleared on delete", async () => {
+  const testInfo = test.info();
+  const root = testInfo.outputPath("native");
+  await mkdir(path.resolve("build"), { recursive: true });
+  const temporaryBuild = await mkdtemp(path.resolve("build/native-bot-browser-"));
+  let output = "";
+  const entry = path.join(temporaryBuild, "bot-browser.mjs");
+  try {
+    await build({
+      entryPoints: [path.resolve("tests/e2e/bot-browser-native.ts")],
+      outfile: entry,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      packages: "external",
+      external: ["electron"],
+      tsconfigRaw: { compilerOptions: {} },
+      logLevel: "silent",
+    });
+    const electron = createRequire(import.meta.url)("electron") as string;
+    // As in browser-throttling.spec.ts: no GPU on hosted runners, and SIGKILL
+    // on timeout so a hang shows its stderr instead of a clean exit.
+    // Chromium refuses to start as root (a container) unless its sandbox is off.
+    const sandbox = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
+    const run = await promisify(execFile)(electron, ["--disable-gpu", ...sandbox, entry], {
+      timeout: 75_000,
+      killSignal: "SIGKILL",
+      env: {
+        PATH: process.env.PATH,
+        AIDEN_BOT_BROWSER_ROOT: root,
+        AIDEN_CONFIG_DIR: path.join(root, "config"),
+        ...(process.platform === "linux"
+          ? Object.fromEntries(
+              ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE"]
+                .filter((name) => process.env[name] !== undefined)
+                .map((name) => [name, process.env[name]]),
+            )
+          : {}),
+      },
+    });
+    output = `${run.stdout}${run.stderr}`;
+  } finally {
+    await rm(temporaryBuild, { recursive: true, force: true });
+  }
+  const raw = await readFile(path.join(root, "result.json"), "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+    throw new Error(`The Bot browser fixture exited without a result:\n${output}`);
+  });
+  const result = JSON.parse(raw);
+
+  // Separate sign-ins: neither browser sends the other's session cookie.
+  expect(result.isolation.botProfile).toBe("bot:bot:ada");
+  expect(result.isolation.personSees).toBe("cookie: none");
+  expect(result.isolation.botSees).toBe("cookie: sid=bot");
+  expect(result.isolation.botCookies).toEqual(["sid=bot"]);
+  expect(result.isolation.personCookies).toEqual(["sid=person"]);
+
+  // Secret fields are painted over in the image and left out of the text; an ordinary block stays red.
+  expect(result.masking.note).toBe(result.expected.maskedNote);
+  for (const field of ["password", "otp", "card"]) expect(painted(result.masking[field]), field).toBe(true);
+  expect(result.masking.control).toEqual(RED);
+  expect(result.masking.leaked).toEqual([]);
+  expect(result.typing).toBe(result.expected.typingRefusal);
+  expect(result.noteTyping).toBe("ran");
+  expect(result.pressing).toBe(result.expected.typingRefusal);
+  expect(result.navigationKey).toBe("ran");
+  expect(result.refused).toEqual({
+    evaluate: result.expected.actionRefusal,
+    record: result.expected.actionRefusal,
+    openFile: result.expected.actionRefusal,
+    valueSelector: result.expected.valueSelectorRefusal,
+    unbounded: "This browser belongs to a Bot.",
+  });
+  // Text, label and XPath locators can't tell a card field's text apart; ordinary ones still find their element.
+  const timedOut = "Browser wait timed out before all conditions matched.";
+  expect(result.textLocators.right).toEqual([timedOut, timedOut, timedOut]);
+  expect(result.textLocators.wrong).toEqual(result.textLocators.right);
+  expect(result.textLocators.xpath).toBe(result.expected.xpathRefusal);
+  expect(result.textLocators.label).toBe("ran");
+  expect(result.textLocators.button).toBe("ran");
+  expect(result.textLocators.both).toMatch(/strict mode violation: this locator matches 2 elements/u);
+  expect(result.textLocators.both).not.toMatch(/4111|737/u);
+  // Role names can't tell a password, code or card field's live value apart; the snapshot names nothing with one.
+  expect(result.roleLocators.right).toEqual([timedOut, timedOut, timedOut, timedOut]);
+  expect(result.roleLocators.wrong).toEqual(result.roleLocators.right);
+  expect(result.roleLocators.button).toBe("ran");
+  expect(result.roleLocators.cell).toBe("ran");
+  expect(result.tableSeen.leaked).toEqual([]);
+  expect(result.tableSeen.found.length).toBeGreaterThan(0);
+  expect(result.tableSeen.found.every((found: string) => found === "ran"), JSON.stringify(result.tableSeen.found)).toBe(true);
+  expect(result.tableSeen.probed.checkbox ?? "").not.toMatch(/5555/u);
+  expect(result.tableSeen.probed.button).toBe("Pay");
+  // A card field covering the target: Playwright's message quotes it; the Bot's doesn't.
+  expect(result.covered.unbounded).toMatch(/4111111111111111/u);
+  expect(result.covered.bot).toContain(result.expected.coveredTarget);
+  expect(result.covered.bot).not.toMatch(/4111|autocomplete|<input/u);
+
+  // A cross-site frame can't be checked for fields: no image, and a note saying why.
+  expect(result.frame).toEqual({ image: false, note: result.expected.frameNote, leaked: false });
+
+  // A held tab refuses the Bot, not the person, until it is released; then the
+  // Bot sees it again with the same fields covered.
+  expect(result.hold.heldState).toEqual({ reason: "sign_in" });
+  expect(result.hold.held).toBe(result.expected.heldRefusal);
+  expect(result.hold.personMayUse).toBe(true);
+  const afterRelease = result.hold.afterRelease;
+  expect(typeof afterRelease, String(afterRelease)).toBe("object");
+  for (const field of ["password", "otp", "card"]) expect(painted(afterRelease[field]), `${field} after release`).toBe(true);
+  expect(afterRelease.control).toEqual(RED);
+  expect(afterRelease.leaked).toEqual([]);
+  // The pages the person loaded and what they logged while holding the tab never reach the Bot.
+  expect(result.hold.heldTraces).toBe(false);
+
+  // A "show password" toggle doesn't uncover the field: not after the Bot saw it
+  // as a password field, nor when the person showed it on a tab they held.
+  for (const who of ["shownByBot", "shownByPerson"] as const) {
+    const seen = result.reveal[who];
+    expect(painted(seen.field), `${who}: the field is still covered`).toBe(true);
+    expect(seen.control, `${who}: nothing else is`).toEqual(RED);
+    expect(seen.leaked, `${who}: the value stays out of the snapshot`).toBe(false);
+  }
+  expect(result.reveal.shownType, "the page did show the field as text").toBe("text");
+  expect(result.reveal.typingShownByBot).toBe(result.expected.typingRefusal);
+  expect(result.reveal.pressingShownByPerson, "a printable key into the focused field").toBe(result.expected.typingRefusal);
+  expect(result.reveal.typingShownByPerson).toBe(result.expected.typingRefusal);
+  expect(result.reveal.probedShownByBot, "approvals and rules still read a password field").toBe("password");
+  expect(result.reveal.probedType, "also after the person showed it").toBe("password");
+  // A remembered field the person showed as plain text: a Bot's wait and
+  // scroll can't tell its value apart through the row around it, and the
+  // snapshot's locators don't quote it, each on a page nothing marked first.
+  expect(result.remembered.shownAs, "the person showed the fields as text").toEqual(["text", "text", "text"]);
+  expect(result.remembered.wait).toEqual({ right: timedOut, wrong: timedOut });
+  // Nor which option a server-rendered card-expiry list marked selected; role states still work.
+  const stateRefusal = result.expected.stateRefusal;
+  expect(result.savedMonth).toEqual({ right: stateRefusal, wrong: stateRefusal, role: "ran", probe: stateRefusal });
+  expect(result.remembered.scroll.right).not.toBe("ran");
+  expect(result.remembered.scroll.right).toBe(result.remembered.scroll.wrong);
+  expect(result.remembered.snapshot.leaked).toBe(false);
+  expect(result.remembered.snapshot.found.length).toBeGreaterThan(0);
+  expect(result.remembered.snapshot.found.every((found: string) => found === "ran"), JSON.stringify(result.remembered.snapshot.found)).toBe(true);
+
+  // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
+  expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });
+});

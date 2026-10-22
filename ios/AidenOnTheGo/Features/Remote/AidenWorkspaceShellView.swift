@@ -31,9 +31,12 @@ struct AidenRelativeTimestampView: View {
 /// Trailing chat-row status. Attention states use soft semantic fills with no
 /// borders; Working keeps the compact spinner; the unread dot is independent
 /// because a chat can be both working and holding unseen earlier output.
+/// Unseen output from a failed turn says Failed in place of the dot.
 struct AidenChatRowStatusView: View {
     let state: AidenChatRowState
     let unread: Bool
+    /// True while the unseen output is a failed turn (`showsFailed`).
+    let failed: Bool
     let palette: AidenPalette
 
     var body: some View {
@@ -51,7 +54,9 @@ struct AidenChatRowStatusView: View {
             case .idle:
                 EmptyView()
             }
-            if unread {
+            if failed {
+                pill("Failed", systemImage: "exclamationmark.circle", tint: palette.danger, label: "Failed")
+            } else if unread {
                 Circle()
                     .fill(palette.accent)
                     .frame(width: 8, height: 8)
@@ -1931,6 +1936,7 @@ struct AidenWorkspaceShellView: View {
             AidenChatRowStatusView(
                 state: chat.displayRowState,
                 unread: chat.unread,
+                failed: chat.showsFailed,
                 palette: palette
             )
 
@@ -2099,8 +2105,8 @@ struct AidenWorkspaceShellView: View {
                 coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
                 return
             }
-            await homeModel.load(coordinator: coordinator)
-            guard coordinator.isCurrent(context) else { return }
+            // The chat opens from the create receipt; Home's full reload
+            // (chats, tasks, catalog, usage) runs behind it.
             homeModel.accept(chat)
             openChat(chat)
             coordinator.haptics.play(
@@ -2108,6 +2114,12 @@ struct AidenWorkspaceShellView: View {
                 scope: hapticScope,
                 dedupeKey: "new-agent:\(workspace.id):\(chat.id):\(chat.revision)"
             )
+            let homeModel = homeModel
+            let coordinator = coordinator
+            Task { @MainActor in
+                guard coordinator.isCurrent(context) else { return }
+                await homeModel.load(coordinator: coordinator)
+            }
         } catch let error where aidenIsCancellation(error) {
             return
         } catch {

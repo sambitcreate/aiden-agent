@@ -178,7 +178,7 @@ class AidenChatSummaryTest {
     @Test
     fun rowStateAndUnreadAreAdditiveAndToleratedWhenUnknown() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(200).setBody(
-            """{"summaries":[${summaryJson("chat-1", "\"rowState\":\"needs_input\",\"unread\":true,", "active")}]}"""
+            """{"summaries":[${summaryJson("chat-1", "\"rowState\":\"needs_input\",\"unread\":true,\"lastRunFailed\":true,", "active")}]}"""
         ))
         server.enqueue(MockResponse().setResponseCode(200).setBody(
             """{"summaries":[${summaryJson("chat-1", "\"rowState\":\"needs_coffee\",", "active")}]}"""
@@ -189,6 +189,7 @@ class AidenChatSummaryTest {
         assertEquals(AidenChatRowState.NEEDS_INPUT, attention.rowState)
         assertEquals(AidenChatRowState.NEEDS_INPUT, attention.displayRowState)
         assertTrue(attention.unread)
+        assertTrue(attention.showsFailed)
         // Once the local stream settles, a stale attention state must not linger.
         assertEquals(AidenChatRowState.IDLE, attention.copy(activity = AidenChatSummaryActivity.IDLE).displayRowState)
 
@@ -202,6 +203,9 @@ class AidenChatSummaryTest {
         val legacy = client.chatSummaryPage(limit = 100).summaries.single()
         assertNull(legacy.rowState)
         assertFalse(legacy.unread)
+        // Pre-revision-36 Macs omit lastRunFailed; the row never says Failed.
+        assertFalse(legacy.lastRunFailed)
+        assertFalse(legacy.showsFailed)
         assertEquals(AidenChatRowState.WORKING, legacy.displayRowState)
     }
 
@@ -238,12 +242,20 @@ class AidenChatSummaryTest {
         val folder = tempFolder.newFolder("row-state-cache")
         val cache = AidenChatCache(root = folder)
         val row = summary("chat-1", "workspace-1", "Waiting", AidenChatSummaryActivity.ACTIVE)
-            .copy(rowStateWire = "needs_approval", unread = true)
+            .copy(rowStateWire = "needs_approval", unread = true, lastRunFailed = true)
         assertTrue(cache.saveSummaries(listOf(row), "instance"))
 
-        val reloaded = AidenChatCache(root = folder).loadSummaries("instance")!!.single()
+        val restored = AidenChatCache(root = folder)
+        val reloaded = restored.loadSummaries("instance")!!.single()
         assertEquals(AidenChatRowState.NEEDS_APPROVAL, reloaded.displayRowState)
         assertTrue(reloaded.unread)
+        assertTrue(reloaded.showsFailed)
+
+        // Opening the chat admits it as viewed: unread clears, and Failed with it.
+        restored.saveChat(fullChat("chat-1", "workspace-1", "Waiting", "rev-2"), "instance")
+        val viewed = restored.loadSummaries("instance")!!.single()
+        assertFalse(viewed.unread)
+        assertFalse(viewed.showsFailed)
     }
 
     @Test

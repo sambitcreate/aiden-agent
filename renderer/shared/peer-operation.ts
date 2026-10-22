@@ -20,7 +20,9 @@ export type PeerReadOperation =
   | "bots"
   | "bot"
   | "botConversations"
-  | "botCapabilities";
+  | "botCapabilities"
+  /** A Bot's one durable conversation (`GET /bots/{botId}/session`). */
+  | "botSession";
 export type PeerWriteOperation =
   | "createChat"
   | "send"
@@ -44,7 +46,26 @@ export type PeerWriteOperation =
   | "forkChat"
   | "forkSummaryRetry"
   | "forkSummarySkip"
-  | "forkSummaryCancel";
+  | "forkSummaryCancel"
+  // A Bot's durable conversation: the same session the host's own app and phones use.
+  | "botSend"
+  | "botResume"
+  | "botDismiss"
+  | "botStop"
+  /** `itemId` is the question's `waitId`. */
+  | "botAnswerQuestion"
+  /** Contract revision 37 (`bot:handoffs`); `itemId` is the hand-off's `waitId`. */
+  | "botAnswerHandoff"
+  /** Contract revision 37: bring a hand-off forward on the host; `itemId` is its `waitId`. */
+  | "botHandoffOpenOnMac"
+  /** Contract revision 37: the person's pause (`POST /bots/{botId}/pause`). */
+  | "botPause"
+  /** Contract revision 37: lift the person's pause (`DELETE /bots/{botId}/pause`). */
+  | "botUnpause"
+  | "botConnectionRequest"
+  | "uploadBotAttachment"
+  /** `itemId` is the staged attachment. */
+  | "removeBotAttachment";
 export interface PeerOperation {
   operation: PeerReadOperation | PeerWriteOperation;
   /** The chat, stream, run, Bot or prompt the operation addresses. */

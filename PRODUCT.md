@@ -28,6 +28,10 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 - Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.
 - Treats the desktop host as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
 - Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
+- Bots ask you to sign in in their own browser; the model never sees your password.
+- Bot computers (Apple silicon): an opt-in macOS VM per Bot, which the Bot sees and uses with its own `computer` tool (screenshots and clicks, each step with a stated intent the rules read) and `computer_shell` tool, on routine runs too. The Bot panel's Computer tab shows it live with the Bot's avatar where it last pointed; the person's first click or key, or Take over, stops the Bot's current action until Give back, and Float over chat keeps the screen in view. Element control (Aiden's pinned cua-driver in the base computer, allowed once for Accessibility and Screen Recording and inherited by every Bot computer made from it) lets the Bot read an app's buttons and fields and click them by number, and the rules then also read the element acted on; skipping it keeps screen-only Bots. A Bot can ask the person to sign in on its own computer: Open hands the person the computer with Safari at the site, the Bot's computer tools wait, and the password never reaches the model. The onboarding tour introduces Bot computers only where they exist. See [docs/bot-computers.md](docs/bot-computers.md).
+
+The standalone CLI can explicitly migrate its Bot host to the shared durable session core. Migration is opt-in, preserves legacy data, and advertises only supported session, routine, preset and memory endpoints; see [CLI durable Bots](docs/cli-durable-bots.md). Private verification receipts and workflow lesson drafts are evaluation infrastructure, not an automatic skill-learning or workflow-adoption feature.
 
 ## Brand Commitments
 

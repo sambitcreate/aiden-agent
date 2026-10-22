@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { convertToLlm } from "../pi-legacy-harness.js";
 import type {
   AgentMessage,
+  AgentOptions,
   AgentTool,
   BeforeToolCallContext,
   BeforeToolCallResult,
@@ -60,6 +61,9 @@ export interface SubagentChildSpec {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+  /** Host-owned budget transition; may remove tools for a final report. */
+  prepareNextTurnWithContext?: AgentOptions["prepareNextTurnWithContext"];
+  finishTurn?: AgentOptions["finishTurn"];
   onStarting?: () => void;
 }
 
@@ -273,6 +277,8 @@ export class SubagentRuntimeRegistry {
         entry.providerResponseReceived = true;
       },
       beforeToolCall: spec.beforeToolCall,
+      prepareNextTurnWithContext: spec.prepareNextTurnWithContext,
+      finishTurn: spec.finishTurn,
       initialState: {
         systemPrompt: spec.systemPrompt,
         model: spec.runtime.model,
@@ -449,6 +455,18 @@ export class SubagentRuntimeRegistry {
 
   hasChatChildren(chatId: string): boolean {
     return this.hasMatching((authority) => authority.chatId === chatId);
+  }
+
+  /**
+   * Children that can still act for this chat. A cancelled child that has not
+   * drained yet is excluded: its parent already settled it as interrupted, its
+   * deployment stays quarantined until it exits, and it must not hold the chat
+   * busy (and so trap queued sends) for as long as a stuck provider stream lasts.
+   */
+  hasLiveChatChildren(chatId: string): boolean {
+    return [...this.children.values()].some(
+      (entry) => entry.authority.chatId === chatId && !entry.cancellation.signal.aborted,
+    );
   }
 
   /** True only once a child has crossed Pi's actual provider-response boundary. */

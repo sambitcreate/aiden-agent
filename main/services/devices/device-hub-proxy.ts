@@ -27,6 +27,7 @@ import { connect, isIP, type Socket } from "node:net";
 import type { Duplex, Transform } from "node:stream";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
 import { DEVICE_ID_PATTERN, LOCAL_DEVICE_HOST_ID, type DeviceStreamGrant } from "../../../renderer/shared/devices.js";
+import { mjpegBoundary, repeatStillFrame } from "./mjpeg-still-frame.js";
 
 export const DEVICE_STREAM_GRANT_TTL_MS = 60_000;
 
@@ -140,6 +141,26 @@ export interface DeviceHubProxyOptions {
   allowedOrigins: readonly string[];
   now?: () => number;
   grantTtlMs?: number;
+  /**
+   * Headers main adds to every request and upgrade sent to a loopback hub,
+   * after the caller's. A hub that requires a secret (the Bot computer viewer
+   * hub) learns it only from here, so nothing but this proxy can reach it.
+   */
+  hubHeaders?: Readonly<Record<string, string>>;
+}
+
+/** The renderer origins main's device proxies accept: the packaged `file://` renderer and the dev server, if any. */
+export function rendererProxyOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
+  const origins = ["file://"];
+  const devServer = env.AIDEN_RENDERER_URL;
+  if (devServer) {
+    try {
+      origins.push(new URL(devServer).origin);
+    } catch {
+      // A malformed dev URL cannot load the renderer either.
+    }
+  }
+  return origins;
 }
 
 export interface DeviceHubProxy {
@@ -340,6 +361,10 @@ function upstreamHeaders(incoming: IncomingHttpHeaders, upstream: DeviceHubUpstr
 
 export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promise<DeviceHubProxy> {
   const now = options.now ?? Date.now;
+  const localHeaders = (incoming: IncomingHttpHeaders, hubOrigin: string): OutgoingHttpHeaders => ({
+    ...hubRequestHeaders(incoming, hubOrigin),
+    ...options.hubHeaders,
+  });
   const ttl = options.grantTtlMs ?? DEVICE_STREAM_GRANT_TTL_MS;
   const grants = new Map<string, number>();
   const openSockets = new Set<Duplex>();
@@ -436,7 +461,20 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
       response.writeHead(hubResponse.statusCode ?? 502, headers);
       // pipe() never forwards errors: a hub that resets mid-stream must end this response, not crash main.
       hubResponse.once("error", () => response.destroy());
-      hubResponse.pipe(response);
+      // A browser paints an MJPEG part only when the next one begins, so a still frame is repeated once.
+      // A response with a declared length cannot grow, so it is passed through as is.
+      const boundary =
+        request.method === "GET" && hubResponse.headers["content-length"] === undefined
+          ? mjpegBoundary(hubResponse.headers["content-type"])
+          : null;
+      if (boundary === null) {
+        hubResponse.pipe(response);
+      } else {
+        const still = repeatStillFrame(boundary);
+        still.once("error", () => response.destroy());
+        response.once("close", () => still.destroy());
+        hubResponse.pipe(still).pipe(response);
+      }
       response.once("close", () => hubResponse.destroy());
     };
     const upstream = isUpstream(target)
@@ -452,7 +490,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
         )
       : httpRequest(
           `${target}${decision.upstreamPath}`,
-          { method: request.method, headers: hubRequestHeaders(request.headers, target) },
+          { method: request.method, headers: localHeaders(request.headers, target) },
           onResponse,
         );
     upstream.once("error", () => {
@@ -516,7 +554,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
       client,
       upstream,
       readyEvent: "connect",
-      requestHead: upgradeRequestHead(decision.upstreamPath, hubRequestHeaders(request.headers, target), request.headers),
+      requestHead: upgradeRequestHead(decision.upstreamPath, localHeaders(request.headers, target), request.headers),
       head,
       track: openSockets,
     });

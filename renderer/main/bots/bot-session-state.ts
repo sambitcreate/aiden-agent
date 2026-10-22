@@ -2,15 +2,20 @@ import type { BotSessionState } from "../../../main/services/bot-runtime/bot-ses
 
 export type { BotSessionState };
 
-export const BOT_PAUSED_ROW_LABEL = "Paused — tap to resume";
+/** A turn that stopped before it finished (a quit, a crash, or a lifted pause). */
+export const BOT_INTERRUPTED_ROW_LABEL = "Interrupted — tap to resume";
+/** The person paused the Bot: nothing runs until they resume it. */
+export const BOT_PAUSED_ROW_LABEL = "Paused";
 export const BOT_NEEDS_MODEL_LABEL = "Needs an AI model";
 export const BOT_UNAVAILABLE_LABEL = "Bots are open in another Aiden window.";
 
 /** The one plain-language status a Bot list row shows instead of its preview. */
 export function botRowStatusLabel(state: BotSessionState | undefined): string | null {
   switch (state?.kind) {
-    case "interrupted":
+    case "paused":
       return BOT_PAUSED_ROW_LABEL;
+    case "interrupted":
+      return BOT_INTERRUPTED_ROW_LABEL;
     case "needs_model":
       return BOT_NEEDS_MODEL_LABEL;
     case "unavailable":

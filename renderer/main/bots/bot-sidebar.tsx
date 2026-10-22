@@ -19,7 +19,7 @@ import {
   SplitView,
   Text,
 } from "../../components/ui";
-import { botChatPath, botRouteBotId, lastNonBotRoute } from "../../lib/bot-routes";
+import { botChatPath, botRouteBotId, hostBotChatRouteKey, lastNonBotRoute } from "../../lib/bot-routes";
 import { isBotUnread } from "../../lib/bot-sidebar-preferences";
 import { useProfile } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
@@ -90,6 +90,7 @@ const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpe
       <BotRowMenus
         bot={row.bot}
         pinned={pinned}
+        paused={row.state?.kind === "paused"}
         rowRef={rowRef}
         moreClassName="right-1.5 top-1/2 -translate-y-1/2"
         onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}
@@ -162,6 +163,7 @@ const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen,
       <BotRowMenus
         bot={row.bot}
         pinned
+        paused={row.state?.kind === "paused"}
         rowRef={rowRef}
         moreClassName="right-1.5 top-1.5"
         onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}
@@ -482,7 +484,12 @@ export function BotSidebar() {
         <nav ref={navRef} aria-label="Bots" className="flex flex-col px-2.5 pb-3">
           {refreshFailed}
           {list}
-          <RemoteBotsSection groups={remoteShown} opening={remote.opening} onOpen={remote.open} />
+          <RemoteBotsSection
+            groups={remoteShown}
+            opening={remote.opening}
+            selected={hostBotChatRouteKey(pathname)}
+            onOpen={remote.open}
+          />
         </nav>
       </Sidebar>
       <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => openChat(bot)} />

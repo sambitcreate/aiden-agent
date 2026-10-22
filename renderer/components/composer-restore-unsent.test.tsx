@@ -87,6 +87,7 @@ test("an open composer takes back both the text and the attachments of a cancell
   const view = render(<Harness saving />);
   await settle();
   assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "");
+  assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).readOnly, true, "a pending first send freezes the draft");
 
   await act(async () => {
     restoreUnsentMessage(DRAFT.id, "Fix the login bug", [NOTES]);
@@ -97,6 +98,7 @@ test("an open composer takes back both the text and the attachments of a cancell
   });
   await settle();
   assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "Fix the login bug");
+  assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).readOnly, false, "cancelling unfreezes it");
   assert.ok(screen.queryAllByText("notes.txt").length > 0, "the attachment is back in the composer");
   assert.equal(takeComposerAttachmentSeed(DRAFT.id), undefined, "nothing is left waiting for a later mount");
 });

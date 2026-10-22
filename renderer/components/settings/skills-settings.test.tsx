@@ -21,6 +21,7 @@ test("the settings boundary revokes cached skill authority and settles active wo
     invalidateSkills: () => { events.push("invalidate"); }, revokeBotSkills: () => { events.push("revoke"); },
     cancelSkillWork: async () => { await Promise.resolve(); events.push("cancel-active-work"); },
     refreshCommands: async () => { events.push("refresh-commands"); }, reconfigureIdleUnload: async () => { events.push("idle"); },
+    preloadLocalVoice: () => { events.push("preload-voice"); },
     publishAppearance: () => { events.push("appearance"); }, publishControls: () => { events.push("publish"); },
     stopCacheWarmers: () => { events.push("stop-warmers"); },
     revokeComputerUseGrants: async () => { events.push("revoke-computer-use"); },

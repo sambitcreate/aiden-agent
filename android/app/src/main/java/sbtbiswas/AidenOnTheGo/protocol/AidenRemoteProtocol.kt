@@ -272,7 +272,9 @@ object AidenBotPrivateResponseValidator {
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
         // Contract revision 27.
         "botMemory", "botMemoryEdit", "botRoutineProposalRespond", "botRoutineSuggestions",
-        "botRoutineNotifications", "botSessionCards"
+        "botRoutineNotifications", "botSessionCards",
+        // Contract revision 37.
+        "botHandoffs"
     )
     private val botSessionRoots = setOf("botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionCards")
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
@@ -472,6 +474,10 @@ object AidenBotPrivateResponseValidator {
         if (root == "botDetail") {
             return parentPath.isEmpty()
         }
+        // Revision 37: the hand-off fixture's paused Bot detail carries its own instructions.
+        if (root == "botHandoffs") {
+            return key == "instructions" && parentPath == listOf("pausedDetail")
+        }
         if (root in listOf("botCreate", "botIdentity")) {
             return parentPath.size == 1 && (parentPath[0] == "request" || parentPath[0] == "response")
         }
@@ -536,6 +542,13 @@ data class AidenRemoteCapability(val rawValue: String) {
          * Bot detail `chatActivity`. It grants no authority.
          */
         val BOT_ACTIVITY = AidenRemoteCapability("bot:activity")
+        /**
+         * Contract revision 37: this phone receives a Bot's hand-offs, the `paused` session
+         * state, Bot `paused` flags and `bot_paused`, and may answer hand-offs and pause and
+         * resume Bots. There is no `/server` feature token: the Mac offers it only in
+         * `serverCapabilities`, and it is asked for in a call of its own.
+         */
+        val BOT_HANDOFFS = AidenRemoteCapability("bot:handoffs")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -560,11 +573,16 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Negotiable behind `bot-activity-v1`. */
         val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
 
+        /** Negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS)
+
         /** Every grant `POST /device/capabilities` may add. */
-        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY
+        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
+            PHONE_BOT_HANDOFFS
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
-        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY
+        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
+            PHONE_BOT_HANDOFFS
     }
 }
 
@@ -631,6 +649,9 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val MEMORY_OVER_BUDGET = AidenRemoteErrorCode("memory_over_budget")
         val MEMORY_BLOCKED = AidenRemoteErrorCode("memory_blocked")
         val ROUTINE_PROPOSAL_NOT_FOUND = AidenRemoteErrorCode("routine_proposal_not_found")
+        /** Contract revision 37: only `bot:handoffs` devices see these. */
+        val BOT_PAUSED = AidenRemoteErrorCode("bot_paused")
+        val HANDOFF_EXPIRED = AidenRemoteErrorCode("handoff_expired")
 
         val V1_KNOWN = setOf(
             INVALID_REQUEST, PAYLOAD_TOO_LARGE, RATE_LIMITED, AUTHENTICATION_REQUIRED,
@@ -644,7 +665,8 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             OPERATION_STALE, GIT_CAPABILITY_DENIED, SCHEDULE_DISABLED, SCHEDULE_RUN_IN_PROGRESS,
             SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED,
             SKILL_UNAVAILABLE, RUN_GONE, APPROVAL_RESOLVED,
-            MEMORY_ENTRY_NOT_FOUND, MEMORY_OVER_BUDGET, MEMORY_BLOCKED, ROUTINE_PROPOSAL_NOT_FOUND
+            MEMORY_ENTRY_NOT_FOUND, MEMORY_OVER_BUDGET, MEMORY_BLOCKED, ROUTINE_PROPOSAL_NOT_FOUND,
+            BOT_PAUSED, HANDOFF_EXPIRED
         )
     }
 }
