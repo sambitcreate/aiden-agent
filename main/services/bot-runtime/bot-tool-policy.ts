@@ -140,7 +140,10 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
   if (name === "run_command") return verdict(authority.shell.enabled, "The shell is off for this Bot.");
   if (name === SHARE_IMAGE_TOOL_NAME) return verdict(authority.files.botHome, "Sharing images is off for this Bot.");
   if (name === ROUTINE_TOOL) {
-    return verdict(hasCapability(facts, "schedules") && turn.telegram !== true, "Routines are off for this Bot.");
+    return verdict(
+      hasCapability(facts, "schedules") && turn.telegram !== true && turn.routine !== true,
+      "Routines are off for this Bot turn.",
+    );
   }
   if (name === ASK_USER_QUESTION_TOOL_NAME) {
     return verdict(turn.telegram !== true && turn.routine !== true, "Questions are off for this Bot.");

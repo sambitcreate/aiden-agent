@@ -166,6 +166,26 @@ test("two devices accepting at once create one routine and both get the same ans
   assert.deepEqual(await proposals.respond({ ...input, decision: "dismiss" }), mac);
 });
 
+test("accepting a one-time wake-up proposal saves a single fire in the Bot's chat", async () => {
+  const { proposals, routines, appended } = harness();
+  const date = new Date(Date.now() + 3 * 24 * 60 * 60 * 1_000).toISOString().slice(0, 10);
+  const schedule = { kind: "once", date, time: "09:00" };
+  const proposed = await proposals.propose("bot-a", {
+    name: "Morning check-in",
+    schedule,
+    prompt: "Ask how my day is starting.",
+  });
+  assert.ok(proposed.ok);
+  assert.deepEqual(appended[0]?.data.schedule, schedule);
+  assert.deepEqual(await routines.list("bot-a"), [], "a proposal alone must not arm the timer");
+
+  const accepted = await proposals.respond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "accept" });
+  const [saved] = await routines.list("bot-a");
+  assert.equal(accepted.routineId, saved?.id);
+  assert.deepEqual(saved?.schedule, schedule);
+  assert.equal(saved?.enabled, true);
+});
+
 test("Not now records a status entry and creates nothing", async () => {
   const { proposals, routines, appended } = harness();
   const proposed = await proposals.propose("bot-a", dailyPlan);

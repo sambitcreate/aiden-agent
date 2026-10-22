@@ -32,6 +32,16 @@ test("routines show the label the host gives them", async () => {
   assert.ok(within(list).getByText("Every Sunday at 8:41 AM"));
 });
 
+test("routines show pending recovery and overdue fires", async () => {
+  installBotTestIpc({ "bots:routines:list": () => [
+    routine({ pendingFireCount: 1 }),
+    routine({ id: "task-2", name: "Morning brief", pendingFireCount: 0, overdueSince: Date.parse("2026-10-22T09:00:00Z") }),
+  ] });
+  await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
+  assert.ok(await screen.findByText("Finishing an earlier run"));
+  assert.ok(screen.getByText(/Overdue since/u));
+});
+
 test("Add routine builds a weekly schedule from the picked days and time", async () => {
   const calls = installBotTestIpc({
     "bots:routines:list": () => [],

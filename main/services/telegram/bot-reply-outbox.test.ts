@@ -532,6 +532,32 @@ test("a routine result goes to the bound chat once, with the routine name in bol
   assert.deepEqual((await ingress.rows()).map((row) => [row.kind, row.state]), [["routine", "sent"]]);
 });
 
+test("startup recovery cannot send a newly queued routine result twice", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  let releaseBinding!: () => void;
+  const bindingChecked = new Promise<void>((resolve) => { releaseBinding = resolve; });
+  let bindingStarted!: () => void;
+  const started = new Promise<void>((resolve) => { bindingStarted = resolve; });
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    deliver: async (reply) => void delivered.push(reply),
+    routineTargetEnabled: async () => {
+      bindingStarted();
+      await bindingChecked;
+      return true;
+    },
+  });
+  await ingress.enqueueRoutineDelivery(routineDelivery);
+  await started;
+  await ingress.recover();
+  releaseBinding();
+  await ingress.idle();
+  assert.equal(delivered.length, 1);
+  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+});
+
 test("a routine result cut off by a crash mid-send is redelivered once with the duplicate label", async () => {
   const file = path.join(tempDir(), "outbox.json");
   let started!: () => void;

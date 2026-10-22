@@ -290,6 +290,10 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   const task = await api.scheduleCommand(dir, ["save", input]);
   assert.equal(task.name, "Review"); assert.equal(task.enabled, false);
   assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
+  const status = await api.scheduleCommand(dir, ["status"]);
+  assert.equal(status.nextRunAt, null);
+  assert.deepEqual(status.overdueTaskIds, []);
+  assert.equal(status.pendingRoutineFires, 0);
   assert.equal((await api.scheduleCommand(dir, ["preview", "0 9 * * *", "UTC"])).length, 5);
   await api.scheduleCommand(dir, ["remove", task.id]);
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
@@ -2231,6 +2235,11 @@ test("a durable Bot paused from the CLI stops its running turn, refuses sends an
   assert.equal(await host.isPaused(bot.id), true, "the CLI's own check reads the same pause");
   await assert.rejects(host.durable.runtime.send(bot.id, { text: "Again", requestId: "while-paused" }), (error) => error.reason === "paused_by_person");
   assert.equal(calls, 1, "a paused Bot makes no provider request");
+  const scheduler = api.createCliScheduler(dir); host.setScheduler(scheduler);
+  const routine = await host.routines.create({ botId: bot.id, name: "Paused check", prompt: "Check in", schedule: { kind: "daily", time: "12:00" }, timezone: "UTC" });
+  await assert.rejects(host.routines.runNow({ botId: bot.id, routineId: routine.id }), /paused\. Resume it/u);
+  assert.deepEqual(await scheduler.store.runs(routine.id), [], "refused Run now does not create a skipped run");
+  await host.routines.delete({ botId: bot.id, id: routine.id });
 
   // The pause outlives the daemon.
   await host.stop();

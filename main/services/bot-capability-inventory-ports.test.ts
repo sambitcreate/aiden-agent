@@ -6,6 +6,7 @@ import { createBotCapabilityInventoryPorts } from "./bot-capability-inventory-po
 const HASH = "a".repeat(64);
 
 test("inventory ports project safe exact facts and conservative unavailable connections", async () => {
+  let scheduledTasksEnabled = true;
   const ports = createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: async () => new Uint8Array(32),
     loadNoticeStatus: async () => ({
@@ -68,7 +69,7 @@ test("inventory ports project safe exact facts and conservative unavailable conn
     },
     // Simulate a stale preference copied from a supported host. Host policy
     // must still keep Computer Use out of the effective Bot inventory.
-    getSettings: async () => ({ exaEnabled: true, computerUseEnabled: true }),
+    getSettings: async () => ({ exaEnabled: true, computerUseEnabled: true, scheduledTasksEnabled }),
     webSearchAvailability: async () => ({ ready: true }),
     subagentsAvailable: () => true,
     computerUseSupported: () => false,
@@ -98,13 +99,18 @@ test("inventory ports project safe exact facts and conservative unavailable conn
   assert.equal(other.find(({ kind }) => kind === "browser")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "computer_use")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "computer")?.available, false, "no Bot computers without the host's readiness");
-  assert.equal(other.find(({ kind }) => kind === "schedules")?.available, false);
+  const schedules = other.find(({ kind }) => kind === "schedules");
+  assert.equal(schedules?.available, true, "the Bot's own routine runtime supports scheduled turns");
   assert.equal(other.find(({ kind }) => kind === "tasks")?.available, true);
   assert.equal(other.find(({ kind }) => kind === "tasks")?.label, "Task tracking");
   assert.match(
     other.find(({ kind }) => kind === "schedules")?.description ?? "",
-    /re-check this Bot's access/u,
+    /post into this chat after you approve/u,
   );
+  scheduledTasksEnabled = false;
+  const disabled = (await ports.inspectOtherCapabilities(signal)).find(({ kind }) => kind === "schedules");
+  assert.equal(disabled?.available, false, "the global scheduler switch must withhold wake-ups");
+  assert.notEqual(disabled?.capabilityFingerprint, schedules?.capabilityFingerprint);
   const serialized = JSON.stringify({ providers, files, shell, connections, skills, other });
   assert.doesNotMatch(serialized, /secret-command|Private|https:\/\//u);
 });

@@ -113,6 +113,7 @@ function allCandidates(authority: BotRuntimeEffectiveAuthority, state: AssemblyS
     { tool: countingTool("web_search") },
     { tool: countingTool("subagent") },
     { tool: countingTool("computer_use") },
+    { tool: countingTool("routines") },
   ];
   if (authority.files.botHome) candidates.push(shareImageCandidate(authority));
   const vision = visionCandidate(authority, {
@@ -135,6 +136,7 @@ const GROUPS: Group[] = [
   { label: "web search", tool: "web_search", args: { text: "news" } },
   { label: "subagents", tool: "subagent", args: { text: "delegate" } },
   { label: "Computer Use", tool: "computer_use", args: { text: "click" } },
+  { label: "Bot routines", tool: "routines", args: { text: "list" } },
   { label: "companion vision", tool: "inspect_image", args: { imageRef: "image_x", question: "what?" } },
   { label: "sharing an image", tool: "share_image", args: { path: "photo.png" } },
 ];
@@ -167,6 +169,17 @@ test("Full Access offers every ported group; Custom Access without those grants 
     assert.ok(!underCustom.includes(group.tool), `${group.label} is withheld under Custom Access`);
   }
   assert.ok(underFull.includes(READ_INBOX_TOOL));
+});
+
+test("a scheduled Bot turn cannot offer its own routine proposal tool", async () => {
+  const state = assemblyState(full(botHome()), false);
+  const deps = assemblyDeps(state, { candidates: (current) => allCandidates(current, state) });
+  const bot = await deps.loadBot("bot-1");
+  const names = async (requestId: string) =>
+    (await deps.currentTools(bot, { requestId })).map(({ tool }) => tool.name);
+  assert.ok((await names("person:one")).includes("routines"));
+  assert.ok(!(await names("routine:task-1:fire-1")).includes("routines"));
+  assert.ok(!(await names("tg:one")).includes("routines"));
 });
 
 for (const group of GROUPS) {

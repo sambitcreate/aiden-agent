@@ -1,5 +1,6 @@
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import path from "node:path";
+import { BOT_ROUTINES_TOOL_NAME } from "../../renderer/shared/bot-routine-proposals.js";
 import type { BotManagedWorkspaceResolution } from "./bot-managed-workspace-core.js";
 
 /** Main-only file authority already resolved from the effective Bot policy. */
@@ -24,6 +25,20 @@ export async function resolveBotForGeneration(
 /** Escape text placed inside a prompt's XML-style tags (persona, memory entries). */
 export function escapePromptText(value: string): string {
   return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+}
+
+/** Describe the host's wake-up path only when this turn actually has the tool. */
+export function botRoutineGuidance(offeredToolNames: ReadonlySet<string>): string {
+  if (!offeredToolNames.has(BOT_ROUTINES_TOOL_NAME)) {
+    return "Aiden supports scheduled Bot routines, but this turn has no routines tool. If asked for a future wake-up, explain that the person can add it in this Bot's Routines page or enable Schedules in access settings; do not describe wake-ups as a permanent platform limitation.";
+  }
+  return [
+    "Authoritative Bot routine delivery:",
+    "You can arrange a future turn in this same Bot chat through the routines tool.",
+    "For an explicit one-time or recurring request, call routines with action propose; the person accepts the Add routine card before it is saved.",
+    "After acceptance, Aiden's scheduler submits the saved prompt to your durable conversation at its scheduled time; you can then reply without a new message from the person.",
+    "Aiden must be running on an awake computer for the scheduled turn to fire. Do not claim that starting a future conversation is impossible when routines is available.",
+  ].join(" ");
 }
 
 /**

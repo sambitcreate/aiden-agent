@@ -85,6 +85,17 @@ export function createCliScheduler(agentDir: string) {
     const [action = "list", value, timezone] = args;
     switch (action) {
       case "list": return store.list();
+      case "status": {
+        const now = Date.now();
+        const tasks = (await store.list()).filter((task) => task.enabled || task.pendingRoutineFires?.length);
+        const nextRunAt = tasks.flatMap((task) => task.enabled && task.nextRunAt !== undefined ? [task.nextRunAt] : []).sort((a, b) => a - b)[0];
+        return {
+          checkedAt: now,
+          nextRunAt: nextRunAt ?? null,
+          overdueTaskIds: tasks.filter((task) => task.enabled && task.nextRunAt !== undefined && task.nextRunAt < now - 15 * 60_000).map((task) => task.id),
+          pendingRoutineFires: tasks.reduce((count, task) => count + (task.pendingRoutineFires?.length ?? 0), 0),
+        };
+      }
       case "runs": if (!value) throw new Error("Provide a task id."); return store.runs(value);
       case "notifications": {
         const since = value === undefined ? undefined : Number(value);
@@ -130,7 +141,7 @@ export function createCliScheduler(agentDir: string) {
       case "pause": return service.pause(value);
       case "resume": return service.resume(value);
       case "run": return service.runNow(value);
-      default: throw new Error("Usage: schedule list | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>");
+      default: throw new Error("Usage: schedule list|status | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>");
     }
   }
   return { store, service: { ...service, save: saveInput }, command, setBotPorts(ports: BotRoutineExecutorPorts) { botPorts = ports; } };

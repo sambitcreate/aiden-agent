@@ -21,18 +21,15 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
   const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
   const runtime = await botSessionRuntime();
   return {
+    submissionForRequest: (botId, requestId) => runtime.submissionForRequest(botId, requestId),
     send: (botId, input) => runtime.send(botId, input),
     state: (botId) => runtime.state(botId),
     awaitReply: (botId, submissionId, signal) => runtime.awaitReply(botId, submissionId, signal),
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),
     routineNotes: (botId, taskId) => botRoutineNotes.render(botId, taskId),
     async deliverResult(delivery) {
-      try {
-        const { telegramService } = await import("./telegram/telegram-service.js");
-        await telegramService.deliverBotRoutineResult(delivery);
-      } catch (error) {
-        logger.warn("bots", `Bot ${delivery.botId} routine result could not reach Telegram.`, error);
-      }
+      const { telegramService } = await import("./telegram/telegram-service.js");
+      await telegramService.deliverBotRoutineResult(delivery);
     },
   };
 }
