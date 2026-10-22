@@ -1,5 +1,6 @@
 // Microphone capture → transcription for the composer mic button. Thin React
-// wrapper over voice-recorder-core (shared with the dictation pill).
+// wrapper over voice-recorder-core (shared with the dictation pill). On-device
+// voice records raw PCM (pcm-recorder); cloud voice records with MediaRecorder.
 
 import * as React from "react";
 import { toast } from "../components/ui";
@@ -9,6 +10,7 @@ import {
   MICROPHONE_PERMISSION_OFF_MESSAGE,
   cancelTranscription,
   transcribeBlob,
+  transcribePcm16,
   type TranscribeOptions,
 } from "./voice-recorder-core";
 import {
@@ -19,6 +21,7 @@ import {
   voiceErrorMessage,
 } from "./dictation-operation-gate";
 import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "./media-recorder-stop";
+import { createVoiceRecorder, PcmRecorder, recorderStopTailMs } from "./pcm-recorder";
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "./live-pcm-capture";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
 import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "./gemini-recorded-retry";
@@ -49,7 +52,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     committed: "",
     tentative: "",
   });
-  const recorderRef = React.useRef<MediaRecorder | null>(null);
+  /** On-device capture records raw 16 kHz PCM; cloud providers take a MediaRecorder file. */
+  const recorderRef = React.useRef<MediaRecorder | PcmRecorder | null>(null);
   const chunksRef = React.useRef<Blob[]>([]);
   const streamRef = React.useRef<MediaStream | null>(null);
   const liveRef = React.useRef<GeminiLiveCapture | null>(null);
@@ -140,8 +144,12 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       streamRef.current = stream;
       chunksRef.current = [];
       setLiveTranscript({ committed: "", tentative: "" });
-      const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const recorder = await createVoiceRecorder(stream, selected.provider);
+      if (!operationGate.isCurrent(token)) {
+        if (recorder instanceof PcmRecorder) recorder.dispose();
+        stopTracks();
+        return;
+      }
       const liveEnabled = shouldUseGeminiLiveTranscription(selected.provider, selected.model);
       const operationId = crypto.randomUUID();
       batchOperationIdRef.current = operationId;
@@ -149,9 +157,11 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       const transcriptionController = new AbortController();
       transcriptionControllerRef.current = transcriptionController;
       let startedAt = performance.now();
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
+      if (!(recorder instanceof PcmRecorder)) {
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunksRef.current.push(e.data);
+        };
+      }
       recorder.onstop = async () => {
         const liveStart = liveStartRef.current;
         liveRef.current = null;
@@ -162,10 +172,12 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
           return;
         }
         setRecording(false);
+        const pcm = recorder instanceof PcmRecorder ? recorder.takePcm() : null;
         const blob = new Blob(chunksRef.current, {
-          type: recorder.mimeType || "audio/webm",
+          type: recorder instanceof PcmRecorder ? "" : recorder.mimeType || "audio/webm",
         });
-        if (blob.size === 0 && !liveEnabled) {
+        const hasAudio = pcm ? pcm.length > 0 : blob.size > 0;
+        if (!hasAudio && !liveEnabled) {
           if (batchOperationIdRef.current === operationId) batchOperationIdRef.current = null;
           if (batchProviderRef.current === selected.provider) batchProviderRef.current = null;
           if (transcriptionControllerRef.current === transcriptionController) {
@@ -210,23 +222,31 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
               text = recoverCommittedLiveTranscript("", live.snapshot().committed);
             }
           }
-          if (needsGeminiRecordedRetry(liveEnabled, text, blob.size > 0)) {
+          if (needsGeminiRecordedRetry(liveEnabled, text, hasAudio)) {
             setAwaitingRecordedRetryConsent(true);
             const approved = await recordedRetryConsent.request();
             setAwaitingRecordedRetryConsent(false);
             if (!approved || !operationGate.isCurrent(token)) return;
           }
-          if (liveEnabled && !text && blob.size === 0) {
+          if (liveEnabled && !text && !hasAudio) {
             reportError("No speech detected.");
             return;
           }
           if (!text) {
-            text = await transcribeBlob(blob, {
-              ...selected,
-              operationId,
-              signal: transcriptionController.signal,
-              audioSeconds,
-            });
+            text =
+              pcm && selected.provider === "local"
+                ? await transcribePcm16(pcm, {
+                    localModel: selected.localModel,
+                    operationId,
+                    signal: transcriptionController.signal,
+                    audioSeconds,
+                  })
+                : await transcribeBlob(blob, {
+                    ...selected,
+                    operationId,
+                    signal: transcriptionController.signal,
+                    audioSeconds,
+                  });
           }
           if (!operationGate.isCurrent(token)) return;
           if (text) onTranscript(text);
@@ -261,8 +281,11 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         liveStartRef.current = null;
         liveRef.current = null;
         if (recorderRef.current === recorder) recorderRef.current = null;
-        recorder.ondataavailable = null;
-        recorder.onstop = null;
+        if (recorder instanceof PcmRecorder) recorder.dispose();
+        else {
+          recorder.ondataavailable = null;
+          recorder.onstop = null;
+        }
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
@@ -271,7 +294,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       operationGate.finishStart(token);
       setRecording(true);
       if (pendingStopRef.current && recorder.state !== "inactive") {
-        scheduleRecorderStopWithTail(recorder, setTimeout);
+        scheduleRecorderStopWithTail(recorder, setTimeout, recorderStopTailMs(recorder));
       }
     } catch (error) {
       const live = liveRef.current;
@@ -284,6 +307,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       transcriptionControllerRef.current = null;
       batchOperationIdRef.current = null;
       batchProviderRef.current = null;
+      const recorder = recorderRef.current;
+      if (recorder instanceof PcmRecorder) recorder.dispose();
       if (!operationGate.isCurrent(token)) return;
       operationGate.finishStart(token);
       recorderRef.current = null;
@@ -296,7 +321,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     pendingStopRef.current = true;
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") {
-      scheduleRecorderStopWithTail(recorder, setTimeout);
+      scheduleRecorderStopWithTail(recorder, setTimeout, recorderStopTailMs(recorder));
     }
   }, []);
 
@@ -306,7 +331,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       recordedRetryConsent.resolve(false);
       const recorder = recorderRef.current;
       recorderRef.current = null;
-      if (recorder) {
+      if (recorder instanceof PcmRecorder) recorder.dispose();
+      else if (recorder) {
         recorder.ondataavailable = null;
         recorder.onstop = null;
         if (recorder.state !== "inactive") recorder.stop();

@@ -26,6 +26,9 @@ export const applySettingsEffects = createSettingsApplicationEffects({
     const { reconfigureLocalSpeechIdleUnload } = await import("./local-speech.js");
     void reconfigureLocalSpeechIdleUnload();
   },
+  preloadLocalVoice: () => {
+    void import("./local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
+  },
   stopCacheWarmers: () => stopAllPiCacheWarmers(),
   revokeComputerUseGrants: async () => {
     const { revokeComputerUseGrants } = await import("./computer-use/access-gate.js");

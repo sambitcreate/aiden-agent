@@ -1,5 +1,6 @@
-// On-device voice settings: engine status, the active model, when an idle
-// model is unloaded to free memory, and silence trimming.
+// On-device voice settings: engine status, the active model, whether it loads
+// ahead of the first dictation, when an idle model is unloaded to free memory,
+// and silence trimming.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -28,7 +29,7 @@ import {
   isLocalVoiceIdleUnloadMinutes,
   LOCAL_VOICE_IDLE_UNLOAD_CHOICES,
 } from "../../shared/dictation-preferences";
-import { voiceTrimSilenceEnabled } from "../../shared/voice-preferences";
+import { localVoicePreloadEnabled, voiceTrimSilenceEnabled } from "../../shared/voice-preferences";
 
 function idleUnloadLabel(minutes: number): string {
   if (minutes === 0) return "Never";
@@ -73,6 +74,30 @@ export function IdleUnload() {
           ))}
         </SelectContent>
       </Select>
+    </Field>
+  );
+}
+
+function LoadInAdvance() {
+  const qc = useQueryClient();
+  const settings = useSettings();
+  const enabled = localVoicePreloadEnabled(settings.data?.localVoicePreload);
+
+  const change = async (value: boolean) => {
+    try {
+      await settingsApi.set({ localVoicePreload: value });
+      await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    } catch {
+      toast.error("Aiden couldn’t change when the on-device model loads.");
+    }
+  };
+
+  return (
+    <Field
+      label="Load in advance"
+      description="Loads the model when Aiden starts and when you choose one, so the first dictation starts instantly. Off loads it when you start dictating."
+    >
+      <Switch aria-label="Load in advance" checked={enabled} onCheckedChange={(value) => void change(value)} />
     </Field>
   );
 }
@@ -182,6 +207,7 @@ export function LocalVoiceSettings() {
       <FieldSet title="On-Device Engine">
         <EngineStatus />
         <ActiveModel onManage={() => setManaging(true)} />
+        <LoadInAdvance />
         <IdleUnload />
         <TrimSilence />
       </FieldSet>

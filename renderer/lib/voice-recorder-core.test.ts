@@ -6,6 +6,7 @@ import { transcriptionBudgetMs } from "./dictation-operation-gate.js";
 
 import {
   transcribeBlob,
+  transcribePcm16,
   microphoneCaptureErrorMessage,
   MICROPHONE_PERMISSION_OFF_MESSAGE,
 } from "./voice-recorder-core.js";
@@ -308,3 +309,42 @@ for (const provider of ["openai", "gemini", "local"] as const) {
     });
   }
 }
+
+test("captured on-device PCM reaches the model as is, with no decode step", async (t) => {
+  replaceGlobal(t, "AudioContext", class {
+    constructor() {
+      throw new Error("captured PCM must not be decoded again");
+    }
+  });
+  const local = t.mock.method(voiceApi, "transcribeLocal", async () => "  hello there  ");
+  const pcm = Int16Array.from([0, 8192, -8192, 32767]);
+  const text = await transcribePcm16(pcm, { localModel: "parakeet-v3", operationId: "captured" });
+  assert.equal(text, "hello there");
+  const [sent, modelId, operationId] = local.mock.calls[0].arguments;
+  assert.deepEqual(Array.from(new Int16Array(sent as ArrayBuffer)), [0, 8192, -8192, 32767]);
+  assert.equal(modelId, "parakeet-v3");
+  assert.equal(operationId, "captured");
+});
+
+test("captured on-device PCM that outlasts its budget is cancelled in main", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const started = deferred<void>();
+  t.mock.method(voiceApi, "transcribeLocal", () => {
+    started.resolve();
+    return new Promise<string>(() => {});
+  });
+  const cancel = t.mock.method(voiceApi, "cancelLocalTranscription", async () => {});
+  const pending = transcribePcm16(new Int16Array(16_000), {
+    localModel: "parakeet-v3",
+    operationId: "slow-local",
+    audioSeconds: 1,
+  });
+  const rejected = assert.rejects(pending, /took too long/u);
+  await started.promise;
+  t.mock.timers.tick(transcriptionBudgetMs("local", 1));
+  await rejected;
+  assert.deepEqual(
+    cancel.mock.calls.map((call) => call.arguments),
+    [["slow-local"]],
+  );
+});

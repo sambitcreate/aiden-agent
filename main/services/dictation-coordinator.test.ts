@@ -810,3 +810,100 @@ test("an absurd recording length cannot overflow the watchdog timer", () => {
   assert.ok(fence <= MAX_TIMER_DELAY_MS, "Node fires a too-large delay immediately");
   assert.ok(fence > TRANSCRIPTION_WATCHDOG_MS);
 });
+
+test("the pill is told which provider the press resolved, so it starts without asking again", async () => {
+  const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
+  const subject = harness({ resolveVoice: async () => ({ ok: true, voice }) });
+  await subject.coordinator.press();
+  await subject.coordinator.ready();
+  assert.deepEqual(subject.events, [
+    { state: "recording", operationId: subject.coordinator.currentOperationId!, voice },
+  ]);
+});
+
+test("the paste checks start when capture stops, before the transcript arrives", async () => {
+  const order: string[] = [];
+  const subject = harness({
+    prepareDelivery: () => order.push("prepare"),
+    paste: async () => {
+      order.push("paste");
+      return "pasted";
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.deepEqual(order, []);
+  await subject.coordinator.press();
+  assert.deepEqual(order, ["prepare"]);
+  await subject.coordinator.result("hello", subject.coordinator.currentOperationId);
+  // Delivery refreshes the check too, in case transcription ran long.
+  assert.deepEqual(order, ["prepare", "prepare", "paste"]);
+});
+
+test("a failing paste check never blocks the stop", async () => {
+  const subject = harness({
+    prepareDelivery: () => {
+      throw new Error("osascript missing");
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  await subject.coordinator.result("hello", subject.coordinator.currentOperationId);
+  assert.equal(subject.events[subject.events.length - 1]?.state, "pasted");
+});
+
+test("each delivered dictation reports how long every stage took", async () => {
+  let clock = 1_000;
+  const timings: unknown[] = [];
+  const shown = deferred<boolean>();
+  const subject = harness({
+    now: () => clock,
+    showPill: () => shown.promise,
+    onTiming: (timing) => timings.push(timing),
+    paste: async () => {
+      clock += 40;
+      return "pasted";
+    },
+  });
+  const press = subject.coordinator.press();
+  clock += 120;
+  shown.resolve(true);
+  await press;
+  await subject.coordinator.ready();
+  const operationId = subject.coordinator.currentOperationId!;
+  clock += 2_000;
+  await subject.coordinator.press();
+  clock += 300;
+  await subject.coordinator.result("hello", operationId);
+  assert.deepEqual(timings, [
+    { operationId, startMs: 120, speechMs: 2_000, transcribeMs: 300, deliverMs: 40, outcome: "pasted" },
+  ]);
+});
+
+test("a pill loaded ahead of time records on the first press", async () => {
+  const loaded = deferred<boolean>();
+  const subject = harness({ preparePill: () => loaded.promise, showPill: async () => false });
+  const prepare = subject.coordinator.prepare();
+  // The new renderer can report ready before its window finishes loading.
+  const ready = subject.coordinator.ready();
+  const press = subject.coordinator.press();
+  loaded.resolve(true);
+  await Promise.all([prepare, ready, press]);
+  assert.equal(subject.coordinator.currentStage, "recording");
+  assert.deepEqual(
+    subject.events.map((event) => event.state),
+    ["recording"],
+  );
+});
+
+test("a pill recreated ahead of time must report ready before recording starts", async () => {
+  const subject = harness({ preparePill: async () => true, showPill: async () => false });
+  await subject.coordinator.ready();
+  await subject.coordinator.prepare();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "starting");
+  await subject.coordinator.ready();
+  assert.equal(subject.coordinator.currentStage, "recording");
+});

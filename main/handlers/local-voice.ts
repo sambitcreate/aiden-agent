@@ -2,7 +2,7 @@
 // management, and local transcription. Thin — logic lives in
 // services/local-speech.ts and services/local-speech-models.ts.
 
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 import {
   engineStatus,
   onLocalSpeechState,
@@ -18,6 +18,7 @@ import {
   isModelInstalled,
 } from "../services/local-speech-models.js";
 import { configStore } from "../services/config-store.js";
+import { preloadLocalVoice } from "../services/local-voice-preload.js";
 import { resolveVoiceProviderNow } from "../services/voice-provider-resolution.js";
 import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";
@@ -68,6 +69,8 @@ export function registerLocalVoiceHandlers(): void {
     // Download for missing models, and Aiden Remote skips installed ones too.
     if (isModelInstalled(modelId)) return;
     await downloadModel(modelId);
+    // A first download can make it the model dictation uses; load it now.
+    void preloadLocalVoice();
   });
   ipcMain.handle("localModels:cancel", async (_event, id: unknown) => {
     return cancelDownload(asString(id, "id"));
@@ -100,30 +103,27 @@ export function registerLocalVoiceHandlers(): void {
         controller.abort();
       });
       activeLocalTranscriptions.set(key, { controller, removeOwnerInvalidation });
+      // The usage write must not hold the transcript back from the paste.
+      const recordUsage = (status: "completed" | "failed") => {
+        void usageStore
+          .record(
+            unreportedUsageRecord({
+              source: "voice-transcription",
+              providerId: "local-voice",
+              providerLabel: "On-device voice",
+              modelId: parsedModelId,
+              local: true,
+              status,
+            }),
+          )
+          .catch((error: unknown) => logger.warn("local-speech", "Could not record voice usage.", error));
+      };
       try {
         const transcript = await transcribeLocalPcm16(samples, parsedModelId, controller.signal);
-        await usageStore.record(
-          unreportedUsageRecord({
-            source: "voice-transcription",
-            providerId: "local-voice",
-            providerLabel: "On-device voice",
-            modelId: parsedModelId,
-            local: true,
-            status: "completed",
-          }),
-        );
+        recordUsage("completed");
         return transcript;
       } catch (error) {
-        await usageStore.record(
-          unreportedUsageRecord({
-            source: "voice-transcription",
-            providerId: "local-voice",
-            providerLabel: "On-device voice",
-            modelId: parsedModelId,
-            local: true,
-            status: "failed",
-          }),
-        );
+        recordUsage("failed");
         throw error;
       } finally {
         removeOwnerInvalidation();

@@ -37,7 +37,7 @@ export function resolveDictationActivationMode(
 
 /** Choices offered for unloading an idle on-device model, in minutes; 0 = never. */
 export const LOCAL_VOICE_IDLE_UNLOAD_CHOICES: readonly number[] = [0, 2, 5, 10, 15, 30, 60];
-export const DEFAULT_LOCAL_VOICE_IDLE_UNLOAD_MINUTES = 10;
+export const DEFAULT_LOCAL_VOICE_IDLE_UNLOAD_MINUTES = 30;
 const MAX_IDLE_UNLOAD_MINUTES = 24 * 60;
 
 export function isLocalVoiceIdleUnloadMinutes(value: unknown): value is number {
