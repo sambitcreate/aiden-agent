@@ -336,6 +336,12 @@ export const BROWSER_VALUE_SELECTOR_REFUSED =
   "A Bot can't find fields by what is typed in them. Use a role, label or text locator.";
 export const BROWSER_XPATH_SELECTOR_REFUSED =
   "A Bot can't use XPath locators. Use a role, label, text or CSS locator.";
+/**
+ * A comment has no use in a locator, and a comment that follows quoted text
+ * holding a comment opener can hide one of the refused tests from the
+ * comment-stripped checks, which can't tell quoted text from code.
+ */
+export const BROWSER_COMMENT_SELECTOR_REFUSED = "A Bot's locators can't contain CSS comments. Remove the /* */ part.";
 export const BROWSER_STATE_SELECTOR_REFUSED =
   "A Bot can't find fields by their state (checked, selected, empty, valid or in range). Use a role locator, such as internal:role=checkbox[checked=true].";
 /**
@@ -380,6 +386,7 @@ export function boundaryRefusalOf(error: unknown): unknown {
     BROWSER_XPATH_SELECTOR_REFUSED,
     BROWSER_STATE_SELECTOR_REFUSED,
     BROWSER_VALUE_SELECTOR_REFUSED,
+    BROWSER_COMMENT_SELECTOR_REFUSED,
     BROWSER_LOCATOR_UNCHECKED_REFUSED,
   ]) {
     if (message.includes(sentence)) return new Error(sentence);
@@ -423,10 +430,12 @@ const STATE_PSEUDO_CLASS =
 /**
  * Refuse a selector that could tell what a field holds before the page runs
  * it: one testing a `value` attribute or a field's state
- * (`STATE_PSEUDO_CLASS`), directly or behind a CSS comment, and any XPath,
- * whose string tests read the text inside a field and every element around
- * it. `browserBoundaryLocatorExpression` refuses XPath again with
- * Playwright's own parser.
+ * (`STATE_PSEUDO_CLASS`), and any XPath, whose string tests read the text
+ * inside a field and every element around it. A test behind a CSS comment
+ * gets its own refusal; any other comment is refused after these checks,
+ * since quoted text before it could hide one from the comment-stripped check.
+ * `browserBoundaryLocatorExpression` refuses XPath again with Playwright's
+ * own parser.
  */
 export function assertBoundarySelector(selector: string | undefined): void {
   if (selector === undefined) return;
@@ -434,6 +443,7 @@ export function assertBoundarySelector(selector: string | undefined): void {
   if (VALUE_ATTRIBUTE.test(selector) || VALUE_ATTRIBUTE.test(uncommented)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
   if (STATE_PSEUDO_CLASS.test(selector) || STATE_PSEUDO_CLASS.test(uncommented)) throw new Error(BROWSER_STATE_SELECTOR_REFUSED);
   if (XPATH_SELECTOR.test(selector) || XPATH_SELECTOR.test(uncommented)) throw new Error(BROWSER_XPATH_SELECTOR_REFUSED);
+  if (selector.includes("/*")) throw new Error(BROWSER_COMMENT_SELECTOR_REFUSED);
 }
 
 /**
@@ -527,9 +537,10 @@ const BOUNDARY_CSS_FUNCTIONS: readonly string[] = [
  *   `aria-labelledby`, whose content Playwright reads with the field's value
  *   in it. An element named by its own `aria-label` alone keeps its name, as
  *   does a field named only by its label. Elements inside a field (a
- *   card-expiry list's options) never match, and a field that isn't an
- *   input, textarea or select (a contenteditable code field) never matches by
- *   name. On a page with none of these fields, role engines run as they are.
+ *   card-expiry list's options) never match, a field that isn't an input,
+ *   textarea or select (a contenteditable code field) never matches by
+ *   name, and a field never matches a `[checked]` or `[selected]` test.
+ *   On a page with none of these fields, role engines run as they are.
  *
  * So a field's contents never decide a match, for the field or any element
  * around it. Without the cache or the engines, or with a selector engine or
@@ -549,7 +560,7 @@ const blankAll=(root)=>{for(const e of root.querySelectorAll("*")){blank(e);if(e
 let fields=0;
 const hide=(root)=>{for(const e of root.querySelectorAll("*")){if(__aidenSensitive(e)){fields+=1;blank(e);blankAll(e);if(e.shadowRoot){blank(e.shadowRoot);blankAll(e.shadowRoot);}}else if(e.shadowRoot)hide(e.shadowRoot);}};
 hide(document);
-if(fields>0)for(const [name,engine] of roles)engines.set(name,{queryAll:(root,body)=>engine.queryAll(root,body).filter((e)=>!__aidenNameReadsField(e,String(body)))});
+if(fields>0)for(const [name,engine] of roles)engines.set(name,{queryAll:(root,body)=>{const states=/\\[\\s*(?:checked|selected)\\b/i.test(String(body));return engine.queryAll(root,body).filter((e)=>!__aidenNameReadsField(e,String(body))&&!(states&&__aidenSensitive(e)));}});
 return run();
 }finally{for(const [name,engine] of roles)engines.set(name,engine);evaluator.end();}};`;
 
@@ -560,8 +571,9 @@ return run();
  * `selected` or `checked` attribute: a server-rendered card-expiry list marks
  * the saved month `<option selected>`, the same mirror of the choice as
  * `:default`. Role engines (`internal:role=option[selected]`) stay, since
- * they never match inside a field. Backslashes are refused in those parts
- * too, as main does (`VALUE_ATTRIBUTE`). More than one match is refused
+ * they never match inside a field. Backslashes and comments are refused in
+ * those parts too, as main does (`VALUE_ATTRIBUTE`,
+ * `BROWSER_COMMENT_SELECTOR_REFUSED`). More than one match is refused
  * without Playwright's previews, which quote attributes and text.
  */
 const BROWSER_BOUNDARY_QUERY_SOURCE = `const __aidenBoundaryQuery=(selector)=>{
@@ -574,6 +586,8 @@ const escaped=(s)=>s.parts.some((part)=>attributes(part).includes("\\\\")||neste
 if(escaped(parsed))throw new Error(${JSON.stringify(BROWSER_VALUE_SELECTOR_REFUSED)});
 const mirrors=(s)=>s.parts.some((part)=>/\\[\\s*(?:[\\w*-]*\\|)?(?:selected|checked)(?![\\w-])/i.test(attributes(part))||nested(part,mirrors));
 if(mirrors(parsed))throw new Error(${JSON.stringify(BROWSER_STATE_SELECTOR_REFUSED)});
+const commented=(s)=>s.parts.some((part)=>((part.name==="css"||part.name==="internal:attr")&&typeof part.source==="string"&&part.source.includes("/*"))||nested(part,commented));
+if(commented(parsed))throw new Error(${JSON.stringify(BROWSER_COMMENT_SELECTOR_REFUSED)});
 return __aidenBoundaryScope(()=>{
 const found=p.querySelectorAll(parsed,document);
 if(found.length>1){const error=new Error("strict mode violation: this locator matches "+found.length+" elements. Use one that matches exactly one.");delete error.stack;throw error;}

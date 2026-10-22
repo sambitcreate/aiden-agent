@@ -367,6 +367,8 @@ void app.whenReady().then(async () => {
     right: await waitFor("#exp option:nth-child(5)[selected]"),
     wrong: await waitFor("#exp option:nth-child(6)[selected]"),
     role: await waitFor("internal:role=checkbox[checked=true]"),
+    // The approval probe refuses it too, so no card asks about a click it would refuse.
+    probe: await outcome(browser.probeAgentTarget(BOT_WORKSPACE, botTab, { locator: "#exp option:nth-child(5)[selected]", click: true })),
   };
 
   // 6. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.

@@ -19,6 +19,7 @@ import {
   assertBoundarySelector,
   boundaryRefusalOf,
   BROWSER_BOUNDARY_AUTHOR_NAMED_ROLES,
+  BROWSER_COMMENT_SELECTOR_REFUSED,
   BROWSER_LOCATOR_UNCHECKED_REFUSED,
   BROWSER_OPAQUE_TYPING_REFUSED,
   BROWSER_RECALL_FIELD_FUNCTION,
@@ -391,19 +392,43 @@ test("Chromium: a Bot can't tell which option a page marked selected or which bo
     await page.setContent(`<form>
       <select id="exp" autocomplete="cc-exp-month">${months}</select>
       <select id="lang"><option id="en" selected>English</option><option id="fr">French</option></select>
+      <input id="pw" type="password" value="hunter2">
+      <label><input id="visa" type="radio" name="kind" autocomplete="cc-type" checked> Visa</label>
+      <label><input id="amex" type="radio" name="kind" autocomplete="cc-type"> Amex</label>
       <label><input id="keep" type="checkbox" checked> Keep me signed in</label></form>`);
-    const { plain, bot } = await boundaryWorld(page);
+    const { plain, bot, run, elementId } = await boundaryWorld(page);
+    const inPage = (selector: string) => run(elementId(browserBoundaryLocatorExpression(selector)));
     const right = reads(5), wrong = reads(6);
     for (const [index, selector] of right.entries()) {
       assert.notEqual(await plain(selector), "none", `${selector} finds the saved month`);
       assert.equal(await plain(wrong[index]!), "none", `${wrong[index]} tells another month apart`);
-      assert.equal(await bot(selector), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`, selector);
+      // The page refuses each; main refuses the one with a comment first.
+      assert.equal(await inPage(selector), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`, selector);
+      const refusal = selector.includes("/*") ? `refused: ${BROWSER_COMMENT_SELECTOR_REFUSED}` : `error: ${BROWSER_STATE_SELECTOR_REFUSED}`;
+      assert.equal(await bot(selector), refusal, selector);
     }
     // Playwright's attribute engine names the saved month outright.
     assert.equal(await plain('#exp >> internal:attr=[selected=""s]'), "m5");
     assert.equal(await bot('#exp >> internal:attr=[selected=""s]'), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
     assert.equal(await bot("#keep[checked]"), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
     assert.equal(await bot('internal:attr=[checked=""s]'), `error: ${BROWSER_STATE_SELECTOR_REFUSED}`);
+    // Quoted text holding a comment opener hides a test from a check that
+    // strips comments, so main and the page both refuse any comment.
+    const hidden = (month: number, prefix: string) => [
+      `#exp option:not([title="/*"]):nth-child(${month})[/**/selected]`,
+      `#exp option:not([title="/*"]):nth-child(${month}):/**/checked`,
+      `input:not([title="/*"])[/**/value^='${prefix}']`,
+    ];
+    for (const [index, selector] of hidden(5, "hunt").entries()) {
+      assert.notEqual(await plain(selector), "none", `${selector} finds the saved value`);
+      assert.equal(await plain(hidden(6, "zzzz")[index]!), "none", `${hidden(6, "zzzz")[index]} tells another value apart`);
+      assert.equal(await bot(selector), `refused: ${BROWSER_COMMENT_SELECTOR_REFUSED}`, selector);
+      assert.equal(await inPage(selector), `error: ${BROWSER_COMMENT_SELECTOR_REFUSED}`, selector);
+    }
+    // A card-type radio's own checked state is the saved card type; its name from its label still finds it.
+    assert.equal(await plain("internal:role=radio[checked=true]"), "visa");
+    assert.equal(await bot("internal:role=radio[checked=true]"), "none");
+    assert.equal(await bot('internal:role=radio[name="Visa"]'), "visa");
     // The role alternative the refusal names, and the selected option of a list that isn't a field.
     assert.equal(await bot("internal:role=checkbox[checked=true]"), "keep");
     assert.equal(await plain("internal:role=option[selected=true]"), "m5,en");

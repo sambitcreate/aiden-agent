@@ -545,7 +545,10 @@ export class BrowserService {
         if (typeof value === "string" && value.length > 0) field[key] = value.slice(0, 300);
       }
       return field;
-    } catch {
+    } catch (error) {
+      // A locator the boundary refuses fails the call before any card asks.
+      const refused = boundaryRefusalOf(error);
+      if (refused !== error) throw refused;
       return undefined;
     }
   }

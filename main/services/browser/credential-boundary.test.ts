@@ -7,6 +7,7 @@ import {
   BROWSER_IMAGE_OMITTED,
   BROWSER_SENSITIVE_TYPING_REFUSED,
   BROWSER_STATE_SELECTOR_REFUSED,
+  BROWSER_COMMENT_SELECTOR_REFUSED,
   BROWSER_VALUE_SELECTOR_REFUSED,
   BROWSER_XPATH_SELECTOR_REFUSED,
   browserKeyInsertsText,
@@ -273,6 +274,17 @@ test("a Bot can't find a field by what is typed in it or its state, or use XPath
     "card-field:state(complete)",
   ]) {
     assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_STATE_SELECTOR_REFUSED }, selector);
+  }
+  // Any other comment, since quoted text holding a comment opener can hide a
+  // test from the comment-stripped checks above.
+  for (const selector of [
+    '#exp option:not([title="/*"]):nth-child(5)[/**/selected]',
+    "input:not([title='/*'])[/**/value^='4111']",
+    'option:not([title="/*"]):/**/checked',
+    "form /* note */ > button",
+    'form >> internal:has="button /**/"',
+  ]) {
+    assert.throws(() => assertBoundarySelector(selector), { message: BROWSER_COMMENT_SELECTOR_REFUSED }, selector);
   }
   // Quoted text that starts like XPath is only text. States that don't depend
   // on what a field holds, and a role's own checked and selected states, stay.
