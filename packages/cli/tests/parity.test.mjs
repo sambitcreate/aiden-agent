@@ -2191,7 +2191,8 @@ test("a durable Bot paused from the CLI stops its running turn, refuses sends an
   t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
   let calls = 0, hold = true;
   const server = createServer(async (request, response) => {
-    for await (const _chunk of request);
+    let body = ""; for await (const chunk of request) body += chunk;
+    assert.ok(body.length > 0);
     calls++;
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
