@@ -111,6 +111,15 @@ successful chat synchronization. “Syncing chats” means the secure connection
 but the chat feed is not ready. “Recently active” describes recent contact, not a live
 connection guarantee.
 
+When a paired desktop cannot connect, its row distinguishes address lookup, network
+routing, a refused connection, a timeout, secure connection failure, and an unreadable
+response when the transport can identify the cause. Recovery steps point to Tailscale
+online status and access rules, or the local network, firewall, and Local Network
+permission for the last known route. A refused connection asks you to open Aiden and
+turn on Control this device on the other computer. The displayed route is the last
+successful route; Aiden may also have tried its saved alternatives. These hints do
+not probe Tailscale or change permissions. Identity changes still require re-pairing.
+
 Paired desktop computers can learn local-network and Tailscale alternatives through
 their verified connection. Aiden checks each route's certificate and paired identity
 before using it, switches when a route fails, and checks for a preferred local route

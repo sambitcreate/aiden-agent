@@ -24,6 +24,24 @@ function seconds(ms: number): string {
   return value === 1 ? "1 second" : `${value} seconds`;
 }
 
+/** Route is last known; failed attempts may also have tried the saved alternatives. */
+export function peerConnectionRecovery(host: PeerHostView, failure: PeerHostStatus["failure"]): string {
+  const routeHelp = host.activeRouteKind === "tailscale"
+    ? "On both computers, open Tailscale and check that they are online in the same tailnet. Check its access rules allow Aiden."
+    : host.activeRouteKind === "lan"
+      ? "Connect both computers to the same network. Check the host firewall and Local Network permission for Aiden."
+      : "Check that both computers are awake and connected to the same network or Tailscale.";
+  switch (failure) {
+    case "dns": return `This computer couldn't resolve the other computer's address. ${routeHelp}`;
+    case "refused": return "The other computer refused the connection. Open Aiden there and turn on Control this device in Settings → Connections. Check its firewall allows Aiden.";
+    case "timeout": return `The connection timed out before the other computer answered. ${routeHelp}`;
+    case "network": return `This computer has no network route to the other computer. ${routeHelp}`;
+    case "tls": return "The secure connection failed. Check the date and time on both computers, update Aiden, then reconnect.";
+    case "invalid_response": return "The other computer returned an unreadable response. Update Aiden on both computers, then reconnect.";
+    default: return `Couldn't reach this computer. ${routeHelp}`;
+  }
+}
+
 /**
  * How one paired host reads in Connections. The supervisor status wins when
  * main has one; before the first status arrives the registry's coarse state
@@ -51,7 +69,7 @@ export function peerHostPresentation(
         return {
           label: "Reconnecting",
           tone: "warning",
-          detail: `${status.failure === "timeout" ? "The computer didn't answer in time." : status.failure === "invalid_response" ? "The computer returned an unreadable response. Check both app versions." : "Couldn't reach this computer. Check that it is awake and connected to your network or Tailscale."} Trying again in ${seconds(state.retryAt - now)}.`,
+          detail: `${peerConnectionRecovery(host, status.failure)} Trying again in ${seconds(state.retryAt - now)}.`,
           canReconnect: true,
           needsRepair: false,
         };
