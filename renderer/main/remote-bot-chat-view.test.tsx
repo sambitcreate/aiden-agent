@@ -149,7 +149,8 @@ test("live frames from the host stream into the chat, and a deny-only approval a
   await screen.findByText("Two meetings and a dentist.");
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
-    emitBotTestNotification("remote:peer-bot-session", event(5, "partial", { text: "Looking at your calendar" }));
+    // Finish the paragraph so this transport test does not race the unfinished-text reveal deadline.
+    emitBotTestNotification("remote:peer-bot-session", event(5, "partial", { text: "Looking at your calendar\n\n" }));
     emitBotTestNotification(
       "remote:peer-bot-session",
       event(6, "approval", {

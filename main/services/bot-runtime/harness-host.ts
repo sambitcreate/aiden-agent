@@ -24,6 +24,8 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { DatabaseSync } from "node:sqlite";
+import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-reclamation.js";
 import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE, BOT_PROFILE_GUARD_FILE } from "./profile-lock.js";
 
 export const BOT_SESSION_FILE = "session.sqlite";
@@ -230,6 +232,16 @@ export async function createBotHarnessHost(
   }
 
   async function openHarness(botId: string): Promise<{ harness: Harness; conversation: Conversation }> {
+    // Configure an empty file before Pi enables WAL, which materializes the
+    // SQLite header. Existing files preserve their format and schema.
+    const database = new DatabaseSync(sessionFile(botId));
+    try {
+      database.exec("PRAGMA busy_timeout=5000");
+      initializeSqliteReclamation(database);
+      reclaimSqlitePages(database);
+    } finally {
+      database.close();
+    }
     const storage = await openNodeSqliteStorage(sessionFile(botId));
     let harness: Harness | undefined;
     try {

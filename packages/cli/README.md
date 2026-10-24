@@ -43,6 +43,8 @@ The CLI bundles Aiden's own extension cores (imported from `main/services/` — 
 | Usage | `/usage` | Session totals plus a source-attributed durable usage ledger |
 | Voice | `/voice`, `/dictate` | Transcription provider settings (`gemini`/`openai`/`off`, persisted to `aiden.json`); dictation records via `sox`/`ffmpeg` and inserts the transcript into the editor. On-device transcription models are available through `aiden speech` and Remote; desktop global-hotkey dictation remains desktop-only |
 
+New Memory databases support bounded incremental space reclamation on open and close. Existing databases keep their format. See [SQLite storage maintenance](../../docs/sqlite-storage.md).
+
 Settings for these live in `~/.aiden/agent/aiden.json` (device-local; shapes mirror the desktop's `AppSettings` subsets).
 
 ## Pi 1.0 capabilities
