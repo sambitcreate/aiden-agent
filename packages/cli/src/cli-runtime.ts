@@ -18,6 +18,7 @@ import { exitAfterFlush } from "./exit-after-flush.ts";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { migrateAidenMcpConfigOnce } from "./mcp.ts";
+import { configureAdditionalSkillDirectories } from "./skill-paths.ts";
 import { shouldDefaultToFullscreenTui } from "./tui-default.ts";
 
 /**
@@ -68,6 +69,7 @@ function tuiSettingsPaths(appDir: string): string[] {
 
 export async function runCli(argv: string[], appDir: string): Promise<void> {
 	try {
+		argv = configureAdditionalSkillDirectories(argv, process.cwd());
 		migrateCliAzureConfig(getAgentDir());
 		try {
 			migrateAidenMcpConfigOnce(getAgentDir());

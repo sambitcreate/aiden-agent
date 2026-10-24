@@ -210,7 +210,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "skills",
     group: "extend",
     title: "Reusable Skills",
-    description: "Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
+    description: "Use your local skill folders and enabled installed Claude Code plugin skills. Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
     icon: Wand2,
     size: "wide",
   },

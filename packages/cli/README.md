@@ -66,9 +66,13 @@ The CLI ships without pi telemetry, enforced three ways: the entry forces `PI_TE
 | `~/.aiden/agent/` | CLI state: `settings.json`, `auth.json`, `models-store.json`, `sessions/`, `extensions/`, `skills/`, `themes/` |
 | `~/.aiden/` | Shared Aiden home (desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop+CLI store; the CLI adds only the `agent/` subtree otherwise) |
 | `<project>/.aiden/` | Project-local settings, extensions, skills, themes, prompts (gated by project trust) |
+| `AIDEN_CODING_AGENT_DIR` | Env override for the agent dir (mirrors pi's `PI_CODING_AGENT_DIR`; required for tests and multi-instance setups) |
 
 The CLI also discovers `~/.aiden/skills` and `~/.claude/skills` as user skills, plus `<session cwd>/.claude/skills` after Pi approves that project. Home skills remain user skills when launched from home. `--no-skills` (`-ns`) disables automatic discovery in every root; `--no-approve` (`-na`) refuses project skills while retaining user skills. A path supplied by the user with `--skill <path>` remains an explicit exception to both flags.
-| `AIDEN_CODING_AGENT_DIR` | Env override for the agent dir (mirrors pi's `PI_CODING_AGENT_DIR`; required for tests and multi-instance setups) |
+
+Use repeated `--add-dir <directory>` or `--add-dir=<directory>` options to discover `.aiden/skills`, `.claude/skills`, and `.agents/skills` in additional folders. Relative paths resolve against the launch directory. These folders follow the active project trust decision and `--no-skills`; they add skill instructions only and do not grant shell or file-tool access. Native and explicit skills, then home and active-project skill roots, retain collision precedence. At most 32 additional directories are accepted.
+
+Enabled installed Claude Code plugin skills are read from local installation metadata and exposed as `plugin:name`. Global plugins remain user-scoped; project and local installations require a matching trusted session directory. Project settings can override plugin enablement. Plugin discovery never installs, launches, or fetches a plugin. The CLI omits plugin skills marked `user-invocable: false` because its current skill command runtime cannot enforce that policy independently. See [skill discovery](../../docs/skills.md) for supported metadata and limits.
 
 ## Theming
 

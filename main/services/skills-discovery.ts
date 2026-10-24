@@ -9,6 +9,8 @@
 //   - Legacy: <root>/<skill>/SKILL.md
 //   - Nested: <root>/skills/<skill>/SKILL.md
 //   - Aiden native: <root>/{skill,skills}/<skill>/SKILL.md
+// Enabled installed Claude Code plugins contribute namespaced skills at lower
+// priority than ordinary folders within their workspace/global source.
 // Workspace skills win over global skills of the same name.
 
 import * as fs from "fs/promises";
@@ -17,10 +19,11 @@ import * as path from "path";
 import { isPathInside } from "../shared/path-containment.js";
 import { constants as fsConstants } from "node:fs";
 import { isMap, isScalar, parseDocument } from "yaml";
-import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
+import { normalizeSafeSkillText, SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { claudePluginSkillRoots } from "./claude-plugin-skill-roots.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
@@ -89,6 +92,7 @@ interface ScanConfig {
   searches: Array<{ base: string; maxDepth: number }>;
   source: DiscoveredSkill["source"];
   priority: number;
+  namespace?: string;
 }
 
 export const SKILL_DISCOVERY_LIMITS = Object.freeze({
@@ -264,7 +268,7 @@ async function* boundedSkillPaths(
       entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
       for (const entry of entries) {
         const relative = path.join(current.relative, entry.name);
-        if (entry.file && entry.name === "SKILL.md" && current.depth >= 1) {
+        if (entry.file && entry.name === "SKILL.md" && (current.depth >= 1 || config.namespace !== undefined)) {
           yield relative;
         } else if (entry.directory && current.depth < search.maxDepth) {
           queue.push({
@@ -337,14 +341,15 @@ async function scanPatterns(
       if (!parsed) continue;
       const { frontmatter, body } = parsed;
       const entryName = path.basename(path.dirname(skillMd));
-      const name = (frontmatter.name || entryName).trim();
+      const plainName = (frontmatter.name || entryName).trim();
+      const name = config.namespace ? `${config.namespace}:${plainName}` : plainName;
       const instructions = body || frontmatter.description || "";
-      if (!name || !instructions) continue;
+      if (!plainName || !instructions) continue;
 
       skills.push({
         // Priority preserves .aiden > .claude > .agents within each source;
         // the resolved path keeps identities unique within that tier.
-        id: `${config.source}:${String(config.priority).padStart(2, "0")}:${skillMd}`,
+        id: `${config.source}:${String(config.priority).padStart(2, "0")}:${config.namespace ? `${config.namespace}:` : ""}${skillMd}`,
         name,
         description: (frontmatter.description || "").trim(),
         instructions,
@@ -424,6 +429,8 @@ async function scanAllSkillCandidates(
     );
   }
 
+  roots.push(...pluginScanConfigs(home, workspaceRoot));
+
   try {
     roots.sort(
       (left, right) =>
@@ -457,6 +464,43 @@ async function scanAllSkillCandidates(
     });
     return [];
   }
+}
+
+function pluginScanConfigs(home: string, workspaceRoot?: string): ScanConfig[] {
+  const seen = new Set<string>();
+  return claudePluginSkillRoots(home, workspaceRoot).filter((plugin) => {
+    const key = JSON.stringify([plugin.scope, plugin.namespace, plugin.root]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((plugin) => ({
+    root: plugin.root, searches: plugin.searches, source: plugin.scope, priority: 30, namespace: plugin.namespace,
+  })).sort((left, right) =>
+    (left.source === "workspace" ? 0 : 1) - (right.source === "workspace" ? 0 : 1) ||
+    left.root.localeCompare(right.root) || left.namespace.localeCompare(right.namespace));
+}
+
+/** Bounded plugin-only candidates shared with the standalone CLI resource loader. */
+export async function discoverPluginSkillCandidates(workspaceRoot: string | undefined, home: string): Promise<DiscoveredSkill[]> {
+  const budgets = {
+    workspace: { candidates: 0, traversedEntries: 0, aggregateBytes: 0 },
+    global: { candidates: 0, traversedEntries: 0, aggregateBytes: 0 },
+  };
+  const results: DiscoveredSkill[] = [];
+  for (const config of pluginScanConfigs(home, workspaceRoot)) {
+    results.push(...await scanPatterns(config, budgets[config.source], {}));
+  }
+  return results.flatMap((skill) => {
+    try {
+      return [{
+        ...skill,
+        name: normalizeSafeSkillText(skill.name, "skill name", SLASH_LIMITS.safeNameCharacters),
+        description: normalizeSafeSkillText(skill.description, "skill description", SLASH_LIMITS.safeDescriptionCharacters, true),
+      }];
+    } catch {
+      return [];
+    }
+  });
 }
 
 const DISCOVERY_CACHE_TTL_MS = 5_000;

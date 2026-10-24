@@ -129,21 +129,39 @@ const skillDiscoveryPlugin = {
             metadataByPath.set(skill.path, { source: "auto", scope: skill.scope, origin: "top-level", baseDir: skill.baseDir });
         }
 ${original}`);
+      const load = "        this.updateSkillsFromPaths(skillPaths, metadataByPath);";
+      if (source.split(load).length !== 2) throw new Error("Pi skill publication changed; review plugin discovery.");
+      source = source.replace(load, `        this.aidenPluginSkills = this.noSkills ? [] : await discoverPluginSkillCandidates(this.settingsManager.isProjectTrusted() ? this.cwd : undefined, homedir());
+${load}`);
+      const publication = "        const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;";
+      if (source.split(publication).length !== 2) throw new Error("Pi skill result changed; review plugin discovery.");
+      source = source.replace(publication, `        const claimedPluginNames = new Set(skillsResult.skills.map((skill) => skill.name.normalize("NFKC").toLowerCase()));
+        for (const plugin of this.aidenPluginSkills ?? []) {
+            const identity = plugin.name.normalize("NFKC").toLowerCase();
+            if (claimedPluginNames.has(identity)) continue;
+            claimedPluginNames.add(identity);
+            if (plugin.userInvocable === false) continue;
+            skillsResult.skills.push({ name: plugin.name, description: plugin.description, filePath: plugin.path, baseDir: dirname(plugin.path), disableModelInvocation: plugin.modelInvocable === false, sourceInfo: { source: "auto", scope: plugin.source === "workspace" ? "project" : "user", origin: "top-level", baseDir: dirname(plugin.path) } });
+        }
+${publication}`);
       const existing = "this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths)";
       if (source.split(existing).length !== 2) throw new Error("Pi skill path composition changed; review the Aiden trust integration.");
       source = source.replace(existing, "this.mergePaths([...cliEnabledSkills, ...enabledSkills], [...this.additionalSkillPaths, ...aidenSkills.map((skill) => skill.path)])");
-      return { contents: `import { homedir } from "node:os";\nimport { desktopSkillDiscoveryPaths } from ${JSON.stringify(join(pkgDir, "src/skill-paths.ts"))};\n` + source, loader: "js", resolveDir: dirname(args.path) };
+      return { contents: `import { homedir } from "node:os";\nimport { discoverPluginSkillCandidates } from ${JSON.stringify(join(pkgDir, "../../main/services/skills-discovery.ts"))};\nimport { desktopSkillDiscoveryPaths } from ${JSON.stringify(join(pkgDir, "src/skill-paths.ts"))};\n` + source, loader: "js", resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /pi-coding-agent\/dist\/core\/trust-manager\.js$/ }, (args) => {
       const source = readFileSync(args.path, "utf8");
       const original = "    const configDir = join(currentDir, CONFIG_DIR_NAME);\n";
       if (source.split(original).length !== 2) throw new Error("Pi project trust detection changed; review the Aiden trust integration.");
       const replacement = `${original}    const claudeSkillsDir = join(currentDir, ".claude", "skills");
+    if (hasAdditionalSkillDirectories() || claudePluginSkillRoots(homeDir, currentDir).some((plugin) => plugin.scope === "workspace")) {
+        return true;
+    }
     if (claudeSkillsDir !== join(homeDir, ".claude", "skills") && existsSync(claudeSkillsDir)) {
         return true;
     }
 `;
-      return { contents: source.replace(original, replacement), loader: "js", resolveDir: dirname(args.path) };
+      return { contents: `import { hasAdditionalSkillDirectories } from ${JSON.stringify(join(pkgDir, "src/skill-paths.ts"))};\nimport { claudePluginSkillRoots } from ${JSON.stringify(join(pkgDir, "../../main/services/claude-plugin-skill-roots.ts"))};\n` + source.replace(original, replacement), loader: "js", resolveDir: dirname(args.path) };
     });
   },
 };

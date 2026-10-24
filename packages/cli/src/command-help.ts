@@ -25,4 +25,7 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   bots enable-durable                       Back up legacy Bot history; restart daemon to switch
   bots session|send|resume|dismiss|stop|delete|approvals|approve
   reset                                     Reset first-run onboarding only
+
+Skill options:
+  --add-dir <directory>                     Add skill folders after project trust (repeatable, max 32)
 `;

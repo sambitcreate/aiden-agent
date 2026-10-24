@@ -502,3 +502,53 @@ test("bundled ChatGPT OAuth module loads and rejects missing installation identi
     notify: () => { throw new Error("Unexpected network login before identity validation"); },
   }), /requires a device ID/);
 });
+
+test("built CLI discovers additional directories and enabled plugin skills after trust without replacing explicit skills", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-plugin-runtime-"));
+	const home = path.join(root, "home");
+	const project = path.join(root, "project");
+	const agentDir = path.join(home, ".aiden", "agent");
+	const plugin = path.join(home, "installed", "tools");
+	const extra = path.join(project, "extra skills");
+	mkdirSync(project, { recursive: true });
+	makeProbeSkill(path.join(extra, ".claude", "skills"), "extra-probe", "Additional directory.");
+	makeProbeSkill(path.join(plugin, "skills"), "review", "Plugin review.");
+	mkdirSync(path.join(home, ".claude", "plugins"), { recursive: true });
+	writeFileSync(path.join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: { "tools@shop": [{ scope: "user", installPath: plugin }] } }));
+	writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "tools@shop": true } }));
+	const options = { cwd: project, env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+	try {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "never" }));
+		assert.ok(!rpcCommands(["--add-dir", "extra skills"], options).includes("skill:extra-probe"));
+		const details = rpcCommandDetails(["--add-dir", "extra skills", "--approve"], options);
+		assert.equal(details.find((skill) => skill.name === "skill:extra-probe")?.description, "Additional directory.");
+		assert.equal(details.find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
+		assert.equal(details.find((skill) => skill.name === "skill:tools:review")?.sourceInfo?.scope, "user");
+		const refused = rpcCommands(["--add-dir=extra skills", "--no-approve"], options);
+		assert.ok(!refused.includes("skill:extra-probe"));
+		assert.ok(refused.includes("skill:tools:review"));
+		const disabled = rpcCommands(["--add-dir=extra skills", "--no-skills", "--approve"], options);
+		assert.ok(!disabled.includes("skill:extra-probe"));
+		assert.ok(!disabled.includes("skill:tools:review"));
+		const projectPlugin = path.join(root, "project-plugin");
+		makeProbeSkill(path.join(projectPlugin, "skills"), "review", "Project plugin review.");
+		mkdirSync(path.join(projectPlugin, ".claude-plugin"), { recursive: true });
+		writeFileSync(path.join(projectPlugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "tools" }));
+		writeFileSync(path.join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: {
+			"tools@shop": [{ scope: "user", installPath: plugin }],
+			"project@shop": [{ scope: "project", installPath: projectPlugin, projectPath: project }],
+		} }));
+		mkdirSync(path.join(project, ".claude"), { recursive: true });
+		writeFileSync(path.join(project, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "project@shop": true } }));
+		assert.equal(rpcCommandDetails([], options).find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
+		assert.equal(rpcCommandDetails(["--approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Project plugin review.");
+		assert.equal(rpcCommandDetails(["--no-approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
+		writeFileSync(path.join(projectPlugin, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Automatic-only project review.\nuser-invocable: false\n---\nAutomatic review instructions.\n");
+		assert.ok(!rpcCommands(["--approve"], options).includes("skill:tools:review"), "omitting an automatic-only project winner must not expose the shadowed global implementation");
+		const explicit = makeProbeSkill(path.join(root, "explicit"), "tools:review", "Explicit override.");
+		assert.equal(rpcCommandDetails(["--skill", explicit, "--approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Explicit override.");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
