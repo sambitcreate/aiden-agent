@@ -452,3 +452,43 @@ test("the jump button is centred on the chat column the composer uses, not on th
   assert.equal(footerLayer.style.insetInlineEnd, "15px");
   assert.equal(jump.tabIndex, 0, "still reachable by keyboard");
 });
+
+test("small scrolls chained from an embedded frame keep the reader's place while the reply grows", () => {
+  const EmbeddedTranscript = ({ chunks }: { chunks: number }) => (
+    <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} streaming>
+      <iframe title="Interactive visual" sandbox="allow-scripts" />
+      <p>Reply chunk {chunks}</p>
+    </ScrollArea>
+  );
+  const view = render(<EmbeddedTranscript chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<EmbeddedTranscript chunks={2} />);
+  const initialBottom = port.bottom();
+
+  // Input inside a sandboxed frame never reaches the host's wheel listeners.
+  // Only the scroll chained out to the transcript is observable here.
+  port.moveTo(initialBottom - 0.5);
+  port.moveTo(initialBottom - 1);
+  port.moveTo(initialBottom - 1.5);
+  assert.equal(port.following(), false, "fractional upward movement accumulates");
+  port.grow(60);
+  view.rerender(<EmbeddedTranscript chunks={3} />);
+  assert.equal(port.top(), initialBottom - 1.5, "the next layout does not undo that scroll");
+
+  port.moveTo(port.bottom());
+  assert.equal(port.following(), true, "returning to the end resumes follow");
+});
+
+test("a content-height clamp after an embedded visual shrinks keeps live follow armed", () => {
+  const view = render(<Transcript chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<Transcript chunks={2} />);
+  port.grow(-300);
+  port.moveTo(port.bottom());
+  assert.equal(port.following(), true, "the browser clamped the offset; no reader navigation occurred");
+  port.grow(80);
+  view.rerender(<Transcript chunks={3} />);
+  assert.equal(port.top(), port.bottom());
+});

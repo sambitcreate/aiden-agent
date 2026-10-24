@@ -997,6 +997,7 @@ export function ScrollArea({
   // The follow latch lives in a ref so scroll, wheel, and resize handlers read
   // the latest decision synchronously; React state only mirrors it for paint.
   const followRef = React.useRef<FollowState>(INITIAL_FOLLOW_STATE);
+  const scrollSampleRef = React.useRef<{ top: number; height: number; viewport: number } | null>(null);
   const followFrameRef = React.useRef(0);
   const offerJumpTimerRef = React.useRef(0);
   const jumpSettleTimerRef = React.useRef(0);
@@ -1056,6 +1057,7 @@ export function ScrollArea({
     if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
       element.scrollTop = element.scrollHeight;
     }
+    scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
     dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
   }, [dispatchFollow, measureDistance]);
 
@@ -1142,6 +1144,7 @@ export function ScrollArea({
       // Only the viewport's own box (its scrollbar) starts a scrollbar hold.
       // The press itself keeps follow: only where the thumb settles counts.
       if (event.target !== element) return;
+      scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
       dispatchFollow({ type: "scrollbarHold" });
     };
     const onPointerUp = () => {
@@ -1318,10 +1321,25 @@ export function ScrollArea({
           overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
         }}
         onScroll={(event) => {
+          const element = event.currentTarget;
+          const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+          const previous = scrollSampleRef.current;
+          const clamped = previous !== null &&
+            (sample.height < previous.height || sample.viewport !== previous.viewport);
+          const movedUp = previous !== null && !clamped && sample.top < previous.top - 1;
+          // Sandboxed frame input cannot reach our wheel/touch listeners. Its
+          // chained host scroll can still reveal the reader moving upward.
+          // Retain the baseline so fractional movement adds up across events.
+          scrollSampleRef.current = !previous || clamped || movedUp || sample.top > previous.top || followRef.current.jumpPending
+            ? sample
+            : { ...sample, top: previous.top };
+          if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
+            dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+          }
           dispatchFollow({
-            type: "settle",
-            distance: measureDistance(event.currentTarget),
-            scrollTop: event.currentTarget.scrollTop,
+            type: clamped ? "contentResize" : "settle",
+            distance: measureDistance(element),
+            scrollTop: element.scrollTop,
           });
         }}
       >

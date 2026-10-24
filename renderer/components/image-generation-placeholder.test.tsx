@@ -4,6 +4,8 @@ import { afterEach, test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { MessageList } from "./message-list";
+import { ImageScanPlaceholder } from "./image-generation-placeholder";
+import { BotStatusLine } from "../main/bots/bot-status-line";
 import type { ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
@@ -39,7 +41,7 @@ function multiTimeline(steps: AgentToolStep[]): GenerationTimeline {
   return { version: 3, generationId: "generation-1", status: "running", startedAt: 1, steps };
 }
 
-function imageArtifact(id: string, name = "Generated image.png", mimeType = "image/png"): ChatArtifactV1 {
+function imageArtifact(id: string, name = "Generated image.png", mimeType = "image/png"): Extract<ChatArtifactV1, { kind: "image" }> {
   return {
     version: 1,
     kind: "image",
@@ -300,4 +302,35 @@ test("elapsed time counts from the step's own start, so a remount keeps it", () 
   const startedAt = Date.now() - 12_000;
   render(list({ timeline: timeline(generateStep("running", { startedAt, updatedAt: startedAt })) }));
   assert.ok(screen.getByText(/Generating · 1[23]s/u));
+});
+
+
+test("an arriving image keeps its stopped elapsed caption when another running label ticks", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 30_000 });
+  t.mock.method(window, "setTimeout", (callback: () => void, delay: number) =>
+    setTimeout(callback, delay) as unknown as number,
+  );
+  t.mock.method(window, "clearTimeout", (handle: number) =>
+    clearTimeout(handle as unknown as ReturnType<typeof setTimeout>),
+  );
+  const Preview = ({ arrived }: { arrived: boolean }) => (
+    <>
+      <ImageScanPlaceholder slot={{
+        stepId: "image", toolCallId: "image-call", aspectRatio: "1:1", startedAt: 1_000,
+        ...(arrived ? { arrived: imageArtifact("result").attachment } : {}),
+      }} />
+      <BotStatusLine activity={{ phase: "thinking", startedAt: 1_000 }} wording="thinking" />
+    </>
+  );
+  try {
+    const view = render(<Preview arrived={false} />);
+    assert.ok(screen.getByText("Generating · 29s"));
+    view.rerender(<Preview arrived />);
+    act(() => t.mock.timers.tick(2_000));
+    view.rerender(<Preview arrived />);
+    assert.ok(screen.getByText("Generating · 29s"), "arrival freezes the image's elapsed time");
+    assert.ok(screen.getByText("· 31s"), "the other label continues ticking");
+  } finally {
+    cleanup();
+  }
 });
