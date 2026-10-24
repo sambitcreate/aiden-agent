@@ -51,3 +51,5 @@ Avoid a generic web dashboard inside a desktop shell, ornamental cards, feature-
 ## Accessibility & Inclusion
 
 Target WCAG 2.2 AA for text and controls. Preserve keyboard access, visible focus, semantic labels, sufficient contrast, reduced-motion behavior, and non-color-only communication. Keep dense desktop UI readable at the app's supported window sizes and system appearance settings.
+
+Desktop Appearance → Chat offers Compact, Standard, Detailed and Verbose work details, automatic collapse on completion or the next message, the shared link-opening preference, and a Queue/Steer busy-send default. Manual disclosure choices take priority. These controls change desktop presentation/input defaults and add no Remote protocol or native-phone setting.

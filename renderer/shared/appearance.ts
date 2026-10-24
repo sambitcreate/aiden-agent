@@ -20,6 +20,27 @@ export type DockIconPreference = "aiden" | "monochrome";
 export type ChatWidthPreference = "narrow" | "default" | "wide" | "full";
 /** Whether the agent may draw inline visuals: on its own, only on /visualize, or never. */
 export type InlineVisualsMode = "automatic" | "on_request" | "off";
+export type WorkDetailsMode = "compact" | "standard" | "detailed" | "verbose";
+export type WorkDetailsCollapseTiming = "completion" | "next-input";
+export type BusySendPreference = "queue" | "steer";
+
+export const WORK_DETAILS_LABELS: Record<WorkDetailsMode, string> = {
+  compact: "Compact", standard: "Standard", detailed: "Detailed", verbose: "Verbose",
+};
+export const COLLAPSE_TIMING_LABELS: Record<WorkDetailsCollapseTiming, string> = {
+  completion: "On completion", "next-input": "On next message",
+};
+export const BUSY_SEND_LABELS: Record<BusySendPreference, string> = { queue: "Queue", steer: "Steer" };
+
+export function isWorkDetailsMode(value: unknown): value is WorkDetailsMode {
+  return value === "compact" || value === "standard" || value === "detailed" || value === "verbose";
+}
+export function isWorkDetailsCollapseTiming(value: unknown): value is WorkDetailsCollapseTiming {
+  return value === "completion" || value === "next-input";
+}
+export function isBusySendPreference(value: unknown): value is BusySendPreference {
+  return value === "queue" || value === "steer";
+}
 
 export interface ThemeVariantConfig {
   preset: ThemeSelection;
@@ -52,6 +73,9 @@ export interface AppearanceConfig {
   chatWidth: ChatWidthPreference;
   /** When the agent may draw inline visuals in desktop chats. */
   inlineVisuals: InlineVisualsMode;
+  workDetails: WorkDetailsMode;
+  workDetailsCollapseTiming: WorkDetailsCollapseTiming;
+  busySendBehavior: BusySendPreference;
 }
 
 export interface AppearancePreviewSnapshot {
@@ -429,6 +453,9 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   fontSmoothing: true,
   chatWidth: "default",
   inlineVisuals: "automatic",
+  workDetails: "standard",
+  workDetailsCollapseTiming: "completion",
+  busySendBehavior: "queue",
 };
 
 export function createDefaultAppearanceConfig(): AppearanceConfig {
@@ -536,6 +563,9 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
       : fallback.fontSmoothing,
     chatWidth: isChatWidthPreference(value.chatWidth) ? value.chatWidth : fallback.chatWidth,
     inlineVisuals: isInlineVisualsMode(value.inlineVisuals) ? value.inlineVisuals : fallback.inlineVisuals,
+    workDetails: isWorkDetailsMode(value.workDetails) ? value.workDetails : fallback.workDetails,
+    workDetailsCollapseTiming: isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming) ? value.workDetailsCollapseTiming : fallback.workDetailsCollapseTiming,
+    busySendBehavior: isBusySendPreference(value.busySendBehavior) ? value.busySendBehavior : fallback.busySendBehavior,
   };
 }
 
@@ -560,6 +590,15 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
     throw new Error("Appearance settings are incomplete.");
   }
   const normalized = normalizeAppearanceConfig(value);
+  if (value.workDetails !== undefined && !isWorkDetailsMode(value.workDetails)) {
+    throw new Error("Work details mode is unsupported.");
+  }
+  if (value.workDetailsCollapseTiming !== undefined && !isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming)) {
+    throw new Error("Work details collapse timing is unsupported.");
+  }
+  if (value.busySendBehavior !== undefined && !isBusySendPreference(value.busySendBehavior)) {
+    throw new Error("Busy send behavior is unsupported.");
+  }
   // Optional for older v1 exports; reject malformed explicitly supplied preferences.
   if (value.showWorkspacePaths !== undefined && typeof value.showWorkspacePaths !== "boolean") {
     throw new Error("Workspace path visibility must be a boolean value.");

@@ -712,3 +712,23 @@ test("composer usage visibility defaults on for legacy settings and strictly val
   assert.equal(parseAppearanceConfig({ ...legacy, showComposerContextUsage: false }).showComposerContextUsage, false);
   assert.throws(() => parseAppearanceConfig({ ...legacy, showComposerContextUsage: "false" }), /visibility/);
 });
+
+test("chat presentation preferences migrate, round-trip, and reject unsupported explicit values", () => {
+  const legacy = { ...createDefaultAppearanceConfig() } as Record<string, unknown>;
+  delete legacy.workDetails;
+  delete legacy.workDetailsCollapseTiming;
+  delete legacy.busySendBehavior;
+  const migrated = parseAppearanceConfig(legacy);
+  assert.equal(migrated.workDetails, "standard");
+  assert.equal(migrated.workDetailsCollapseTiming, "completion");
+  assert.equal(migrated.busySendBehavior, "queue");
+  const chosen = { ...migrated, workDetails: "verbose", workDetailsCollapseTiming: "next-input", busySendBehavior: "steer" };
+  const restored = parseAppearanceConfig(JSON.parse(JSON.stringify(chosen)));
+  assert.equal(restored.workDetails, "verbose");
+  assert.equal(restored.workDetailsCollapseTiming, "next-input");
+  assert.equal(restored.busySendBehavior, "steer");
+  assert.throws(() => parseAppearanceConfig({ ...migrated, workDetails: "hidden" }), /work details mode/i);
+  assert.throws(() => parseAppearanceConfig({ ...migrated, workDetailsCollapseTiming: null }), /collapse timing/i);
+  assert.throws(() => parseAppearanceConfig({ ...migrated, busySendBehavior: "interrupt" }), /busy send behavior/i);
+  assert.equal(normalizeAppearanceConfig({ workDetails: "bad", busySendBehavior: false }).workDetails, "standard");
+});
