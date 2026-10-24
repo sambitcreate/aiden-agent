@@ -1,6 +1,6 @@
 # Chat appearance and busy-send preferences
 
-Status: Implemented on branch; local verification, review and hosted CI in progress.
+Status: Implemented; local verification and review complete. [PR #587](https://github.com/sambitcreate/aiden-agent/pull/587) is open; hosted CI is tracked on its exact head.
 Date: 2026-10-24.
 
 ## Scope
