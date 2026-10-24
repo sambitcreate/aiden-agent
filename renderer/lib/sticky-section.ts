@@ -33,9 +33,12 @@ export function useStickySectionCollapse<
       if (!viewport || !header || viewport.dataset.follow === "true") return;
       const bounds = viewport.getBoundingClientRect();
       const position = header.getBoundingClientRect();
+      const toolbarInset = Number.parseFloat(getComputedStyle(viewport).getPropertyValue("--scroll-area-sticky-top")) || 0;
+      const readingTop = bounds.top + Math.max(0, toolbarInset);
       // A sticky header can remain displaced inside a section entirely above
-      // the viewport. Only a header the person can see may restore their place.
-      if (position.bottom <= bounds.top || position.top >= bounds.bottom) return;
+      // the viewport or behind its toolbar. Only a header the person can see
+      // may restore their place.
+      if (position.bottom <= readingTop || position.top >= bounds.bottom) return;
     }
     restorePendingRef.current = Boolean(
       section &&

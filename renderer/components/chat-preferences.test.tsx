@@ -192,3 +192,22 @@ test("automatic folding never scrolls back to an offscreen historical trail", ()
   view.rerender(<div data-follow="false"><ActivityFeed timeline={completed} mode="detailed" /></div>);
   assert.equal(restores, 0, "a displaced header above the viewport must not steal the scroll position");
 });
+
+test("automatic reasoning folds ignore headers covered by the toolbar but restore visible pinned headers", () => {
+  let restores = 0;
+  const content = (open: boolean) => <div data-follow="false" style={{ "--scroll-area-sticky-top": "52px" } as React.CSSProperties}><ReasoningBlock content="Readable details" automaticOpen={open} /></div>;
+  const view = render(content(true));
+  const viewport = view.container.querySelector<HTMLElement>("[data-follow]")!;
+  const header = screen.getByRole("button", { name: "Thinking" });
+  const section = header.parentElement!;
+  viewport.getBoundingClientRect = () => ({ top: 0, bottom: 500 }) as DOMRect;
+  section.getBoundingClientRect = () => ({ top: -168 }) as DOMRect;
+  header.getBoundingClientRect = () => ({ top: -24, bottom: 12 }) as DOMRect;
+  section.scrollIntoView = () => { restores += 1; };
+  view.rerender(content(false));
+  assert.equal(restores, 0, "the toolbar covers the header's sliver inside the raw viewport");
+  view.rerender(content(true));
+  header.getBoundingClientRect = () => ({ top: 52, bottom: 88 }) as DOMRect;
+  view.rerender(content(false));
+  assert.equal(restores, 1, "a header visibly pinned below the toolbar still preserves the reader's place");
+});

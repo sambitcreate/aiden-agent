@@ -68,3 +68,7 @@ Hosted CI must still be checked on the PR's exact head.
 Scroll acceptance follow-up (2026-10-24): automatic restoration now requires a visible sticky header inside the reading viewport. Offscreen historical trails and tail-following views must not reclaim the scroll position when they fold. The additional behavioral regression brings the preference suite to 42/42; GPT-6.1 Sol high-effort re-review verified the guard with no actionable findings. The prior hosted run compiled and passed the budget, but hit an unchanged Git watcher notification failure and a GitHub artifact-service timeout; both are recorded with job links in PR #587. The new scroll-fix head requires fresh CI.
 
 The scroll follow-up production build, type/lint checks and three focused Electron follow/keyboard/settings cases pass on the updated code.
+
+Toolbar visibility follow-up (2026-10-24): automatic folding also excludes the measured overlaid toolbar from the readable viewport. A real reasoning-component regression covers a header geometrically inside the scrollport but fully hidden by the toolbar, and verifies that a visible pinned header below it still restores the reading position. The focused preference suite passes 43/43.
+
+The toolbar follow-up passes production build, type checking, lint, and both Electron follow/history keyboard cases. GPT-6.1 Sol at high effort rechecked the inset and geometry coverage with no actionable findings.
