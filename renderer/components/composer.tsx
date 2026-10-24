@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
+import { useAppearancePreference } from "../lib/use-appearance-preference";
 import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
@@ -57,7 +58,7 @@ import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, GitInfo, Workspace, WorkspacePermission } from "../lib/types";
-import { composerSubmissionAllowed } from "../lib/composer-submission";
+import { composerSubmissionAllowed, effectiveBusySendMode } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
   acceptComposerAttachments,
@@ -428,9 +429,10 @@ export function Composer({
     slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, restoredText),
   });
   const { text, slashTracker } = draft;
-  const [busyMode, setBusyMode] = React.useState<BusySendMode>("queue");
+  const busyDefault = useAppearancePreference("busySendBehavior");
+  const [busyChoice, setBusyMode] = React.useState<BusySendMode | null>(null);
   React.useEffect(() => {
-    if (!isGenerating) setBusyMode("queue");
+    if (!isGenerating) setBusyMode(null);
   }, [isGenerating]);
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
@@ -515,6 +517,7 @@ export function Composer({
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
+  const busyMode = effectiveBusySendMode(busyChoice ?? busyDefault, Boolean(onSteer) && attachments.length === 0 && !selectedSkill);
   // A blocked send explains itself beside the composer, not in a toast, and the
   // hint lasts only while the draft, attachments, skill, and send mode are unchanged.
   const [blockedSend, setBlockedSend] = React.useState<{
@@ -1920,7 +1923,7 @@ export function Composer({
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void submit();
+      void submit(isGenerating && (event.metaKey || event.ctrlKey) ? (busyMode === "queue" ? "steer" : "queue") : undefined);
     }
   };
 

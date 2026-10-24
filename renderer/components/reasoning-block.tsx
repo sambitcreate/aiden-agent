@@ -2,12 +2,10 @@ import * as React from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
-  REASONING_PREVIEW_MS,
-  initialReasoningDisclosure,
   reasoningDisclosureLayout,
-  reduceReasoningDisclosure,
 } from "../lib/reasoning-disclosure";
 import { useStickySectionCollapse } from "../lib/sticky-section";
+import { DisclosureCollapseBoundary } from "./disclosure-collapse-boundary";
 
 interface ReasoningBlockProps {
   content: string;
@@ -17,6 +15,8 @@ interface ReasoningBlockProps {
   active?: boolean;
   /** Header text; active state is communicated by the shimmer. */
   label?: string;
+  /** Automatic preview visibility; manual disclosure choices take priority. */
+  automaticOpen?: boolean;
 }
 
 /** A quiet, bounded view of reasoning deliberately exposed by a supported provider. */
@@ -25,6 +25,7 @@ export function ReasoningBlock({
   streaming = false,
   active = false,
   label = "Thinking",
+  automaticOpen = streaming,
 }: ReasoningBlockProps) {
   if (!content.trim()) {
     return (
@@ -33,7 +34,7 @@ export function ReasoningBlock({
       </div>
     );
   }
-  return <ReadableReasoningBlock content={content} streaming={streaming} active={active} label={label} />;
+  return <ReadableReasoningBlock content={content} streaming={streaming} active={active} label={label} automaticOpen={automaticOpen} />;
 }
 
 function ReadableReasoningBlock({
@@ -41,20 +42,16 @@ function ReadableReasoningBlock({
   streaming = false,
   active = false,
   label = "Thinking",
+  automaticOpen = streaming,
 }: ReasoningBlockProps) {
   const contentId = React.useId();
   const viewportRef = React.useRef<HTMLDivElement>(null);
   const followTailRef = React.useRef(streaming);
-  const previewOnMountRef = React.useRef(streaming);
-  const [disclosure, dispatchDisclosure] = React.useReducer(
-    reduceReasoningDisclosure,
-    streaming,
-    initialReasoningDisclosure,
-  );
-  const { expanded } = disclosure;
-  const layout = reasoningDisclosureLayout(disclosure);
+  const [choice, setChoice] = React.useState<boolean | null>(null);
+  const expanded = choice ?? automaticOpen;
+  const layout = reasoningDisclosureLayout({ expanded, userControlled: choice !== null });
   const regionLabel = label === "Thinking" ? "Model reasoning" : label;
-  const { sectionRef, headerRef, noteCollapse, restoreAfterCollapse } =
+  const { sectionRef, headerRef, noteCollapse, noteAutomaticCollapse, restoreAfterCollapse, onFocusCapture } =
     useStickySectionCollapse<HTMLElement, HTMLButtonElement>();
   const [atTop, setAtTop] = React.useState(true);
   const [atBottom, setAtBottom] = React.useState(true);
@@ -65,25 +62,12 @@ function ReadableReasoningBlock({
     setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 2);
   }, []);
 
-  React.useEffect(() => {
-    if (!previewOnMountRef.current) return;
-    const timer = window.setTimeout(
-      () => dispatchDisclosure({ type: "preview-elapsed" }),
-      REASONING_PREVIEW_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, []);
-
   React.useLayoutEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
     if (streaming && followTailRef.current) element.scrollTop = element.scrollHeight;
     updateScrollEdges(element);
   }, [content, expanded, streaming, updateScrollEdges]);
-
-  React.useLayoutEffect(() => {
-    if (!expanded) restoreAfterCollapse();
-  }, [expanded, restoreAfterCollapse]);
 
   React.useLayoutEffect(() => {
     const element = viewportRef.current;
@@ -94,8 +78,10 @@ function ReadableReasoningBlock({
   }, [layout, updateScrollEdges]);
 
   return (
+    <DisclosureCollapseBoundary expanded={expanded} beforeCollapse={noteAutomaticCollapse} afterCollapse={restoreAfterCollapse}>
     <section
       ref={sectionRef}
+      onFocusCapture={onFocusCapture}
       data-disclosure-layout={layout}
       className="transcript-sticky-section reasoning-surface rounded-card bg-well text-small text-secondary outline-none"
       data-streaming={active ? "true" : "false"}
@@ -108,7 +94,7 @@ function ReadableReasoningBlock({
         data-surface="well"
         onClick={() => {
           if (expanded) noteCollapse();
-          dispatchDisclosure({ type: "toggle" });
+          setChoice(!expanded);
         }}
         className="transcript-sticky-header flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:text-primary focus-visible:outline-none"
       >
@@ -154,5 +140,6 @@ function ReadableReasoningBlock({
         </div>
       ) : null}
     </section>
+    </DisclosureCollapseBoundary>
   );
 }

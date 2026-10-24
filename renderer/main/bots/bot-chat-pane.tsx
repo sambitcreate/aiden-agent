@@ -48,6 +48,7 @@ import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
 import { BotPausedCard, botPausedText } from "./bot-paused-card";
 import { BotActivityRecap } from "./bot-activity-recap";
+import { useAppearancePreference } from "../../lib/use-appearance-preference";
 import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { useBotMenuActions } from "./bot-menu";
@@ -488,6 +489,13 @@ export function TranscriptEntries({
   connecting?: boolean;
 }) {
   const rows = botTranscriptRows(entries, partial, { running, level, queued });
+  const workDetails = useAppearancePreference("workDetails");
+  const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
+  const retainedRecaps = React.useMemo(() => {
+    let latestUserIndex = 0;
+    entries.forEach((entry, index) => { if (entry.type === "user") latestUserIndex = index; });
+    return new Set(entries.slice(latestUserIndex).map((entry) => `${entry.id}:recap`));
+  }, [entries]);
   return (
     <>
       {rows.map((row) => {
@@ -533,7 +541,7 @@ export function TranscriptEntries({
               </BotMessageActions>
             );
           case "recap":
-            return <BotActivityRecap key={row.id} steps={row.steps} durationMs={row.durationMs} live={row.live} level={level} />;
+            return <BotActivityRecap key={row.id} steps={row.steps} durationMs={row.durationMs} live={row.live} level={level} mode={workDetails} retainDetails={collapseTiming === "next-input" && retainedRecaps.has(row.id)} />;
           case "queued":
             return (
               <BotQueuedBubble

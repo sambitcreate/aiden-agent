@@ -53,3 +53,14 @@ test("a failed save restores the previous choice", async () => {
   await flush();
   assert.match(screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "", /Aiden browser/);
 });
+
+test("embedded chat link control follows a newer broadcast while its first read is pending", async () => {
+  let finish!: (value: string) => void;
+  installBotTestIpc({ "browser:link-preference": () => new Promise<string>((resolve) => { finish = resolve; }) });
+  render(<LinksSettings embedded />);
+  emitBotTestNotification("browser:event", { type: "link-preference", linkOpening: "external" });
+  await flush();
+  finish("ask");
+  await flush();
+  assert.match(screen.getByRole("combobox", { name: "Open chat links in" }).textContent ?? "", /System browser/u);
+});
