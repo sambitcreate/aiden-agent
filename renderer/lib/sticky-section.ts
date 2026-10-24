@@ -28,7 +28,15 @@ export function useStickySectionCollapse<
     const header = headerRef.current;
     // Following a new message owns the scroll destination. A history reader
     // instead keeps the closing section's sticky header in view.
-    if (automatic && section?.closest<HTMLElement>("[data-follow]")?.dataset.follow === "true") return;
+    if (automatic) {
+      const viewport = section?.closest<HTMLElement>("[data-follow]");
+      if (!viewport || !header || viewport.dataset.follow === "true") return;
+      const bounds = viewport.getBoundingClientRect();
+      const position = header.getBoundingClientRect();
+      // A sticky header can remain displaced inside a section entirely above
+      // the viewport. Only a header the person can see may restore their place.
+      if (position.bottom <= bounds.top || position.top >= bounds.bottom) return;
+    }
     restorePendingRef.current = Boolean(
       section &&
         header &&

@@ -153,7 +153,8 @@ test("automatic trail collapse restores a stuck reader before hiding details, bu
   const section = view.container.querySelector("details")!;
   const header = section.querySelector("summary")!;
   section.getBoundingClientRect = () => ({ top: -80 }) as DOMRect;
-  header.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+  header.getBoundingClientRect = () => ({ top: 0, bottom: 24 }) as DOMRect;
+  view.container.querySelector<HTMLElement>("[data-follow]")!.getBoundingClientRect = () => ({ top: 0, bottom: 500 }) as DOMRect;
   section.scrollIntoView = () => { restores += 1; };
   view.rerender(<div data-follow="false"><ActivityFeed timeline={completed} mode="detailed" /></div>);
   assert.equal(restores, 1);
@@ -176,4 +177,18 @@ test("Queue default supports alternate steering and an unavailable alternate pre
   await flush();
   assert.deepEqual(sent, ["steer"]);
   assert.equal(textbox.value, "Keep this draft");
+});
+
+test("automatic folding never scrolls back to an offscreen historical trail", () => {
+  let restores = 0;
+  const view = render(<div data-follow="false"><ActivityFeed timeline={completed} mode="detailed" retainDetails /></div>);
+  const section = view.container.querySelector("details")!;
+  const header = section.querySelector("summary")!;
+  const viewport = view.container.querySelector<HTMLElement>("[data-follow]")!;
+  viewport.getBoundingClientRect = () => ({ top: 0, bottom: 500 }) as DOMRect;
+  section.getBoundingClientRect = () => ({ top: -800 }) as DOMRect;
+  header.getBoundingClientRect = () => ({ top: -100, bottom: -76 }) as DOMRect;
+  section.scrollIntoView = () => { restores += 1; };
+  view.rerender(<div data-follow="false"><ActivityFeed timeline={completed} mode="detailed" /></div>);
+  assert.equal(restores, 0, "a displaced header above the viewport must not steal the scroll position");
 });

@@ -64,3 +64,7 @@ Verification results and PR status will be recorded when acceptance completes.
 - React Doctor reports three non-blocking warnings: the existing large Appearance component, recap complexity, and the intentional JSON serialization roundtrip in a preference test. No scanner suppression or new dependency was added.
 
 Hosted CI must still be checked on the PR's exact head.
+
+Scroll acceptance follow-up (2026-10-24): automatic restoration now requires a visible sticky header inside the reading viewport. Offscreen historical trails and tail-following views must not reclaim the scroll position when they fold. The additional behavioral regression brings the preference suite to 42/42; GPT-6.1 Sol high-effort re-review verified the guard with no actionable findings. The prior hosted run compiled and passed the budget, but hit an unchanged Git watcher notification failure and a GitHub artifact-service timeout; both are recorded with job links in PR #587. The new scroll-fix head requires fresh CI.
+
+The scroll follow-up production build, type/lint checks and three focused Electron follow/keyboard/settings cases pass on the updated code.
