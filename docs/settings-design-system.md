@@ -37,6 +37,10 @@ Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add cu
 
 Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
 
+## Limits & spending
+
+Settings → Limits & spending (section id `limits`, in the Agent group) has two `FieldSet` groups. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
+
 ## Icons and illustrations
 
 Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain glyphs or brain illustrations. The existing onboarding artwork is outside this Settings change.
