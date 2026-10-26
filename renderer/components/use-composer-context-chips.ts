@@ -7,6 +7,7 @@
 import * as React from "react";
 import { useAutoHideComposerContext } from "./composer-context-bar";
 import {
+  useChatFollowThrough,
   useChatCurrentPullRequest,
   useChatPullRequestPending,
   useChatPullRequests,
@@ -20,6 +21,7 @@ import {
 } from "../lib/composer-context-chips";
 import { chatPullRequestChipLabels } from "../lib/chat-pull-request-chip";
 import type { GitInfo, Workspace } from "../lib/types";
+import { hasActiveFollowThrough } from "../shared/follow-through";
 
 export interface ComposerContextChipsState {
   chips: ComposerContextChips;
@@ -54,6 +56,7 @@ export function useComposerContextChips({
   const links = useChatPullRequests(chatId, remoteReadable);
   const current = useChatCurrentPullRequest(chatId, remoteReadable);
   const pending = useChatPullRequestPending(chatId, remoteReadable);
+  const followThrough = useChatFollowThrough(chatId, started && hasFolder && !accessOff);
   const views = links.data?.links ?? [];
   const linked = views.length;
   const pendingCount = pending.data?.length ?? 0;
@@ -77,6 +80,7 @@ export function useComposerContextChips({
       current: Boolean(currentView),
       branchCanOpen: branchCanOpenPullRequest(gitStatus),
     },
+    followThrough: hasActiveFollowThrough(followThrough.data) || Boolean(followThrough.data?.check),
   });
   const pullRequestSettled =
     !remoteReadable || (!identity.isPending && !links.isPending && !current.isPending && !pending.isPending);

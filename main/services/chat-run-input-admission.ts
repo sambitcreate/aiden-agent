@@ -7,6 +7,7 @@ import {
 import { AidenOperationUnknownOutcomeError } from "./aiden-remote-operation-contract.js";
 import type { PiRuntimeQueueOptions, PiRuntimeQueueReceipt } from "./pi-agent-runtime-harness.js";
 import type { Chat, ChatMessage } from "./types.js";
+import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import type {
   ChatRunInputAdmissionResult,
   ChatRunInputMode,
@@ -59,6 +60,8 @@ export interface ChatRunInputAdmissionRequest {
   mode: ChatRunInputMode;
   text: string;
   ownerDocumentId?: string;
+  /** Main-owned follow-up notice: stored with the message so clients draw it as a card. */
+  notice?: AgentNoticeV1;
 }
 
 function rejectionReason(
@@ -115,7 +118,12 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
         append: () =>
           deps.appendMessage(
             generation.chatId,
-            { id: messageId, role: "user", content: input.text },
+            {
+              id: messageId,
+              role: "user",
+              content: input.text,
+              ...(input.notice ? { notice: input.notice } : {}),
+            },
             {
               isCurrent: () =>
                 deps.active.get(input.streamId) === generation &&

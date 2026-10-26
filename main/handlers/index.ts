@@ -52,6 +52,7 @@ import { botComputerHandlerDependencies } from "../services/bot-computers/bot-co
 import { registerDiagnosticHandlers } from "./diagnostics.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
+import { registerFollowThroughHandlers } from "./follow-through.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { registerDesignHandlers } from "./design/register.js";
@@ -127,6 +128,7 @@ export function registerHandlers(): void {
   registerLocalRunIpc();
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
+  registerFollowThroughHandlers();
   registerTtsHandlers();
   registerDeviceHandlers();
   // A no-op unless the designStudio capability is on.

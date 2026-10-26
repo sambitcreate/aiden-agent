@@ -1,4 +1,5 @@
 import { aidenAppNavigation } from "./aiden-app-navigation.js";
+import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import { appControlsService } from "./app-controls-main.js";
 import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
@@ -95,6 +96,7 @@ import {
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import { backgroundJobRequiresApproval } from "./follow-through/background-job-tool.js";
 import {
   hostRunRegistry,
   recordRunAttentionResolved,
@@ -556,6 +558,12 @@ export interface GenerationExecutionOptions {
   botAudienceId?: string;
   /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
   designRun?: DesignRunBinding;
+  /**
+   * Main-owned follow-up turn nobody is watching (a background job ended, a
+   * followed pull request or a "done when" check needs the agent). Approvals
+   * and questions are unavailable for the whole turn.
+   */
+  unattended?: boolean;
 }
 
 interface BotGenerationAuthorityContext {
@@ -1722,6 +1730,33 @@ async function prepareGeneration(
           : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
+  // Background jobs and pull request follows: workspace chats with folder
+  // access, on the Mac and Linux desktop. Their news reaches the chat later.
+  if (
+    !botContext &&
+    !assistantMode &&
+    params.chatId &&
+    workspace &&
+    folderPath &&
+    permission !== "none" &&
+    permission !== "read-only" &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    hostPlatformCapabilities().backgroundJobs
+  ) {
+    const { createFollowThroughTools } = await import("./follow-through/follow-through-tools-main.js");
+    tools.push(
+      ...createFollowThroughTools({
+        chatId: params.chatId,
+        workspaceId: workspace.id,
+        folderPath,
+        permission: workspace.permission,
+        ...(deviceShimDir ? { pathPrefix: deviceShimDir } : {}),
+        isCurrent: () => !signal.aborted && active.has(streamId),
+        excludeToolNames: options.excludeToolNames,
+      }),
+    );
+  }
   const botMutatingToolNames = new Set<string>();
   if (botContext) {
     const authority = botContext.admission.authority;
@@ -2263,6 +2298,12 @@ export const llmClient = {
       throw new Error("This message turn expired before generation could start.");
     }
     options.onTurnAccepted?.();
+    if (options.unattended) {
+      // Nobody is there to answer: every approval or question this turn would
+      // raise settles at once as unavailable, and the model is told so.
+      approvals.detachStream(streamId);
+      questionnaires.detachStream(streamId);
+    }
     initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
       this.detachRenderer(streamId, owner.documentId);
     });
@@ -3690,7 +3731,8 @@ export const llmClient = {
               permission === "ask" &&
               (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
                 BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
-                deviceToolRequiresApproval(context.toolCall.name, context.args));
+                deviceToolRequiresApproval(context.toolCall.name, context.args) ||
+                backgroundJobRequiresApproval(context.toolCall.name, context.args));
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const memoryApproval =
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
@@ -4972,6 +5014,27 @@ export const llmClient = {
     input: ChatRunInputAdmissionRequest,
   ): Promise<ChatRunInputAdmissionResult> {
     return runInputAdmission.admit(input);
+  },
+
+  /**
+   * Queue a follow-up notice into the chat's running generation, whoever owns
+   * it. Null when nothing is running there that takes input.
+   */
+  async admitAgentNotice(
+    chatId: string,
+    input: { text: string; notice: AgentNoticeV1 },
+  ): Promise<ChatRunInputAdmissionResult | null> {
+    const streamId = [...active.entries()].find(
+      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested && !entry.inputClosed,
+    )?.[0];
+    if (!streamId) return null;
+    return runInputAdmission.admit({
+      streamId,
+      chatId,
+      mode: "queue",
+      text: input.text,
+      notice: input.notice,
+    });
   },
 
   /**
