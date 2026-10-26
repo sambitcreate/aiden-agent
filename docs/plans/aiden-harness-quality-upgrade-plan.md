@@ -8,7 +8,7 @@ Improve Aiden's ability to complete work, recover from failures, show what was v
 
 Keep the active Pi packages pinned at **1.3.0** during the initial work. Preserve the frozen `@aiden/pi-legacy-harness` alias at **0.87.1**. The changes belong primarily to Aiden's runtime integration, tools, memory, clients, and evaluation infrastructure. Use existing Pi hooks and Aiden's immutable runtime contribution snapshots. Do not fork Pi, patch installed dependencies, replace the runtime with Harness², or combine a provider upgrade with a harness experiment.
 
-If an upstream defect or missing public API prevents a slice, reproduce it independently and use the separate Pi upgrade gate below. The current dependency record is [Pi 1.3.0 project memory](../../.memory/pi-1.3.0-upgrade.md).
+If an upstream defect or missing public API prevents a slice, reproduce it independently and use the separate Pi upgrade gate below. The current dependency record is [Pi 1.4.0 project memory](../../.memory/pi-1.4.0-upgrade.md); the pins moved from 1.3.0 through the separate gate below on 2026-10-26, with no harness policy change.
 
 ## Evidence and baseline
 
@@ -146,7 +146,7 @@ Report per-task outcomes and variation, with the baseline always eligible. Keep 
 
 ### H3 — Bring durable Bot sessions to the CLI deliberately
 
-First document the portable-service boundary and profile ownership model. Target reuse of the desktop durable Bot-session core through CLI process, credential, and notification adapters. Audit the bundled dependency graph for Electron imports. If portability requires adding a Pi package, pin it to the audited 1.3.0 line and evaluate the addition separately; do not silently upgrade existing packages.
+First document the portable-service boundary and profile ownership model. Target reuse of the desktop durable Bot-session core through CLI process, credential, and notification adapters. Audit the bundled dependency graph for Electron imports. If portability requires adding a Pi package, pin it to the audited desktop line (1.4.0 since 2026-10-26) and evaluate the addition separately; do not silently upgrade existing packages.
 
 Preserve Bot homes, grants, schedules, and chats. Define explicit migration with backup/recovery before changing legacy Bot chat handling; never launch unattended work during migration. Negotiate session/routine/preset/memory/proactivity features only when their endpoints are wired and accepted.
 
