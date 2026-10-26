@@ -24,6 +24,7 @@ import { botsGrantingMcpServer, scheduledTasksUsingMcpServer } from "../services
 import type { McpServer } from "../services/types.js";
 import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
 import { resolveMcpConnectionCredentials } from "../services/mcp-connection-credentials.js";
+import { isMcpMacAppOpen, mcpMacAppStatus, openMcpMacApp } from "../services/mcp-mac-apps.js";
 import { mcpStdioApprovals, resolveStoredMcpFieldSecrets, storedMcpEnvForApproval } from "../services/mcp-field-secrets.js";
 import { saveConfiguredMcpServer, sealPlaintextMcpServerFields } from "../services/mcp-server-save.js";
 import type { McpOAuthOperation } from "../services/mcp-oauth-operation.js";
@@ -96,6 +97,7 @@ import {
 function draftCredentialResolver(credentials: McpDraftCredentials) {
   return (draft: McpServer, isCurrent: () => boolean): Promise<McpServer> =>
     resolveMcpConnectionCredentials(draft, {
+      isMacAppOpen: (preset) => isMcpMacAppOpen(preset),
       // Stored env/header values only go where the saved server already connects.
       resolveFieldSecrets: async (server) => {
         if (!credentials.savedDestination) {
@@ -604,6 +606,8 @@ export function registerPhase2Handlers(): void {
       return true;
     },
     launchApproved: (server) => mcpStdioApprovals.isApproved(server),
+    macAppStatus: (preset) => mcpMacAppStatus(preset),
+    openMacApp: (preset) => openMcpMacApp(preset),
   });
   mcpLiveStatus.subscribe((status) => ipcMain.broadcast("mcp:statusChanged", status));
   // Force-drop all cached MCP connections so the next message reconnects fresh.

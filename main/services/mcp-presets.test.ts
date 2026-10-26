@@ -14,10 +14,11 @@ import { isConnectorAvailable } from "../../renderer/shared/connector-catalog.js
 import type { McpServer } from "./types.js";
 
 const available = MCP_PRESETS.filter(isConnectorAvailable);
+const availableHttp = available.filter((preset) => preset.transport === "http");
 
-test("every available preset builds a server record that main accepts", () => {
-  assert.ok(available.length >= 20);
-  for (const preset of available) {
+test("every available HTTP preset builds a server record that main accepts", () => {
+  assert.ok(availableHttp.length >= 20);
+  for (const preset of availableHttp) {
     const server = serverFromPreset(preset);
     assert.equal(server.id, presetServerId(preset.id));
     assert.equal(server.transport, "http");
@@ -37,7 +38,7 @@ test("presetServerId and presetSecretId are deterministic", () => {
 });
 
 test("hosted presets keep credentials on their exact catalog origin", () => {
-  for (const preset of available.filter((entry) => !entry.local)) {
+  for (const preset of availableHttp.filter((entry) => !entry.local)) {
     const origin = new URL(preset.url).origin;
     // Provider-owned paths on the same origin are allowed.
     assert.equal(serverFromPreset(preset, `${origin}/mcp/session/abc`).url, `${origin}/mcp/session/abc`);
@@ -80,6 +81,46 @@ test("Figma Desktop connects without a credential and only to its loopback origi
   }
   assert.throws(() => assertMcpPresetServer({ ...server, oauth: true }), /invalid authentication mode/u);
   assert.throws(() => assertMcpPresetServer({ ...server, headers: { Authorization: "Bearer x" } }), /does not take headers/u);
+});
+
+test("iMCP runs only the server inside its app in an Applications folder, with nothing added, and only on a Mac", () => {
+  const imcp = getMcpPreset("imcp");
+  assert.ok(imcp?.transport === "stdio");
+  const mac = { platform: "darwin" as const, homedir: "/Users/me" };
+  for (const command of [
+    "/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    "/Users/me/Applications/iMCP.app/Contents/MacOS/imcp-server",
+  ]) {
+    assert.deepEqual(serverFromPreset(imcp, command, mac), {
+      id: "preset-imcp",
+      name: "iMCP",
+      presetId: "imcp",
+      enabled: true,
+      transport: "stdio",
+      command,
+      args: [],
+    });
+  }
+  const valid = serverFromPreset(imcp, "/Applications/iMCP.app/Contents/MacOS/imcp-server", mac);
+  for (const command of [
+    "",
+    "imcp-server",
+    "/Applications/iMCP.app/Contents/MacOS/iMCP",
+    "/Applications/Other/iMCP.app/Contents/MacOS/imcp-server",
+    "/Users/someone-else/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    "/Applications/iMCP.app/Contents/MacOS/../../../../bin/sh",
+    "/tmp/imcp-server",
+  ]) {
+    assert.throws(() => assertMcpPresetServer({ ...valid, command }, mac), /only runs the server inside iMCP\.app/u, command);
+  }
+  assert.throws(() => assertMcpPresetServer({ ...valid, args: ["--evil"] }, mac), /no arguments or environment/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, env: { NODE_OPTIONS: "--require x" } }, mac), /no arguments or environment/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, transport: "http", url: "https://example.com/mcp" }, mac), /own app on this Mac/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, oauth: true }, mac), /own app on this Mac/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, headers: { Authorization: "x" } }, mac), /own app on this Mac/u);
+  assert.throws(() => assertMcpPresetServer({ ...valid, id: "preset-notion" }, mac), /invalid identity/u);
+  // A record carried to Linux never runs.
+  assert.throws(() => assertMcpPresetServer(valid, { platform: "linux", homedir: "/Users/me" }), /works only on a Mac/u);
 });
 
 test("hosted Figma is refused with its reason wherever main validates a preset", () => {

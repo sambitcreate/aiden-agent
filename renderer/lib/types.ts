@@ -1,5 +1,5 @@
 import type { McpExposure } from "../shared/mcp-exposure";
-import type { ConnectorCatalogEntry } from "../shared/connector-catalog";
+import type { McpPreset } from "../shared/connector-catalog";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -815,12 +815,8 @@ export interface McpServer {
   hiddenTools?: string[];
 }
 
-export type { McpPresetAuth } from "../shared/connector-catalog";
-
 /** A built-in connector definition from the main-process catalog. */
-export interface McpPreset extends ConnectorCatalogEntry {
-  transport: "http";
-}
+export type { McpPreset, McpPresetAuth } from "../shared/connector-catalog";
 
 /** Catalog entry plus the user's connection state for it. */
 export interface McpPresetState {
@@ -1164,6 +1160,7 @@ export type {
   McpDependent,
   McpLiveState,
   McpLiveStatus,
+  McpMacAppStatus,
   McpServerDependents,
   McpStatus,
   McpToolSummary,
