@@ -3089,6 +3089,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     queryFn: () => chatsApi.replyInterrupted(chatId),
     enabled: transcriptIdle && !draft && messages.length > 0,
     staleTime: Infinity,
+    // An unreadable run history only hides the offer; don't keep asking.
+    retry: false,
   });
   // Like the failure card, a Resume press is busy only in its own chat.
   const resumeTokenRef = React.useRef(0);
